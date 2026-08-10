@@ -1083,6 +1083,35 @@ func bsonIndexKeyValuePrefixV2(entry []byte) ([]byte, error) {
 	return entry[:n], nil
 }
 
+// BSONIndexKeyStableSortPrefixV2 returns a BSON-v2 logical key suitable for a
+// Mongo-compatible stable sort tie group. Mongo comparison treats a missing
+// field and null as equal; the physical v2 index deliberately keeps them
+// distinct so equality and range bounds remain precise. Normalizing only that
+// distinction lets an ordered caller group the adjacent physical runs and use
+// document ID as the stable tie breaker without changing the stored format.
+func BSONIndexKeyStableSortPrefixV2(entry []byte) ([]byte, error) {
+	prefix, err := bsonIndexKeyValuePrefixV2(entry)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]byte(nil), prefix...)
+	for at := 0; at < len(out); {
+		n, err := bsonIndexKeyComponentV2Length(out[at:])
+		if err != nil {
+			return nil, err
+		}
+		if out[at] == bsonIndexKeyComponentV2DescendingMarker {
+			if ^out[at+1] == bsonIndexKeyTagMissingV2 {
+				out[at+1] = ^bsonIndexKeyTagNullV2
+			}
+		} else if out[at+1] == bsonIndexKeyTagMissingV2 {
+			out[at+1] = bsonIndexKeyTagNullV2
+		}
+		at += n
+	}
+	return out, nil
+}
+
 func bsonIndexKeyValuePrefixLengthV2(entry []byte) (int, error) {
 	componentLength := 0
 	for componentLength < len(entry) && entry[componentLength] != bsonIndexKeyDocumentIDSuffixMarkerV2 {

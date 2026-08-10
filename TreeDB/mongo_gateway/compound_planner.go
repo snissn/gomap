@@ -235,7 +235,15 @@ func compoundPrefixes(choices [][]bson.RawValue) [][]bson.RawValue {
 		}
 		seen := make(map[string]struct{}, len(choices[at]))
 		for _, value := range choices[at] {
-			key := string(append([]byte{byte(value.Type)}, value.Value...))
+			// BSON-v2 canonicalizes numeric equality (for example int32(1) and
+			// int64(1)). Deduplicate by the actual probe component rather than
+			// raw BSON type/payload so equivalent $in choices do not consume the
+			// global candidate budget twice.
+			encoded, err := collections.EncodeBSONIndexKeyComponentV2(value)
+			if err != nil {
+				continue // buildCompoundIndexPlan already validated every value.
+			}
+			key := string(encoded)
 			if _, duplicate := seen[key]; duplicate {
 				continue
 			}
@@ -423,8 +431,10 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		found, truncated, err := col.FindByCompoundIndexRange(candidate.idx.Name, collections.CompoundIndexRangeOptions{
 			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: probeLimit, Desc: candidate.reverse,
 			// Mongo's compatible sort contract uses _id as the deterministic tie
-			// breaker even when the physical secondary key is traversed backwards.
-			StableDocumentIDTies: candidate.reverse,
+			// breaker. BSON-v2 keeps missing and null physically distinct, while
+			// Mongo compares them as equal, so stable grouping is required in both
+			// physical directions.
+			StableDocumentIDTies: candidate.sortSatisfied,
 		})
 		if err != nil {
 			return nil, candidate, true, err

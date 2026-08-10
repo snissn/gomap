@@ -20262,9 +20262,9 @@ type CompoundIndexRangeOptions struct {
 	Upper  IndexRangeBound
 	Limit  int
 	Desc   bool
-	// StableDocumentIDTies makes a descending BSON v2 scan emit equal logical
-	// index keys in ascending document-ID order. The default retains the
-	// historical physical reverse order for direct callers. A result limit may
+	// StableDocumentIDTies makes a BSON v2 scan emit equal logical index keys in
+	// ascending document-ID order. The default retains the historical physical
+	// order for direct callers. A result limit may
 	// return the ascending-ID prefix of a fully buffered group; a work-cap stop
 	// never publishes an incomplete group and reports truncation instead.
 	StableDocumentIDTies bool
@@ -20427,8 +20427,8 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, 0, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:      true,
 		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
-		StableDocumentIDTies: opts.Desc && opts.StableDocumentIDTies,
-		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+		StableDocumentIDTies: opts.StableDocumentIDTies,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
 	}, func(id []byte) (bool, error) {
 		ids = append(ids, id)
 		return true, nil
@@ -21143,13 +21143,10 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return true
 	}
 	if opts.StableDocumentIDTies {
-		if !reverse {
-			return false, errors.New("collections: stable document-ID ties require a descending scan")
-		}
 		if opts.LogicalIndexKey == nil {
 			return false, errors.New("collections: stable document-ID ties require a logical index key parser")
 		}
-		return scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt, valueType, maxResults, inspect, opts, fn)
+		return scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt, valueType, maxResults, reverse, inspect, opts, fn)
 	}
 	if bufferedIt == nil && !opts.DedupeDocumentID {
 		emitted := 0
@@ -21295,10 +21292,11 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	return false, nil
 }
 
-// scanMergedCollectionIndexIDsStableReverse preserves reverse logical-index
-// order while normalizing each equal-key run to ascending document ID order.
-// It deliberately buffers only one run; callers never pay a full-result sort.
-func scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, inspect func(int) bool, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+// scanMergedCollectionIndexIDsStable preserves logical-index order in either
+// direction while normalizing each equal-key run to ascending document ID
+// order. It deliberately buffers only one run; callers never pay a
+// full-result sort.
+func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, reverse bool, inspect func(int) bool, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	nextLiveKey := func() ([]byte, bool, bool, error) {
 		for {
 			bufferedKey, bufferedOK := collectionIndexIteratorKey(bufferedIt)
@@ -21329,13 +21327,13 @@ func scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt iterator.
 				bufferedIt.Next()
 			default:
 				cmp := bytes.Compare(bufferedKey, persistedKey)
-				if cmp > 0 { // reverse merge: physically greater key first.
+				if (!reverse && cmp < 0) || (reverse && cmp > 0) {
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(bufferedIt)
 					}
 					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 					bufferedIt.Next()
-				} else if cmp < 0 {
+				} else if (!reverse && cmp > 0) || (reverse && cmp < 0) {
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(persistedIt)
 					}

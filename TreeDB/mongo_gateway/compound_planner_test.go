@@ -54,9 +54,28 @@ func benchmarkMongoCompoundPlannerVariant(b *testing.B, variant string) {
 			}
 		}
 	}
-	// Preflight asserts the identical visible result before timing. Explain is
-	// intentionally available to callers for candidate/materialization counters;
-	// the benchmark itself measures the same query/cursor protocol in each mode.
+	// Preflight asserts the identical visible result before timing and records
+	// the gateway-owned counters from the same command shape.
+	explain := serveCommand(b, server, 406592, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(b, explain)
+	stats := bson.Raw(explain).Lookup("executionStats").Document()
+	metric := func(name string) int64 {
+		value, ok := stats.Lookup(name).Int64OK()
+		if !ok || value <= 0 {
+			b.Fatalf("%s executionStats.%s=%d ok=%v want positive: %s", variant, name, value, ok, explain)
+		}
+		return value
+	}
+	if returned := metric("nReturned"); returned != 32 {
+		b.Fatalf("%s executionStats.nReturned=%d want 32: %s", variant, returned, explain)
+	}
+	b.ReportMetric(float64(metric("candidateDocumentsExamined")), "candidates_examined/op")
+	b.ReportMetric(float64(metric("candidateDocumentsMaterialized")), "documents_materialized/op")
+	materializedBytes, ok := stats.Lookup("candidateMaterializedBytes").Int64OK()
+	if !ok || materializedBytes < 0 {
+		b.Fatalf("%s executionStats.candidateMaterializedBytes=%d ok=%v want non-negative: %s", variant, materializedBytes, ok, explain)
+	}
+	b.ReportMetric(float64(materializedBytes), "materialized_bytes/op")
 	drain(serveCommand(b, server, 406599, command), 406598)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -144,6 +163,47 @@ func TestMongoCompoundPlanReverseTieUsesStableDocumentID(t *testing.T) {
 	// still use the gateway's stable ascending _id tiebreaker.
 	response := serveCommand(t, server, 4065053, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
 	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b", "c"})
+}
+
+func TestMongoCompoundPlanSortNormalizesMissingAndNullTiesBeforeLimit(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40650531, bson.D{
+		{Key: "createIndexes", Value: "events"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 40650532, bson.D{
+		{Key: "insert", Value: "events"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "z"}, {Key: "tenant", Value: "t"}},
+			bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: nil}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(1)}},
+		}}, {Key: "$db", Value: "app"},
+	}))
+	base := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	asc := append(bson.D(nil), base[:2]...)
+	asc = append(asc, bson.E{Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}})
+	asc = append(asc, base[2:]...)
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40650533, asc)), []string{"a"})
+	desc := append(bson.D(nil), base[:2]...)
+	desc = append(desc, bson.E{Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}})
+	desc = append(desc, base[2:]...)
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40650534, desc)), []string{"b"})
+	// Once the numeric group is skipped, the equivalent missing/null group uses
+	// its ascending _id tie order in either physical direction.
+	withSkip := append(bson.D(nil), desc[:3]...)
+	withSkip = append(withSkip, bson.E{Key: "skip", Value: int32(1)})
+	withSkip = append(withSkip, desc[3:]...)
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40650535, withSkip)), []string{"a"})
+}
+
+func TestMongoCompoundPlanInCanonicalNumericPrefixesShareCandidateBudget(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 2
+	assertOK(t, serveCommand(t, server, 40650536, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40650537, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}, bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(2)}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 40650538, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: bson.A{int32(1), int64(1)}}}}}}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b"})
 }
 
 func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) {
