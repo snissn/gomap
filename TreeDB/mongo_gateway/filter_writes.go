@@ -35,7 +35,9 @@ func reconcileMongoFindAndModifyOutcome(predicateMatched *bool, before, after *w
 }
 
 func validateMongoWritePlan(plan findPlan) error {
-	for _, predicates := range append([][]findPredicate{plan.predicates}, plan.orBranches...) {
+	branches := append([][]findPredicate{plan.predicates}, plan.orBranches...)
+	branches = append(branches, plan.norBranches...)
+	for _, predicates := range branches {
 		for _, predicate := range predicates {
 			for _, value := range predicate.values {
 				if value.Type == bson.TypeRegex {

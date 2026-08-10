@@ -61,3 +61,37 @@ func TestMongoNegativePredicateRejectsMalformedOperands(t *testing.T) {
 		}
 	}
 }
+
+func TestMongoTopLevelNorCombinesWithSiblingPredicates(t *testing.T) {
+	filter, err := bson.Marshal(bson.D{{Key: "tenant", Value: "a"}, {Key: "$nor", Value: bson.A{
+		bson.D{{Key: "score", Value: int32(1)}},
+		bson.D{{Key: "state", Value: "disabled"}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := parseFindPlan(nil, wire.Document(filter))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		doc  bson.D
+		want bool
+	}{
+		{bson.D{{Key: "tenant", Value: "a"}, {Key: "score", Value: int32(2)}}, true},
+		{bson.D{{Key: "tenant", Value: "a"}, {Key: "state", Value: "disabled"}}, false},
+		{bson.D{{Key: "tenant", Value: "b"}, {Key: "score", Value: int32(2)}}, false},
+	} {
+		raw, err := bson.Marshal(test.doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := documentMatchesPlan(wire.Document(raw), plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("doc %v match=%v want %v", test.doc, got, test.want)
+		}
+	}
+}

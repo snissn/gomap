@@ -878,7 +878,7 @@ func TestFindPlanFinalizationCachesCompoundInForReadAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal filter: %v", err)
 	}
-	predicates, branches, err := parseFindFilter(wire.Document(filterBytes))
+	predicates, branches, _, err := parseFindFilter(wire.Document(filterBytes))
 	if err != nil {
 		t.Fatalf("parse filter: %v", err)
 	}

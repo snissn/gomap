@@ -65,14 +65,15 @@ type findHint struct {
 }
 
 type findPlan struct {
-	predicates []findPredicate
-	orBranches [][]findPredicate
-	sort       findSort
-	skip       int32
-	limit      int32
-	hint       findHint
-	projection compiledProjection
-	stats      *findExecutionStats
+	predicates  []findPredicate
+	orBranches  [][]findPredicate
+	norBranches [][]findPredicate
+	sort        findSort
+	skip        int32
+	limit       int32
+	hint        findHint
+	projection  compiledProjection
+	stats       *findExecutionStats
 }
 
 // cloneFindPlanForCursor detaches predicate BSON values from the wire command
@@ -100,6 +101,10 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 	out.orBranches = make([][]findPredicate, len(plan.orBranches))
 	for i := range plan.orBranches {
 		out.orBranches[i] = clonePredicates(plan.orBranches[i])
+	}
+	out.norBranches = make([][]findPredicate, len(plan.norBranches))
+	for i := range plan.norBranches {
+		out.norBranches[i] = clonePredicates(plan.norBranches[i])
 	}
 	out.sort.terms = append([]findSortTerm(nil), plan.sort.terms...)
 	out.hint.components = append([]collections.IndexComponent(nil), plan.hint.components...)
@@ -264,7 +269,7 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
-	predicates, orBranches, err := parseFindFilter(filter)
+	predicates, orBranches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return findPlan{}, err
 	}
@@ -289,13 +294,14 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 		return findPlan{}, err
 	}
 	return finalizeFindPlan(findPlan{
-		predicates: predicates,
-		orBranches: orBranches,
-		sort:       sortSpec,
-		skip:       skip,
-		limit:      limit,
-		hint:       hint,
-		projection: projection,
+		predicates:  predicates,
+		orBranches:  orBranches,
+		norBranches: norBranches,
+		sort:        sortSpec,
+		skip:        skip,
+		limit:       limit,
+		hint:        hint,
+		projection:  projection,
 	}), nil
 }
 
@@ -647,7 +653,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 // accounting. Ordinary find requests must not branch on nil diagnostics for
 // every scanned record.
 func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && len(plan.norBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -656,7 +662,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
 		var match, ok bool
 		var err error
-		if len(plan.orBranches) == 0 {
+		if len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 			if err != nil {
 				return false, err
@@ -666,7 +672,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 			}
 		}
 		var doc wire.Document
-		if !ok || len(plan.orBranches) > 0 {
+		if !ok || len(plan.orBranches) > 0 || len(plan.norBranches) > 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -683,7 +689,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 			matched++
 			return true, nil
 		}
-		if ok && len(plan.orBranches) == 0 {
+		if ok && len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -706,7 +712,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 }
 
 func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && len(plan.norBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -716,7 +722,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 		plan.recordCandidate()
 		var match, ok bool
 		var err error
-		if len(plan.orBranches) == 0 {
+		if len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 			if err != nil {
 				return false, err
@@ -726,7 +732,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 			}
 		}
 		var doc wire.Document
-		if !ok || len(plan.orBranches) > 0 {
+		if !ok || len(plan.orBranches) > 0 || len(plan.norBranches) > 0 {
 			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
@@ -744,7 +750,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 			matched++
 			return true, nil
 		}
-		if ok && len(plan.orBranches) == 0 {
+		if ok && len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
@@ -1611,53 +1617,64 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 }
 
 func parseFindPredicates(filter wire.Document) ([]findPredicate, error) {
-	predicates, _, err := parseFindFilter(filter)
+	predicates, _, _, err := parseFindFilter(filter)
 	return predicates, err
 }
 
-func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, error) {
+func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, [][]findPredicate, error) {
 	if filter == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	elements, err := bson.Raw(filter).Elements()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var predicates []findPredicate
 	var orBranches [][]findPredicate
+	var norBranches [][]findPredicate
 	for _, elem := range elements {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if key == "$or" {
 			if orBranches != nil {
-				return nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
+				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
 			}
 			orBranches, err = parseOrPredicates(elem.Value())
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
+			}
+			continue
+		}
+		if key == "$nor" {
+			if norBranches != nil {
+				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $nor")
+			}
+			norBranches, err = parseOrPredicates(elem.Value())
+			if err != nil {
+				return nil, nil, nil, err
 			}
 			continue
 		}
 		if key == "$and" {
 			parsed, err := parseAndPredicates(elem.Value())
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			predicates = append(predicates, parsed...)
 			continue
 		}
 		if strings.HasPrefix(key, "$") {
-			return nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
+			return nil, nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
 		}
 		parsed, err := parseFieldPredicate(key, elem.Value())
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		predicates = append(predicates, parsed...)
 	}
-	return predicates, orBranches, nil
+	return predicates, orBranches, norBranches, nil
 }
 
 func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
@@ -1896,8 +1913,11 @@ func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPre
 func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
 	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	match, err := documentMatchesPredicatesWithBudget(doc, plan.predicates, &remainingDecimal128Normalizations)
-	if err != nil || !match || len(plan.orBranches) == 0 {
+	if err != nil || !match {
 		return match, err
+	}
+	if len(plan.orBranches) != 0 {
+		match = false
 	}
 	for _, branch := range plan.orBranches {
 		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
@@ -1905,10 +1925,23 @@ func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
 			return false, err
 		}
 		if match {
-			return true, nil
+			match = true
+			break
 		}
 	}
-	return false, nil
+	if !match {
+		return false, nil
+	}
+	for _, branch := range plan.norBranches {
+		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
+		if err != nil {
+			return false, err
+		}
+		if match {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {

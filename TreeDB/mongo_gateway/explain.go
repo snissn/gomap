@@ -248,7 +248,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	predicates, branches, err := parseFindFilter(filter)
+	predicates, branches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -256,7 +256,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, norBranches: norBranches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		return int64(len(result.docs)), err
 	})
@@ -288,11 +288,11 @@ func (s *Server) explainDistinctResponse(ctx context.Context, command wire.Docum
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	predicates, branches, err := parseFindFilter(filter)
+	predicates, branches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, norBranches: norBranches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		if err != nil {
 			return 0, err

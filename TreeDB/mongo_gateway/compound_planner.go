@@ -35,7 +35,7 @@ func compoundIndexComponents(idx collections.IndexDefinition) []collections.Inde
 }
 
 func compoundIndexPlans(meta collections.CollectionMeta, plan findPlan) []compoundIndexPlan {
-	if len(plan.orBranches) != 0 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 {
 		return nil
 	}
 	out := make([]compoundIndexPlan, 0)
