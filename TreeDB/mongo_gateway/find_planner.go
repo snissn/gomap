@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -92,14 +93,28 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 	return out
 }
 
-// findPlanCursorRetainedBytes is the BSON payload retained by a cloned plan.
-// It intentionally counts every cloned predicate occurrence: cloneFindPlanForCursor
-// owns each raw value independently so aliases in the request buffer are not
-// retained by a resumable cursor.
+// findPlanCursorRetainedBytes counts all payloads retained by a cloned plan.
+// Raw BSON values are cloned per occurrence. Command strings are only copied
+// as headers, so aliases of the same backing bytes are charged once while
+// equal text backed by separate command allocations is charged separately.
 func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes := 0
+	type stringAllocation struct {
+		data *byte
+		len  int
+	}
+	seenStrings := make(map[stringAllocation]struct{})
+	addString := func(value string) {
+		allocation := stringAllocation{data: unsafe.StringData(value), len: len(value)}
+		if _, duplicate := seenStrings[allocation]; duplicate {
+			return
+		}
+		seenStrings[allocation] = struct{}{}
+		bytes += len(value)
+	}
 	add := func(predicates []findPredicate) {
 		for _, predicate := range predicates {
+			addString(predicate.field)
 			for _, value := range predicate.values {
 				bytes += len(value.Value)
 			}
@@ -110,7 +125,15 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 		add(branch)
 	}
 	for field := range plan.projection.fields {
-		bytes += len(field)
+		addString(field)
+	}
+	addString(plan.sort.field)
+	for _, term := range plan.sort.terms {
+		addString(term.field)
+	}
+	addString(plan.hint.name)
+	for _, component := range plan.hint.components {
+		addString(component.Field)
 	}
 	return bytes
 }
