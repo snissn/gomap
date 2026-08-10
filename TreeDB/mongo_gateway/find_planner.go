@@ -224,15 +224,16 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 			return findPlannerSelection{stage: "primary_lookup"}
 		}
-		if probes := findIndexProbes(meta, plan); len(probes) != 0 {
-			return findPlannerSelection{stage: probes[0].stage, indexName: probes[0].idx.Name, indexField: probes[0].idx.Field}
-		}
 	}
-	if compound, ok := compoundIndexPlanFor(meta, plan); ok {
+	compound, compoundOK := compoundIndexPlanFor(meta, plan)
+	if compoundOK && !compoundPlanDeferredToLegacyLookup(meta, plan) {
 		return findPlannerSelection{stage: "compound_index_scan", indexName: compound.idx.Name, indexField: compound.idx.Field, residualFilters: compound.residualFilters, sortSatisfied: compound.sortSatisfied, equalityPrefix: compound.equalityPrefix, hasRange: compound.hasRange, reverse: compound.reverse}
 	}
 	if probes := findIndexProbes(meta, plan); len(probes) != 0 {
 		return findPlannerSelection{stage: probes[0].stage, indexName: probes[0].idx.Name, indexField: probes[0].idx.Field}
+	}
+	if compoundOK {
+		return findPlannerSelection{stage: "compound_index_scan", indexName: compound.idx.Name, indexField: compound.idx.Field, residualFilters: compound.residualFilters, sortSatisfied: compound.sortSatisfied, equalityPrefix: compound.equalityPrefix, hasRange: compound.hasRange, reverse: compound.reverse}
 	}
 	return findPlannerSelection{stage: "bounded_scan"}
 }

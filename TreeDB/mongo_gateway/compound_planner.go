@@ -77,6 +77,21 @@ func compoundPlanPaginationSafe(candidate compoundIndexPlan, plan findPlan) bool
 	return candidate.residualFilters == 0 && (plan.sort.field == "" || candidate.sortSatisfied)
 }
 
+// compoundPlanDeferredToLegacyLookup keeps the established selective legacy
+// path available for unhinted queries only when it cannot discard a compound
+// ordering advantage. A requested sort that a compound index satisfies is a
+// real execution benefit: selecting a scalar equality probe instead would
+// force an in-memory sort and make explain's selected plan disagree with the
+// executor. No requested sort is deliberately order-irrelevant, so the
+// legacy probe remains preferred there.
+func compoundPlanDeferredToLegacyLookup(meta collections.CollectionMeta, plan findPlan) bool {
+	if plan.hint.present || len(findIndexProbes(meta, plan)) == 0 {
+		return false
+	}
+	candidate, ok := compoundIndexPlanFor(meta, plan)
+	return !ok || plan.sort.field == "" || !candidate.sortSatisfied
+}
+
 // mongoPrimaryKeyLess compares canonical gateway primary keys by their BSON
 // _id values. Storage byte order is intentionally not Mongo's public _id
 // order (for example strings retain BSON's little-endian length).
@@ -391,7 +406,7 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 			return nil, compoundIndexPlan{}, false, nil
 		}
-		if len(findIndexProbes(col.MetaView(), plan)) != 0 {
+		if compoundPlanDeferredToLegacyLookup(col.MetaView(), plan) {
 			return nil, compoundIndexPlan{}, false, nil
 		}
 	}
