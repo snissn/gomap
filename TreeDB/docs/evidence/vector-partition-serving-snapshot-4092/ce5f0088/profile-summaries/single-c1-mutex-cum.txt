@@ -1,0 +1,68 @@
+File: treedb_vector_partition_bench
+Build ID: 98e16ee18e0b970254196800f211453591690330
+Type: delay
+Time: 2026-08-09 17:07:07 HST
+Showing nodes accounting for 37.78ms, 100% of 37.78ms total
+Dropped 230 nodes (cum <= 0.19ms)
+Showing top 60 nodes out of 65
+      flat  flat%   sum%        cum   cum%
+   33.93ms 89.81% 89.81%    33.93ms 89.81%  runtime.unlock (partial-inline)
+         0     0% 89.81%    19.83ms 52.48%  runtime.systemstack
+         0     0% 89.81%    16.86ms 44.62%  runtime.gcBgMarkWorker
+         0     0% 89.81%    13.14ms 34.77%  runtime.schedule
+         0     0% 89.81%    12.08ms 31.98%  runtime.mcall
+         0     0% 89.81%    11.92ms 31.56%  runtime.findRunnable
+         0     0% 89.81%    11.77ms 31.16%  runtime.park_m
+         0     0% 89.81%    11.74ms 31.08%  runtime.forEachP (inline)
+         0     0% 89.81%    11.74ms 31.08%  runtime.forEachPInternal
+         0     0% 89.81%    11.74ms 31.07%  runtime.gcMarkDone
+         0     0% 89.81%    11.59ms 30.67%  runtime.gcMarkTermination
+         0     0% 89.81%    11.59ms 30.67%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 89.81%     9.15ms 24.21%  runtime.(*timers).unlock (inline)
+         0     0% 89.81%     9.11ms 24.10%  runtime.(*timers).check
+         0     0% 89.81%     7.95ms 21.05%  runtime.stealWork
+         0     0% 89.81%     5.31ms 14.05%  runtime.gcBgMarkWorker.func2
+         0     0% 89.81%     5.31ms 14.05%  runtime.gcDrain
+         0     0% 89.81%     4.14ms 10.96%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 89.81%     3.68ms  9.74%  runtime.gcFlushBgCredit
+    3.37ms  8.93% 98.74%     3.37ms  8.93%  runtime._LostContendedRuntimeLock
+         0     0% 98.74%     2.46ms  6.51%  runtime.(*mheap).freeSpan (inline)
+         0     0% 98.74%     2.46ms  6.51%  runtime.(*sweepLocked).sweep
+         0     0% 98.74%     2.46ms  6.50%  runtime.(*sweepLocked).sweep.(*mheap).freeSpan.func3
+         0     0% 98.74%     2.43ms  6.44%  runtime.bgsweep
+         0     0% 98.74%     2.43ms  6.44%  runtime.sweepone
+         0     0% 98.74%     2.13ms  5.65%  runtime.goschedImpl
+         0     0% 98.74%     1.91ms  5.05%  runtime.gopreempt_m (inline)
+         0     0% 98.74%     1.85ms  4.89%  runtime.morestack
+         0     0% 98.74%     1.85ms  4.89%  runtime.newstack
+         0     0% 98.74%     1.72ms  4.56%  runtime.(*mheap).allocSpan
+         0     0% 98.74%     1.72ms  4.55%  runtime.(*mheap).allocManual
+         0     0% 98.74%     1.72ms  4.55%  runtime.markroot
+         0     0% 98.74%     1.72ms  4.55%  runtime.markroot.func1
+         0     0% 98.74%     1.72ms  4.55%  runtime.scanstack
+         0     0% 98.74%     1.68ms  4.45%  runtime.getempty
+         0     0% 98.74%     1.68ms  4.45%  runtime.getempty.func1
+         0     0% 98.74%     1.68ms  4.44%  runtime.scanframeworker
+         0     0% 98.74%     1.22ms  3.24%  runtime.wakep
+         0     0% 98.74%     1.21ms  3.21%  runtime.resetspinning
+         0     0% 98.74%     1.17ms  3.10%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 98.74%     1.14ms  3.00%  runtime.runSafePointFn
+         0     0% 98.74%     1.13ms  3.00%  runtime.(*timer).unlockAndRun
+         0     0% 98.74%     1.13ms  3.00%  runtime.(*timers).run
+         0     0% 98.74%     1.09ms  2.89%  runtime.injectglist
+         0     0% 98.74%     1.09ms  2.89%  runtime.injectglist.func1
+         0     0% 98.74%     1.08ms  2.86%  runtime.scanblock
+         0     0% 98.74%     1.04ms  2.74%  runtime.(*stackScanState).putPtr
+         0     0% 98.74%     0.60ms  1.59%  runtime.(*stackScanState).addObject
+    0.48ms  1.26%   100%     0.48ms  1.26%  sync.(*Mutex).Unlock
+         0     0%   100%     0.43ms  1.14%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0%   100%     0.43ms  1.14%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0%   100%     0.43ms  1.14%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0%   100%     0.43ms  1.14%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+         0     0%   100%     0.42ms  1.11%  context.(*cancelCtx).propagateCancel
+         0     0%   100%     0.42ms  1.11%  context.WithDeadline (inline)
+         0     0%   100%     0.42ms  1.11%  context.WithDeadlineCause
+         0     0%   100%     0.42ms  1.11%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPRequestContextV1
+         0     0%   100%     0.37ms  0.99%  runtime.mallocgc
+         0     0%   100%     0.30ms  0.78%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0%   100%     0.30ms  0.78%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
