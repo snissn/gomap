@@ -3,6 +3,7 @@ package mongogateway
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -149,13 +150,16 @@ func TestMongoCompoundPlanEqualityPrefixRangeAndSort(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 406505, reverse)), []string{"a", "b", "c"})
 }
 
-func TestMongoCompoundPlanTemporalSortMatchesBoundedComparator(t *testing.T) {
+func TestMongoCompoundPlanScalarSortMatchesBoundedComparator(t *testing.T) {
 	cases := []struct {
 		name   string
 		values []any
 	}{
 		{name: "datetime", values: []any{bson.DateTime(255), bson.DateTime(256)}},
 		{name: "timestamp", values: []any{bson.Timestamp{T: 255, I: 1}, bson.Timestamp{T: 256, I: 1}}},
+		// BSON-v2 places NaN before every finite numeric value. This must agree
+		// with a bounded collection-scan comparator before limit/skip are applied.
+		{name: "nan", values: []any{math.NaN(), float64(0)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,8 +181,8 @@ func TestMongoCompoundPlanTemporalSortMatchesBoundedComparator(t *testing.T) {
 					}
 					indexedResponse := serveCommand(t, server, int32(406508+direction*10+skip), command(indexed))
 					scannedResponse := serveCommand(t, server, int32(406528+direction*10+skip), command(scanned))
-					indexedID := temporalSortBatchID(t, cursorFirstBatch(t, indexedResponse))
-					scannedID := temporalSortBatchID(t, cursorFirstBatch(t, scannedResponse))
+					indexedID := scalarSortBatchID(t, cursorFirstBatch(t, indexedResponse))
+					scannedID := scalarSortBatchID(t, cursorFirstBatch(t, scannedResponse))
 					if indexedID != scannedID {
 						t.Fatalf("direction=%d skip=%d indexed=%q scanned=%q", direction, skip, indexedID, scannedID)
 					}
@@ -201,10 +205,11 @@ func TestMongoCompoundPlanTemporalSortMatchesBoundedComparator(t *testing.T) {
 	}
 }
 
-func TestCompareRawValuesTemporalOrderMatchesBSONV2Codec(t *testing.T) {
+func TestCompareRawValuesScalarOrderMatchesBSONV2Codec(t *testing.T) {
 	cases := [][]bson.RawValue{
 		{mustRawValue(t, bson.DateTime(-1)), mustRawValue(t, bson.DateTime(0)), mustRawValue(t, bson.DateTime(255)), mustRawValue(t, bson.DateTime(256))},
 		{mustRawValue(t, bson.Timestamp{T: 1, I: 2}), mustRawValue(t, bson.Timestamp{T: 1, I: 3}), mustRawValue(t, bson.Timestamp{T: 2, I: 0})},
+		{mustRawValue(t, math.NaN()), mustRawValue(t, math.Inf(-1)), mustRawValue(t, int32(0)), mustRawValue(t, math.Inf(1))},
 	}
 	for _, values := range cases {
 		for left := range values {
@@ -217,7 +222,7 @@ func TestCompareRawValuesTemporalOrderMatchesBSONV2Codec(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got, want := temporalOrderSign(compareRawValues(values[left], values[right])), temporalOrderSign(bytes.Compare(leftEncoded, rightEncoded)); got != want {
+				if got, want := scalarOrderSign(compareRawValues(values[left], values[right])), scalarOrderSign(bytes.Compare(leftEncoded, rightEncoded)); got != want {
 					t.Fatalf("codec/comparator order got=%d want=%d left=%v right=%v", got, want, values[left], values[right])
 				}
 			}
@@ -225,7 +230,39 @@ func TestCompareRawValuesTemporalOrderMatchesBSONV2Codec(t *testing.T) {
 	}
 }
 
-func temporalSortBatchID(tb testing.TB, batch []bson.Raw) string {
+func TestMongoCompoundPlanDecimal128SortMatchesBoundedComparator(t *testing.T) {
+	decimal, err := bson.ParseDecimal128("0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406555, bson.D{{Key: "createIndexes", Value: "indexed"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "value", Value: int32(1)}}}, {Key: "name", Value: "tenant_value"}}}}, {Key: "$db", Value: "app"}}))
+	docs := bson.A{
+		bson.D{{Key: "_id", Value: "decimal"}, {Key: "tenant", Value: "t"}, {Key: "value", Value: decimal}},
+		bson.D{{Key: "_id", Value: "string"}, {Key: "tenant", Value: "t"}, {Key: "value", Value: "a"}},
+	}
+	assertOK(t, serveCommand(t, server, 406556, bson.D{{Key: "insert", Value: "indexed"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406557, bson.D{{Key: "insert", Value: "scanned"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	for _, direction := range []int32{1, -1} {
+		command := func(collection string) bson.D {
+			return bson.D{{Key: "find", Value: collection}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "value", Value: direction}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+		}
+		indexedID := scalarSortBatchID(t, cursorFirstBatch(t, serveCommand(t, server, 406558+direction, command("indexed"))))
+		scannedID := scalarSortBatchID(t, cursorFirstBatch(t, serveCommand(t, server, 406560+direction, command("scanned"))))
+		if indexedID != scannedID {
+			t.Fatalf("direction=%d indexed=%q scanned=%q", direction, indexedID, scannedID)
+		}
+		want := "decimal"
+		if direction < 0 {
+			want = "string"
+		}
+		if indexedID != want {
+			t.Fatalf("direction=%d ID=%q want %q", direction, indexedID, want)
+		}
+	}
+}
+
+func scalarSortBatchID(tb testing.TB, batch []bson.Raw) string {
 	tb.Helper()
 	if len(batch) != 1 {
 		tb.Fatalf("temporal sort batch length=%d, want 1", len(batch))
@@ -237,7 +274,7 @@ func temporalSortBatchID(tb testing.TB, batch []bson.Raw) string {
 	return id
 }
 
-func temporalOrderSign(value int) int {
+func scalarOrderSign(value int) int {
 	if value < 0 {
 		return -1
 	}

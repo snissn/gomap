@@ -2525,7 +2525,7 @@ func compareRawNumbers(left, right bson.RawValue) int {
 
 func numberSortRank(value bson.RawValue, finite bool) int {
 	if finite {
-		return 1
+		return 2
 	}
 	if rank, ok := rawNumberNonFiniteRank(value); ok {
 		return rank
@@ -2539,11 +2539,11 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 		v, ok := value.DoubleOK()
 		if ok {
 			switch {
-			case math.IsInf(v, -1):
-				return 0, true
-			case math.IsInf(v, 1):
-				return 2, true
 			case math.IsNaN(v):
+				return 0, true
+			case math.IsInf(v, -1):
+				return 1, true
+			case math.IsInf(v, 1):
 				return 3, true
 			}
 		}
@@ -2551,13 +2551,13 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 		v, ok := value.Decimal128OK()
 		if ok {
 			if v.IsNaN() {
-				return 3, true
+				return 0, true
 			}
 			switch v.IsInf() {
 			case -1:
-				return 0, true
+				return 1, true
 			case 1:
-				return 2, true
+				return 3, true
 			}
 		}
 	}
@@ -2566,7 +2566,7 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 
 func rawValueIsNaN(value bson.RawValue) bool {
 	rank, ok := rawNumberNonFiniteRank(value)
-	return ok && rank == 3
+	return ok && rank == 0
 }
 
 func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
@@ -2608,8 +2608,8 @@ func rawNumberComparable(value bson.RawValue) bool {
 	if _, ok := rawNumberRat(value); ok {
 		return true
 	}
-	rank, ok := rawNumberNonFiniteRank(value)
-	return ok && rank != 3
+	_, ok := rawNumberNonFiniteRank(value)
+	return ok && !rawValueIsNaN(value)
 }
 
 func decimal128Rat(value bson.Decimal128) (*big.Rat, bool) {
@@ -2654,7 +2654,7 @@ func bsonTypeSortRank(t bson.Type) int {
 		return 0
 	case bson.TypeNull:
 		return 1
-	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble:
+	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble, bson.TypeDecimal128:
 		return 2
 	case bson.TypeString:
 		return 3
