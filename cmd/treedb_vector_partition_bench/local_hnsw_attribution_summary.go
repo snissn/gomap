@@ -56,7 +56,7 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 	cases := make([]localHNSWAttributionTimingCaseV1, 0, len(ordinals))
 	artifact, err := localHNSWAttributionWriteGzipJSONLV1(sidecarPath, func(encoder *json.Encoder) (int, error) {
 		for i, ordinal := range ordinals {
-			if ordinal < 0 || i > 0 && ordinals[i-1] >= ordinal || len(queries[i]) == 0 {
+			if ordinal < 0 || !localHNSWCalibrationOrdinalV1(ordinal) || i > 0 && ordinals[i-1] >= ordinal || len(queries[i]) == 0 {
 				return 0, errors.New("invalid local HNSW calibration ordinal")
 			}
 			canonical, err := localHNSWAttributionCanonicalResultsV1(truths[i], true)
