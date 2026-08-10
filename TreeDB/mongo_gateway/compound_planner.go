@@ -341,6 +341,17 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 	if !ok || err != nil {
 		return nil, candidate, ok, err
 	}
+	if candidate.residualFilters == 0 && candidate.sortSatisfied {
+		start := int(plan.skip)
+		if start >= len(ids) {
+			ids = nil
+		} else {
+			ids = ids[start:]
+		}
+		if plan.limit > 0 && int(plan.limit) < len(ids) {
+			ids = ids[:plan.limit]
+		}
+	}
 	maxDocuments := s.maxFindScanDocuments()
 	docs := make([]wire.Document, 0, len(ids))
 	materializedBytes := 0

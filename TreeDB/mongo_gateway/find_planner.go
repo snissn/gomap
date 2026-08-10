@@ -299,14 +299,15 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 				filtered = append(filtered, doc)
 			}
 		}
-		if plan.skip > 0 {
+		alreadyPaginated := compound.residualFilters == 0 && compound.sortSatisfied
+		if plan.skip > 0 && !alreadyPaginated {
 			if int(plan.skip) >= len(filtered) {
 				filtered = nil
 			} else {
 				filtered = filtered[plan.skip:]
 			}
 		}
-		if plan.limit > 0 && int(plan.limit) < len(filtered) {
+		if plan.limit > 0 && !alreadyPaginated && int(plan.limit) < len(filtered) {
 			filtered = filtered[:plan.limit]
 		}
 		plan.recordCompoundWinner(compound)

@@ -235,6 +235,11 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 				assertOK(t, serveCommand(t, server, 219, bson.D{{Key: "insert", Value: "planner_events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "low"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}}, bson.D{{Key: "_id", Value: "high"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(2)}}}}, {Key: "$db", Value: "app"}}))
 				resp := serveCommand(t, server, 220, bson.D{{Key: "find", Value: "planner_events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}, {Key: "$db", Value: "app"}})
 				assertBatchIDs(t, cursorFirstBatch(t, resp), []string{"high", "low"})
+				explain := serveCommand(t, server, 221, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "planner_events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}}}, {Key: "$db", Value: "app"}})
+				assertOK(t, explain)
+				if stage := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValue(); stage != "compound_index_scan" {
+					t.Fatalf("compound planner capability stage=%q want compound_index_scan: %s", stage, explain)
+				}
 			},
 		},
 		{

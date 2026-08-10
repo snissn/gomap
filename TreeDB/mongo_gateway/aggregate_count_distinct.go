@@ -473,11 +473,7 @@ func executeAggregateStages(docs []wire.Document, stages []aggregateStage) ([]wi
 			docs = projected
 		case "$sort":
 			sort.SliceStable(docs, func(i, j int) bool {
-				cmp := compareDocumentField(docs[i], docs[j], stage.plan.sort.field)
-				if stage.plan.sort.desc {
-					return cmp > 0
-				}
-				return cmp < 0
+				return compareDocumentsForFindSort(docs[i], docs[j], stage.plan.sort) < 0
 			})
 		case "$skip":
 			if stage.amount >= len(docs) {
