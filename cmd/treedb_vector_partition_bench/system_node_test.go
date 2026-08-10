@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,11 +54,16 @@ func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: filepath.Join(root, "dataset"),
 		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: state, PublicListen: "127.0.0.1:22004",
 		ReadyPath: filepath.Join(state, "ready.json"), ProfileDirectory: filepath.Join(state, "profiles"), LocalGroups: local, Endpoints: endpoints,
+		RuntimeOwnership: &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "2,0-1", GoMemoryLimitBytes: 1 << 30},
 	}
 	path := filepath.Join(root, "config.json")
 	writeVectorPartitionSystemJSONTestV1(t, path, config)
-	if _, err := loadVectorPartitionSystemNodeConfigV1(path); err != nil {
+	loaded, err := loadVectorPartitionSystemNodeConfigV1(path)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if loaded.RuntimeOwnership == nil || loaded.RuntimeOwnership.CPUSet != "0-2" || loaded.RuntimeOwnership.GOMAXPROCS != 3 {
+		t.Fatalf("canonical runtime ownership = %+v", loaded.RuntimeOwnership)
 	}
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state directory created during config load: %v", err)
@@ -325,6 +331,7 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 			DatabaseDirectory: filepath.Join(root, "db-"+group), StateDirectory: filepath.Join(root, "state-"+group),
 			ReadyPath: filepath.Join(root, "state-"+group, "ready.json"), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}},
 			Endpoints: endpoints, GroupAppliedIndexes: applied,
+			RuntimeOwnership: &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: fmt.Sprintf("%d-%d", index*3, index*3+2), GOMAXPROCS: 3, GoMemoryLimitBytes: 6 << 30},
 		}
 	}
 	configs[0].PublicListen = "127.0.0.1:22000"
@@ -349,6 +356,24 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	if _, err := validateVectorPartitionSystemTopologyV1(containerConfigs); err != nil {
 		t.Fatalf("container topology with unique mount destinations: %v", err)
 	}
+	savedOwnership := cloneVectorPartitionSystemRuntimeOwnershipV1(configs[0].RuntimeOwnership)
+	configs[0].RuntimeOwnership = nil
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "requires explicit runtime ownership") {
+		t.Fatalf("missing runtime ownership error = %v", err)
+	}
+	configs[0].RuntimeOwnership = &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "3-5", GOMAXPROCS: 3, GoMemoryLimitBytes: 6 << 30}
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "owned by multiple nodes") {
+		t.Fatalf("overlapping runtime ownership error = %v", err)
+	}
+	configs[0].RuntimeOwnership = &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "1024", GOMAXPROCS: 1, GoMemoryLimitBytes: 6 << 30}
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("out-of-range runtime ownership error = %v", err)
+	}
+	configs[0].RuntimeOwnership = &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "0-2", GOMAXPROCS: 4, GoMemoryLimitBytes: 6 << 30}
+	if _, err := validateVectorPartitionSystemTopologyV1(configs); err == nil || !strings.Contains(err.Error(), "GOMAXPROCS") {
+		t.Fatalf("overcommitted runtime ownership error = %v", err)
+	}
+	configs[0].RuntimeOwnership = savedOwnership
 	var configPaths []string
 	for index, config := range configs {
 		path := filepath.Join(root, fmt.Sprintf("node-%d.json", index))
@@ -567,6 +592,38 @@ func TestVectorPartitionSystemBenchRequiresEveryLiveNodeIdentityV1(t *testing.T)
 	}
 }
 
+func TestVectorPartitionSystemBenchRequiresEffectiveRuntimeOwnershipV1(t *testing.T) {
+	ownership := &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "2-3", GOMAXPROCS: 2, GoMemoryLimitBytes: 1 << 30}
+	topology := vectorPartitionSystemTopologyEvidenceV1{
+		Nodes:     []vectorPartitionSystemTopologyNodeV1{{NodeID: "node-a", NodeConfigSHA256: strings.Repeat("a", 64), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: "group-a", Listen: "127.0.0.1:1"}}, RuntimeOwnership: ownership}},
+		Endpoints: map[string]string{"group-a": "127.0.0.1:1"},
+	}
+	identity := nativewire.VectorPartitionShardEndpointIdentityV1{
+		Version: 1, GroupID: "group-a", InstanceIdentity: strings.Repeat("a", 64),
+		ProcessRuntimeStats: nativewire.VectorPartitionProcessRuntimeStatsV1{LogicalCPUs: 4, GOMAXPROCS: 2, GoMemoryLimitBytes: 1 << 30, EffectiveCPUSet: "2-3"},
+	}
+	probe := func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error) {
+		return identity, nil
+	}
+	if _, err := vectorPartitionSystemCatalogReadSnapshotV1(t.Context(), topology, probe); err != nil {
+		t.Fatal(err)
+	}
+	identity.ProcessRuntimeStats.GOMAXPROCS = 3
+	if _, err := vectorPartitionSystemCatalogReadSnapshotV1(t.Context(), topology, probe); err == nil || !strings.Contains(err.Error(), "runtime ownership") {
+		t.Fatalf("mismatched runtime ownership error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemRuntimeOwnershipUnsupportedPlatformV1(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("Linux supports runtime ownership")
+	}
+	err := applyVectorPartitionSystemRuntimeOwnershipV1(&vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "0", GOMAXPROCS: 1, GoMemoryLimitBytes: 1 << 30})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unsupported runtime ownership error = %v", err)
+	}
+}
+
 func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing.T) {
 	dataset := writeFixtureForTest(t, 10, 2, 2)
 	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", t.TempDir())
@@ -586,6 +643,13 @@ func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing
 
 func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing.T) {
 	requireM8PersistentAssetSupportV1(t)
+	if runtime.GOOS != "linux" {
+		t.Skip("native runtime ownership is Linux-only")
+	}
+	_, runtimeCPUs, err := canonicalVectorPartitionSystemCPUSetV1(vectorPartitionSystemEffectiveCPUSetV1())
+	if err != nil || len(runtimeCPUs) < 4 {
+		t.Skipf("four disjoint runtime CPUs unavailable: %v", err)
+	}
 	dataset := writeFixtureForTest(t, 64, 8, 8)
 	fixture, err := loadFixture(dataset)
 	if err != nil {
@@ -631,6 +695,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 			DatabaseDirectory: databases[index], StateDirectory: states[index], ReadyPath: ready[index],
 			LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}}, Endpoints: endpoints,
 			GroupAppliedIndexes: applied,
+			RuntimeOwnership:    &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: fmt.Sprint(runtimeCPUs[index]), GOMAXPROCS: 1, GoMemoryLimitBytes: 1 << 30},
 		}
 		if index == 0 {
 			config.PublicListen = publicAddress
@@ -652,6 +717,17 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	for _, index := range []int{1, 2, 3, 0} {
 		processes[index] = startVectorPartitionSystemNodeProcessTestV1(t, configs[index], states[index])
 		waitVectorPartitionSystemReadyTestV1(t, ready[index], processes[index])
+	}
+	for index, path := range ready {
+		var nodeReady vectorPartitionSystemNodeReadyV1
+		raw, err := os.ReadFile(path)
+		if err != nil || json.Unmarshal(raw, &nodeReady) != nil {
+			t.Fatalf("read runtime ownership readiness %d: %v", index, err)
+		}
+		wantCPU := fmt.Sprint(runtimeCPUs[index])
+		if nodeReady.RuntimeOwnership == nil || nodeReady.RuntimeOwnership.CPUSet != wantCPU || nodeReady.EffectiveCPUSet != wantCPU || nodeReady.GOMAXPROCS != 1 || nodeReady.GoMemoryLimit != 1<<30 {
+			t.Fatalf("runtime ownership readiness %d = %+v", index, nodeReady)
+		}
 	}
 	for index, group := range groups {
 		var config vectorPartitionSystemNodeConfigV1
@@ -703,6 +779,14 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 	writeVectorPartitionSystemJSONTestV1(t, configs[3], restartedConfig)
 	processes[3] = startVectorPartitionSystemNodeProcessTestV1(t, configs[3], states[3])
 	waitVectorPartitionSystemReadyTestV1(t, restartedReady, processes[3])
+	var restartedReadyEvidence vectorPartitionSystemNodeReadyV1
+	restartedRaw, err := os.ReadFile(restartedReady)
+	if err != nil || json.Unmarshal(restartedRaw, &restartedReadyEvidence) != nil {
+		t.Fatalf("read restarted runtime ownership: %v", err)
+	}
+	if restartedReadyEvidence.RuntimeOwnership == nil || restartedReadyEvidence.RuntimeOwnership.CPUSet != fmt.Sprint(runtimeCPUs[3]) || restartedReadyEvidence.EffectiveCPUSet != fmt.Sprint(runtimeCPUs[3]) || restartedReadyEvidence.GOMAXPROCS != 1 || restartedReadyEvidence.GoMemoryLimit != 1<<30 {
+		t.Fatalf("restarted runtime ownership = %+v", restartedReadyEvidence)
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		request.Search.Deadline = time.Now().Add(30 * time.Second)
