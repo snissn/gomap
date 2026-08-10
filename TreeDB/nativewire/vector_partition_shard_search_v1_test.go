@@ -54,6 +54,7 @@ type fakeVectorPartitionGenerationSourceV1 struct {
 	manifest  collections.VectorPartitionManifestV1
 	assets    map[uint32]collections.VectorPartitionSearchAssetV1
 	openErr   map[uint32]error
+	openLease map[uint32]*VectorPartitionPartitionSearchLeaseV1
 	pins      int
 	releases  int
 	opens     int
@@ -96,6 +97,9 @@ func (p *fakeVectorPartitionPinnedGenerationV1) OpenPartition(ctx context.Contex
 	p.source.opens++
 	if err := p.source.openErr[partition]; err != nil {
 		return nil, err
+	}
+	if lease := p.source.openLease[partition]; lease != nil {
+		return lease, nil
 	}
 	asset, ok := p.source.assets[partition]
 	if !ok {

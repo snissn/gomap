@@ -250,6 +250,9 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 				return fail(openErr)
 			}
 			if lease == nil || lease.Searcher == nil {
+				if lease != nil {
+					return fail(errors.Join(ErrVectorPartitionShardSearchAssetsUnavailable, lease.Close()))
+				}
 				return fail(ErrVectorPartitionShardSearchAssetsUnavailable)
 			}
 			counts.partitionOpens++

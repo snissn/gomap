@@ -147,6 +147,17 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 	return fixture
 }
 
+func TestVectorPartitionServingSnapshotPublicationClosesMalformedLeaseV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	malformedCloses := 0
+	fixture.sources["group-a"].openLease = map[uint32]*VectorPartitionPartitionSearchLeaseV1{0: {
+		closeFn: func() error { malformedCloses++; return nil },
+	}}
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) || malformedCloses != 1 {
+		t.Fatalf("malformed lease publication error=%v closes=%d", err, malformedCloses)
+	}
+}
+
 func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) {
 	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
 	injected := errors.New("injected partition open failure")
