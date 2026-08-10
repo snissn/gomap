@@ -22,7 +22,7 @@ func TestLocalHNSWAttributionHistoricalBaselineV1(t *testing.T) {
 		return path
 	}
 	cell := func(probes int, recall float64) vectorPartitionSystemBenchCellV1 {
-		return vectorPartitionSystemBenchCellV1{Status: "pass", Budget: map[string]int{"probes": probes}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 1000, CompletedQueries: 1000, ResultCount: 10000, RecallAt10: recall, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3}, Counters: map[string]uint64{"candidates": 1, "edges": 1}}
+		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 1000, CompletedQueries: 1000, ResultCount: 10000, RecallAt10: recall, QPS: 1, P50Nanos: 1, P95Nanos: 2, P99Nanos: 3}, Counters: map[string]uint64{"candidates": 1, "edges": 1}}
 	}
 	report := vectorPartitionSystemBenchResultV1{SchemaVersion: 1, ResultKind: "vector_partition_system_bench_v1", Topology: "single_daemon_four_group", TopologyIdentitySHA256: localHNSWAttributionHistoricalTopologySHA256V1, DatasetChecksum: strings.Repeat("a", 64), TruthArtifactSHA256: strings.Repeat("b", 64), TopK: 10, EfSearch: 128, Cells: []vectorPartitionSystemBenchCellV1{cell(2, .9247), cell(16, .9265)}}
 	encode := func(name string, r vectorPartitionSystemBenchResultV1) (string, string) {
