@@ -1042,6 +1042,45 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	return c.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), index, generation, partition)
 }
 
+// OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1 opens one
+// freshly materialized local pack without publishing its manifest or acquiring
+// a production generation pin. It is for bounded offline attribution only.
+// The caller keeps the materializer's StableResourceSet alive until Close.
+func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1) (*VectorPartitionLocalSearcherV1, error) {
+	if c == nil || c.db == nil || ctx == nil {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if manifest.Collection != c.name || manifest.IndexName != index || manifest.Generation == 0 || asset.PartitionID >= manifest.PartitionCount || asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+		return nil, fmt.Errorf("%w: offline pack identity", ErrVectorPartitionSearchUnavailable)
+	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
+		return nil, fmt.Errorf("%w: offline index identity", ErrVectorPartitionSearchUnavailable)
+	}
+	source, err := c.VectorPartitionSourceIdentityV1(index)
+	if err != nil || source.Generation != manifest.SourceGeneration || source.Checksum != manifest.SourceChecksum || source.SchemaHash != manifest.SourceSchemaHash || source.RowCount != manifest.SourceRowCount {
+		return nil, fmt.Errorf("%w: offline source identity", ErrVectorPartitionSearchUnavailable)
+	}
+	members, err := vectorPartitionMembershipsForPartitionWithContextV1(ctx, manifest, asset.PartitionID)
+	if err != nil {
+		return nil, err
+	}
+	home, overlap := 0, 0
+	for _, member := range members {
+		if member.kind == VectorPartitionMembershipHomeV1 {
+			home++
+		} else if member.kind == VectorPartitionMembershipOverlapV1 {
+			overlap++
+		} else {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap)
+}
+
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
 // cancellation-aware cold-open boundary used by routed serving. Checks are
 // placed around lifecycle reads, membership scans, checksum streaming, and

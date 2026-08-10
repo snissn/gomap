@@ -106,6 +106,60 @@ func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCancel
 	}
 }
 
+func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Collection, manifest.IndexName, manifest.IndexDefinitionDigest = col.name, def.Name, VectorIndexDefinitionDigestV1(def)
+	manifest.Generation, manifest.PartitionCount = 91, 2
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}, {Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions}}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, manifest, 977, inputs, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, assets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := searcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrongPartition := assets[0]
+	wrongPartition.PartitionID = 1
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongPartition); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong partition err=%v", err)
+	}
+	wrongSource := manifest
+	wrongSource.SourceChecksum++
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, wrongSource, assets[0]); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong source err=%v", err)
+	}
+	wrongMembers := manifest
+	wrongMembers.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 0, PartitionID: 1}}
+	wrongMembers.Canonicalize()
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, wrongMembers, assets[0]); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong membership err=%v", err)
+	}
+	wrongAsset := assets[0]
+	wrongAsset.ID = "wrong"
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongAsset); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong asset err=%v", err)
+	}
+}
+
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
