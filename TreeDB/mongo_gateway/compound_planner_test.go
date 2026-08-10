@@ -511,6 +511,57 @@ func TestMongoCompoundPlanInPrefixSharesOneBoundedWorkBudget(t *testing.T) {
 	assertCommandError(t, resp, "BadValue")
 }
 
+func TestMongoCompoundPlanNoSortLimitPushesExactPrefixWorkBound(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 1
+	assertOK(t, serveCommand(t, server, 4065261, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065262, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(3)}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 4065263, command)
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a"})
+	explain := serveCommand(t, server, 4065264, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	stats := bson.Raw(explain).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 1 {
+		t.Fatalf("candidateDocumentsExamined=%d ok=%v want 1: %s", got, ok, explain)
+	}
+}
+
+func TestMongoCompoundHintExplainExcludesAllLegacyProbes(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065265, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}}}, {Key: "name", Value: "tenant_legacy"}, {Key: "treedbValueType", Value: "string"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}},
+	}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065266, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "hint", Value: "tenant_score"}, {Key: "$db", Value: "app"}}
+	for _, verbosity := range []string{"queryPlanner", "executionStats"} {
+		t.Run(verbosity, func(t *testing.T) {
+			response := serveCommand(t, server, 4065267, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: verbosity}, {Key: "$db", Value: "app"}})
+			assertOK(t, response)
+			planner := bson.Raw(response).Lookup("queryPlanner").Document()
+			if got := planner.Lookup("winningPlan").Document().Lookup("stage").StringValue(); got != "compound_index_scan" {
+				t.Fatalf("winning stage=%q want compound_index_scan: %s", got, response)
+			}
+			usable, err := planner.Lookup("usableIndexes").Array().Values()
+			if err != nil || len(usable) != 1 || usable[0].Document().Lookup("name").StringValue() != "tenant_score" {
+				t.Fatalf("hinted usable indexes=%v err=%v want tenant_score only: %s", usable, err, response)
+			}
+			if candidatePlans := planner.Lookup("candidatePlans"); candidatePlans.Type != 0 {
+				candidates, err := candidatePlans.Array().Values()
+				if err != nil || len(candidates) != 1 || candidates[0].Document().Lookup("indexName").StringValue() != "tenant_score" {
+					t.Fatalf("hinted candidate plans=%v err=%v want tenant_score only: %s", candidates, err, response)
+				}
+			}
+		})
+	}
+}
+
 func TestMongoCompoundPlanInPrefixUsesSharedRemainingBudget(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	server.MaxFindScanDocuments = 4

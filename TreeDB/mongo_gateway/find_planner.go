@@ -120,7 +120,9 @@ type findIndexProbe struct {
 // indexed executor: each entry is a concrete equality or range probe that can
 // actually be issued for this index/value type combination.
 func findIndexProbes(meta collections.CollectionMeta, plan findPlan) []findIndexProbe {
-	if len(plan.orBranches) != 0 {
+	// A strict compound hint is an execution contract, not a preference: legacy
+	// scalar paths must neither compete with it nor leak into explain output.
+	if len(plan.orBranches) != 0 || plan.hint.present {
 		return nil
 	}
 	probes := make([]findIndexProbe, 0)
@@ -306,7 +308,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 				return compareDocumentsForFindSort(filtered[i], filtered[j], plan.sort) < 0
 			})
 		}
-		alreadyPaginated := compound.residualFilters == 0 && compound.sortSatisfied
+		alreadyPaginated := compoundPlanPaginationSafe(compound, plan)
 		if plan.skip > 0 && !alreadyPaginated {
 			if int(plan.skip) >= len(filtered) {
 				filtered = nil

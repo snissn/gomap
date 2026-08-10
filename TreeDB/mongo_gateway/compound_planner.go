@@ -68,6 +68,14 @@ func compoundIndexPlans(meta collections.CollectionMeta, plan findPlan) []compou
 	return out
 }
 
+// compoundPlanPaginationSafe reports whether an exact single-prefix walk may
+// stop after skip+limit candidates. With no requested sort the visible order is
+// intentionally unconstrained, so any prefix order is sufficient; with a
+// requested sort, the physical walk must satisfy the complete gateway order.
+func compoundPlanPaginationSafe(candidate compoundIndexPlan, plan findPlan) bool {
+	return candidate.residualFilters == 0 && (plan.sort.field == "" || candidate.sortSatisfied)
+}
+
 func findHintMatchesIndex(hint findHint, idx collections.IndexDefinition) bool {
 	if !hint.present {
 		return true
@@ -357,7 +365,7 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 	if !ok || err != nil {
 		return nil, candidate, ok, err
 	}
-	if candidate.residualFilters == 0 && candidate.sortSatisfied {
+	if compoundPlanPaginationSafe(candidate, plan) {
 		start := int(plan.skip)
 		if start >= len(ids) {
 			ids = nil
@@ -418,10 +426,11 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
 	// Pagination can bound the index walk only when its physical order is the
-	// complete gateway order.  A fallback in-memory sort must see every
+	// complete gateway order. With no requested sort, pagination is likewise
+	// safe in the physical prefix order. A fallback in-memory sort must see every
 	// bounded candidate before applying skip/limit; otherwise a later null or
 	// missing value may precede an early physical entry under Mongo ordering.
-	if candidate.residualFilters == 0 && candidate.sortSatisfied && plan.limit > 0 && len(prefixes) == 1 {
+	if compoundPlanPaginationSafe(candidate, plan) && plan.limit > 0 && len(prefixes) == 1 {
 		needed := int(plan.skip + plan.limit)
 		if needed > 0 && needed < maxDocuments {
 			maxDocuments = needed
@@ -462,7 +471,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			// already bounds all IDs execution can observe. The direct primitive
 			// marks the next entry as truncated; that is sufficient, not a scan
 			// cap failure, because later IDs cannot affect this result page.
-			if candidate.residualFilters == 0 && candidate.sortSatisfied && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
+			if compoundPlanPaginationSafe(candidate, plan) && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
 				for _, id := range found {
 					if _, duplicate := seenIDs[string(id)]; duplicate {
 						continue

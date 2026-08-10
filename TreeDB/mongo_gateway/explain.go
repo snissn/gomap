@@ -659,6 +659,9 @@ func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
 	}
 	out := bson.A{}
 	for _, idx := range col.MetaView().Indexes {
+		if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
+			continue
+		}
 		if _, ok := usableNames[idx.Name]; !ok {
 			reason := "filter_or_sort_not_covered"
 			if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
