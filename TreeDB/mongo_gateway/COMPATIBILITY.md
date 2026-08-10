@@ -46,6 +46,10 @@ gateway README summary drifts from the manifest. `TestMongoCompatibilityMatrix`
 fails if any capability ID is duplicated, lacks an executable probe, or has
 an extra probe outside the manifest.
 
+The BSON/storage matrix below is likewise generated from canonical rows in
+`capability_manifest.go`; it separates native ordered-BSON scalar support from
+bridge-only regex/code limitations.
+
 <!-- mongo-compatibility-matrix:begin -->
 | Category | Feature | Status | Capability ID |
 |---|---|---|---|
@@ -261,16 +265,19 @@ implemented.
 
 ## BSON And Storage Matrix
 
+<!-- mongo-bson-storage-matrix:begin -->
 | Surface | Status | Harness / evidence | Current gap |
 |---|---|---|---|
-| `_id` as TreeDB primary key | `supported` | CRUD tests | `_id` array rejected; exact Mongo key ordering is scoped to gateway encoding. |
-| Auto-generated `_id` | `supported subset` | insert tests | Generated ObjectId is gateway-local. |
-| Native BSON collection storage | `supported subset` | `TestMongoCompatibilityMatrix`, BSON storage tests | Preferred current gateway storage path. |
+| _id as TreeDB primary key | `supported` | CRUD tests | _id array rejected; exact Mongo key ordering is scoped to gateway encoding. |
+| Auto-generated _id | `supported subset` | insert tests | Generated ObjectId is gateway-local. |
+| Native BSON collection storage | `supported subset` | TestMongoCompatibilityMatrix, BSON storage tests | Preferred current gateway storage path. |
 | JSON / template-v1 bridge storage | `supported subset` | update/materializer tests | Some BSON types are rejected before JSON bridge storage. |
-| BSON string, bool, int32/int64, double, null, ObjectId | `supported` | CRUD/find tests | Ordered BSON scalar v2 indexing accepts supported scalar values without `treedbValueType`; legacy homogeneous indexes require it. |
+| BSON string, bool, int32/int64, double, null, ObjectId | `supported` | CRUD/find tests | Ordered BSON scalar v2 indexing accepts supported scalar values without treedbValueType; legacy homogeneous indexes require it. |
+| Decimal128, date, timestamp in native BSON ordered-v2 indexes | `supported subset` | TestMongoCompoundPlanScalarSortMatchesBoundedComparator, TestMongoCompoundPlanDecimal128SortMatchesBoundedComparator, TestCompareRawValuesScalarOrderMatchesBSONV2Codec | Compatible one-term BSON-v2 sort selection is supported standalone; legacy treedbValueType indexes remain limited to string, bool, int64, and double. |
 | Arrays and nested documents | `supported subset` | document validation and dotted predicate tests | No multikey index compatibility claim. |
-| Binary and other non-JSON BSON types | `supported subset` in native BSON mode | `TestMongoCompatibilityMatrix` covers binary insert in BSON mode | JSON/template bridge rejects unsupported BSON types. |
-| Decimal128, date, timestamp, regex, code | `not implemented` / storage-format dependent | Unsupported bridge types reject; native BSON may store unindexed bytes | No query/index compatibility claim. |
+| Binary and other non-JSON BSON types | `supported subset in native BSON mode` | TestMongoCompatibilityMatrix covers binary insert in BSON mode | JSON/template bridge rejects unsupported BSON types. |
+| Regex and code | `storage-format dependent` | native BSON storage and bridge-rejection tests | Native BSON may retain unindexed values; JSON/template bridge and regex/code query or index semantics remain unavailable. |
+<!-- mongo-bson-storage-matrix:end -->
 
 ## Index Matrix
 

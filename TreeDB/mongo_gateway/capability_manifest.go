@@ -65,6 +65,31 @@ type MongoGatewayCapabilityManifest struct {
 	Summaries    []MongoGatewayCapabilitySummary    `json:"summaries"`
 }
 
+// mongoGatewayCompatibilityRow is a canonical, generated documentation row
+// for factual support surfaces that are more specific than the protocol
+// capability manifest's one-line feature entries.
+type mongoGatewayCompatibilityRow struct {
+	Surface  string
+	Status   string
+	Evidence string
+	Gap      string
+}
+
+// mongoGatewayBSONStorageCompatibilityRows is the source for the BSON and
+// storage matrix in COMPATIBILITY.md. Keep native BSON-v2 scalar/index support
+// distinct from bridge-only regex/code limitations.
+var mongoGatewayBSONStorageCompatibilityRows = []mongoGatewayCompatibilityRow{
+	{Surface: "_id as TreeDB primary key", Status: "supported", Evidence: "CRUD tests", Gap: "_id array rejected; exact Mongo key ordering is scoped to gateway encoding."},
+	{Surface: "Auto-generated _id", Status: "supported subset", Evidence: "insert tests", Gap: "Generated ObjectId is gateway-local."},
+	{Surface: "Native BSON collection storage", Status: "supported subset", Evidence: "TestMongoCompatibilityMatrix, BSON storage tests", Gap: "Preferred current gateway storage path."},
+	{Surface: "JSON / template-v1 bridge storage", Status: "supported subset", Evidence: "update/materializer tests", Gap: "Some BSON types are rejected before JSON bridge storage."},
+	{Surface: "BSON string, bool, int32/int64, double, null, ObjectId", Status: "supported", Evidence: "CRUD/find tests", Gap: "Ordered BSON scalar v2 indexing accepts supported scalar values without treedbValueType; legacy homogeneous indexes require it."},
+	{Surface: "Decimal128, date, timestamp in native BSON ordered-v2 indexes", Status: "supported subset", Evidence: "TestMongoCompoundPlanScalarSortMatchesBoundedComparator, TestMongoCompoundPlanDecimal128SortMatchesBoundedComparator, TestCompareRawValuesScalarOrderMatchesBSONV2Codec", Gap: "Compatible one-term BSON-v2 sort selection is supported standalone; legacy treedbValueType indexes remain limited to string, bool, int64, and double."},
+	{Surface: "Arrays and nested documents", Status: "supported subset", Evidence: "document validation and dotted predicate tests", Gap: "No multikey index compatibility claim."},
+	{Surface: "Binary and other non-JSON BSON types", Status: "supported subset in native BSON mode", Evidence: "TestMongoCompatibilityMatrix covers binary insert in BSON mode", Gap: "JSON/template bridge rejects unsupported BSON types."},
+	{Surface: "Regex and code", Status: "storage-format dependent", Evidence: "native BSON storage and bridge-rejection tests", Gap: "Native BSON may retain unindexed values; JSON/template bridge and regex/code query or index semantics remain unavailable."},
+}
+
 var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 	Schema:  MongoGatewayCapabilitySchema,
 	Version: MongoGatewayCapabilityVersion,
