@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -75,7 +76,7 @@ func loadLocalHNSWAttributionHistoricalReportV1(path string) (vectorPartitionSys
 func validateLocalHNSWAttributionHistoricalReportV1(report vectorPartitionSystemBenchResultV1, fixtureChecksum, truthSHA256 string) (localHNSWAttributionHistoricalCellV1, localHNSWAttributionHistoricalCellV1, error) {
 	var probe2, probe16 localHNSWAttributionHistoricalCellV1
 	if report.SchemaVersion != 1 || report.ResultKind != "vector_partition_system_bench_v1" || report.Topology != "single_daemon_four_group" || report.TopologyIdentitySHA256 != localHNSWAttributionHistoricalTopologySHA256V1 || report.DatasetChecksum != fixtureChecksum || report.TruthArtifactSHA256 != truthSHA256 || report.TopK != 10 || report.EfSearch != 128 {
-		return probe2, probe16, errors.New("invalid local HNSW historical report identity")
+		return probe2, probe16, fmt.Errorf("invalid local HNSW historical report identity: schema=%d kind=%q topology=%q topology_sha256=%q dataset=%q want_dataset=%q truth=%q want_truth=%q top_k=%d ef_search=%d", report.SchemaVersion, report.ResultKind, report.Topology, report.TopologyIdentitySHA256, report.DatasetChecksum, fixtureChecksum, report.TruthArtifactSHA256, truthSHA256, report.TopK, report.EfSearch)
 	}
 	for _, cell := range report.Cells {
 		if cell.Concurrency != 1 || cell.Budget["probes"] == 0 {
