@@ -497,6 +497,28 @@ func TestMongoCompoundPlannerCursorRechecksPredicateAfterUpdate(t *testing.T) {
 	assertBatchIDs(t, cursorNextBatch(t, next), []string{})
 }
 
+func TestMongoCompoundPlannerCursorChargesFilteredDocumentAfterUpdate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxCursorRetainedBytes = 256
+	assertOK(t, serveCommand(t, server, 4065122, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}}}}, {Key: "$db", Value: "app"}}))
+	docs := bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}},
+	}
+	assertOK(t, serveCommand(t, server, 4065123, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	first := serveCommand(t, server, 4065124, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, first), []string{"a"})
+	id := cursorIDFromResponse(t, first)
+	update := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "tenant", Value: "x"}, {Key: "payload", Value: strings.Repeat("p", 512)}}}}}}
+	assertOK(t, serveCommand(t, server, 4065125, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{update}}, {Key: "$db", Value: "app"}}))
+	assertCommandError(t, serveCommand(t, server, 4065126, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if _, ok := server.cursors[id]; ok {
+		t.Fatal("cursor retained after filtered-document materialization cap failure")
+	}
+}
+
 func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406511, bson.D{

@@ -4103,6 +4103,13 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 		if err != nil {
 			return nil, 0, 0, err
 		}
+		// Decoding is materialization even if a document updated between batches
+		// no longer satisfies the retained predicate.  The ID is consumed below,
+		// so charge it before the predicate recheck.
+		if len(doc) > s.maxCursorRetainedBytes()-committedMaterialized-materializedBytes {
+			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
+		}
+		materializedBytes += len(doc)
 		if cursor.compoundPlan != nil {
 			match, err := documentMatchesPlan(doc, *cursor.compoundPlan)
 			if err != nil {
@@ -4111,9 +4118,6 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 			if !match {
 				continue
 			}
-		}
-		if len(doc) > s.maxCursorRetainedBytes()-committedMaterialized-materializedBytes {
-			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
 		}
 		projected, err := projectDocumentWithProjection(doc, cursor.projection)
 		if err != nil {
@@ -4125,11 +4129,11 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 		}
 		if len(out) > 0 && findBatchOverheadBytes+batchBytes+docBytes > s.maxFindBatchBytes() {
 			decoded--
+			materializedBytes -= len(doc)
 			break
 		}
 		out = append(out, bson.Raw(projected))
 		batchBytes += docBytes
-		materializedBytes += len(doc)
 		added++
 	}
 	return out, decoded, materializedBytes, nil
