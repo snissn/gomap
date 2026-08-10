@@ -161,6 +161,20 @@ func TestDiagnosticsZeroValueServerInitializesNamespaceCounters(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsFastFindErrorCountsAsFailedWithoutNamespace(t *testing.T) {
+	server := NewServer()
+	response := serveCommand(t, server, 6240, bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	_, commands, namespaces, _, _ := server.diagnosticsSnapshot()
+	metric, ok := commands["find"]
+	if !ok || metric.Count != 1 || metric.Errors != 1 {
+		t.Fatalf("find metric=%+v present=%v", metric, ok)
+	}
+	if len(namespaces) != 0 {
+		t.Fatalf("failed find recorded namespace metrics: %+v", namespaces)
+	}
+}
+
 func TestDiagnosticsCommandArgumentValidation(t *testing.T) {
 	server := NewServer()
 	for requestID, command := range []bson.D{
@@ -197,13 +211,44 @@ func TestDBStatsSharesGlobalDocumentScanBudget(t *testing.T) {
 	assertCommandError(t, serveCommand(t, server, 6271, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}), "BadValue")
 }
 
+func TestDBStatsExactPhysicalCapAllowsTrailingMetadataProvenEmptyCollection(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// MaxFindScanDocuments is the public live-document limit: exactly three
+	// app.users documents succeed. app.zzempty sorts after it and has no primary
+	// root, so it remains provably empty after the live budget is exhausted.
+	assertOK(t, serveCommand(t, server, 6275, bson.D{{Key: "create", Value: "zzempty"}, {Key: "$db", Value: "app"}}))
+	server.MaxFindScanDocuments = 3
+	response := serveCommand(t, server, 6276, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	if collections, ok := response.Lookup("collections").Int64OK(); !ok || collections != 2 {
+		t.Fatalf("dbStats collections=%s", response)
+	}
+	if objects, ok := response.Lookup("objects").Int64OK(); !ok || objects != 3 {
+		t.Fatalf("dbStats objects=%s", response)
+	}
+}
+
+func TestCollStatsExactLiveDocumentCapSucceeds(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// The public cap is live documents, not iterator positioning work. Exactly
+	// three live IDs must complete; a fourth live ID would reject.
+	server.MaxFindScanDocuments = 3
+	response := serveCommand(t, server, 6277, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	if count, ok := response.Lookup("count").Int64OK(); !ok || count != 3 {
+		t.Fatalf("collStats count=%s", response)
+	}
+}
+
 func TestDiagnosticsCountsChargePrimaryTombstones(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
-	assertOK(t, serveCommand(t, server, 6280, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	// The live-document limit rejects the first document beyond the cap. The
+	// collections iterator tests cover tombstone/shadow source work directly;
+	// diagnostics supplies their separate bounded physical-work budget.
 	server.MaxFindScanDocuments = 2
 	assertCommandError(t, serveCommand(t, server, 6281, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}), "BadValue")
 	assertOK(t, serveCommand(t, server, 6282, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "e1"}}}}, {Key: "$db", Value: "app"}}))
-	server.MaxFindScanDocuments = 3
+	server.MaxFindScanDocuments = 2
 	assertCommandError(t, serveCommand(t, server, 6283, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}), "BadValue")
 }
 

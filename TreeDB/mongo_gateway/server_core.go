@@ -837,8 +837,10 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 
 	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
+		base := len(dst)
 		responseID := s.nextID()
 		response, err = s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
+		diagnosticFailed = err != nil || !opMsgCommandResponseOK(response[base:])
 		if err != nil {
 			return nil, retainRequestBody, err
 		}
@@ -886,6 +888,19 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 		return nil, retainRequestBody, fmt.Errorf("%w: response length=%d max=%d", wire.ErrMessageTooLarge, len(msgResponse)-base, s.maxMessageLength())
 	}
 	return msgResponse, retainRequestBody, nil
+}
+
+// opMsgCommandResponseOK extracts the command body from one complete OP_MSG
+// response. The fast find encoder returns wire bytes rather than a BSON command
+// document, so dispatch uses this to preserve the same failed-command metrics
+// as the ordinary commandResponse path.
+func opMsgCommandResponseOK(response []byte) bool {
+	header, err := wire.ParseHeader(response)
+	if err != nil || header.OpCode != wire.OpMsg || int(header.MessageLength) != len(response) {
+		return false
+	}
+	msg, err := wire.ParseMsg(response[wire.HeaderLen:])
+	return err == nil && commandResponseOK(msg.Body)
 }
 
 func commandRejectsReadOPMsgFeatures(name string) bool {

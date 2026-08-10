@@ -37,14 +37,17 @@ func BenchmarkDiagnosticsTop(b *testing.B) {
 
 func BenchmarkDiagnosticsCollectionStats(b *testing.B) {
 	for _, tc := range []struct {
-		name string
-		cap  int
+		name      string
+		cap       int
+		documents int
 	}{
-		{name: "small_fixture", cap: 8},
+		{name: "small_fixture", cap: 8, documents: 3},
+		{name: "representative_ten_live_documents", cap: 10, documents: 10},
 		// The seeded fixture has three live primary IDs and one merged-source
-		// inspection. This near-cap witness therefore makes four charged work
-		// units explicit for both dbStats and collStats.
-		{name: "near_cap_four_physical_units", cap: 4},
+		// inspection. The public cap is three live documents; the separate
+		// diagnostics source-work budget is six units, of which this fixture uses
+		// four (positioning plus three primary IDs).
+		{name: "near_cap_three_live_documents", cap: 3, documents: 3},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			for _, command := range []struct {
@@ -57,21 +60,32 @@ func BenchmarkDiagnosticsCollectionStats(b *testing.B) {
 			} {
 				b.Run(command.name, func(b *testing.B) {
 					server := newMongoCompatibilityMatrixServer(b)
+					if tc.documents > 3 {
+						documents := make(bson.A, 0, tc.documents-3)
+						for id := 3; id < tc.documents; id++ {
+							documents = append(documents, bson.D{{Key: "_id", Value: id}})
+						}
+						response := serveCommand(b, server, 0, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: documents}, {Key: "$db", Value: "app"}})
+						if ok, valid := response.Lookup("ok").DoubleOK(); !valid || ok != 1 {
+							b.Fatalf("seed representative documents: %s", response)
+						}
+					}
 					server.MaxFindScanDocuments = tc.cap
 					warmup := serveCommand(b, server, 1, bson.D{{Key: command.name, Value: command.value}, {Key: "$db", Value: "app"}})
-					if value, ok := warmup.Lookup(command.field).Int64OK(); !ok || value != 3 {
+					if value, ok := warmup.Lookup(command.field).Int64OK(); !ok || value != int64(tc.documents) {
 						b.Fatalf("warmup %s=%s", command.name, warmup)
 					}
-					_, inspected, truncated, err := server.diagnosticCollectionCountWithin("app.users", tc.cap)
-					if err != nil || truncated || inspected != 4 {
-						b.Fatalf("physical work inspected=%d truncated=%v err=%v want 4/false/nil", inspected, truncated, err)
+					_, inspected, truncated, err := server.diagnosticCollectionCountWithin("app.users", tc.cap, diagnosticPhysicalWorkBudget(tc.cap))
+					if err != nil || truncated || inspected != tc.documents+1 {
+						b.Fatalf("physical work inspected=%d truncated=%v err=%v want %d/false/nil", inspected, truncated, err, tc.documents+1)
 					}
 					b.ReportAllocs()
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
 						_ = serveCommand(b, server, int32(i+2), bson.D{{Key: command.name, Value: command.value}, {Key: "$db", Value: "app"}})
 					}
-					b.ReportMetric(float64(inspected), "physical_ids/op")
+					b.ReportMetric(float64(tc.documents), "live_documents/op")
+					b.ReportMetric(float64(inspected), "physical_source_work/op")
 				})
 			}
 		})

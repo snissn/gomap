@@ -21818,8 +21818,8 @@ func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte)
 	if c.db == nil {
 		return 0, false, errCollectionDBNil
 	}
-	if maxEntries <= 0 {
-		return 0, false, errors.New("collections: max physical entries must be positive")
+	if maxEntries < 0 {
+		return 0, false, errors.New("collections: max physical entries must not be negative")
 	}
 	if fn == nil {
 		return 0, false, errors.New("collections: scan callback is nil")
@@ -21839,7 +21839,18 @@ func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte)
 	if catalog == nil {
 		return 0, false, errCollectionNotFound
 	}
-	it, err := collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, true, maxEntries, func(count int) { inspected += count })
+	rootName := collectionPrimaryRootName(catalog.meta.Name)
+	if maxEntries == 0 {
+		// A missing primary root and no overlay roots are a metadata proof that
+		// this collection has no physical primary entries. Anything else must
+		// fail closed rather than inspect a first entry outside the caller's
+		// shared budget.
+		if catalog.rootID(rootName) == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+			return 0, false, nil
+		}
+		return 0, true, nil
+	}
+	it, err := collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, nil, nil, true, maxEntries, func(count int) { inspected += count })
 	if err != nil {
 		return inspected, false, err
 	}

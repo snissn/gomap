@@ -332,6 +332,10 @@ func TestAuthorizationEverySupportedCommandHasExplicitPrivilege(t *testing.T) {
 		"updateUser":       authorizationUserAdmin,
 		"dropUser":         authorizationUserAdmin,
 		"usersInfo":        authorizationUserAdmin,
+		"serverStatus":     authorizationServerAdmin,
+		"top":              authorizationServerAdmin,
+		"dbStats":          authorizationMetadataRead,
+		"collStats":        authorizationMetadataRead,
 	}
 	if len(cases) != len(mongoGatewaySupportedCommands) {
 		t.Fatalf("authorization cases=%d dispatched commands=%d", len(cases), len(mongoGatewaySupportedCommands))

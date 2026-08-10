@@ -27,6 +27,25 @@ type mongoNamespaceDiagnostic struct {
 	LatencyNanos int64
 }
 
+var errDiagnosticLiveDocumentCap = errors.New("Mongo gateway diagnostics live document count exceeds bounded scan limit")
+
+// diagnosticPhysicalWorkBudget bounds iterator/source work separately from the
+// public live-document budget. A single primary source needs one positioning
+// inspection and, for a complete count, at most one advance per live document.
+// Giving diagnostics twice the public document cap leaves that bounded EOF
+// proof available while tombstones and shadowed entries still consume the same
+// finite physical-work budget.
+func diagnosticPhysicalWorkBudget(maxDocuments int) int {
+	if maxDocuments <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if maxDocuments > maxInt/2 {
+		return maxInt
+	}
+	return maxDocuments * 2
+}
+
 func commandResponseOK(response wire.Document) bool {
 	if response == nil {
 		return false
@@ -214,13 +233,11 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	remainingIDs := s.maxFindScanDocuments()
+	remainingDocuments := s.maxFindScanDocuments()
+	remainingPhysical := diagnosticPhysicalWorkBudget(remainingDocuments)
 	var objects, indexes int64
 	for _, meta := range metas {
-		if remainingIDs <= 0 {
-			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway diagnostics document count exceeds bounded scan limit")
-		}
-		count, inspected, truncated, err := s.diagnosticCollectionCountWithin(meta.Name, remainingIDs)
+		count, inspected, truncated, err := s.diagnosticCollectionCountWithin(meta.Name, remainingDocuments, remainingPhysical)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -228,7 +245,8 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway diagnostics document count exceeds bounded scan limit")
 		}
 		objects += count
-		remainingIDs -= inspected
+		remainingDocuments -= int(count)
+		remainingPhysical -= inspected
 		indexes += int64(1 + len(meta.Indexes) + len(meta.VectorIndexes))
 	}
 	return marshalDocument(bson.D{{Key: "db", Value: db}, {Key: "collections", Value: int64(len(metas))}, {Key: "objects", Value: objects}, {Key: "indexes", Value: indexes}, {Key: "ok", Value: 1.0}})
@@ -382,7 +400,8 @@ func (s *Server) diagnosticMetas(db string, cursorOwner int64) ([]collections.Co
 }
 
 func (s *Server) diagnosticCollectionCount(name string) (int64, error) {
-	count, _, truncated, err := s.diagnosticCollectionCountWithin(name, s.maxFindScanDocuments())
+	maxDocuments := s.maxFindScanDocuments()
+	count, _, truncated, err := s.diagnosticCollectionCountWithin(name, maxDocuments, diagnosticPhysicalWorkBudget(maxDocuments))
 	if err != nil {
 		return 0, err
 	}
@@ -392,12 +411,21 @@ func (s *Server) diagnosticCollectionCount(name string) (int64, error) {
 	return count, nil
 }
 
-func (s *Server) diagnosticCollectionCountWithin(name string, maxIDs int) (count int64, inspected int, truncated bool, err error) {
+func (s *Server) diagnosticCollectionCountWithin(name string, maxDocuments, maxPhysical int) (count int64, inspected int, truncated bool, err error) {
 	col, err := s.openCollectionCached(name)
 	if err != nil {
 		return 0, 0, false, err
 	}
-	inspected, truncated, err = col.ScanDocumentIDsPhysicalFunc(maxIDs, func([]byte) (bool, error) { count++; return true, nil })
+	inspected, truncated, err = col.ScanDocumentIDsPhysicalFunc(maxPhysical, func([]byte) (bool, error) {
+		if count >= int64(maxDocuments) {
+			return false, errDiagnosticLiveDocumentCap
+		}
+		count++
+		return true, nil
+	})
+	if errors.Is(err, errDiagnosticLiveDocumentCap) {
+		return count, inspected, true, nil
+	}
 	if err != nil {
 		return 0, inspected, false, err
 	}
