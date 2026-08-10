@@ -274,6 +274,38 @@ func TestVectorPartitionServingSnapshotProofRefreshRetriesWithinRemainingLeaseV1
 	}
 }
 
+func TestVectorPartitionServingSnapshotStrictAcquireUsesOneProofAndDrainsV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	lease, err := fixture.publisher.AcquireStrictV1(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	if after.StrictSearch.Reads-before.StrictSearch.Reads != 1 || after.Total.Reads-before.Total.Reads != 1 || after.Total.LogBarriers != before.Total.LogBarriers || after.Total.NoLogProofs-before.Total.NoLogProofs != 1 {
+		t.Fatalf("strict proof stats before=%+v after=%+v", before, after)
+	}
+	if err := fixture.publisher.InvalidateV1(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.publisher.AcquireStrictV1(t.Context()); err == nil {
+		t.Fatal("invalidated snapshot admitted a strict request")
+	}
+	if lease.IdentityV1().ServingIdentityDigest == "" {
+		t.Fatal("in-flight strict pin did not retain its serving identity")
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats := fixture.publisher.StatsV1()
+	if stats.StrictAcquisitions != 1 || stats.StrictAcquisitionFailures != 1 || stats.CurrentPins != 0 {
+		t.Fatalf("strict acquisition stats=%+v", stats)
+	}
+}
+
 func TestVectorPartitionServingSnapshotReplacementIdentityAdvancesV1(t *testing.T) {
 	previous := &vectorPartitionServingSnapshotV1{identity: VectorPartitionServingSnapshotIdentityV1{PublishedAtUnixNano: 7}}
 	next := &vectorPartitionServingSnapshotV1{identity: previous.identity}

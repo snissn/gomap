@@ -52,7 +52,7 @@ func TestVectorPartitionSystemConfigLoadDoesNotCreateStateDirectoryV1(t *testing
 	config := vectorPartitionSystemNodeConfigV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: filepath.Join(root, "dataset"),
-		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: state, PublicListen: "127.0.0.1:22004",
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: state, CapabilityKeyPath: writeVectorPartitionSystemCapabilityKeyTestV1(t, root), PublicListen: "127.0.0.1:22004",
 		ReadyPath: filepath.Join(state, "ready.json"), ProfileDirectory: filepath.Join(state, "profiles"), LocalGroups: local, Endpoints: endpoints,
 		RuntimeOwnership: &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: "2,0-1", GoMemoryLimitBytes: 1 << 30},
 	}
@@ -198,7 +198,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	config := vectorPartitionSystemNodeConfigV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single-0", DatasetDirectory: dataset, DatabaseDirectory: database,
-		StateDirectory: state, PublicListen: "127.0.0.1:0", ReadyPath: filepath.Join(state, "ready.json"), LocalGroups: local, Endpoints: endpoints,
+		StateDirectory: state, CapabilityKeyPath: writeVectorPartitionSystemCapabilityKeyTestV1(t, t.TempDir()), PublicListen: "127.0.0.1:0", ReadyPath: filepath.Join(state, "ready.json"), LocalGroups: local, Endpoints: endpoints,
 	}
 	node, err := openVectorPartitionSystemNodeV1(t.Context(), config)
 	if err != nil {
@@ -259,7 +259,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Counters["public_request_frame_bytes"] == 0 || cell.Counters["public_response_frame_bytes"] == 0 || cell.Timings["total"] == 0 || cell.Timings["coordinator_total"] == 0 || cell.Timings["client_total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] == 0 || cell.Timings["shard_search"] == 0 || cell.CatalogReads.Total.Total.Reads != uint64(2*len(queries))+cell.Counters["selected_groups"] || cell.CatalogReads.Total.Total.LogBarriers != 0 || cell.CatalogReads.Total.Total.NoLogProofs != cell.CatalogReads.Total.Total.Reads || len(cell.TotalNanos) != len(queries) {
+	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Counters["public_request_frame_bytes"] == 0 || cell.Counters["public_response_frame_bytes"] == 0 || cell.Counters["snapshot_pins"] != uint64(len(queries)) || cell.Counters["read_proofs"] != 0 || cell.Counters["generation_pins"] != 0 || cell.Counters["partition_opens"] != 0 || cell.Timings["total"] == 0 || cell.Timings["coordinator_total"] == 0 || cell.Timings["client_total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] != 0 || cell.Timings["shard_search"] == 0 || cell.CatalogReads.Total.Total.Reads != uint64(len(queries)) || cell.CatalogReads.Total.StrictSearch.Reads != uint64(len(queries)) || cell.CatalogReads.Total.OperationsHealth.Reads != 0 || cell.CatalogReads.Total.CoordinatorLifecycle.Reads != 0 || cell.CatalogReads.Total.ShardLifecycle.Reads != 0 || cell.CatalogReads.Total.Total.LogBarriers != 0 || cell.CatalogReads.Total.Total.NoLogProofs != cell.CatalogReads.Total.Total.Reads || len(cell.TotalNanos) != len(queries) {
 		t.Fatalf("system benchmark cell = %+v", cell)
 	}
 	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
@@ -277,22 +277,22 @@ func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 1, CPUTimeNanos: 10, RunQueueDelayNanos: 10, Timeslices: 10, TotalAllocBytes: 10, Mallocs: 1, Goroutines: 1},
 	}}
 	afterCatalog := nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1{
-		Total: stage(7), OperationsHealth: stage(2), CoordinatorLifecycle: stage(2), ShardLifecycle: stage(3),
+		Total: stage(2), StrictSearch: stage(2),
 		LastTerm: 1, LastCatalogApplied: 2, LastRaftApplied: 12, LastRaftLog: 12,
 	}
 	after := map[string]vectorPartitionSystemNodeObservationV1{"node": {
 		Catalog: afterCatalog,
 		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 2, CPUTimeNanos: 20, RunQueueDelayNanos: 0, Timeslices: 0, TotalAllocBytes: 20, Mallocs: 2, Goroutines: 1},
 	}}
-	reads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(before, after, 2, 3)
-	if err != nil || reads.Total.Total.Reads != 7 || len(runtimeStats) != 1 || runtimeStats[0].After.CPUTimeNanos != 20 {
+	reads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(before, after, 2)
+	if err != nil || reads.Total.Total.Reads != 2 || reads.Total.StrictSearch.Reads != 2 || len(runtimeStats) != 1 || runtimeStats[0].After.CPUTimeNanos != 20 {
 		t.Fatalf("catalog/runtime delta reads=%+v runtime=%+v err=%v", reads, runtimeStats, err)
 	}
 	missingLog := after
 	node := missingLog["node"]
 	node.Catalog.LastRaftLog = 11
 	missingLog["node"] = node
-	if _, _, err := vectorPartitionSystemCatalogReadDeltaV1(before, missingLog, 2, 3); err == nil || !strings.Contains(err.Error(), "non-monotonic or lack proof") {
+	if _, _, err := vectorPartitionSystemCatalogReadDeltaV1(before, missingLog, 2); err == nil || !strings.Contains(err.Error(), "non-monotonic or lack proof") {
 		t.Fatalf("invalid no-log proof evidence error = %v", err)
 	}
 }
@@ -319,6 +319,7 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
 	endpoints := map[string]string{}
 	applied := map[string]uint64{}
+	capabilityKey := writeVectorPartitionSystemCapabilityKeyTestV1(t, root)
 	for index, group := range groups {
 		endpoints[group] = fmt.Sprintf("127.0.0.1:%d", 21000+index)
 		applied[group] = 1
@@ -328,7 +329,7 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 		configs[index] = vectorPartitionSystemNodeConfigV1{
 			SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 			Topology: "native_four_daemon_four_group", NodeID: "node-" + group, DatasetDirectory: filepath.Join(root, "dataset"),
-			DatabaseDirectory: filepath.Join(root, "db-"+group), StateDirectory: filepath.Join(root, "state-"+group),
+			DatabaseDirectory: filepath.Join(root, "db-"+group), StateDirectory: filepath.Join(root, "state-"+group), CapabilityKeyPath: capabilityKey,
 			ReadyPath: filepath.Join(root, "state-"+group, "ready.json"), LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}},
 			Endpoints: endpoints, GroupAppliedIndexes: applied,
 			RuntimeOwnership: &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: fmt.Sprintf("%d-%d", index*3, index*3+2), GOMAXPROCS: 3, GoMemoryLimitBytes: 6 << 30},
@@ -677,6 +678,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 		defer os.RemoveAll(databases[index])
 	}
 	root := t.TempDir()
+	capabilityKey := writeVectorPartitionSystemCapabilityKeyTestV1(t, root)
 	endpoints := make(map[string]string, len(groups))
 	for _, group := range groups {
 		endpoints[group] = reserveVectorPartitionSystemTCPAddressTestV1(t)
@@ -692,7 +694,7 @@ func TestVectorPartitionSystemNativeFourDaemonProcessLossAndRestartV1(t *testing
 		config := vectorPartitionSystemNodeConfigV1{
 			SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 			Topology: "native_four_daemon_four_group", NodeID: "native-" + group, DatasetDirectory: dataset,
-			DatabaseDirectory: databases[index], StateDirectory: states[index], ReadyPath: ready[index],
+			DatabaseDirectory: databases[index], StateDirectory: states[index], CapabilityKeyPath: capabilityKey, ReadyPath: ready[index],
 			LocalGroups: []vectorPartitionSystemLocalGroupV1{{GroupID: group, Listen: endpoints[group]}}, Endpoints: endpoints,
 			GroupAppliedIndexes: applied,
 			RuntimeOwnership:    &vectorPartitionSystemRuntimeOwnershipV1{CPUSet: fmt.Sprint(runtimeCPUs[index]), GOMAXPROCS: 1, GoMemoryLimitBytes: 1 << 30},
@@ -877,9 +879,19 @@ func writeVectorPartitionSystemJSONTestV1(t *testing.T, path string, value any) 
 	}
 }
 
+func writeVectorPartitionSystemCapabilityKeyTestV1(t *testing.T, root string) string {
+	t.Helper()
+	path := filepath.Join(root, "strict-capability.key")
+	if err := os.WriteFile(path, bytes.Repeat([]byte{0x5a}, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, dataset string) string {
 	t.Helper()
 	root := t.TempDir()
+	capabilityKey := writeVectorPartitionSystemCapabilityKeyTestV1(t, root)
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
 	endpoints := make(map[string]string, len(groups))
 	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
@@ -891,7 +903,7 @@ func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, da
 	config := vectorPartitionSystemNodeConfigV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
-		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"), CapabilityKeyPath: capabilityKey,
 		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
 	}
 	evidence, err := validateVectorPartitionSystemTopologyV1([]vectorPartitionSystemNodeConfigV1{config})
@@ -906,6 +918,7 @@ func writeVectorPartitionSystemTopologyEvidenceTestV1(t *testing.T, endpoint, da
 func writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t *testing.T, endpoint, dataset string) (string, func()) {
 	t.Helper()
 	root := t.TempDir()
+	capabilityKey := writeVectorPartitionSystemCapabilityKeyTestV1(t, root)
 	groups := []string{"group-a", "group-b", "group-c", "group-d"}
 	endpoints := make(map[string]string, len(groups))
 	local := make([]vectorPartitionSystemLocalGroupV1, 0, len(groups))
@@ -922,7 +935,7 @@ func writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t *testing.T, end
 	config := vectorPartitionSystemNodeConfigV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeConfigKindV1, Assembly: vectorPartitionSystemAssemblyV1,
 		Topology: "single_daemon_four_group", NodeID: "single", DatasetDirectory: dataset,
-		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"),
+		DatabaseDirectory: filepath.Join(root, "database"), StateDirectory: filepath.Join(root, "state"), CapabilityKeyPath: capabilityKey,
 		ReadyPath: filepath.Join(root, "state", "ready.json"), PublicListen: endpoint, LocalGroups: local, Endpoints: endpoints,
 	}
 	evidence, err := validateVectorPartitionSystemTopologyV1([]vectorPartitionSystemNodeConfigV1{config})

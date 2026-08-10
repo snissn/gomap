@@ -346,7 +346,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 		return cell, fmt.Errorf("catalog read snapshot after measurement: %w", err)
 	}
 	var recall float64
-	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
+	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "snapshot_pins": 0, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
 	timings := map[string]uint64{"admission": 0, "operations_health": 0, "service_adapter": 0, "public_adapter": 0, "router_open": 0, "router_search": 0, "placement": 0, "coordinator_lifecycle": 0, "dispatch": 0, "queue": 0, "rpc": 0, "network": 0, "read_index_apply": 0, "generation_open": 0, "shard_search": 0, "response": 0, "dedupe": 0, "merge": 0, "coordinator_total": 0, "total": 0, "client_encode": 0, "client_write": 0, "client_response_read": 0, "client_decode": 0, "client_total": 0}
 	for index, outcome := range outcomes {
 		if outcome == nil {
@@ -364,7 +364,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 		}
 		recall += m8CanonicalRecallV1(truth[index], got)
 		c := outcome.Counters
-		for key, value := range map[string]uint64{"selected_partitions": c.SelectedPartitions, "selected_groups": c.SelectedGroups, "requests": c.Requests, "rpcs": c.RPCs, "retries": c.Retries, "redirects": c.Redirects, "candidates": c.Candidates, "edges": c.Edges, "query_bytes": c.QueryBytes, "request_bytes": c.RequestBytes, "candidate_bytes": c.CandidateBytes, "response_bytes": c.ResponseBytes} {
+		for key, value := range map[string]uint64{"selected_partitions": c.SelectedPartitions, "selected_groups": c.SelectedGroups, "requests": c.Requests, "rpcs": c.RPCs, "retries": c.Retries, "redirects": c.Redirects, "candidates": c.Candidates, "edges": c.Edges, "snapshot_pins": c.SnapshotPins, "read_proofs": c.ReadProofs, "generation_pins": c.GenerationPins, "partition_opens": c.PartitionOpens, "query_bytes": c.QueryBytes, "request_bytes": c.RequestBytes, "candidate_bytes": c.CandidateBytes, "response_bytes": c.ResponseBytes} {
 			if math.MaxUint64-counters[key] < value {
 				return cell, errors.New("system-bench counter overflow")
 			}
@@ -392,7 +392,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	cell.Metrics.CompletedQueries, cell.Metrics.ResultCount = len(queries), len(queries)*topK
 	cell.Metrics.RecallAt10, cell.Metrics.QPS = recall/float64(len(queries)), float64(len(queries))/elapsed.Seconds()
 	cell.Metrics.P50Nanos, cell.Metrics.P95Nanos, cell.Metrics.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	catalogReads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(proofsBefore, proofsAfter, uint64(len(queries)), counters["selected_groups"])
+	catalogReads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(proofsBefore, proofsAfter, uint64(len(queries)))
 	if err != nil {
 		return cell, err
 	}
@@ -400,7 +400,7 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	return cell, nil
 }
 
-func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPartitionSystemNodeObservationV1, queries, selectedGroups uint64) (vectorPartitionSystemCatalogReadsV1, []vectorPartitionSystemRuntimeNodeV1, error) {
+func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPartitionSystemNodeObservationV1, queries uint64) (vectorPartitionSystemCatalogReadsV1, []vectorPartitionSystemRuntimeNodeV1, error) {
 	var result vectorPartitionSystemCatalogReadsV1
 	if len(before) == 0 || len(before) != len(after) {
 		return result, nil, errors.New("system-bench catalog read snapshots do not cover the same nodes")
@@ -429,14 +429,10 @@ func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPart
 		result.Nodes = append(result.Nodes, vectorPartitionSystemCatalogReadNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Catalog, After: afterNode.Catalog, Delta: delta})
 		runtimeStats = append(runtimeStats, vectorPartitionSystemRuntimeNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Runtime, After: afterNode.Runtime})
 	}
-	wantReads, ok := vectorPartitionSystemAddUint64V1(queries, queries)
-	if ok {
-		wantReads, ok = vectorPartitionSystemAddUint64V1(wantReads, selectedGroups)
-	}
-	if !ok || result.Total.Total.Reads != wantReads || result.Total.OperationsHealth.Reads != queries || result.Total.CoordinatorLifecycle.Reads != queries || result.Total.ShardLifecycle.Reads != selectedGroups || result.Total.Unknown.Reads != 0 {
+	if result.Total.Total.Reads != queries || result.Total.StrictSearch.Reads != queries || result.Total.OperationsHealth.Reads != 0 || result.Total.CoordinatorLifecycle.Reads != 0 || result.Total.ShardLifecycle.Reads != 0 || result.Total.Unknown.Reads != 0 {
 		return result, nil, errors.New("system-bench catalog proof counts do not match measured search work")
 	}
-	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
+	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.StrictSearch, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
 	var summed nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1
 	for _, source := range sources {
 		exclusive, ok := vectorPartitionSystemAddUint64V1(source.AdmissionNanos, source.VerifyLeaderNanos)
@@ -482,6 +478,9 @@ func vectorPartitionSystemCatalogReadStatsSubtractV1(after, before nativewire.Ve
 	if out.OperationsHealth, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.OperationsHealth, before.OperationsHealth); !ok {
 		return out, false
 	}
+	if out.StrictSearch, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.StrictSearch, before.StrictSearch); !ok {
+		return out, false
+	}
 	if out.CoordinatorLifecycle, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.CoordinatorLifecycle, before.CoordinatorLifecycle); !ok {
 		return out, false
 	}
@@ -512,7 +511,7 @@ func vectorPartitionSystemCatalogReadStageSubtractV1(after, before nativewire.Ve
 }
 
 func vectorPartitionSystemCatalogReadStatsAddV1(total *nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1, value nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1) bool {
-	if total == nil || !vectorPartitionSystemCatalogReadStageAddV1(&total.Total, value.Total) || !vectorPartitionSystemCatalogReadStageAddV1(&total.OperationsHealth, value.OperationsHealth) || !vectorPartitionSystemCatalogReadStageAddV1(&total.CoordinatorLifecycle, value.CoordinatorLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ShardLifecycle, value.ShardLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.Unknown, value.Unknown) {
+	if total == nil || !vectorPartitionSystemCatalogReadStageAddV1(&total.Total, value.Total) || !vectorPartitionSystemCatalogReadStageAddV1(&total.OperationsHealth, value.OperationsHealth) || !vectorPartitionSystemCatalogReadStageAddV1(&total.StrictSearch, value.StrictSearch) || !vectorPartitionSystemCatalogReadStageAddV1(&total.CoordinatorLifecycle, value.CoordinatorLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ShardLifecycle, value.ShardLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.Unknown, value.Unknown) {
 		return false
 	}
 	total.LastTerm = max(total.LastTerm, value.LastTerm)

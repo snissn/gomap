@@ -60,6 +60,7 @@ type vectorPartitionSystemNodeConfigV1 struct {
 	DatasetDirectory    string                                   `json:"dataset_directory"`
 	DatabaseDirectory   string                                   `json:"database_directory"`
 	StateDirectory      string                                   `json:"state_directory"`
+	CapabilityKeyPath   string                                   `json:"capability_key_path"`
 	PublicListen        string                                   `json:"public_listen,omitempty"`
 	ReadyPath           string                                   `json:"ready_path"`
 	ProfileDirectory    string                                   `json:"profile_directory,omitempty"`
@@ -123,6 +124,7 @@ type vectorPartitionSystemTopologyNodeV1 struct {
 	NodeConfigSHA256  string                                   `json:"node_config_sha256"`
 	DatabaseDirectory string                                   `json:"database_directory"`
 	StateDirectory    string                                   `json:"state_directory"`
+	CapabilityKeyPath string                                   `json:"capability_key_path"`
 	ReadyPath         string                                   `json:"ready_path"`
 	ProfileDirectory  string                                   `json:"profile_directory,omitempty"`
 	PublicListen      string                                   `json:"public_listen,omitempty"`
@@ -258,7 +260,7 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	var persistentRoots []string
 	publicCount := 0
 	for _, config := range configs {
-		if config.Assembly != vectorPartitionSystemAssemblyV1 || config.Topology != first.Topology || config.DatasetDirectory != first.DatasetDirectory || !maps.Equal(config.Endpoints, first.Endpoints) || !maps.Equal(config.GroupAppliedIndexes, first.GroupAppliedIndexes) {
+		if config.Assembly != vectorPartitionSystemAssemblyV1 || config.Topology != first.Topology || config.DatasetDirectory != first.DatasetDirectory || config.CapabilityKeyPath == "" || config.CapabilityKeyPath != first.CapabilityKeyPath || !maps.Equal(config.Endpoints, first.Endpoints) || !maps.Equal(config.GroupAppliedIndexes, first.GroupAppliedIndexes) {
 			return evidence, errors.New("system topology node configs do not share one production identity")
 		}
 		if config.NodeID == "" || nodes[config.NodeID] || databases[config.DatabaseDirectory] || states[config.StateDirectory] || readyPaths[config.ReadyPath] {
@@ -274,6 +276,9 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		}
 		if vectorPartitionSystemPathsOverlapV1(config.DatabaseDirectory, config.StateDirectory) {
 			return evidence, errors.New("system topology persistent roots must be disjoint")
+		}
+		if vectorPartitionSystemPathsOverlapV1(config.CapabilityKeyPath, config.DatasetDirectory) || vectorPartitionSystemPathsOverlapV1(config.CapabilityKeyPath, config.DatabaseDirectory) || vectorPartitionSystemPathsOverlapV1(config.CapabilityKeyPath, config.StateDirectory) {
+			return evidence, errors.New("system topology capability key must be outside dataset and persistent roots")
 		}
 		persistentRoots = append(persistentRoots, config.DatabaseDirectory, config.StateDirectory)
 		nodes[config.NodeID], databases[config.DatabaseDirectory], states[config.StateDirectory], readyPaths[config.ReadyPath] = true, true, true, true
@@ -307,7 +312,7 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 			return evidence, err
 		}
 		evidence.Nodes = append(evidence.Nodes, vectorPartitionSystemTopologyNodeV1{
-			NodeID: config.NodeID, NodeConfigSHA256: configSHA, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory,
+			NodeID: config.NodeID, NodeConfigSHA256: configSHA, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory, CapabilityKeyPath: config.CapabilityKeyPath,
 			ReadyPath: config.ReadyPath, ProfileDirectory: config.ProfileDirectory, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups), RuntimeOwnership: cloneVectorPartitionSystemRuntimeOwnershipV1(config.RuntimeOwnership),
 		})
 	}
@@ -635,6 +640,9 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 	if config.StateDirectory, pathErr = canonical(config.StateDirectory); pathErr != nil {
 		return config, fmt.Errorf("system node state directory: %w", pathErr)
 	}
+	if config.CapabilityKeyPath, pathErr = canonical(config.CapabilityKeyPath); pathErr != nil {
+		return config, fmt.Errorf("system node capability key path: %w", pathErr)
+	}
 	if config.ReadyPath, pathErr = canonical(config.ReadyPath); pathErr != nil {
 		return config, fmt.Errorf("system node ready path: %w", pathErr)
 	}
@@ -673,6 +681,10 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		return nil, err
 	}
 	vectors, _ := fixtureData(fixture)
+	capabilityKey, err := readVectorPartitionSystemCapabilityKeyV1(config.CapabilityKeyPath)
+	if err != nil {
+		return nil, err
+	}
 	assets, err := openM8ProductionMultiGroupExistingAssetsV1(config.DatabaseDirectory, groups, len(groups)*4, fixture, vectors)
 	if err != nil {
 		return nil, err
@@ -711,10 +723,16 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
+	topologyDigest, err := vectorPartitionSystemServingTopologyDigestV1(config)
+	if err != nil {
+		return nil, err
+	}
+	authorizationDigest := sha256.Sum256([]byte("vector-partition-no-authorization-overlay-v1"))
 	node.production, err = nativewire.NewVectorPartitionProductionNodeV1(ctx, nativewire.VectorPartitionProductionNodeOptionsV1{
 		Collection: assets.collection, Manifest: assets.manifest, RouterSource: assets.RouterSource(), AssetSetDigests: assets.assetSetDigests,
 		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
 		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA, RuntimeStats: vectorPartitionSystemProcessRuntimeStatsV1,
+		TopologyDigest: topologyDigest, AuthorizationOverlayDigest: hex.EncodeToString(authorizationDigest[:]), IndexedThrough: assets.manifest.SourceRowCount, StrictCapabilityKey: capabilityKey,
 	})
 	if err != nil {
 		return nil, err
@@ -761,6 +779,32 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		node.ready.Groups = append(node.ready.Groups, vectorPartitionSystemGroupReadyV1{GroupID: evidence.GroupID, Endpoint: config.Endpoints[evidence.GroupID], LeaderID: evidence.LeaderID, AppliedIndex: evidence.AppliedIndex, ProvesProductionConsensus: true})
 	}
 	return node, nil
+}
+
+func readVectorPartitionSystemCapabilityKeyV1(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() != sha256.Size {
+		return nil, errors.New("system node capability key must be a 32-byte mode-0600 regular file")
+	}
+	key, err := readBoundedRegularFileV1(path, sha256.Size)
+	if err != nil || len(key) != sha256.Size {
+		return nil, errors.New("system node capability key must be a stable 32-byte regular file")
+	}
+	return key, nil
+}
+
+func vectorPartitionSystemServingTopologyDigestV1(config vectorPartitionSystemNodeConfigV1) (string, error) {
+	raw, err := json.Marshal(struct {
+		Topology            string
+		DatasetDirectory    string
+		Endpoints           map[string]string
+		GroupAppliedIndexes map[string]uint64
+	}{config.Topology, config.DatasetDirectory, config.Endpoints, config.GroupAppliedIndexes})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func vectorPartitionSystemEffectiveCPUSetV1() string {

@@ -34,6 +34,7 @@ type OperationsCountersV1 struct {
 	CapCandidateBytes, CapResponseBytes, CapTopK, CapProbes         uint64
 	CapEfSearch, CapMergeEntries                                    uint64
 	Failures, Requests, RPCs, Retries, Redirects, Candidates, Edges uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens        uint64
 	SelectedPartitions, SelectedGroups                              uint64
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes         uint64
 }
@@ -96,26 +97,16 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 		return SearchResponseV1{}, err
 	}
 	admissionElapsed := time.Since(admissionStarted)
-	healthStarted := time.Now()
-	health, err := o.Status(ctx)
-	healthElapsed := time.Since(healthStarted)
-	if err == nil && !health.Ready {
-		err = &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
-	}
-	var response SearchResponseV1
+	serviceStarted := time.Now()
+	response, err := o.service.Search(ctx, request)
+	serviceElapsed := time.Since(serviceStarted)
 	if err == nil {
-		serviceStarted := time.Now()
-		response, err = o.service.Search(ctx, request)
-		serviceElapsed := time.Since(serviceStarted)
-		if err == nil {
-			response.Timing.Admission = admissionElapsed
-			response.Timing.OperationsHealth = healthElapsed
-			nested := response.Timing.PublicAdapter + response.Timing.CoordinatorTotal
-			if serviceElapsed >= nested {
-				response.Timing.ServiceAdapter = serviceElapsed - nested
-			}
-			response.Timing.Total = time.Since(started)
+		response.Timing.Admission = admissionElapsed
+		nested := response.Timing.PublicAdapter + response.Timing.CoordinatorTotal
+		if serviceElapsed >= nested {
+			response.Timing.ServiceAdapter = serviceElapsed - nested
 		}
+		response.Timing.Total = time.Since(started)
 	}
 	o.mu.Lock()
 	o.counts.Searches++
@@ -128,6 +119,10 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 		o.counts.Redirects += response.Counters.Redirects
 		o.counts.Candidates += response.Counters.Candidates
 		o.counts.Edges += response.Counters.Edges
+		o.counts.SnapshotPins += response.Counters.SnapshotPins
+		o.counts.ReadProofs += response.Counters.ReadProofs
+		o.counts.GenerationPins += response.Counters.GenerationPins
+		o.counts.PartitionOpens += response.Counters.PartitionOpens
 		o.counts.SelectedPartitions += response.Counters.SelectedPartitions
 		o.counts.SelectedGroups += response.Counters.SelectedGroups
 		o.counts.QueryBytes += response.Counters.QueryBytes

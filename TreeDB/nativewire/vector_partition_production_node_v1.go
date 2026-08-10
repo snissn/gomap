@@ -7,6 +7,7 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -25,21 +26,25 @@ type VectorPartitionProductionNodeShardV1 struct {
 }
 
 type VectorPartitionProductionNodeOptionsV1 struct {
-	Collection          *collections.Collection
-	Manifest            collections.VectorPartitionManifestV1
-	RouterSource        VectorPartitionCoordinatorRouterSourceV1
-	AssetSetDigests     map[string]string
-	GroupAppliedIndexes map[string]uint64
-	Database            string
-	Catalog             string
-	Endpoints           map[string]string
-	LocalShards         []VectorPartitionProductionNodeShardV1
-	RequestBase         VectorPartitionCoordinatorRequestV1
-	NodeID              string
-	EndpointIdentity    string
-	RuntimeStats        func() VectorPartitionProcessRuntimeStatsV1
-	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
-	ShardLimits         VectorPartitionShardSearchLimitsV1
+	Collection                 *collections.Collection
+	Manifest                   collections.VectorPartitionManifestV1
+	RouterSource               VectorPartitionCoordinatorRouterSourceV1
+	AssetSetDigests            map[string]string
+	GroupAppliedIndexes        map[string]uint64
+	Database                   string
+	Catalog                    string
+	Endpoints                  map[string]string
+	LocalShards                []VectorPartitionProductionNodeShardV1
+	RequestBase                VectorPartitionCoordinatorRequestV1
+	NodeID                     string
+	EndpointIdentity           string
+	RuntimeStats               func() VectorPartitionProcessRuntimeStatsV1
+	CoordinatorLimits          VectorPartitionCoordinatorLimitsV1
+	ShardLimits                VectorPartitionShardSearchLimitsV1
+	TopologyDigest             string
+	AuthorizationOverlayDigest string
+	IndexedThrough             uint64
+	StrictCapabilityKey        []byte
 }
 
 type VectorPartitionProductionNodeGroupEvidenceV1 struct {
@@ -102,7 +107,8 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if opts.Collection == nil || opts.RouterSource == nil || opts.Manifest.State != "ready" || len(opts.Endpoints) == 0 || len(opts.LocalShards) == 0 || opts.Database == "" || opts.Catalog == "" || opts.NodeID == "" {
+	if opts.Collection == nil || opts.RouterSource == nil || opts.Manifest.State != "ready" || len(opts.Endpoints) == 0 || len(opts.LocalShards) == 0 || opts.Database == "" || opts.Catalog == "" || opts.NodeID == "" ||
+		!isVectorPartitionShardSearchDigestV1(opts.TopologyDigest) || !isVectorPartitionShardSearchDigestV1(opts.AuthorizationOverlayDigest) || opts.IndexedThrough == 0 || len(opts.StrictCapabilityKey) != sha256.Size {
 		return nil, errors.New("nativewire: production node options are incomplete")
 	}
 	groups := make([]string, 0, len(opts.Endpoints))
@@ -254,6 +260,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	}
 	pinnedManifest := vectorPartitionProductionNodePinnedManifestV1(opts.Manifest)
 	shards := make([]VectorPartitionProductionShardV1, 0, len(local))
+	generationSources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(local))
 	for group, listener := range local {
 		group := group
 		source, sourceErr := NewCollectionVectorPartitionGenerationSourceForReplicatedLifecycleV1(opts.Collection, placement.Collection, replicated)
@@ -261,9 +268,11 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 			return nil, sourceErr
 		}
 		node.sources = append(node.sources, source)
+		generationSource := vectorPartitionProductionNodeGenerationSourceV1{source: source, manifest: pinnedManifest}
+		generationSources[group] = generationSource
 		service, serviceErr := NewVectorPartitionShardSearchServiceV1(VectorPartitionShardSearchServiceOptionsV1{
 			Catalog: resolved, Placement: placement, LocalNodeID: node.groups[group].LeaderID(), LocalGroupID: group,
-			ReadCoordinator: node.groups[group].ReadCoordinator(), GenerationSource: vectorPartitionProductionNodeGenerationSourceV1{source: source, manifest: pinnedManifest},
+			ReadCoordinator: node.groups[group].ReadCoordinator(), GenerationSource: generationSource,
 			Limits: opts.ShardLimits,
 		})
 		if serviceErr != nil {
@@ -306,6 +315,11 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	node.topology, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
 		Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, ReplicatedLifecycle: replicated,
 		Endpoints: endpoints, NodeEndpoints: nodeEndpoints, Shards: shards, CoordinatorLimits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits,
+		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
+			Authority: replicated, GenerationSources: generationSources, TopologyDigest: opts.TopologyDigest,
+			AuthorizationOverlayDigest: opts.AuthorizationOverlayDigest, IndexedThrough: opts.IndexedThrough,
+		},
+		StrictCapabilityKey: opts.StrictCapabilityKey,
 	})
 	if err != nil {
 		return nil, err
