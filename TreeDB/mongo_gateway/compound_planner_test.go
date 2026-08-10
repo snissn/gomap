@@ -665,6 +665,37 @@ func TestMongoCompoundPlannerCursorCapsRetainedIDsBeforePublication(t *testing.T
 	}
 }
 
+func TestMongoCompoundPlannerBoundsRetainedIDsForNonCursorExecutions(t *testing.T) {
+	// Candidate IDs are retained before non-cursor plans materialize BSON too;
+	// count, distinct, aggregate, and an ordinary single-batch find must not
+	// bypass the same owned-ID admission limit used by compound cursors.
+	commands := []bson.D{
+		{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "$db", Value: "app"}},
+		{{Key: "count", Value: "events"}, {Key: "query", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "$db", Value: "app"}},
+		{{Key: "distinct", Value: "events"}, {Key: "key", Value: "created"}, {Key: "query", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "$db", Value: "app"}},
+		{{Key: "aggregate", Value: "events"}, {Key: "pipeline", Value: bson.A{bson.D{{Key: "$match", Value: bson.D{{Key: "tenant", Value: "t"}}}}}}, {Key: "cursor", Value: bson.D{}}, {Key: "$db", Value: "app"}},
+	}
+	for i, command := range commands {
+		t.Run(command[0].Key, func(t *testing.T) {
+			server := newMongoCompatibilityMatrixServer(t)
+			server.MaxCursorRetainedBytes = 200
+			requestID := int32(40651140 + i*10)
+			assertOK(t, serveCommand(t, server, requestID, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+			longA, longB := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			assertOK(t, serveCommand(t, server, requestID+1, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+				bson.D{{Key: "_id", Value: longA}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}},
+				bson.D{{Key: "_id", Value: longB}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
+			}}, {Key: "$db", Value: "app"}}))
+			assertCommandError(t, serveCommand(t, server, requestID+2, command), "BadValue")
+			server.cursorMu.Lock()
+			defer server.cursorMu.Unlock()
+			if len(server.cursors) != 0 {
+				t.Fatalf("published cursor despite non-cursor retained-ID admission cap: %d", len(server.cursors))
+			}
+		})
+	}
+}
+
 func TestMongoCompoundPlannerCursorChargesRetainedPredicatePayload(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	server.MaxCursorRetainedBytes = 96

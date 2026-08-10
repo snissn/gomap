@@ -906,6 +906,94 @@ func TestScanMergedCompoundIndexIDsStableRejectsOversizedTieBufferBeforePublicat
 	}
 }
 
+func TestScanMergedCompoundIndexIDsStableTinyCapRejectsSecondTieIDWithoutPartialPublication(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	first := key("a", "a")
+	logical, err := BSONIndexKeyStableSortPrefixV2(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The logical key and exactly one ID fit. The second equal-key ID must
+	// stop the scan before the complete group can be published.
+	cap := len(logical) + stableDocumentIDTieEntryOverhead + len("a") + stableDocumentIDTieEntryOverhead
+	table := newCollectionRunTable(2)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, first, nil)
+	setCollectionRunValue(table, key("a", "b"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 2, false, 3, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		MaxStableTieBytes:    cap,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || len(got) != 0 {
+		t.Fatalf("stable tiny-cap ids=%q truncated=%v err=%v want [],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableResetsDedupeOnlyGroupBytes(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	first := key("a", "a")
+	// After publishing a, each b..z group contains only a duplicate ID. Their
+	// logical-key charges must be released so the later { group can retain and
+	// emit z. The old implementation accumulated the 25 duplicate-only keys
+	// and exceeded this cap before reaching the final live group.
+	const cap = 512
+	table := newCollectionRunTable(27)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, first, nil)
+	for value := byte('b'); value <= 'z'; value++ {
+		setCollectionRunValue(table, key(string(value), "a"), nil)
+	}
+	setCollectionRunValue(table, key("{", "z"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 3, false, 27, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		DedupeDocumentID:     true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		MaxStableTieBytes:    cap,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || truncated || fmt.Sprint(got) != "[a z]" {
+		t.Fatalf("stable dedupe-only reset ids=%q truncated=%v err=%v want [a z],false,nil", got, truncated, err)
+	}
+}
+
 func TestScanMergedCompoundIndexIDsStableDedupeKeysShareTieByteBudgetAcrossGroups(t *testing.T) {
 	key := func(value, id string) []byte {
 		t.Helper()

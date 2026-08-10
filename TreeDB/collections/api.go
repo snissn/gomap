@@ -20282,6 +20282,11 @@ type CompoundIndexRangeOptions struct {
 	// retains the historical direct-API behavior; a positive value returns a
 	// truncated prefix before retaining more owned ID payload.
 	MaxRetainedIDBytes int
+	// Inspected, when non-nil, receives the number of physical index entries
+	// consumed by this scan. It is reset before scanning. Planners can carry a
+	// single inspection budget across several canonical probes without treating
+	// each probe as entitled to a fresh work cap.
+	Inspected *int
 }
 
 const defaultIndexRangeResultCap = 16
@@ -20367,6 +20372,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	}
 	if opts.MaxRetainedIDBytes < 0 {
 		return nil, false, errors.New("collections: compound index retained-ID byte cap cannot be negative")
+	}
+	if opts.Inspected != nil {
+		*opts.Inspected = 0
 	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
@@ -20472,6 +20480,11 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		// Otherwise a cursor plan could allocate the default 64 MiB tie buffer
 		// before its own smaller admission cap observes the IDs.
 		MaxStableTieBytes: opts.MaxRetainedIDBytes,
+		OnInspected: func(count int) {
+			if opts.Inspected != nil {
+				*opts.Inspected += count
+			}
+		},
 	}, func(id []byte) (bool, error) {
 		charge := len(id) + stableDocumentIDTieEntryOverhead
 		if charge < len(id) || (opts.MaxRetainedIDBytes > 0 && charge > opts.MaxRetainedIDBytes-retainedIDBytes) {
@@ -21172,6 +21185,10 @@ type scanMergedCollectionIndexIDOptions struct {
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
+	// OnInspected observes every physical entry consumed by the final overlay
+	// merge. It is used by planner callers that share one work budget over
+	// several index probes.
+	OnInspected func(count int)
 }
 
 const (
@@ -21210,6 +21227,9 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 			return false
 		}
 		inspected += count
+		if opts.OnInspected != nil {
+			opts.OnInspected(count)
+		}
 		return true
 	}
 	if opts.StableDocumentIDTies {
@@ -21455,6 +21475,11 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 	}
 	emitGroup := func() (bool, bool, error) {
 		if len(groupIDs) == 0 {
+			// A dedupe-only group still retained its logical-key prefix. Release
+			// that per-group charge before starting the next group; otherwise a
+			// sequence of duplicate-only keys incorrectly consumes the entire
+			// stable-tie budget.
+			groupBytes = 0
 			return true, false, nil
 		}
 		less := opts.DocumentIDLess

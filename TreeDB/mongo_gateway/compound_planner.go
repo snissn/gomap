@@ -482,7 +482,11 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	}
 	ids := make([][]byte, 0, maxDocuments)
 	seenIDs := make(map[string]struct{})
-	retainedIDCap := 0
+	// Every execution shape retains the candidate ID slice and cross-prefix
+	// dedupe map before it either materializes documents or opens a cursor.
+	// Bound that owned memory even for single-batch/count/distinct/aggregate
+	// paths; cursor dispatch may pass a smaller residual admission budget.
+	retainedIDCap := s.maxCursorRetainedBytes()
 	if len(retainedIDCaps) != 0 {
 		retainedIDCap = retainedIDCaps[0]
 	}
@@ -510,6 +514,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		return true, nil
 	}
 	remainingCandidates := maxDocuments
+	remainingInspected := maxInspected
 	for _, prefix := range prefixes {
 		// Every prefix shares one candidate budget. Once it is exhausted, a
 		// one-ID probe can only establish whether another candidate exists; it
@@ -534,10 +539,15 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 				return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
 			}
 		}
+		if remainingInspected <= 0 {
+			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index inspection budget exceeded %d entries", errMongoFindScanCapExceeded, maxInspected)
+		}
+		inspected := 0
 		found, truncated, err := col.FindByCompoundIndexRange(candidate.idx.Name, collections.CompoundIndexRangeOptions{
 			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: probeLimit, Desc: candidate.reverse,
-			MaxInspected:       maxInspected,
+			MaxInspected:       remainingInspected,
 			MaxRetainedIDBytes: directRetainedCap,
+			Inspected:          &inspected,
 			// Mongo's compatible sort contract uses _id as the deterministic tie
 			// breaker. BSON-v2 keeps missing and null physically distinct, while
 			// Mongo compares them as equal, so stable grouping is required in both
@@ -545,6 +555,10 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			StableDocumentIDTies: candidate.sortSatisfied,
 			DocumentIDLess:       mongoPrimaryKeyLess,
 		})
+		if inspected > remainingInspected {
+			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index inspection budget exceeded %d entries", errMongoFindScanCapExceeded, maxInspected)
+		}
+		remainingInspected -= inspected
 		if err != nil {
 			return nil, candidate, true, err
 		}
