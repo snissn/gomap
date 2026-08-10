@@ -663,11 +663,7 @@ func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
 			continue
 		}
 		if _, ok := usableNames[idx.Name]; !ok {
-			reason := "filter_or_sort_not_covered"
-			if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
-				reason = "hint_not_selected"
-			}
-			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: reason}})
+			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: "filter_or_sort_not_covered"}})
 		}
 	}
 	return out

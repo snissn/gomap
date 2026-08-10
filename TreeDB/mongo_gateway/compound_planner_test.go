@@ -680,6 +680,23 @@ func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testin
 	assertCommandError(t, serveCommand(t, server, 406517, incompatible), "BadValue")
 }
 
+func TestMongoCompoundPlannerRejectsOversizedAndDuplicateSortOrHint(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065171, bson.D{{Key: "create", Value: "events"}, {Key: "$db", Value: "app"}}))
+	base := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{}}, {Key: "$db", Value: "app"}}
+	with := func(key string, value any) bson.D {
+		command := append(bson.D(nil), base[:2]...)
+		command = append(command, bson.E{Key: key, Value: value})
+		return append(command, base[2:]...)
+	}
+	fiveFields := bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(1)}, {Key: "c", Value: int32(1)}, {Key: "d", Value: int32(1)}, {Key: "e", Value: int32(1)}}
+	duplicateFields := bson.D{{Key: "a", Value: int32(1)}, {Key: "a", Value: int32(-1)}}
+	assertCommandError(t, serveCommand(t, server, 4065172, with("sort", fiveFields)), "BadValue")
+	assertCommandError(t, serveCommand(t, server, 4065173, with("sort", duplicateFields)), "BadValue")
+	assertCommandError(t, serveCommand(t, server, 4065174, with("hint", fiveFields)), "BadValue")
+	assertCommandError(t, serveCommand(t, server, 4065175, with("hint", duplicateFields)), "BadValue")
+}
+
 func TestMongoCompoundPlanInEqualityPrefix(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406521, bson.D{

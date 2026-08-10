@@ -126,6 +126,39 @@ func TestCompoundStableDocumentIDTiesRejectsMultipleUnfixedComponents(t *testing
 	}
 }
 
+func TestCompoundStableDocumentIDTiesNormalizeMissingAndNull(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "score", Components: []IndexComponent{{Field: "score", Direction: IndexDirectionAscending}}, ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := bson.Marshal(bson.D{{Key: "_id", Value: "z"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	null, err := bson.Marshal(bson.D{{Key: "_id", Value: "a"}, {Key: "score", Value: nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("a")}, [][]byte{missing, null}); err != nil {
+		t.Fatal(err)
+	}
+	for _, desc := range []bool{false, true} {
+		ids, truncated, err := col.FindByCompoundIndexRange("score", CompoundIndexRangeOptions{StableDocumentIDTies: true, Desc: desc, Limit: 2})
+		if err != nil || truncated || len(ids) != 2 || string(ids[0]) != "a" || string(ids[1]) != "z" {
+			t.Fatalf("stable missing/null desc=%v ids=%q truncated=%v err=%v want [a z]", desc, ids, truncated, err)
+		}
+	}
+}
+
 func TestCompoundBSONIndexComponentsRejectArraysBeforeMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -814,8 +847,8 @@ func TestScanMergedCompoundIndexIDsStableReverseDoesNotEmitPartialTieAtWorkCap(t
 	}
 	table := newCollectionRunTable(3)
 	defer resetCollectionRunTable(table)
-	// Reverse physical order reaches b,a (one logical tie) before c. A cap at
-	// two entries must not publish b,a without proving that their tie ended.
+	// Reverse physical order reaches c first, then the logical tie b,a. A cap
+	// at two entries must not publish b,a without proving that their tie ended.
 	setCollectionRunValue(table, key("a", "a"), nil)
 	setCollectionRunValue(table, key("a", "b"), nil)
 	setCollectionRunValue(table, key("b", "c"), nil)
@@ -833,6 +866,16 @@ func TestScanMergedCompoundIndexIDsStableReverseDoesNotEmitPartialTieAtWorkCap(t
 	})
 	if err != nil || !truncated || fmt.Sprint(got) != "[c]" {
 		t.Fatalf("stable reverse cap ids=%q truncated=%v err=%v want [c],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableRequiresPositiveWorkCap(t *testing.T) {
+	_, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, nil, IndexValueBSONOrderedV2, 1, false, 0, scanMergedCollectionIndexIDOptions{
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+	}, func([]byte) (bool, error) { return true, nil })
+	if err == nil || !strings.Contains(err.Error(), "positive inspected-entry cap") {
+		t.Fatalf("stable zero-cap err=%v want positive-cap rejection", err)
 	}
 }
 

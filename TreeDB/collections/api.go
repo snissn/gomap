@@ -20442,7 +20442,7 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = persistedIt.Close() }()
 	}
 	ids := make([][]byte, 0)
-	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, 0, scanMergedCollectionIndexIDOptions{
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, workCap, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:      true,
 		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
 		StableDocumentIDTies: opts.StableDocumentIDTies,
@@ -21165,6 +21165,12 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	if opts.StableDocumentIDTies {
 		if opts.LogicalIndexKey == nil {
 			return false, errors.New("collections: stable document-ID ties require a logical index key parser")
+		}
+		// Stable mode buffers one complete logical tie group before publishing it.
+		// Require an explicit cap so that buffer cannot become unbounded through a
+		// future internal caller (public compound scans always supply one).
+		if maxInspected == 0 {
+			return false, errors.New("collections: stable document-ID ties require a positive inspected-entry cap")
 		}
 		return scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt, valueType, maxResults, reverse, inspect, opts, fn)
 	}

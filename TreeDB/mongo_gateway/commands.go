@@ -4045,7 +4045,7 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 	retained += planBytes
 	retainedPlan := cloneFindPlanForCursor(plan)
 	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, compoundPlan: &retainedPlan, projection: plan.projection, lastUsed: time.Now()}
-	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize, 0)
+	batch, consumed, materialized, err := s.compoundCursorBatch(col, ids, &retainedPlan, plan.projection, 0, batchSize, 0)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -4076,22 +4076,22 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 	return cursorID, batch, nil
 }
 
-func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, committedMaterialized int) (bson.A, int, int, error) {
-	if cursor.compoundCollection == nil {
+func (s *Server) compoundCursorBatch(col *collections.Collection, ids [][]byte, plan *findPlan, projection compiledProjection, start, maxDocs, committedMaterialized int) (bson.A, int, int, error) {
+	if col == nil {
 		return nil, 0, 0, errors.New("mongo gateway compound cursor has no collection")
 	}
-	materializer, err := storedDocumentMaterializerForCollection(cursor.compoundCollection)
+	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return nil, 0, 0, err
 	}
 	defer func() { _ = materializer.Close() }()
-	if maxDocs < 0 || maxDocs > len(cursor.compoundIDs)-start {
-		maxDocs = len(cursor.compoundIDs) - start
+	if maxDocs < 0 || maxDocs > len(ids)-start {
+		maxDocs = len(ids) - start
 	}
 	out := make(bson.A, 0, maxDocs)
 	batchBytes, materializedBytes, added, decoded := 0, 0, 0, 0
-	for start+decoded < len(cursor.compoundIDs) && added < maxDocs {
-		stored, err := cursor.compoundCollection.Get(cursor.compoundIDs[start+decoded])
+	for start+decoded < len(ids) && added < maxDocs {
+		stored, err := col.Get(ids[start+decoded])
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -4099,7 +4099,7 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 		if len(stored) == 0 {
 			continue
 		}
-		doc, err := storedDocumentToBSON(cursor.compoundCollection, materializer, stored)
+		doc, err := storedDocumentToBSON(col, materializer, stored)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -4110,8 +4110,8 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
 		}
 		materializedBytes += len(doc)
-		if cursor.compoundPlan != nil {
-			match, err := documentMatchesPlan(doc, *cursor.compoundPlan)
+		if plan != nil {
+			match, err := documentMatchesPlan(doc, *plan)
 			if err != nil {
 				return nil, 0, 0, err
 			}
@@ -4119,7 +4119,7 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 				continue
 			}
 		}
-		projected, err := projectDocumentWithProjection(doc, cursor.projection)
+		projected, err := projectDocumentWithProjection(doc, projection)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -4162,12 +4162,16 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		startPos := cursor.pos
 		if cursor.compoundCollection != nil {
 			committedMaterialized := cursor.materializedBytes
+			compoundCollection := cursor.compoundCollection
+			compoundIDs := cursor.compoundIDs
+			compoundPlan := cursor.compoundPlan
+			projection := cursor.projection
 			effectiveBatchSize := batchSize
 			if !explicitBatchSize {
 				effectiveBatchSize = defaultBatchSize
 			}
 			s.cursorMu.Unlock()
-			batch, consumed, materialized, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize, committedMaterialized)
+			batch, consumed, materialized, err := s.compoundCursorBatch(compoundCollection, compoundIDs, compoundPlan, projection, startPos, effectiveBatchSize, committedMaterialized)
 			if err != nil {
 				s.cursorMu.Lock()
 				if current := s.cursors[cursorID]; current == cursor && current.pos == startPos {
