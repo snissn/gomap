@@ -322,6 +322,7 @@ func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) 
 		firstIdentity.ManifestIntegrityDigest != strings.Repeat("d", 64) || len(firstIdentity.ReadyGroups) != 2 || len(firstIdentity.LocalGroups) != 2 {
 		t.Fatalf("published identity = %+v", firstIdentity)
 	}
+	time.Sleep(20 * time.Millisecond)
 	before := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
 	if err := fixture.publisher.RefreshProofV1(t.Context()); err != nil {
 		t.Fatal(err)
