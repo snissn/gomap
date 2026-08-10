@@ -33,6 +33,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 }
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch, trace *columnHNSWSearchPackAttributionTrace) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	var stats columnVectorGraphNativeSearchStats
+	if trace != nil {
+		trace.Termination = ""
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
