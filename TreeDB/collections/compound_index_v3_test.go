@@ -110,11 +110,19 @@ func TestCompoundStableDocumentIDTiesRejectsMultipleUnfixedComponents(t *testing
 	}
 	// missing/0 and null/0 normalize to one logical tie, but the physical
 	// missing/1 run would separate them without this fail-closed contract.
-	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("middle"), []byte("a")}, [][]byte{document("z", false, nil, 0), document("middle", false, nil, 1), document("a", true, nil, 0)}); err != nil {
+	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("middle"), []byte("a"), []byte("full-z"), []byte("full-a")}, [][]byte{document("z", false, nil, 0), document("middle", false, nil, 1), document("a", true, nil, 0), document("full-z", true, "full", 1), document("full-a", true, "full", 1)}); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if _, _, err := col.FindByCompoundIndexRange("x_y", CompoundIndexRangeOptions{StableDocumentIDTies: true, Limit: 4}); err == nil || !strings.Contains(err.Error(), "at most one unfixed") {
 		t.Fatalf("stable multi-unfixed scan err=%v want fail-closed rejection", err)
+	}
+	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("full")}
+	intRaw := bson.RawValue{Type: bson.TypeInt32, Value: []byte{1, 0, 0, 0}}
+	for _, desc := range []bool{false, true} {
+		ids, truncated, err := col.FindByCompoundIndexRange("x_y", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw, intRaw}, StableDocumentIDTies: true, Desc: desc, Limit: 2})
+		if err != nil || truncated || len(ids) != 2 || string(ids[0]) != "full-a" || string(ids[1]) != "full-z" {
+			t.Fatalf("full-prefix stable desc=%v ids=%q truncated=%v err=%v want [full-a full-z]", desc, ids, truncated, err)
+		}
 	}
 }
 

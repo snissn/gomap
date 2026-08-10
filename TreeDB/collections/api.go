@@ -20386,7 +20386,7 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		// stable tie buffer can normalize them only when the equality prefix
 		// fixes every component except one; otherwise later component values can
 		// separate equal logical keys non-adjacently.
-		if len(opts.Prefix) >= len(components) || len(components)-len(opts.Prefix) > 1 {
+		if len(components)-len(opts.Prefix) > 1 {
 			return nil, false, errors.New("collections: stable document-ID ties require at most one unfixed compound component")
 		}
 	}
