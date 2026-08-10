@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +43,116 @@ func compactPartitionAdjacencyV1(in []uint32) []uint32 {
 }
 
 const vectorPartitionLocalNavigationBranchV1 = 8
+
+// vectorPartitionLocalAuxiliaryNavigationV1 is a separately encoded layer-0
+// component bridge. Its CSR never shares the native HNSW degree budget.
+type vectorPartitionLocalAuxiliaryNavigationV1 struct {
+	Offsets   []uint64
+	Neighbors []uint32
+}
+
+// buildVectorPartitionLocalAuxiliaryNavigationV1 connects the deterministic
+// directed-reachability roots of the native layer-0 graph. The entry component
+// is root zero; each later root is the least unseen ordinal. A bidirectional
+// branching-factor-eight tree gives every root a path from the entry while
+// bounding every auxiliary degree by nine.
+func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
+	if len(rows) == 0 {
+		if entryOrdinal != -1 {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary entry")
+		}
+		return vectorPartitionLocalAuxiliaryNavigationV1{Offsets: []uint64{0}}, nil
+	}
+	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary entry")
+	}
+	seen := make([]bool, len(rows))
+	roots := make([]uint32, 0, 1)
+	visit := func(root int) error {
+		queue := []int{root}
+		seen[root] = true
+		for head := 0; head < len(queue); head++ {
+			ordinal := queue[head]
+			neighbors, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
+			if err != nil {
+				return err
+			}
+			rowSeen := make(map[uint32]struct{}, len(neighbors))
+			for _, neighbor := range neighbors {
+				if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
+					return errors.New("partition-local auxiliary native neighbor")
+				}
+				if _, duplicate := rowSeen[neighbor]; duplicate {
+					return errors.New("partition-local auxiliary duplicate native neighbor")
+				}
+				rowSeen[neighbor] = struct{}{}
+				if !seen[neighbor] {
+					seen[neighbor] = true
+					queue = append(queue, int(neighbor))
+				}
+			}
+		}
+		return nil
+	}
+	for ordinal := entryOrdinal; ; {
+		roots = append(roots, uint32(ordinal))
+		if err := visit(ordinal); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		next := -1
+		for candidate := range seen {
+			if !seen[candidate] {
+				next = candidate
+				break
+			}
+		}
+		if next < 0 {
+			break
+		}
+		ordinal = next
+	}
+	if len(roots) > 1 && len(roots)-1 > (math.MaxInt/2) {
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary edge count")
+	}
+	degrees := make([]uint8, len(rows))
+	for child := 1; child < len(roots); child++ {
+		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
+		degrees[roots[parent]]++
+		degrees[roots[child]]++
+	}
+	offsets := make([]uint64, len(rows)+1)
+	for ordinal, degree := range degrees {
+		if degree > vectorPartitionLocalNavigationBranchV1+1 {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary degree")
+		}
+		offsets[ordinal+1] = offsets[ordinal] + uint64(degree)
+	}
+	if offsets[len(rows)] != uint64(2*(len(roots)-1)) {
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary edge count")
+	}
+	neighbors := make([]uint32, offsets[len(rows)])
+	next := append([]uint64(nil), offsets[:len(rows)]...)
+	for child := 1; child < len(roots); child++ {
+		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
+		left, right := roots[parent], roots[child]
+		neighbors[next[left]] = right
+		next[left]++
+		neighbors[next[right]] = left
+		next[right]++
+	}
+	return vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}, nil
+}
+
+func validateVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAssetRow, entryOrdinal int, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) error {
+	expected, err := buildVectorPartitionLocalAuxiliaryNavigationV1(rows, entryOrdinal)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(auxiliary.Offsets, expected.Offsets) || !slices.Equal(auxiliary.Neighbors, expected.Neighbors) {
+		return errors.New("partition-local auxiliary navigation mismatch")
+	}
+	return nil
+}
 
 // VectorPartitionLocalGraphVariantV1 selects only the post-build partition
 // graph mutation. It exists for offline causal attribution; callers must bind
