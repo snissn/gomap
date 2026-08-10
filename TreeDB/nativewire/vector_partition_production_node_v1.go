@@ -89,6 +89,7 @@ func (s vectorPartitionProductionNodeGenerationSourceV1) PinVectorPartitionGener
 	}
 	manifest := pinned.Manifest()
 	manifest.IntegrityDigest = s.manifest.IntegrityDigest
+	manifest.ReadySetDigest = s.manifest.ReadySetDigest
 	manifest.Placements = slices.Clone(s.manifest.Placements)
 	return vectorPartitionProductionNodePinnedGenerationV1{VectorPartitionPinnedGenerationV1: pinned, manifest: manifest}, nil
 }
@@ -315,7 +316,8 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		}
 	}
 	node.topology, err = NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
-		Catalog: resolved, Placement: placement, RouterSource: opts.RouterSource, ReplicatedLifecycle: replicated,
+		ConstructionContext: ctx,
+		Catalog:             resolved, Placement: placement, RouterSource: opts.RouterSource, ReplicatedLifecycle: replicated,
 		Endpoints: endpoints, NodeEndpoints: nodeEndpoints, Shards: shards, CoordinatorLimits: opts.CoordinatorLimits, ShardLimits: opts.ShardLimits,
 		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
 			Authority: replicated, GenerationSources: generationSources, TopologyDigest: opts.TopologyDigest,

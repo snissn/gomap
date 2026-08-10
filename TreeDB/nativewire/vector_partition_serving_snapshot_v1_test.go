@@ -16,6 +16,7 @@ type vectorPartitionServingSnapshotFixtureV1 struct {
 	harness     *raftplacement.CatalogMetaLifecycleHarnessV1
 	lifecycle   raftplacement.VectorPartitionLifecycleCoordinatorV1
 	identity    raftplacement.VectorPartitionLifecycleIdentityV1
+	catalog     raftplacement.ResolvedCatalogV1
 	coordinator *VectorPartitionCoordinatorV1
 	authority   *LinearizableCatalogVectorPartitionLifecycleAuthorityV1
 	publisher   *VectorPartitionServingSnapshotPublisherV1
@@ -171,7 +172,7 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		tb.Fatal(err)
 	}
 	fixture := &vectorPartitionServingSnapshotFixtureV1{
-		harness: harness, lifecycle: lifecycle, identity: identity, coordinator: coordinator,
+		harness: harness, lifecycle: lifecycle, identity: identity, catalog: catalog, coordinator: coordinator,
 		authority: authority, publisher: publisher, router: router, sources: sources,
 	}
 	tb.Cleanup(func() {
@@ -180,6 +181,29 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		_ = fixture.harness.Close()
 	})
 	return fixture
+}
+
+func TestVectorPartitionProductionTopologyInitialSnapshotPublicationHonorsContextV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	sources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(fixture.sources))
+	for group, source := range fixture.sources {
+		sources[group] = source
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{
+		ConstructionContext: ctx, Catalog: fixture.catalog, Placement: fixture.coordinator.placement,
+		RouterSource: fixture.coordinator.routerSource, ReplicatedLifecycle: fixture.authority,
+		Endpoints: map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1", "group-b": "127.0.0.1:2"},
+		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
+			Authority: fixture.authority, GenerationSources: sources,
+			TopologyDigest: strings.Repeat("e", 64), AuthorizationOverlayDigest: strings.Repeat("f", 64), IndexedThrough: 11,
+		},
+		StrictCapabilityKey: []byte(strings.Repeat("k", 32)),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("initial publication error=%v, want canceled", err)
+	}
 }
 
 func TestVectorPartitionServingSnapshotPublicationRejectsAssetSetMismatchV1(t *testing.T) {

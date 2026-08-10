@@ -29,6 +29,7 @@ type VectorPartitionProductionShardV1 struct {
 }
 
 type VectorPartitionProductionTopologyOptionsV1 struct {
+	ConstructionContext context.Context
 	Catalog             raftplacement.ResolvedCatalogV1
 	Placement           raftplacement.VectorPartitionPlacementRecordV1
 	RouterSource        VectorPartitionCoordinatorRouterSourceV1
@@ -253,7 +254,13 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 		if err != nil {
 			return nil, err
 		}
-		if err = h.servingSnapshot.PublishV1(context.Background()); err != nil {
+		constructionContext := opts.ConstructionContext
+		if constructionContext == nil {
+			constructionContext = context.Background()
+		}
+		publishContext, cancel := context.WithTimeout(constructionContext, coordinatorLimits.MaxWallClock)
+		defer cancel()
+		if err = h.servingSnapshot.PublishV1(publishContext); err != nil {
 			return nil, err
 		}
 		h.strictKey = slices.Clone(opts.StrictCapabilityKey)

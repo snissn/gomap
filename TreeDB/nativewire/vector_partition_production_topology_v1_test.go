@@ -555,7 +555,6 @@ func TestVectorPartitionProductionNodeUsesActiveReadySetDigestV1(t *testing.T) {
 	logical.IntegrityDigest = strings.Repeat("c", 64)
 	logical.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}}
 	physical := manifest
-	physical.ReadySetDigest = want
 	source := vectorPartitionProductionNodeGenerationSourceV1{source: &fakeVectorPartitionGenerationSourceV1{manifest: physical}, manifest: logical}
 	pinned, err := source.PinVectorPartitionGenerationV1(t.Context(), manifest.IndexName, manifest.Generation)
 	if err != nil {
