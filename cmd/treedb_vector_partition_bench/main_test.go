@@ -2692,6 +2692,17 @@ func TestM8ProfileCaptureWritesRequiredRuntimeArtifactsV1(t *testing.T) {
 	}
 }
 
+func TestM8ProfileCaptureCreatesDirectoryV1(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "profiles")
+	capture, err := startM8ProfileCaptureV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m8FinishDirectProfileCaptureV1(capture, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestM8ProfileCaptureDoesNotReplaceExistingArtifactV1(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "allocs_baseline.pprof")
