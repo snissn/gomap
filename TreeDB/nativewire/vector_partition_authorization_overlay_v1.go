@@ -22,21 +22,32 @@ func newVectorPartitionAuthorizationOverlayV1(digest string, denied []string, ma
 }
 
 func (o *vectorPartitionAuthorizationOverlayV1) publishV1(digest string, denied []string, maxIDBytes int) error {
-	if o == nil || !isVectorPartitionShardSearchDigestV1(digest) || maxIDBytes < 1 || len(denied) > maxVectorPartitionAuthorizationOverlayEntriesV1 {
+	if o == nil {
 		return ErrVectorPartitionShardSearchInvalidRequest
+	}
+	state, err := newVectorPartitionAuthorizationOverlayStateV1(digest, denied, maxIDBytes)
+	if err != nil {
+		return err
+	}
+	o.state.Store(state)
+	return nil
+}
+
+func newVectorPartitionAuthorizationOverlayStateV1(digest string, denied []string, maxIDBytes int) (*vectorPartitionAuthorizationOverlayStateV1, error) {
+	if !isVectorPartitionShardSearchDigestV1(digest) || maxIDBytes < 1 || len(denied) > maxVectorPartitionAuthorizationOverlayEntriesV1 {
+		return nil, ErrVectorPartitionShardSearchInvalidRequest
 	}
 	state := &vectorPartitionAuthorizationOverlayStateV1{digest: digest, denied: make(map[string]struct{}, len(denied))}
 	for _, id := range denied {
 		if id == "" || len(id) > maxIDBytes {
-			return ErrVectorPartitionShardSearchInvalidRequest
+			return nil, ErrVectorPartitionShardSearchInvalidRequest
 		}
 		if _, exists := state.denied[id]; exists {
-			return ErrVectorPartitionShardSearchInvalidRequest
+			return nil, ErrVectorPartitionShardSearchInvalidRequest
 		}
 		state.denied[id] = struct{}{}
 	}
-	o.state.Store(state)
-	return nil
+	return state, nil
 }
 
 func (o *vectorPartitionAuthorizationOverlayV1) filterV1(expectedDigest string, response *VectorPartitionCoordinatorResponseV1) error {

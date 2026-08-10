@@ -449,10 +449,11 @@ func (h *VectorPartitionProductionTopologyV1) PublishSearchSnapshotV1(ctx contex
 	}
 	h.searchPublication.Lock()
 	defer h.searchPublication.Unlock()
-	if err := h.authorization.publishV1(authorizationDigest, deniedDocumentIDs, h.coordinator.limits.MaxStableIDBytes); err != nil {
+	nextAuthorization, err := newVectorPartitionAuthorizationOverlayStateV1(authorizationDigest, deniedDocumentIDs, h.coordinator.limits.MaxStableIDBytes)
+	if err != nil {
 		return public.IndexedWriteTokenV1{}, err
 	}
-	if err := h.servingSnapshot.PublishStateV1(ctx, indexedThrough, authorizationDigest); err != nil {
+	if err := h.servingSnapshot.publishStateV1(ctx, indexedThrough, authorizationDigest, func() { h.authorization.state.Store(nextAuthorization) }); err != nil {
 		return public.IndexedWriteTokenV1{}, err
 	}
 	return public.IndexedWriteTokenV1{Sequence: indexedThrough}, nil

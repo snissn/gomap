@@ -159,6 +159,29 @@ func TestServiceV1FastAndPinnedContract(t *testing.T) {
 	}
 }
 
+func TestServiceV1FastSearchAppliesRequestDeadlineBeforeBackendV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &serviceBackendV1{states: make(map[GenerationIDV1]GenerationStatusV1)}
+	backend.search = func(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+		select {
+		case <-ctx.Done():
+			return SearchResponseV1{}, ctx.Err()
+		case <-time.After(time.Second):
+			t.Fatal("fast backend outlived request deadline")
+			return SearchResponseV1{}, nil
+		}
+	}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validSearchRequestV1(id)
+	request.Deadline = time.Now().Add(20 * time.Millisecond)
+	if _, _, err := service.SearchFast(context.Background(), request, FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 1}); !hasCodeV1(err, ErrorDeadlineExceededV1) {
+		t.Fatalf("fast deadline error=%v", err)
+	}
+}
+
 func TestServiceV1FailsClosedWithoutPartialResults(t *testing.T) {
 	id := GenerationIDV1{Index: "embedding", Generation: 7}
 	svc, err := NewServiceV1(&serviceBackendV1{states: map[GenerationIDV1]GenerationStatusV1{}, search: func(context.Context, SearchRequestV1) (SearchResponseV1, error) {

@@ -75,7 +75,13 @@ func (s *ServiceV1) SearchFast(ctx context.Context, request SearchRequestV1, opt
 	if err := validateFastSearchOptionsV1(options); err != nil {
 		return SearchResponseV1{}, FastSearchEvidenceV1{}, err
 	}
-	response, evidence, err := s.backend.SearchVectorPartitionFastV1(ctx, cloneSearchRequestV1(request), options)
+	requestCtx, cancel := ctx, func() {}
+	ctxDeadline, hasCtxDeadline := ctx.Deadline()
+	if !request.Deadline.IsZero() && (!hasCtxDeadline || request.Deadline.Before(ctxDeadline)) {
+		requestCtx, cancel = context.WithDeadline(ctx, request.Deadline)
+	}
+	defer cancel()
+	response, evidence, err := s.backend.SearchVectorPartitionFastV1(requestCtx, cloneSearchRequestV1(request), options)
 	if err != nil {
 		return SearchResponseV1{}, FastSearchEvidenceV1{}, classifyErrorV1(ctx, err)
 	}

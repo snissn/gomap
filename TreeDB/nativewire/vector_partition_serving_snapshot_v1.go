@@ -181,6 +181,10 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 // source watermark. Concurrent publishers serialize; an older watermark can
 // never replace a newer one.
 func (p *VectorPartitionServingSnapshotPublisherV1) PublishStateV1(ctx context.Context, indexedThrough uint64, overlayDigest string) error {
+	return p.publishStateV1(ctx, indexedThrough, overlayDigest, nil)
+}
+
+func (p *VectorPartitionServingSnapshotPublisherV1) publishStateV1(ctx context.Context, indexedThrough uint64, overlayDigest string, commit func()) error {
 	if p == nil {
 		return ErrVectorPartitionShardSearchAssetsUnavailable
 	}
@@ -234,6 +238,9 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishStateV1(ctx context.C
 	if err := vectorPartitionServingSnapshotAdvanceIdentityV1(next, previous); err != nil {
 		p.mu.Unlock()
 		return errors.Join(err, next.close())
+	}
+	if commit != nil {
+		commit()
 	}
 	p.current = next
 	p.opts.IndexedThrough = indexedThrough
@@ -638,12 +645,12 @@ func (p *VectorPartitionServingSnapshotPublisherV1) AcquireStrictV1(ctx context.
 		p.mu.Unlock()
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
 	}
-	snapshot := p.current
+	snapshot, revision := p.current, p.revision
 	snapshot.refs++
 	p.stats.Acquisitions++
 	p.stats.CurrentPins++
 	p.mu.Unlock()
-	lease := &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: snapshot, revision: p.revision}
+	lease := &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: snapshot, revision: revision}
 	placement := p.opts.Coordinator.placement
 	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
 		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceStrictSearchV1),

@@ -574,6 +574,57 @@ func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) 
 	}
 }
 
+func TestVectorPartitionServingSnapshotCommitRunsOnlyAfterSuccessfulBuildV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := fixture.publisher.AcquireV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeIdentity := before.IdentityV1()
+	if err := before.Close(); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected publication failure")
+	fixture.sources["group-b"].openErr[1] = injected
+	commits := 0
+	if err := fixture.publisher.publishStateV1(t.Context(), 12, strings.Repeat("9", 64), func() { commits++ }); !errors.Is(err, injected) {
+		t.Fatalf("failed publication error=%v", err)
+	}
+	if commits != 0 {
+		t.Fatalf("failed publication commits=%d", commits)
+	}
+	current, err := fixture.publisher.AcquireV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.IdentityV1(); got.SnapshotDigest != beforeIdentity.SnapshotDigest || got.AuthorizationOverlayDigest != beforeIdentity.AuthorizationOverlayDigest {
+		t.Fatalf("failed publication changed identity=%+v before=%+v", got, beforeIdentity)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	delete(fixture.sources["group-b"].openErr, uint32(1))
+	if err := fixture.publisher.publishStateV1(t.Context(), 12, strings.Repeat("9", 64), func() { commits++ }); err != nil {
+		t.Fatal(err)
+	}
+	if commits != 1 {
+		t.Fatalf("successful publication commits=%d", commits)
+	}
+	current, err = fixture.publisher.AcquireV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := current.IdentityV1(); got.SnapshotDigest == beforeIdentity.SnapshotDigest || got.AuthorizationOverlayDigest != strings.Repeat("9", 64) {
+		t.Fatalf("successful publication identity=%+v before=%+v", got, beforeIdentity)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func BenchmarkVectorPartitionServingSnapshotAcquireV1(b *testing.B) {
 	fixture := newVectorPartitionServingSnapshotFixtureV1(b)
 	if err := fixture.publisher.PublishV1(context.Background()); err != nil {
