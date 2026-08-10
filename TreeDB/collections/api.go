@@ -21130,10 +21130,26 @@ type scanMergedCollectionIndexIDOptions struct {
 	DedupeDocumentID     bool
 	StableDocumentIDTies bool
 	DocumentIDLess       func(left, right []byte) bool
+	// MaxStableTieBytes bounds cloned IDs retained while normalizing one
+	// logical-key tie group. Zero selects the conservative production default.
+	// It is an internal seam so the public range API retains a fixed, bounded
+	// memory contract while tests can exercise the fail-closed path cheaply.
+	MaxStableTieBytes int
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
 }
+
+const (
+	// maxStableDocumentIDTieBytes is deliberately independent of the result
+	// count/work cap: document IDs are variable-sized, so an entry-only cap
+	// would still permit an arbitrarily large temporary tie buffer.
+	maxStableDocumentIDTieBytes = 64 << 20
+	// Account for the cloned byte slice's header/capacity bookkeeping as well as
+	// its payload. The conservative fixed charge keeps the retained allocation
+	// beneath the advertised byte ceiling without relying on runtime internals.
+	stableDocumentIDTieEntryOverhead = 32
+)
 
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, opts, fn)
@@ -21171,6 +21187,9 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		// future internal caller (public compound scans always supply one).
 		if maxInspected == 0 {
 			return false, errors.New("collections: stable document-ID ties require a positive inspected-entry cap")
+		}
+		if opts.MaxStableTieBytes < 0 {
+			return false, errors.New("collections: stable document-ID ties cannot use a negative byte cap")
 		}
 		return scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt, valueType, maxResults, reverse, inspect, opts, fn)
 	}
@@ -21387,6 +21406,11 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 	emitted := 0
 	var groupKey []byte
 	groupIDs := make([][]byte, 0)
+	maxGroupBytes := opts.MaxStableTieBytes
+	if maxGroupBytes == 0 {
+		maxGroupBytes = maxStableDocumentIDTieBytes
+	}
+	groupBytes := 0
 	emitGroup := func() (bool, bool, error) {
 		if len(groupIDs) == 0 {
 			return true, false, nil
@@ -21416,6 +21440,7 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 			}
 		}
 		groupIDs = groupIDs[:0]
+		groupBytes = 0
 		return true, truncated, nil
 	}
 	for {
@@ -21458,7 +21483,16 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 			}
 			seen[idKey] = struct{}{}
 		}
+		// Never retain a partial stable group: callers would otherwise see an
+		// order that could change once the remaining equal-key IDs were sorted.
+		// This is checked before cloning so an oversized ID cannot transiently
+		// escape the group-memory bound.
+		entryBytes := len(id) + stableDocumentIDTieEntryOverhead
+		if entryBytes < len(id) || entryBytes > maxGroupBytes-groupBytes {
+			return true, nil
+		}
 		groupIDs = append(groupIDs, bytes.Clone(id))
+		groupBytes += entryBytes
 	}
 }
 

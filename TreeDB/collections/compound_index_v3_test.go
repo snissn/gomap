@@ -869,6 +869,43 @@ func TestScanMergedCompoundIndexIDsStableReverseDoesNotEmitPartialTieAtWorkCap(t
 	}
 }
 
+func TestScanMergedCompoundIndexIDsStableRejectsOversizedTieBufferBeforePublication(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(2)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, key("a", "long-document-id-a"), nil)
+	setCollectionRunValue(table, key("a", "long-document-id-b"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 2, false, 8, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+		// This tiny test seam proves the production fixed byte ceiling is
+		// checked before cloning/retaining an equal-key group.
+		MaxStableTieBytes: 8,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || len(got) != 0 {
+		t.Fatalf("stable tie byte cap ids=%q truncated=%v err=%v want [],true,nil", got, truncated, err)
+	}
+}
+
 func TestScanMergedCompoundIndexIDsStableRequiresPositiveWorkCap(t *testing.T) {
 	_, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, nil, IndexValueBSONOrderedV2, 1, false, 0, scanMergedCollectionIndexIDOptions{
 		StableDocumentIDTies: true,
