@@ -329,6 +329,52 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 		return nil, compoundIndexPlan{}, false, nil
 	}
 	candidate := candidates[0]
+	ids, candidate, ok, err := s.compoundIndexPlanIDs(col, plan)
+	if !ok || err != nil {
+		return nil, candidate, ok, err
+	}
+	maxDocuments := s.maxFindScanDocuments()
+	docs := make([]wire.Document, 0, len(ids))
+	materializedBytes := 0
+	maxMaterializedBytes := s.maxCursorRetainedBytes()
+	for _, id := range ids {
+		stored, err := col.Get(id)
+		if err != nil {
+			return nil, candidate, true, err
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		plan.recordMaterialized()
+		doc, err := storedDocumentToBSON(col, materializer, stored)
+		if err != nil {
+			return nil, candidate, true, err
+		}
+		if len(doc) > maxMaterializedBytes-materializedBytes {
+			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index materialization exceeded %d bytes", errMongoFindScanCapExceeded, maxMaterializedBytes)
+		}
+		materializedBytes += len(doc)
+		plan.recordMaterializedBytes(len(doc))
+		docs = append(docs, doc)
+		if len(docs) > maxDocuments {
+			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index fetched more than %d documents", errMongoFindScanCapExceeded, maxDocuments)
+		}
+	}
+	return docs, candidate, true, nil
+}
+
+// compoundIndexPlanIDs performs the bounded ordered index walk without
+// decoding documents. Cursor execution retains these small primary keys and
+// materializes BSON only as each batch is requested.
+func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan) ([][]byte, compoundIndexPlan, bool, error) {
+	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+		return nil, compoundIndexPlan{}, false, nil
+	}
+	candidates := compoundIndexPlans(col.MetaView(), plan)
+	if len(candidates) == 0 {
+		return nil, compoundIndexPlan{}, false, nil
+	}
+	candidate := candidates[0]
 	maxDocuments := s.maxFindScanDocuments()
 	if maxDocuments <= 0 {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner requires a positive work cap", errMongoFindScanCapExceeded)
@@ -365,33 +411,7 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 			plan.recordCandidate()
 		}
 	}
-	docs := make([]wire.Document, 0, len(ids))
-	materializedBytes := 0
-	maxMaterializedBytes := s.maxCursorRetainedBytes()
-	for _, id := range ids {
-		stored, err := col.Get(id)
-		if err != nil {
-			return nil, candidate, true, err
-		}
-		if len(stored) == 0 {
-			continue
-		}
-		plan.recordMaterialized()
-		doc, err := storedDocumentToBSON(col, materializer, stored)
-		if err != nil {
-			return nil, candidate, true, err
-		}
-		if len(doc) > maxMaterializedBytes-materializedBytes {
-			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index materialization exceeded %d bytes", errMongoFindScanCapExceeded, maxMaterializedBytes)
-		}
-		materializedBytes += len(doc)
-		plan.recordMaterializedBytes(len(doc))
-		docs = append(docs, doc)
-		if len(docs) > maxDocuments {
-			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index fetched more than %d documents", errMongoFindScanCapExceeded, maxDocuments)
-		}
-	}
-	return docs, candidate, true, nil
+	return ids, candidate, true, nil
 }
 
 func compoundIndexPlanFor(meta collections.CollectionMeta, plan findPlan) (compoundIndexPlan, bool) {

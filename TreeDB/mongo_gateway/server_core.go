@@ -171,13 +171,18 @@ type collectionFirstWriteRegistry struct {
 }
 
 type serverCursor struct {
-	ns         string
-	owner      int64
-	principal  AuthUser
-	docs       []wire.Document
-	projection compiledProjection
-	pos        int
-	lastUsed   time.Time
+	ns        string
+	owner     int64
+	principal AuthUser
+	docs      []wire.Document
+	// compoundIDs is an ordered, bounded index result. Unlike docs it contains
+	// no decoded BSON: getMore fetches and projects only the requested batch.
+	compoundIDs        [][]byte
+	compoundCollection *collections.Collection
+	materializedBytes  int
+	projection         compiledProjection
+	pos                int
+	lastUsed           time.Time
 }
 
 func NewServer() *Server {

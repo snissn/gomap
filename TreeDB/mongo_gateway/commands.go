@@ -939,6 +939,36 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 			}
 		}
 	}
+	// The V2 compound path retains primary keys, not BSON documents. It is used
+	// only when every predicate is encoded by the index and its order satisfies
+	// the requested sort; all other shapes use the conservative executor below.
+	if !singleBatch {
+		if ids, compound, ok, err := s.compoundIndexPlanIDs(col, plan); ok || err != nil {
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			if compound.residualFilters == 0 && compound.sortSatisfied && len(compound.prefixChoices) == 1 {
+				if plan.skip > 0 {
+					if int(plan.skip) >= len(ids) {
+						ids = nil
+					} else {
+						ids = ids[plan.skip:]
+					}
+				}
+				if plan.limit > 0 && int(plan.limit) < len(ids) {
+					ids = ids[:plan.limit]
+				}
+				cursorID, firstBatch, err := s.openCompoundIDCursor(ns, col, ids, plan.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
+				if err != nil {
+					doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+					return findResponsePayload{document: doc}, err
+				}
+				doc, err := marshalCursorResponseWithID(ns, cursorID, "firstBatch", firstBatch)
+				return findResponsePayload{document: doc}, err
+			}
+		}
+	}
 	results, err := s.executeFind(col, plan)
 	if err != nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -3987,6 +4017,105 @@ func (s *Server) openRetainedCursor(ns string, docs []wire.Document, projection 
 	return cursorID, nil
 }
 
+// openCompoundIDCursor retains only ordered primary keys from the bounded
+// compound index walk. BSON decoding is intentionally deferred to the first
+// batch/getMore path so a large cursor is not fully materialized up front.
+func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, ids [][]byte, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
+	if s.isClosed() {
+		return 0, nil, errServerClosed
+	}
+	batchSize, err := normalizeBatchSize(batchSize, explicitBatchSize, defaultBatchSize)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(ids) == 0 {
+		return 0, bson.A{}, nil
+	}
+	retained := 0
+	for _, id := range ids {
+		if len(id) > s.maxCursorRetainedBytes()-retained {
+			return 0, nil, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
+		}
+		retained += len(id)
+	}
+	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, projection: projection, lastUsed: time.Now()}
+	batch, consumed, bytes, err := s.compoundCursorBatch(cursor, 0, batchSize)
+	if err != nil {
+		return 0, nil, err
+	}
+	cursor.pos, cursor.materializedBytes = consumed, bytes
+	if consumed >= len(ids) {
+		return 0, batch, nil
+	}
+	cursorID := s.nextCursorID.Add(1)
+	if cursorID == 0 {
+		cursorID = s.nextCursorID.Add(1)
+	}
+	s.cursorMu.Lock()
+	defer s.cursorMu.Unlock()
+	if s.isClosed() {
+		return 0, nil, errServerClosed
+	}
+	s.reapExpiredCursorsLocked(time.Now())
+	if s.cursors == nil {
+		s.cursors = make(map[int64]*serverCursor)
+	}
+	if len(s.cursors) >= s.maxOpenCursors() {
+		return 0, nil, errors.New("Mongo gateway cursor limit exceeded")
+	}
+	if user := s.authUser(owner); user != nil {
+		cursor.principal = *user
+	}
+	s.addCursorLocked(cursorID, cursor)
+	return cursorID, batch, nil
+}
+
+func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs int) (bson.A, int, int, error) {
+	if cursor.compoundCollection == nil {
+		return nil, 0, 0, errors.New("mongo gateway compound cursor has no collection")
+	}
+	materializer, err := storedDocumentMaterializerForCollection(cursor.compoundCollection)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer func() { _ = materializer.Close() }()
+	out := make(bson.A, 0, maxDocs)
+	batchBytes, added, decoded := 0, 0, 0
+	for start+decoded < len(cursor.compoundIDs) && added < maxDocs {
+		stored, err := cursor.compoundCollection.Get(cursor.compoundIDs[start+decoded])
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		decoded++
+		if len(stored) == 0 {
+			continue
+		}
+		doc, err := storedDocumentToBSON(cursor.compoundCollection, materializer, stored)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if len(doc) > s.maxCursorRetainedBytes()-cursor.materializedBytes {
+			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
+		}
+		projected, err := projectDocumentWithProjection(doc, cursor.projection)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		docBytes := findBatchDocumentBytes(projected, len(out))
+		if findBatchOverheadBytes+docBytes > s.maxFindBatchBytes() {
+			return nil, 0, 0, fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", docBytes, s.maxFindBatchBytes())
+		}
+		if len(out) > 0 && findBatchOverheadBytes+batchBytes+docBytes > s.maxFindBatchBytes() {
+			decoded--
+			break
+		}
+		out = append(out, bson.Raw(projected))
+		batchBytes += docBytes
+		added++
+	}
+	return out, decoded, batchBytes, nil
+}
+
 func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, explicitBatchSize bool, defaultBatchSize int) (int64, bson.A, bool, error) {
 	if cursorID == 0 {
 		return 0, nil, false, nil
@@ -4008,6 +4137,42 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 			return 0, nil, false, nil
 		}
 		startPos := cursor.pos
+		if cursor.compoundCollection != nil {
+			effectiveBatchSize := batchSize
+			if !explicitBatchSize {
+				effectiveBatchSize = defaultBatchSize
+			}
+			s.cursorMu.Unlock()
+			batch, consumed, bytes, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize)
+			if err != nil {
+				s.cursorMu.Lock()
+				if current := s.cursors[cursorID]; current == cursor && current.pos == startPos {
+					s.deleteCursorLocked(cursorID)
+				}
+				s.cursorMu.Unlock()
+				return 0, nil, false, err
+			}
+			s.cursorMu.Lock()
+			current := s.cursors[cursorID]
+			if current == nil || current != cursor || current.ns != ns || current.owner != owner || !cursorPrincipalMatches(current, s.authUser(owner)) {
+				s.cursorMu.Unlock()
+				return 0, nil, false, nil
+			}
+			if current.pos != startPos {
+				s.cursorMu.Unlock()
+				continue
+			}
+			current.pos += consumed
+			current.materializedBytes += bytes
+			current.lastUsed = time.Now()
+			if current.pos >= len(current.compoundIDs) {
+				s.deleteCursorLocked(cursorID)
+				s.cursorMu.Unlock()
+				return 0, batch, true, nil
+			}
+			s.cursorMu.Unlock()
+			return cursorID, batch, true, nil
+		}
 		remaining := cursor.docs[startPos:]
 		projection := cursor.projection
 		effectiveBatchSize := batchSize

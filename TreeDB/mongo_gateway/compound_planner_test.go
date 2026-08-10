@@ -66,6 +66,34 @@ func TestMongoCompoundPlanEqualityPrefixRangeAndSort(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 406505, reverse)), []string{"a", "b", "c"})
 }
 
+func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406506, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406507, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(3)}},
+	}}, {Key: "$db", Value: "app"}}))
+	find := serveCommand(t, server, 406508, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "skip", Value: int64(1)}, {Key: "limit", Value: int64(2)}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, find), []string{"b"})
+	cursorID := cursorIDFromResponse(t, find)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want resumable compound cursor")
+	}
+	server.cursorMu.Lock()
+	cursor := server.cursors[cursorID]
+	server.cursorMu.Unlock()
+	if cursor == nil || len(cursor.docs) != 0 || len(cursor.compoundIDs) != 2 {
+		t.Fatalf("cursor did not retain bounded IDs only: %#v", cursor)
+	}
+	next := serveCommand(t, server, 406509, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorNextBatch(t, next), []string{"a"})
+	if got := cursorIDFromResponse(t, next); got != 0 {
+		t.Fatalf("final cursor id=%d want 0", got)
+	}
+	assertCommandError(t, serveCommand(t, server, 406510, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "CursorNotFound")
+}
+
 func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406511, bson.D{
