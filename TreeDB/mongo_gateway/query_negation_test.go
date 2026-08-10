@@ -53,7 +53,7 @@ func TestMongoNegativeAndExistsPredicatesRespectMissingNullAndDottedValues(t *te
 }
 
 func TestMongoDottedProjectionRebuildsParentsAndFailsClosedOnArrays(t *testing.T) {
-	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}, {Key: "age", Value: int32(37)}}}, {Key: "state", Value: "active"}})
+	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "_id", Value: "nested"}, {Key: "name", Value: "Ada"}, {Key: "age", Value: int32(37)}}}, {Key: "state", Value: "active"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestMongoDottedProjectionRebuildsParentsAndFailsClosedOnArrays(t *testing.T
 		want       bson.D
 	}{
 		{"include nested", bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
-		{"exclude nested", bson.D{{Key: "profile.age", Value: int32(0)}}, bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}}},
+		{"exclude nested", bson.D{{Key: "profile.age", Value: int32(0)}}, bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "_id", Value: "nested"}, {Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			projection, err := bson.Marshal(test.projection)
@@ -101,6 +101,18 @@ func TestMongoDottedProjectionRebuildsParentsAndFailsClosedOnArrays(t *testing.T
 	}
 	if _, err := compileProjection(wire.Document(deepProjection)); err == nil {
 		t.Fatal("over-depth projection unexpectedly accepted")
+	}
+}
+
+func TestMongoDottedProjectionArrayFailureDoesNotPublishCursor(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406604, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.A{bson.D{{Key: "name", Value: "Ada"}}}}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406605, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{}}, {Key: "projection", Value: bson.D{{Key: "profile.name", Value: int32(1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite dotted projection rejection: %d", len(server.cursors))
 	}
 }
 

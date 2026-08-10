@@ -2296,7 +2296,7 @@ func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID bool)
 			}
 			continue
 		}
-		projected, present, err := projectIncludedDocument(nested, child, true)
+		projected, present, err := projectIncludedDocument(nested, child, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -2368,6 +2368,15 @@ const (
 	projectionInclude
 	projectionExclude
 )
+
+func projectionHasDottedPath(projection compiledProjection) bool {
+	for field := range projection.fields {
+		if strings.Contains(field, ".") {
+			return true
+		}
+	}
+	return false
+}
 
 func parseProjection(projection wire.Document) (projectionMode, map[string]struct{}, bool, bool, error) {
 	elements, err := bson.Raw(projection).Elements()

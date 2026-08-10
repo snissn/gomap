@@ -3974,6 +3974,16 @@ func (s *Server) openCursor(ns string, docs []wire.Document, projection compiled
 	if err != nil {
 		return 0, nil, err
 	}
+	// A zero-sized first batch would otherwise defer dotted-path validation to
+	// getMore after publishing a cursor. Validate all already-bounded result
+	// documents before that externally visible state transition.
+	if projectionHasDottedPath(projection) {
+		for _, doc := range docs {
+			if _, err := projectDocumentWithProjection(doc, projection); err != nil {
+				return 0, nil, err
+			}
+		}
+	}
 	firstBatch, consumed, err := documentsBatchWithLimit(docs, projection, batchSize, s.maxFindBatchBytes())
 	if err != nil {
 		return 0, nil, err
