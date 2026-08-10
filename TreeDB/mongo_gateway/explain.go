@@ -540,7 +540,7 @@ func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {
 }
 
 func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
-	if len(plan.orBranches) != 0 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
 	candidatePlans := explainCandidatePlans(col, plan)
@@ -554,8 +554,8 @@ func explainPlannerSelection(col *collections.Collection, plan findPlan) findPla
 }
 
 func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bool {
-	if len(plan.orBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
-		return len(plan.predicates) != 0 || len(plan.orBranches) != 0
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
+		return len(plan.predicates) != 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0
 	}
 	if selection.stage == "primary_lookup" {
 		return len(plan.predicates) != 1

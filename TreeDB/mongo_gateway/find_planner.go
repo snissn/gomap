@@ -118,6 +118,7 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes := 0
 	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
+	bytes += len(plan.norBranches) * int(unsafe.Sizeof([]findPredicate{}))
 	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
 	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
 	// A cloned projection retains a Go map allocation and its groups, in
@@ -157,6 +158,9 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 	}
 	add(plan.predicates)
 	for _, branch := range plan.orBranches {
+		add(branch)
+	}
+	for _, branch := range plan.norBranches {
 		add(branch)
 	}
 	for field := range plan.projection.fields {
@@ -1641,7 +1645,7 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 			if orBranches != nil {
 				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
 			}
-			orBranches, err = parseOrPredicates(elem.Value())
+			orBranches, err = parseBooleanBranches(elem.Value(), "$or")
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -1651,7 +1655,7 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 			if norBranches != nil {
 				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $nor")
 			}
-			norBranches, err = parseOrPredicates(elem.Value())
+			norBranches, err = parseBooleanBranches(elem.Value(), "$nor")
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -1734,22 +1738,26 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 }
 
 func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
+	return parseBooleanBranches(value, "$or")
+}
+
+func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredicate, error) {
 	array, ok := value.ArrayOK()
 	if !ok {
-		return nil, errors.New("Mongo gateway $or must be an array")
+		return nil, fmt.Errorf("Mongo gateway %s must be an array", operator)
 	}
 	values, err := array.Values()
 	if err != nil {
 		return nil, err
 	}
 	if len(values) == 0 {
-		return nil, errors.New("Mongo gateway $or must contain at least one expression")
+		return nil, fmt.Errorf("Mongo gateway %s must contain at least one expression", operator)
 	}
 	branches := make([][]findPredicate, 0, len(values))
 	for i, value := range values {
 		doc, ok := value.DocumentOK()
 		if !ok {
-			return nil, fmt.Errorf("Mongo gateway $or[%d] must be a document", i)
+			return nil, fmt.Errorf("Mongo gateway %s[%d] must be a document", operator, i)
 		}
 		predicates, err := parseFindPredicateDocument(wire.Document(doc))
 		if err != nil {
@@ -1920,11 +1928,11 @@ func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
 		match = false
 	}
 	for _, branch := range plan.orBranches {
-		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
+		branchMatch, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
 		if err != nil {
 			return false, err
 		}
-		if match {
+		if branchMatch {
 			match = true
 			break
 		}
@@ -1948,7 +1956,11 @@ func missingValueMatchesPredicate(pred findPredicate) bool {
 	switch pred.op {
 	case findPredicateEq, findPredicateIn:
 		return predicateContainsNull(pred)
-	case findPredicateNE, findPredicateNIN:
+	case findPredicateNE:
+		// Mongo's $ne:null is the non-null/existence form; unlike ordinary
+		// $ne it does not include a missing path.
+		return !predicateContainsNull(pred)
+	case findPredicateNIN:
 		return true
 	case findPredicateExists:
 		exists, _ := pred.values[0].BooleanOK()

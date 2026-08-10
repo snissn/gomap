@@ -15,6 +15,9 @@ func TestMongoNegativeAndExistsPredicatesRespectMissingNullAndDottedValues(t *te
 		want   bool
 	}{
 		{"ne matches missing", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: int32(1)}}}}, bson.D{{Key: "_id", Value: 1}}, true},
+		{"ne null rejects missing", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: nil}}}}, bson.D{{Key: "_id", Value: 1}}, false},
+		{"ne null rejects explicit null", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: nil}}}}, bson.D{{Key: "a", Value: nil}}, false},
+		{"ne null matches scalar", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: nil}}}}, bson.D{{Key: "a", Value: int32(1)}}, true},
 		{"ne rejects numeric equivalent", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: int32(1)}}}}, bson.D{{Key: "a", Value: int64(1)}}, false},
 		{"nin matches null", bson.D{{Key: "a", Value: bson.D{{Key: "$nin", Value: bson.A{int32(1)}}}}}, bson.D{{Key: "a", Value: nil}}, true},
 		{"exists distinguishes null from missing", bson.D{{Key: "a", Value: bson.D{{Key: "$exists", Value: true}}}}, bson.D{{Key: "a", Value: nil}}, true},
@@ -93,5 +96,65 @@ func TestMongoTopLevelNorCombinesWithSiblingPredicates(t *testing.T) {
 		if got != test.want {
 			t.Fatalf("doc %v match=%v want %v", test.doc, got, test.want)
 		}
+	}
+}
+
+func TestMongoTopLevelOrAndNorCoexist(t *testing.T) {
+	filter, err := bson.Marshal(bson.D{{Key: "$or", Value: bson.A{
+		bson.D{{Key: "tenant", Value: "a"}}, bson.D{{Key: "tenant", Value: "b"}},
+	}}, {Key: "$nor", Value: bson.A{bson.D{{Key: "state", Value: "disabled"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := parseFindPlan(nil, wire.Document(filter))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		doc  bson.D
+		want bool
+	}{
+		{bson.D{{Key: "tenant", Value: "a"}}, true},
+		{bson.D{{Key: "tenant", Value: "a"}, {Key: "state", Value: "disabled"}}, false},
+		{bson.D{{Key: "tenant", Value: "c"}}, false},
+	} {
+		raw, err := bson.Marshal(test.doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := documentMatchesPlan(wire.Document(raw), plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != test.want {
+			t.Fatalf("doc %v match=%v want %v", test.doc, got, test.want)
+		}
+	}
+}
+
+func TestMongoDottedSortIsStableAndReportsBoundedMaterialization(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406601, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "z"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "bob"}}}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "alice"}}}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "alice"}}}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{}}, {Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}}, {Key: "skip", Value: int32(1)}, {Key: "limit", Value: int32(2)}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 406602, command)
+	assertOK(t, response)
+	batch := cursorFirstBatch(t, response)
+	if len(batch) != 2 {
+		t.Fatalf("batch len=%d want 2", len(batch))
+	}
+	for i, want := range []string{"c", "z"} {
+		if got, ok := batch[i].Lookup("_id").StringValueOK(); !ok || got != want {
+			t.Fatalf("result[%d]._id=%q ok=%v want %q", i, got, ok, want)
+		}
+	}
+	explain := serveCommand(t, server, 406603, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	stats := bson.Raw(explain).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got != 3 {
+		t.Fatalf("materialized=%d ok=%v want 3: %s", got, ok, explain)
 	}
 }
