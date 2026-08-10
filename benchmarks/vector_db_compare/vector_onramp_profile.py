@@ -38,11 +38,12 @@ STAGE_FIELDS = {
 }
 CATALOG_SOURCES = ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown")
 RUNTIME_MONOTONIC = (
-    "cpu_time_nanos", "run_queue_delay_nanos", "timeslices", "voluntary_context_switches", "nonvoluntary_context_switches",
+    "cpu_time_nanos", "voluntary_context_switches", "nonvoluntary_context_switches",
     "peak_rss_bytes", "total_alloc_bytes", "mallocs", "frees", "num_gc", "pause_total_nanos",
 )
+RUNTIME_DIAGNOSTIC = ("run_queue_delay_nanos", "timeslices")
 RUNTIME_FIELDS = {
-    "sample_unix_nano", *RUNTIME_MONOTONIC, "rss_bytes", "heap_alloc_bytes", "heap_objects", "goroutines",
+    "sample_unix_nano", *RUNTIME_MONOTONIC, *RUNTIME_DIAGNOSTIC, "rss_bytes", "heap_alloc_bytes", "heap_objects", "goroutines",
 }
 
 
@@ -96,7 +97,8 @@ def _validate_runtime(cell: dict[str, Any], node_ids: set[str]) -> dict[str, flo
         for key in RUNTIME_MONOTONIC:
             _require(_uint(before[key]) and _uint(after[key]) and after[key] >= before[key], "runtime evidence is non-monotonic")
             totals[key] += after[key] - before[key]
-    _require(totals["cpu_time_nanos"] > 0 and totals["timeslices"] > 0 and totals["total_alloc_bytes"] > 0 and totals["mallocs"] > 0, "runtime evidence did not cover process worker threads")
+        _require(all(_uint(before[key]) and _uint(after[key]) for key in RUNTIME_DIAGNOSTIC), "runtime diagnostic fields are invalid")
+    _require(totals["cpu_time_nanos"] > 0 and totals["total_alloc_bytes"] > 0 and totals["mallocs"] > 0, "runtime evidence did not cover process worker threads")
     return {key + "_per_query": value / 1000 for key, value in totals.items()}
 
 

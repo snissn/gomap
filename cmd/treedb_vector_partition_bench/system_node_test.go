@@ -268,7 +268,7 @@ func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 	}
 	before := map[string]vectorPartitionSystemNodeObservationV1{"node": {
 		Catalog: nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1{LastTerm: 1, LastCatalogApplied: 2, LastRaftApplied: 5, LastRaftLog: 5},
-		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 1, CPUTimeNanos: 10, TotalAllocBytes: 10, Mallocs: 1, Goroutines: 1},
+		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 1, CPUTimeNanos: 10, RunQueueDelayNanos: 10, Timeslices: 10, TotalAllocBytes: 10, Mallocs: 1, Goroutines: 1},
 	}}
 	afterCatalog := nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1{
 		Total: stage(7), OperationsHealth: stage(2), CoordinatorLifecycle: stage(2), ShardLifecycle: stage(3),
@@ -276,7 +276,7 @@ func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 	}
 	after := map[string]vectorPartitionSystemNodeObservationV1{"node": {
 		Catalog: afterCatalog,
-		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 2, CPUTimeNanos: 20, TotalAllocBytes: 20, Mallocs: 2, Goroutines: 1},
+		Runtime: nativewire.VectorPartitionProcessRuntimeStatsV1{SampleUnixNano: 2, CPUTimeNanos: 20, RunQueueDelayNanos: 0, Timeslices: 0, TotalAllocBytes: 20, Mallocs: 2, Goroutines: 1},
 	}}
 	reads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(before, after, 2, 3)
 	if err != nil || reads.Total.Total.Reads != 7 || len(runtimeStats) != 1 || runtimeStats[0].After.CPUTimeNanos != 20 {

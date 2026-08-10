@@ -90,7 +90,15 @@ class VectorOnrampProfileTest(unittest.TestCase):
         self.assertEqual(evidence["catalog"]["reads_per_query"], 3.834)
         self.assertEqual(evidence["catalog"]["log_barriers_per_query"], 3.834)
         self.assertGreater(evidence["runtime"]["cpu_time_nanos_per_query"], 0)
+        self.assertNotIn("run_queue_delay_nanos_per_query", evidence["runtime"])
+        self.assertNotIn("timeslices_per_query", evidence["runtime"])
         self.assertIn("operations_health", evidence["wall"]["public_exclusive_nanos_per_query"])
+
+    def test_disappearing_thread_schedstat_is_not_process_evidence(self) -> None:
+        value = cell()
+        value["runtime"][0]["after"]["run_queue_delay_nanos"] = 0
+        value["runtime"][0]["after"]["timeslices"] = 0
+        validate_cell(value, {NODE})
 
     def test_worker_runtime_and_catalog_log_proof_fail_closed(self) -> None:
         value = cell()

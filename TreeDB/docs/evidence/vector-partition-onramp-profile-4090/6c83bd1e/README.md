@@ -75,10 +75,9 @@ not promotion numbers.
 | c32 QPS | 163.31 | 110.84 | 127.19 | 119.42 |
 | c32 p95 ms | 242.39 | 382.79 | 426.06 | 402.62 |
 
-CPU pinning did not reliably remove the native gap. The budgeted and container
-controls instead accumulated about 1.1-1.5 ms of run-queue delay per query in
-these rows. That makes explicit daemon/runtime ownership worth retaining as a
-separate production control, but it is not the primary latency root.
+CPU pinning did not reliably remove the native gap. Explicit daemon/runtime
+ownership remains a separate production control, but it is not the primary
+latency root.
 
 ## What one c1 query costs today
 
@@ -94,9 +93,16 @@ The single-process c1 median provides the cleanest serial accounting:
 | Summed local HNSW search | 0.628 ms |
 | Summed network work | 0.481 ms |
 | Process CPU | 4.296 ms |
-| Process run-queue delay | 0.142 ms |
 | Allocation | 954.6 KiB |
 | Context switches | 161.9 |
+
+The raw Linux rows contain sampled `/proc/self/task/*/schedstat` run-queue and
+timeslice fields. They are retained for byte provenance but excluded from the
+reduced result: exited OS threads disappear from that interface, so endpoint
+subtraction cannot qualify a complete process delta. Current instrumentation
+publishes those compatibility fields as unavailable and relies only on
+process-wide `getrusage` CPU/context-switch counters, which retain exited
+workers.
 
 The catalog attribution is exact: p2 performs 3.834 catalog reads and 3.834
 catalog `LogBarrier` calls per query--one Operations health check, one

@@ -457,8 +457,8 @@ func vectorPartitionSystemRuntimeMonotonicV1(before, after nativewire.VectorPart
 	if before.SampleUnixNano == 0 || after.SampleUnixNano <= before.SampleUnixNano || after.Goroutines == 0 {
 		return false
 	}
-	beforeValues := [...]uint64{before.CPUTimeNanos, before.RunQueueDelayNanos, before.Timeslices, before.VoluntaryContextSwitches, before.NonvoluntaryContextSwitches, before.PeakRSSBytes, before.TotalAllocBytes, before.Mallocs, before.Frees, before.NumGC, before.PauseTotalNanos}
-	afterValues := [...]uint64{after.CPUTimeNanos, after.RunQueueDelayNanos, after.Timeslices, after.VoluntaryContextSwitches, after.NonvoluntaryContextSwitches, after.PeakRSSBytes, after.TotalAllocBytes, after.Mallocs, after.Frees, after.NumGC, after.PauseTotalNanos}
+	beforeValues := [...]uint64{before.CPUTimeNanos, before.VoluntaryContextSwitches, before.NonvoluntaryContextSwitches, before.PeakRSSBytes, before.TotalAllocBytes, before.Mallocs, before.Frees, before.NumGC, before.PauseTotalNanos}
+	afterValues := [...]uint64{after.CPUTimeNanos, after.VoluntaryContextSwitches, after.NonvoluntaryContextSwitches, after.PeakRSSBytes, after.TotalAllocBytes, after.Mallocs, after.Frees, after.NumGC, after.PauseTotalNanos}
 	for i := range beforeValues {
 		if afterValues[i] < beforeValues[i] {
 			return false

@@ -3,9 +3,7 @@
 package main
 
 import (
-	"fmt"
 	"math"
-	"os"
 	"syscall"
 )
 
@@ -23,21 +21,8 @@ func vectorPartitionSystemKernelRuntimeStatsV1() (cpu, runQueue, timeslices, vol
 			nonvoluntary = uint64(usage.Nivcsw)
 		}
 	}
-	entries, err := os.ReadDir("/proc/self/task")
-	if err != nil {
-		return
-	}
-	for _, entry := range entries {
-		var threadCPU, threadRunQueue, threadTimeslices uint64
-		raw, readErr := os.ReadFile("/proc/self/task/" + entry.Name() + "/schedstat")
-		if readErr != nil {
-			continue
-		}
-		if _, scanErr := fmt.Sscan(string(raw), &threadCPU, &threadRunQueue, &threadTimeslices); scanErr != nil || math.MaxUint64-runQueue < threadRunQueue || math.MaxUint64-timeslices < threadTimeslices {
-			continue
-		}
-		runQueue += threadRunQueue
-		timeslices += threadTimeslices
-	}
+	// /proc/self/task/*/schedstat is not process accounting: a thread that
+	// exits between samples disappears with its counters. Leave those two
+	// compatibility fields unavailable rather than publish a false delta.
 	return
 }

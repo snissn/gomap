@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestVectorPartitionSystemKernelRuntimeStatsCoverWorkerThreadsV1(t *testing.T) {
+func TestVectorPartitionSystemKernelRuntimeStatsRetainExitedWorkerThreadsV1(t *testing.T) {
 	beforeCPU, _, _, beforeVoluntary, beforeNonvoluntary := vectorPartitionSystemKernelRuntimeStatsV1()
 	var wait sync.WaitGroup
 	wait.Add(4)
@@ -26,8 +26,11 @@ func TestVectorPartitionSystemKernelRuntimeStatsCoverWorkerThreadsV1(t *testing.
 		}(uint64(worker + 1))
 	}
 	wait.Wait()
-	afterCPU, _, _, afterVoluntary, afterNonvoluntary := vectorPartitionSystemKernelRuntimeStatsV1()
+	afterCPU, afterRunQueue, afterTimeslices, afterVoluntary, afterNonvoluntary := vectorPartitionSystemKernelRuntimeStatsV1()
 	if afterCPU <= beforeCPU || afterVoluntary < beforeVoluntary || afterNonvoluntary < beforeNonvoluntary {
 		t.Fatalf("process runtime counters did not advance monotonically: before=(%d,%d,%d) after=(%d,%d,%d)", beforeCPU, beforeVoluntary, beforeNonvoluntary, afterCPU, afterVoluntary, afterNonvoluntary)
+	}
+	if afterRunQueue != 0 || afterTimeslices != 0 {
+		t.Fatalf("non-process schedstat counters must remain unavailable: run_queue=%d timeslices=%d", afterRunQueue, afterTimeslices)
 	}
 }

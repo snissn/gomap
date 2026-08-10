@@ -285,8 +285,6 @@
             "num_gc_per_query": 0.069,
             "pause_total_nanos_per_query": 4659.807,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 1283820.998,
-            "timeslices_per_query": 311.161,
             "total_alloc_bytes_per_query": 1073546.736,
             "voluntary_context_switches_per_query": 299.353
           },
@@ -384,8 +382,6 @@
             "num_gc_per_query": 0.067,
             "pause_total_nanos_per_query": 3597.985,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 1104811.96,
-            "timeslices_per_query": 306.406,
             "total_alloc_bytes_per_query": 1071685.512,
             "voluntary_context_switches_per_query": 300.842
           },
@@ -483,8 +479,6 @@
             "num_gc_per_query": 0.069,
             "pause_total_nanos_per_query": 3498.806,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 155699.404,
-            "timeslices_per_query": 349.713,
             "total_alloc_bytes_per_query": 1079744.736,
             "voluntary_context_switches_per_query": 347.943
           },
@@ -582,8 +576,6 @@
             "num_gc_per_query": 0.025,
             "pause_total_nanos_per_query": 1248.621,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 141781.731,
-            "timeslices_per_query": 161.804,
             "total_alloc_bytes_per_query": 977514.08,
             "voluntary_context_switches_per_query": 160.304
           },
@@ -687,8 +679,6 @@
             "num_gc_per_query": 0.051,
             "pause_total_nanos_per_query": 6375.441,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 1464392.473,
-            "timeslices_per_query": 182.224,
             "total_alloc_bytes_per_query": 789170.584,
             "voluntary_context_switches_per_query": 177.189
           },
@@ -786,8 +776,6 @@
             "num_gc_per_query": 0.049,
             "pause_total_nanos_per_query": 5102.68,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 1407340.236,
-            "timeslices_per_query": 173.078,
             "total_alloc_bytes_per_query": 778908.52,
             "voluntary_context_switches_per_query": 170.54
           },
@@ -885,8 +873,6 @@
             "num_gc_per_query": 0.053,
             "pause_total_nanos_per_query": 3507.191,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 553602.197,
-            "timeslices_per_query": 208.576,
             "total_alloc_bytes_per_query": 821131.288,
             "voluntary_context_switches_per_query": 205.962
           },
@@ -984,8 +970,6 @@
             "num_gc_per_query": 0.018,
             "pause_total_nanos_per_query": 1575.078,
             "peak_rss_bytes_per_query": 0.0,
-            "run_queue_delay_nanos_per_query": 284641.06,
-            "timeslices_per_query": 74.171,
             "total_alloc_bytes_per_query": 743351.872,
             "voluntary_context_switches_per_query": 72.248
           },
