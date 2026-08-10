@@ -518,10 +518,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) refreshLoopV1() {
 				continue
 			}
 		}
-		delay := time.Duration(proof.ValidThroughUnixNano-proof.IssuedAtUnixNano) / 2
-		if delay < 10*time.Millisecond {
-			delay = 10 * time.Millisecond
-		}
+		delay := vectorPartitionServingSnapshotRefreshDelayV1(proof, time.Now())
 		timer := time.NewTimer(delay)
 		select {
 		case <-p.ctx.Done():
@@ -536,6 +533,14 @@ func (p *VectorPartitionServingSnapshotPublisherV1) refreshLoopV1() {
 		_ = p.RefreshProofV1(ctx)
 		cancel()
 	}
+}
+
+func vectorPartitionServingSnapshotRefreshDelayV1(proof raftcluster.CatalogMetaReadProofV1, now time.Time) time.Duration {
+	delay := time.Unix(0, proof.ValidThroughUnixNano).Sub(now) / 2
+	if delay < 10*time.Millisecond {
+		return 10 * time.Millisecond
+	}
+	return delay
 }
 
 func (p *VectorPartitionServingSnapshotPublisherV1) wakeRefreshV1() {

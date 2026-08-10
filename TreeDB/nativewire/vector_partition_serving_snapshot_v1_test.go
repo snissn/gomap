@@ -266,6 +266,17 @@ func TestVectorPartitionServingSnapshotProofRefreshIsMonotonicV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionServingSnapshotProofRefreshRetriesWithinRemainingLeaseV1(t *testing.T) {
+	now := time.Unix(100, 0)
+	proof := raftcluster.CatalogMetaReadProofV1{
+		IssuedAtUnixNano:     now.Add(-100 * time.Millisecond).UnixNano(),
+		ValidThroughUnixNano: now.Add(100 * time.Millisecond).UnixNano(),
+	}
+	if got, want := vectorPartitionServingSnapshotRefreshDelayV1(proof, now), 50*time.Millisecond; got != want {
+		t.Fatalf("refresh retry delay=%s want %s", got, want)
+	}
+}
+
 func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) {
 	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
 	injected := errors.New("injected partition open failure")
