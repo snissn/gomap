@@ -282,11 +282,7 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	if err != nil {
 		return findPlan{}, err
 	}
-	// BSON-v2 $in canonicalization may encode each raw value. Cache it once
-	// per parsed predicate so candidate ranking, explain, and execution do not
-	// repeat unbounded raw-input work for every compatible index.
-	cacheCompoundCanonicalValues(predicates)
-	return findPlan{
+	return finalizeFindPlan(findPlan{
 		predicates: predicates,
 		orBranches: orBranches,
 		sort:       sortSpec,
@@ -294,7 +290,7 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 		limit:      limit,
 		hint:       hint,
 		projection: projection,
-	}, nil
+	}), nil
 }
 
 func parseFindHint(command wire.Document) (findHint, error) {
@@ -347,6 +343,7 @@ func parseFindHint(command wire.Document) (findHint, error) {
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
+	plan = finalizeFindPlan(plan)
 	// Selection metadata is diagnostic-only. Avoid allocating probe descriptors
 	// on the ordinary find path; executionStats receives the same selector and
 	// may later refine it to the materialized winner.

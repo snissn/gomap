@@ -869,6 +869,49 @@ func TestParseFindPlanCachesCanonicalInValuesOncePerPredicate(t *testing.T) {
 	}
 }
 
+func TestFindPlanFinalizationCachesCompoundInForReadAdapters(t *testing.T) {
+	values := make(bson.A, 1024)
+	for i := range values {
+		values[i] = int32(1)
+	}
+	filterBytes, err := bson.Marshal(bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: values}}}})
+	if err != nil {
+		t.Fatalf("marshal filter: %v", err)
+	}
+	predicates, branches, err := parseFindFilter(wire.Document(filterBytes))
+	if err != nil {
+		t.Fatalf("parse filter: %v", err)
+	}
+	assertCached := func(t *testing.T, plan findPlan) {
+		t.Helper()
+		plan = finalizeFindPlan(plan)
+		if len(plan.predicates) != 1 || !plan.predicates[0].compoundCanonicalized || len(plan.predicates[0].compoundCanonicalValues) != 1 {
+			t.Fatalf("adapter plan did not cache bounded canonical $in: %#v", plan.predicates)
+		}
+	}
+	// count, distinct, and their explain paths construct plans after
+	// parseFindFilter rather than through parseFindPlan.
+	assertCached(t, findPlan{predicates: predicates, orBranches: branches, skip: 1, limit: 1})
+	assertCached(t, findPlan{predicates: predicates, orBranches: branches})
+
+	aggregateCommandBytes, err := bson.Marshal(bson.D{{Key: "pipeline", Value: bson.A{bson.D{{Key: "$match", Value: bson.Raw(filterBytes)}}}}})
+	if err != nil {
+		t.Fatalf("marshal aggregate command: %v", err)
+	}
+	pipeline, err := commandBoundedDocumentArray(wire.Document(aggregateCommandBytes), "pipeline", mongoAggregateMaxStages)
+	if err != nil {
+		t.Fatalf("decode aggregate pipeline: %v", err)
+	}
+	stages, err := parseAggregateStages(pipeline)
+	if err != nil {
+		t.Fatalf("parse aggregate stages: %v", err)
+	}
+	if len(stages) != 1 {
+		t.Fatalf("aggregate stages=%d want 1", len(stages))
+	}
+	assertCached(t, stages[0].plan)
+}
+
 func TestMongoCompoundPlannerCursorChargesPredicateSliceStructure(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	// Eight one-byte duplicate values leave the legacy payload-only accounting

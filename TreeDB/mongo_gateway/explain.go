@@ -256,7 +256,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}, verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		return int64(len(result.docs)), err
 	})
@@ -292,7 +292,7 @@ func (s *Server) explainDistinctResponse(ctx context.Context, command wire.Docum
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, findPlan{predicates: predicates, orBranches: branches}, verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		if err != nil {
 			return 0, err
@@ -394,6 +394,7 @@ func (s *Server) explainCollectionRead(ctx context.Context, db, collection strin
 }
 
 func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, db, collection string, plan findPlan, verbosity string, execute func(findPlan) (int64, error)) (wire.Document, error) {
+	plan = finalizeFindPlan(plan)
 	if missing && plan.hint.present {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway find hint does not name an existing index")
 	}

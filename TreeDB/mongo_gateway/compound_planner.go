@@ -315,12 +315,27 @@ func canonicalCompoundPrefixValues(values []bson.RawValue) []bson.RawValue {
 // supported without multiplying work by the number of usable indexes.
 func cacheCompoundCanonicalValues(predicates []findPredicate) {
 	for i := range predicates {
+		if predicates[i].compoundCanonicalized {
+			continue
+		}
 		if predicates[i].op != findPredicateIn {
 			continue
 		}
 		predicates[i].compoundCanonicalValues = canonicalCompoundPrefixValues(predicates[i].values)
 		predicates[i].compoundCanonicalized = true
 	}
+}
+
+// finalizeFindPlan initializes request-local planner caches for every command
+// adapter that constructs a findPlan. Keeping this here avoids a find-only
+// initialization rule: count, distinct, aggregate and explain all share the
+// same compound planner and must not repeat raw $in canonicalization.
+func finalizeFindPlan(plan findPlan) findPlan {
+	cacheCompoundCanonicalValues(plan.predicates)
+	for i := range plan.orBranches {
+		cacheCompoundCanonicalValues(plan.orBranches[i])
+	}
+	return plan
 }
 
 func compoundPredicatePrefixValues(predicate findPredicate) []bson.RawValue {

@@ -53,7 +53,7 @@ func (s *Server) countResponse(ctx context.Context, command wire.Document) (wire
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	result, err := s.executeFind(col, findPlan{predicates: predicates, orBranches: orBranches, skip: skip, limit: limit})
+	result, err := s.executeFind(col, finalizeFindPlan(findPlan{predicates: predicates, orBranches: orBranches, skip: skip, limit: limit}))
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -95,7 +95,7 @@ func (s *Server) distinctResponse(ctx context.Context, command wire.Document) (w
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	result, err := s.executeFind(col, findPlan{predicates: predicates, orBranches: orBranches})
+	result, err := s.executeFind(col, finalizeFindPlan(findPlan{predicates: predicates, orBranches: orBranches}))
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -271,6 +271,7 @@ func (s *Server) aggregateResponse(ctx context.Context, command wire.Document, c
 		plan.limit = int32(stages[consumed].amount)
 		consumed++
 	}
+	plan = finalizeFindPlan(plan)
 	stages = stages[consumed:]
 	result, err := s.executeFind(col, plan)
 	if err != nil {
@@ -354,6 +355,7 @@ func parseAggregateStages(pipeline []wire.Document) ([]aggregateStage, error) {
 				return nil, fmt.Errorf("Mongo gateway aggregate %s must be a document", name)
 			}
 			stage.plan.predicates, stage.plan.orBranches, err = parseFindFilter(wire.Document(doc))
+			stage.plan = finalizeFindPlan(stage.plan)
 		case "$project":
 			doc, ok := value.DocumentOK()
 			if !ok {
