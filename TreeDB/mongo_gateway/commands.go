@@ -959,7 +959,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 				if plan.limit > 0 && int(plan.limit) < len(ids) {
 					ids = ids[:plan.limit]
 				}
-				cursorID, firstBatch, err := s.openCompoundIDCursor(ns, col, ids, plan.projection, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
+				cursorID, firstBatch, err := s.openCompoundIDCursor(ns, col, ids, plan, int(batchSize), batchSizeSet, defaultCursorBatchSize, cursorOwner)
 				if err != nil {
 					doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 					return findResponsePayload{document: doc}, err
@@ -4020,7 +4020,7 @@ func (s *Server) openRetainedCursor(ns string, docs []wire.Document, projection 
 // openCompoundIDCursor retains only ordered primary keys from the bounded
 // compound index walk. BSON decoding is intentionally deferred to the first
 // batch/getMore path so a large cursor is not fully materialized up front.
-func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, ids [][]byte, projection compiledProjection, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
+func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, ids [][]byte, plan findPlan, batchSize int, explicitBatchSize bool, defaultBatchSize int, owner int64) (int64, bson.A, error) {
 	if s.isClosed() {
 		return 0, nil, errServerClosed
 	}
@@ -4038,7 +4038,7 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 		}
 		retained += len(id)
 	}
-	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, projection: projection, lastUsed: time.Now()}
+	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, compoundPlan: &plan, projection: plan.projection, lastUsed: time.Now()}
 	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize, 0)
 	if err != nil {
 		return 0, nil, err
@@ -4096,6 +4096,15 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 		doc, err := storedDocumentToBSON(cursor.compoundCollection, materializer, stored)
 		if err != nil {
 			return nil, 0, 0, err
+		}
+		if cursor.compoundPlan != nil {
+			match, err := documentMatchesPlan(doc, *cursor.compoundPlan)
+			if err != nil {
+				return nil, 0, 0, err
+			}
+			if !match {
+				continue
+			}
 		}
 		if len(doc) > s.maxCursorRetainedBytes()-committedMaterialized-materializedBytes {
 			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())

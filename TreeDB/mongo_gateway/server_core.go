@@ -179,6 +179,7 @@ type serverCursor struct {
 	// no decoded BSON: getMore fetches and projects only the requested batch.
 	compoundIDs        [][]byte
 	compoundCollection *collections.Collection
+	compoundPlan       *findPlan
 	materializedBytes  int
 	projection         compiledProjection
 	pos                int

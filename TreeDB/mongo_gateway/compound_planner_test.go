@@ -179,6 +179,24 @@ func TestMongoCompoundPlannerCursorCumulativeGetMoreCap(t *testing.T) {
 	}
 }
 
+func TestMongoCompoundPlannerCursorRechecksPredicateAfterUpdate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065117, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065118, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}}, bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	first := serveCommand(t, server, 4065119, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, first), []string{"a"})
+	id := cursorIDFromResponse(t, first)
+	assertOK(t, serveCommand(t, server, 4065120, bson.D{
+		{Key: "update", Value: "events"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "tenant", Value: "x"}}}}},
+		}}}, {Key: "$db", Value: "app"},
+	}))
+	next := serveCommand(t, server, 4065121, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorNextBatch(t, next), []string{})
+}
+
 func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406511, bson.D{
