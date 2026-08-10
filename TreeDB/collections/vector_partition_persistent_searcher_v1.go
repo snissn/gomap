@@ -223,6 +223,7 @@ type VectorPartitionLocalGraphVariantV1 string
 const (
 	VectorPartitionLocalGraphVariantNativeV1         VectorPartitionLocalGraphVariantV1 = "native"
 	VectorPartitionLocalGraphVariantOverlayCurrentV1 VectorPartitionLocalGraphVariantV1 = "overlay_current"
+	vectorPartitionLocalGraphVariantAuxiliaryV1      VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation"
 )
 
 func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
@@ -235,7 +236,7 @@ func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGrap
 }
 
 func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]byte, variant VectorPartitionLocalGraphVariantV1) [sha256.Size]byte {
-	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
+	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 || variant == vectorPartitionLocalGraphVariantAuxiliaryV1 {
 		return membership
 	}
 	h := sha256.New()
@@ -338,27 +339,36 @@ func vectorPartitionUint32SlicesEqualV1(left, right []uint32) bool {
 }
 
 // buildVectorPartitionLocalGraphAdjacencyV1 retains the shared native graph
-// construction, then reserves a bounded layer-0 navigation tree in the
-// partition-only pack. It gives the entry a logarithmic-hop route to every
-// local row while leaving global column-graph and router assets unchanged.
+// and computes its separate partition-only reachability channel. The channel
+// is encoded by the pack materializer; native adjacency is never rewritten.
 func buildVectorPartitionLocalGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
-	return buildVectorPartitionLocalGraphAdjacencyVariantV1(rows, def, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	_, err := buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows, def, vectorPartitionLocalGraphVariantAuxiliaryV1)
+	return err
 }
 
 func buildVectorPartitionLocalGraphAdjacencyVariantV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) error {
-	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
-		return err
+	_, err := buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows, def, variant)
+	return err
+}
+
+func buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
+	if variant != vectorPartitionLocalGraphVariantAuxiliaryV1 {
+		if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
 	}
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
-		return err
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
 	switch variant {
 	case VectorPartitionLocalGraphVariantNativeV1:
-		return nil
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
-		return addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+	case vectorPartitionLocalGraphVariantAuxiliaryV1:
+		return buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
 	default:
-		return fmt.Errorf("partition-local graph variant=%q", variant)
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, fmt.Errorf("partition-local graph variant=%q", variant)
 	}
 }
 
@@ -833,7 +843,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 			},
 			ExpectedMembershipDigest: want,
 		})
-		if err != nil || pack.Header.MembershipDigest != want {
+		if err != nil || pack.Header.MembershipDigest != want || !pack.Header.HasAuxiliaryNavigation {
 			return fmt.Errorf("%w: native membership header partition=%d: %v", ErrVectorPartitionSearchUnavailable, asset.PartitionID, err)
 		}
 	}
@@ -844,7 +854,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 // authority. Callers install the returned descriptors in the generation M1
 // manifest; publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalGraphVariantAuxiliaryV1)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 is the offline A/B
@@ -856,7 +866,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index 
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalGraphVariantAuxiliaryV1)
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
@@ -864,8 +874,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
 	}
-	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
+	if variant != vectorPartitionLocalGraphVariantAuxiliaryV1 {
+		if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+			return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
+		}
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
@@ -988,7 +1000,8 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			}
 			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
 		}
-		if err := buildVectorPartitionLocalGraphAdjacencyVariantV1(rows, def, variant); err != nil {
+		auxiliary, err := buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows, def, variant)
+		if err != nil {
 			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
 		maxLayer := 0
@@ -1016,7 +1029,11 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 				neighborCounts[layer] += uint64(len(neighbors))
 			}
 		}
-		exactPackBytes, err := exactVectorPartitionNativePackBytesV1(len(rows), def.Dimensions, neighborCounts, documentIDBytes, maxAssetBytes)
+		auxiliaryNeighbors := uint64(0)
+		if variant == vectorPartitionLocalGraphVariantAuxiliaryV1 {
+			auxiliaryNeighbors = uint64(len(auxiliary.Neighbors))
+		}
+		exactPackBytes, err := exactVectorPartitionLocalGraphPackBytesV1(len(rows), def.Dimensions, neighborCounts, documentIDBytes, auxiliaryNeighbors, variant == vectorPartitionLocalGraphVariantAuxiliaryV1, maxAssetBytes)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1029,6 +1046,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		// identity. Production publication and serving recompute the canonical
 		// membership digest and therefore fail closed on a native offline pack.
 		pack.MembershipDigest = vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant)
+		if variant == vectorPartitionLocalGraphVariantAuxiliaryV1 {
+			pack.HasAuxiliaryNavigation = true
+			pack.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: auxiliary.Offsets, Neighbors: auxiliary.Neighbors}
+		}
 		raw, err := encodeColumnHNSWSearchPack(pack)
 		if err != nil {
 			return nil, nil, err
@@ -1449,7 +1470,11 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		return nil, fmt.Errorf("%w: asset byte cap", ErrVectorPartitionSearchUnavailable)
 	}
 	manager := mappedresource.NewManager()
-	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: asset.Ref.Namespace, Kind: string(asset.Ref.Kind), Generation: asset.Ref.Generation, PartID: asset.Ref.PartID, FileID: asset.Ref.FileID, Offset: asset.Ref.Offset, Length: asset.Ref.Length, Checksum: uint64(asset.Ref.Checksum), Version: columnHNSWSearchPackVersionV2, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: asset.ID}}
+	packVersion := columnHNSWSearchPackVersionV3
+	if allowOfflineNative {
+		packVersion = columnHNSWSearchPackVersionV2
+	}
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: asset.Ref.Namespace, Kind: string(asset.Ref.Kind), Generation: asset.Ref.Generation, PartID: asset.Ref.PartID, FileID: asset.Ref.FileID, Offset: asset.Ref.Offset, Length: asset.Ref.Length, Checksum: uint64(asset.Ref.Checksum), Version: packVersion, Encoding: columnVectorIndexStateEncodingHNSWSearchPackV1, Section: mappedresource.Section{Kind: string(columnVectorIndexStateAssetRoleHNSWSearchPack), Category: string(ColumnAssetKindTCS1HNSWSearchPack), Name: asset.ID}}
 	openStarted := time.Now()
 	h, err := manager.AcquireFileRange(key, mappedresource.Scope{Kind: mappedresource.ScopePreparedSearch, ID: "vector_partition/" + strconv.FormatUint(generation, 10), Collection: c.name, Namespace: asset.Ref.Namespace, Generation: generation, Reason: "vector partition native HNSW"}, path, mappedresource.AcquireOptions{Reason: "vector partition native HNSW", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true, ResourceRoot: c.db.ColumnAssetRootDir(), ResourcePath: path})
 	if err != nil {
@@ -1465,6 +1490,10 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		return nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	if view.Header.Dimensions != def.Dimensions || view.Header.M != def.M || view.Header.EfConstruction != def.EfConstruction || view.Header.EfSearch != def.EfSearch {
+		_ = view.Close()
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if !allowOfflineNative && !view.Header.HasAuxiliaryNavigation {
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -1510,12 +1539,16 @@ func preflightVectorPartitionNativePackV1(rows, dimensions, degree int) error {
 func preflightVectorPartitionNativePackKnownBytesV1(rows, dimensions int, documentIDBytes uint64, capBytes int64) error {
 	// A single layer with no encoded neighbors is the smallest valid topology.
 	// The exact pass after graph construction still owns the final layer and
-	// adjacency counts; this pass only proves the already-known lower bound.
-	_, err := exactVectorPartitionNativePackBytesV1(rows, dimensions, []uint64{0}, documentIDBytes, capBytes)
+	// adjacency counts; this pass only proves the already-known V3 lower bound.
+	_, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, documentIDBytes, 0, true, capBytes)
 	return err
 }
 
 func exactVectorPartitionNativePackBytesV1(rows, dimensions int, neighborCounts []uint64, documentIDBytes uint64, capBytes int64) (int64, error) {
+	return exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, neighborCounts, documentIDBytes, 0, false, capBytes)
+}
+
+func exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions int, neighborCounts []uint64, documentIDBytes, auxiliaryNeighbors uint64, hasAuxiliaryNavigation bool, capBytes int64) (int64, error) {
 	if err := preflightVectorPartitionNativePackV1(rows, dimensions, 1); err != nil {
 		return 0, err
 	}
@@ -1539,6 +1572,9 @@ func exactVectorPartitionNativePackBytesV1(rows, dimensions int, neighborCounts 
 		return a + b, nil
 	}
 	sectionCount := uint64(8 + 2*len(neighborCounts))
+	if hasAuxiliaryNavigation {
+		sectionCount += 2
+	}
 	directoryBytes, err := mul(sectionCount, uint64(columnHNSWSearchPackSectionEntrySize))
 	if err != nil {
 		return 0, err
@@ -1595,6 +1631,18 @@ func exactVectorPartitionNativePackBytesV1(rows, dimensions int, neighborCounts 
 			return 0, err
 		}
 		if err := appendSection(neighborBytes, columnHNSWSearchPackAlignment); err != nil {
+			return 0, err
+		}
+	}
+	if hasAuxiliaryNavigation {
+		if err := appendSection(adjacencyOffsetBytes, columnHNSWSearchPackAlignment); err != nil {
+			return 0, err
+		}
+		auxiliaryNeighborBytes, err := mul(auxiliaryNeighbors, 4)
+		if err != nil {
+			return 0, err
+		}
+		if err := appendSection(auxiliaryNeighborBytes, columnHNSWSearchPackAlignment); err != nil {
 			return 0, err
 		}
 	}

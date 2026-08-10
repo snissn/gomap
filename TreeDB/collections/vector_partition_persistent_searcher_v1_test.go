@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -139,6 +140,10 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
 	}
+	members := vectorPartitionMembershipsForPartitionV1(manifest, assets[0].PartitionID)
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("production open accepted native v2 pack: %v", err)
+	}
 	nativeManifest := manifest
 	nativeManifest.Assets = assets
 	nativeManifest.Canonicalize()
@@ -202,6 +207,72 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer nr.Release()
+	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 983, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ar.Release()
+	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auxiliaryRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), auxiliary[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auxiliaryAgain, ar2, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 984, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ar2.Release()
+	auxiliaryAgainRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), auxiliaryAgain[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(auxiliaryRaw, auxiliaryAgainRaw) {
+		t.Fatal("auxiliary rebuild bytes differ")
+	}
+	nativeDigest, err := decodeVectorPartitionMembershipDigestV1(native[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auxiliaryDigest, err := decodeVectorPartitionMembershipDigestV1(auxiliary[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativePack, err := decodeColumnHNSWSearchPack(nativeRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: nativeDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	auxiliaryPack, err := decodeColumnHNSWSearchPack(auxiliaryRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: auxiliaryDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hnswPackU16(auxiliaryRaw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 || !auxiliaryPack.Header.HasAuxiliaryNavigation || hnswPackU16(nativeRaw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV2 {
+		t.Fatalf("pack versions native=%d auxiliary=%d headers=%+v", hnswPackU16(nativeRaw, columnHNSWSearchPackHeaderVersionOffset), hnswPackU16(auxiliaryRaw, columnHNSWSearchPackHeaderVersionOffset), auxiliaryPack.Header)
+	}
+	if !reflect.DeepEqual(nativePack.AdjacencyLayers, auxiliaryPack.AdjacencyLayers) {
+		t.Fatal("auxiliary default changed native adjacency")
+	}
+	seen := make([]bool, auxiliaryPack.Header.Rows)
+	queue := []int{auxiliaryPack.Header.EntryOrdinal}
+	seen[auxiliaryPack.Header.EntryOrdinal] = true
+	for head := 0; head < len(queue); head++ {
+		ordinal := queue[head]
+		for _, layer := range []columnHNSWSearchPackLayer{auxiliaryPack.AdjacencyLayers[0], auxiliaryPack.AuxiliaryNavigation} {
+			for _, neighbor := range layer.Neighbors[layer.Offsets[ordinal]:layer.Offsets[ordinal+1]] {
+				if !seen[neighbor] {
+					seen[neighbor] = true
+					queue = append(queue, int(neighbor))
+				}
+			}
+		}
+	}
+	for ordinal, reached := range seen {
+		if !reached {
+			t.Fatalf("native plus auxiliary did not reach ordinal=%d", ordinal)
+		}
+	}
 	overlay, or, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 982, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
 	if err != nil {
 		t.Fatal(err)
@@ -931,11 +1002,11 @@ func TestVectorPartitionNativePackMembershipBindingRejectsCrossManifestMixV1(t *
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV2 {
-			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV2)
+		if got := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); got != columnHNSWSearchPackVersionV3 {
+			t.Fatalf("pack version=%d want %d", got, columnHNSWSearchPackVersionV3)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: manifest.SourceGeneration, ManifestChecksum: manifest.SourceChecksum, SchemaHash: manifest.SourceSchemaHash}, ExpectedMembershipDigest: expected})
-		if err != nil || pack.Header.MembershipDigest != expected {
+		if err != nil || pack.Header.MembershipDigest != expected || !pack.Header.HasAuxiliaryNavigation {
 			t.Fatalf("persisted membership header=%x expected=%x err=%v", pack.Header.MembershipDigest, expected, err)
 		}
 	}
@@ -1010,7 +1081,7 @@ func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testin
 	if err := reader.Close(); err != nil {
 		t.Fatal(err)
 	}
-	exactBytes, err := exactVectorPartitionNativePackBytesV1(1, def.Dimensions, make([]uint64, level+1), uint64(len(id)), vectorPartitionSearchAssetMaxBytesV1)
+	exactBytes, err := exactVectorPartitionLocalGraphPackBytesV1(1, def.Dimensions, make([]uint64, level+1), uint64(len(id)), 0, true, vectorPartitionSearchAssetMaxBytesV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1048,7 +1119,7 @@ func TestVectorPartitionNativePackExactCapRejectsWithoutDurableTraceV1(t *testin
 
 func TestVectorPartitionNativePackKnownBytesPreflightUsesCallerCapV1(t *testing.T) {
 	const rows, dimensions = 2, 3
-	baseBytes, err := exactVectorPartitionNativePackBytesV1(rows, dimensions, []uint64{0}, 0, vectorPartitionSearchAssetMaxBytesV1)
+	baseBytes, err := exactVectorPartitionLocalGraphPackBytesV1(rows, dimensions, []uint64{0}, 0, 0, true, vectorPartitionSearchAssetMaxBytesV1)
 	if err != nil {
 		t.Fatal(err)
 	}
