@@ -20,6 +20,12 @@ import (
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+const (
+	vectorPartitionSystemSearchStrictV1 = "strict"
+	vectorPartitionSystemSearchFastV1   = "fast"
+	vectorPartitionSystemSearchPinnedV1 = "pinned"
+)
+
 type vectorPartitionSystemBenchMetricsV1 struct {
 	Queries          int     `json:"queries"`
 	CompletedQueries int     `json:"completed_queries"`
@@ -34,18 +40,22 @@ type vectorPartitionSystemBenchMetricsV1 struct {
 }
 
 type vectorPartitionSystemBenchCellV1 struct {
-	Status       string                               `json:"status"`
-	Error        string                               `json:"error,omitempty"`
-	Budget       map[string]int                       `json:"budget"`
-	Concurrency  int                                  `json:"concurrency"`
-	Generation   public.GenerationIDV1                `json:"generation"`
-	Metrics      vectorPartitionSystemBenchMetricsV1  `json:"metrics"`
-	Counters     map[string]uint64                    `json:"counters"`
-	Timings      map[string]uint64                    `json:"timings"`
-	CatalogReads vectorPartitionSystemCatalogReadsV1  `json:"catalog_reads"`
-	Runtime      []vectorPartitionSystemRuntimeNodeV1 `json:"runtime"`
-	ElapsedNanos uint64                               `json:"elapsed_nanos"`
-	TotalNanos   []uint64                             `json:"total_nanos"`
+	Status           string                               `json:"status"`
+	Error            string                               `json:"error,omitempty"`
+	Budget           map[string]int                       `json:"budget"`
+	Concurrency      int                                  `json:"concurrency"`
+	Generation       public.GenerationIDV1                `json:"generation"`
+	Metrics          vectorPartitionSystemBenchMetricsV1  `json:"metrics"`
+	Counters         map[string]uint64                    `json:"counters"`
+	Timings          map[string]uint64                    `json:"timings"`
+	CatalogReads     vectorPartitionSystemCatalogReadsV1  `json:"catalog_reads"`
+	Runtime          []vectorPartitionSystemRuntimeNodeV1 `json:"runtime"`
+	ElapsedNanos     uint64                               `json:"elapsed_nanos"`
+	TotalNanos       []uint64                             `json:"total_nanos"`
+	SearchMode       string                               `json:"search_mode"`
+	FastEvidence     *public.FastSearchEvidenceV1         `json:"fast_evidence,omitempty"`
+	MinIndexAgeNanos uint64                               `json:"min_index_age_nanos,omitempty"`
+	MaxIndexAgeNanos uint64                               `json:"max_index_age_nanos,omitempty"`
 }
 
 type vectorPartitionSystemCatalogReadNodeV1 struct {
@@ -84,6 +94,9 @@ type vectorPartitionSystemBenchResultV1 struct {
 	TopK                   int                                `json:"top_k"`
 	EfSearch               int                                `json:"ef_search"`
 	WarmupQueries          int                                `json:"warmup_queries"`
+	SearchMode             string                             `json:"search_mode"`
+	MaxIndexAgeNanos       uint64                             `json:"max_index_age_nanos,omitempty"`
+	MaxSessionAgeNanos     uint64                             `json:"max_session_age_nanos,omitempty"`
 	StartedAt              time.Time                          `json:"started_at"`
 	CompletedAt            time.Time                          `json:"completed_at"`
 	Cells                  []vectorPartitionSystemBenchCellV1 `json:"cells"`
@@ -93,11 +106,12 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell, nativewire.ProbeVectorPartitionShardEndpointV1)
 }
 
-func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error), probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
+func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, string, time.Duration, time.Duration, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error), probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
+	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out, searchMode string
 	var topK, efSearch, warmup int
+	var maxIndexAge, maxSessionAge time.Duration
 	fs.StringVar(&endpoint, "endpoint", "", "production operations TCP endpoint")
 	fs.StringVar(&topologyPath, "topology", "", "checked production topology evidence JSON")
 	fs.StringVar(&dataset, "dataset", "", "fixture manifest directory")
@@ -109,10 +123,13 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	fs.IntVar(&topK, "top-k", 10, "neighbors per query")
 	fs.IntVar(&efSearch, "ef-search", 128, "partition-local HNSW ef-search")
 	fs.IntVar(&warmup, "warmup", 1000, "warmup queries per cell")
+	fs.StringVar(&searchMode, "search-mode", vectorPartitionSystemSearchStrictV1, "strict, fast, or pinned search shape")
+	fs.DurationVar(&maxIndexAge, "max-index-age", time.Hour, "maximum published index age for fast and pinned search")
+	fs.DurationVar(&maxSessionAge, "max-session-age", 2*time.Minute, "maximum pinned session age")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || endpoint == "" || topologyPath == "" || dataset == "" || truthCache == "" || truthSHA == "" || probeText == "" || concurrencyText == "" || out == "" || topK != 10 || efSearch < topK || warmup < 0 {
+	if fs.NArg() != 0 || endpoint == "" || topologyPath == "" || dataset == "" || truthCache == "" || truthSHA == "" || probeText == "" || concurrencyText == "" || out == "" || topK != 10 || efSearch < topK || warmup < 0 || !validVectorPartitionSystemSearchModeV1(searchMode) || searchMode != vectorPartitionSystemSearchStrictV1 && maxIndexAge <= 0 || searchMode == vectorPartitionSystemSearchPinnedV1 && maxSessionAge <= 0 {
 		return errors.New("system-bench requires bounded endpoint, topology, dataset, truth, probes, concurrency, and output")
 	}
 	canonicalTopology, err := m8CanonicalPathV1(topologyPath)
@@ -186,7 +203,13 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 	if err != nil {
 		return fmt.Errorf("system-bench truth: %w", err)
 	}
-	result := vectorPartitionSystemBenchResultV1{SchemaVersion: 1, ResultKind: "vector_partition_system_bench_v1", Endpoint: endpoint, Topology: topology.Topology, TopologyIdentitySHA256: topology.TopologyIdentitySHA256, DatasetChecksum: fixture.Checksum, TruthArtifactSHA256: artifactSHA, TopK: topK, EfSearch: efSearch, WarmupQueries: warmup, StartedAt: time.Now().UTC()}
+	result := vectorPartitionSystemBenchResultV1{SchemaVersion: 1, ResultKind: "vector_partition_system_bench_v1", Endpoint: endpoint, Topology: topology.Topology, TopologyIdentitySHA256: topology.TopologyIdentitySHA256, DatasetChecksum: fixture.Checksum, TruthArtifactSHA256: artifactSHA, TopK: topK, EfSearch: efSearch, WarmupQueries: warmup, SearchMode: searchMode, StartedAt: time.Now().UTC()}
+	if searchMode != vectorPartitionSystemSearchStrictV1 {
+		result.MaxIndexAgeNanos = uint64(maxIndexAge)
+	}
+	if searchMode == vectorPartitionSystemSearchPinnedV1 {
+		result.MaxSessionAgeNanos = uint64(maxSessionAge)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for _, probes := range probes {
@@ -197,7 +220,7 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 			snapshot := func(ctx context.Context) (map[string]vectorPartitionSystemNodeObservationV1, error) {
 				return vectorPartitionSystemCatalogReadSnapshotV1(ctx, topology, probe)
 			}
-			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup, snapshot)
+			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup, searchMode, maxIndexAge, maxSessionAge, snapshot)
 			if runErr == nil {
 				if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, probe); err != nil {
 					runErr = fmt.Errorf("live topology after cell: %w", err)
@@ -278,8 +301,8 @@ func vectorPartitionSystemCatalogReadSnapshotV1(ctx context.Context, topology ve
 	return snapshot, nil
 }
 
-func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int, snapshot vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
-	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}}
+func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int, searchMode string, maxIndexAge, maxSessionAge time.Duration, snapshot vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
+	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}, SearchMode: searchMode}
 	clients := make([]*vectorPartitionOperationsTCPClientV1, workers)
 	defer func() {
 		for _, client := range clients {
@@ -307,6 +330,24 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	}
 	generation := status.Health.Generation
 	cell.Generation = generation
+	fastOptions := public.FastSearchOptionsV1{MaxIndexAge: maxIndexAge}
+	pinOptions := public.PinSearchSnapshotOptionsV1{FastSearchOptionsV1: fastOptions, MaxSessionAge: maxSessionAge}
+	var fastEvidence *public.FastSearchEvidenceV1
+	minIndexAge, maxIndexAgeObserved := uint64(math.MaxUint64), uint64(0)
+	observeEvidence := func(evidence *public.FastSearchEvidenceV1) error {
+		if evidence == nil || evidence.Generation != generation || evidence.IndexAge < 0 || evidence.IndexAge > maxIndexAge || evidence.PublishedAt.IsZero() || evidence.TopologyDigest == "" || evidence.AuthorizationOverlayDigest == "" {
+			return errors.New("system-bench fast search evidence is invalid")
+		}
+		if fastEvidence == nil {
+			copy := *evidence
+			fastEvidence = &copy
+		} else if evidence.Generation != fastEvidence.Generation || evidence.IndexedThrough != fastEvidence.IndexedThrough || !evidence.PublishedAt.Equal(fastEvidence.PublishedAt) || evidence.TopologyDigest != fastEvidence.TopologyDigest || evidence.AuthorizationOverlayDigest != fastEvidence.AuthorizationOverlayDigest {
+			return errors.New("system-bench fast search evidence changed immutable snapshot identity")
+		}
+		age := uint64(evidence.IndexAge)
+		minIndexAge, maxIndexAgeObserved = min(minIndexAge, age), max(maxIndexAgeObserved, age)
+		return nil
+	}
 	request := func(query []float32) public.SearchRequestV1 {
 		return public.SearchRequestV1{
 			Version: 1, Generation: generation, Query: query,
@@ -314,9 +355,45 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 			Limits: public.SearchLimitsV1{RequestBytes: 4 << 20, CandidateBytes: 64 << 20, ResponseBytes: 16 << 20, MergeEntries: 256 * topK}, Deadline: time.Now().Add(30 * time.Second),
 		}
 	}
+	callSearch := func(client *vectorPartitionOperationsTCPClientV1, query []float32) (vectorPartitionOperationsWireResponseV1, vectorPartitionSystemFrameTimingV1, error) {
+		wire := vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: request(query)}
+		switch searchMode {
+		case vectorPartitionSystemSearchFastV1:
+			wire.Operation, wire.FastOptions = "search_fast", &fastOptions
+		case vectorPartitionSystemSearchPinnedV1:
+			wire.Operation = "search_pinned"
+		}
+		return client.callWithTiming(wire)
+	}
+	if searchMode == vectorPartitionSystemSearchFastV1 {
+		wire, _, err := callSearch(clients[0], queries[0])
+		if err != nil || wire.Search == nil {
+			return cell, errors.Join(errors.New("system-bench fast search preflight failed"), err)
+		}
+		if err := observeEvidence(wire.FastEvidence); err != nil {
+			return cell, err
+		}
+	}
+	if searchMode == vectorPartitionSystemSearchPinnedV1 {
+		for _, client := range clients {
+			wire, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "pin_search_snapshot", PinOptions: &pinOptions})
+			if err != nil {
+				return cell, err
+			}
+			if err := observeEvidence(wire.FastEvidence); err != nil {
+				return cell, err
+			}
+		}
+	}
 	if err := vectorPartitionSystemRunQueriesV1(ctx, clients, warmup, func(index int) error {
-		_, err := clients[index%workers].call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: request(queries[index%len(queries)])})
-		return err
+		wire, _, err := callSearch(clients[index%workers], queries[index%len(queries)])
+		if err != nil || wire.Search == nil {
+			return errors.Join(errors.New("system-bench warmup returned no search response"), err)
+		}
+		if searchMode == vectorPartitionSystemSearchFastV1 && (wire.FastEvidence == nil || fastEvidence == nil || wire.FastEvidence.Generation != fastEvidence.Generation || wire.FastEvidence.IndexedThrough != fastEvidence.IndexedThrough || !wire.FastEvidence.PublishedAt.Equal(fastEvidence.PublishedAt) || wire.FastEvidence.TopologyDigest != fastEvidence.TopologyDigest || wire.FastEvidence.AuthorizationOverlayDigest != fastEvidence.AuthorizationOverlayDigest) {
+			return errors.New("system-bench warmup changed fast snapshot identity")
+		}
+		return nil
 	}); err != nil {
 		return cell, fmt.Errorf("warmup: %w", err)
 	}
@@ -324,17 +401,21 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	if err != nil {
 		return cell, fmt.Errorf("catalog read snapshot before measurement: %w", err)
 	}
+	if searchMode == vectorPartitionSystemSearchFastV1 {
+		minIndexAge, maxIndexAgeObserved = math.MaxUint64, 0
+	}
 	outcomes := make([]*public.SearchResponseV1, len(queries))
+	evidence := make([]*public.FastSearchEvidenceV1, len(queries))
 	durations := make([]uint64, len(queries))
 	transport := make([]vectorPartitionSystemFrameTimingV1, len(queries))
 	started := time.Now()
 	err = vectorPartitionSystemRunQueriesV1(ctx, clients, len(queries), func(index int) error {
-		wire, callTiming, callErr := clients[index%workers].callWithTiming(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: request(queries[index])})
+		wire, callTiming, callErr := callSearch(clients[index%workers], queries[index])
 		durations[index], transport[index] = callTiming.TotalNanos, callTiming
 		if callErr != nil {
 			return callErr
 		}
-		outcomes[index] = wire.Search
+		outcomes[index], evidence[index] = wire.Search, wire.FastEvidence
 		return nil
 	})
 	elapsed := time.Since(started)
@@ -345,8 +426,18 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	if err != nil {
 		return cell, fmt.Errorf("catalog read snapshot after measurement: %w", err)
 	}
+	if searchMode == vectorPartitionSystemSearchPinnedV1 {
+		for _, client := range clients {
+			if _, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "close_pinned_snapshot"}); err != nil {
+				return cell, err
+			}
+		}
+	}
 	var recall float64
-	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "snapshot_pins": 0, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
+	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "snapshot_pins": 0, "session_pins": 0, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
+	if searchMode == vectorPartitionSystemSearchPinnedV1 {
+		counters["session_pins"] = uint64(workers)
+	}
 	timings := map[string]uint64{"admission": 0, "operations_health": 0, "service_adapter": 0, "public_adapter": 0, "router_open": 0, "router_search": 0, "placement": 0, "coordinator_lifecycle": 0, "dispatch": 0, "queue": 0, "rpc": 0, "network": 0, "read_index_apply": 0, "generation_open": 0, "shard_search": 0, "response": 0, "dedupe": 0, "merge": 0, "coordinator_total": 0, "total": 0, "client_encode": 0, "client_write": 0, "client_response_read": 0, "client_decode": 0, "client_total": 0}
 	for index, outcome := range outcomes {
 		if outcome == nil {
@@ -357,6 +448,11 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 		}
 		if outcome.Generation != generation {
 			return cell, fmt.Errorf("query %d returned generation %+v, want %+v", index, outcome.Generation, generation)
+		}
+		if searchMode == vectorPartitionSystemSearchFastV1 {
+			if err := observeEvidence(evidence[index]); err != nil {
+				return cell, fmt.Errorf("query %d: %w", index, err)
+			}
 		}
 		got := make([]m8CanonicalResultV1, len(outcome.Neighbors))
 		for i, neighbor := range outcome.Neighbors {
@@ -392,15 +488,22 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	cell.Metrics.CompletedQueries, cell.Metrics.ResultCount = len(queries), len(queries)*topK
 	cell.Metrics.RecallAt10, cell.Metrics.QPS = recall/float64(len(queries)), float64(len(queries))/elapsed.Seconds()
 	cell.Metrics.P50Nanos, cell.Metrics.P95Nanos, cell.Metrics.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	catalogReads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(proofsBefore, proofsAfter, uint64(len(queries)))
+	wantStrictProofs := uint64(0)
+	if searchMode == vectorPartitionSystemSearchStrictV1 {
+		wantStrictProofs = uint64(len(queries))
+	}
+	catalogReads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(proofsBefore, proofsAfter, wantStrictProofs)
 	if err != nil {
 		return cell, err
 	}
 	cell.Counters, cell.Timings, cell.CatalogReads, cell.Runtime, cell.ElapsedNanos, cell.TotalNanos = counters, timings, catalogReads, runtimeStats, uint64(elapsed), durations
+	if searchMode != vectorPartitionSystemSearchStrictV1 {
+		cell.FastEvidence, cell.MinIndexAgeNanos, cell.MaxIndexAgeNanos = fastEvidence, minIndexAge, maxIndexAgeObserved
+	}
 	return cell, nil
 }
 
-func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPartitionSystemNodeObservationV1, queries uint64) (vectorPartitionSystemCatalogReadsV1, []vectorPartitionSystemRuntimeNodeV1, error) {
+func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPartitionSystemNodeObservationV1, wantStrictProofs uint64) (vectorPartitionSystemCatalogReadsV1, []vectorPartitionSystemRuntimeNodeV1, error) {
 	var result vectorPartitionSystemCatalogReadsV1
 	if len(before) == 0 || len(before) != len(after) {
 		return result, nil, errors.New("system-bench catalog read snapshots do not cover the same nodes")
@@ -429,9 +532,9 @@ func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPart
 		result.Nodes = append(result.Nodes, vectorPartitionSystemCatalogReadNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Catalog, After: afterNode.Catalog, Delta: delta})
 		runtimeStats = append(runtimeStats, vectorPartitionSystemRuntimeNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Runtime, After: afterNode.Runtime})
 	}
-	wantTotal, ok := vectorPartitionSystemAddUint64V1(queries, result.Total.ServingRefresh.Reads)
-	if !ok || result.Total.Total.Reads != wantTotal || result.Total.StrictSearch.Reads != queries || result.Total.OperationsHealth.Reads != 0 || result.Total.CoordinatorLifecycle.Reads != 0 || result.Total.ShardLifecycle.Reads != 0 || result.Total.Unknown.Reads != 0 {
-		return result, nil, fmt.Errorf("system-bench catalog proof counts do not match measured search work: total=%d strict=%d refresh=%d health=%d coordinator=%d shard=%d unknown=%d want=%d", result.Total.Total.Reads, result.Total.StrictSearch.Reads, result.Total.ServingRefresh.Reads, result.Total.OperationsHealth.Reads, result.Total.CoordinatorLifecycle.Reads, result.Total.ShardLifecycle.Reads, result.Total.Unknown.Reads, queries)
+	wantTotal, ok := vectorPartitionSystemAddUint64V1(wantStrictProofs, result.Total.ServingRefresh.Reads)
+	if !ok || result.Total.Total.Reads != wantTotal || result.Total.StrictSearch.Reads != wantStrictProofs || result.Total.OperationsHealth.Reads != 0 || result.Total.CoordinatorLifecycle.Reads != 0 || result.Total.ShardLifecycle.Reads != 0 || result.Total.Unknown.Reads != 0 {
+		return result, nil, fmt.Errorf("system-bench catalog proof counts do not match measured search work: total=%d strict=%d refresh=%d health=%d coordinator=%d shard=%d unknown=%d want_strict=%d", result.Total.Total.Reads, result.Total.StrictSearch.Reads, result.Total.ServingRefresh.Reads, result.Total.OperationsHealth.Reads, result.Total.CoordinatorLifecycle.Reads, result.Total.ShardLifecycle.Reads, result.Total.Unknown.Reads, wantStrictProofs)
 	}
 	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.StrictSearch, result.Total.ServingRefresh, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
 	var summed nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1
@@ -593,6 +696,10 @@ func vectorPartitionSystemPositiveListV1(raw string) ([]int, error) {
 		out = append(out, value)
 	}
 	return out, nil
+}
+
+func validVectorPartitionSystemSearchModeV1(mode string) bool {
+	return mode == vectorPartitionSystemSearchStrictV1 || mode == vectorPartitionSystemSearchFastV1 || mode == vectorPartitionSystemSearchPinnedV1
 }
 
 func writeVectorPartitionSystemJSONExclusiveV1(path string, value any) error {

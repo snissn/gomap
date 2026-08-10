@@ -733,6 +733,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		GroupAppliedIndexes: config.GroupAppliedIndexes, Database: "default", Catalog: "default", Endpoints: config.Endpoints,
 		LocalShards: shards, RequestBase: requestBase, NodeID: config.NodeID, EndpointIdentity: configSHA, RuntimeStats: vectorPartitionSystemProcessRuntimeStatsV1,
 		TopologyDigest: topologyDigest, AuthorizationOverlayDigest: hex.EncodeToString(authorizationDigest[:]), IndexedThrough: assets.manifest.SourceRowCount, StrictCapabilityKey: capabilityKey,
+		MaxPinnedSessions: 64, MaxPinnedSessionAge: 2 * time.Minute, MaxRetainedSnapshots: 2,
 	})
 	if err != nil {
 		return nil, err
@@ -836,6 +837,20 @@ func vectorPartitionSystemEffectiveCPUSetV1() string {
 	return effective
 }
 
+type vectorPartitionSystemPeakRSSV1 struct {
+	sync.Mutex
+	bytes uint64
+}
+
+func (p *vectorPartitionSystemPeakRSSV1) observe(bytes uint64) uint64 {
+	p.Lock()
+	defer p.Unlock()
+	p.bytes = max(p.bytes, bytes)
+	return p.bytes
+}
+
+var vectorPartitionSystemProcessPeakRSSV1 vectorPartitionSystemPeakRSSV1
+
 func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProcessRuntimeStatsV1 {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
@@ -863,6 +878,7 @@ func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProc
 			}
 		}
 	}
+	stats.PeakRSSBytes = vectorPartitionSystemProcessPeakRSSV1.observe(stats.PeakRSSBytes)
 	return stats
 }
 
@@ -954,18 +970,21 @@ func stringsHostPortEquivalentV1(configured, actual string) bool {
 }
 
 type vectorPartitionOperationsWireRequestV1 struct {
-	SchemaVersion int                    `json:"schema_version"`
-	Operation     string                 `json:"operation"`
-	Search        public.SearchRequestV1 `json:"search,omitempty"`
+	SchemaVersion int                                `json:"schema_version"`
+	Operation     string                             `json:"operation"`
+	Search        public.SearchRequestV1             `json:"search,omitempty"`
+	FastOptions   *public.FastSearchOptionsV1        `json:"fast_options,omitempty"`
+	PinOptions    *public.PinSearchSnapshotOptionsV1 `json:"pin_options,omitempty"`
 }
 
 type vectorPartitionOperationsWireResponseV1 struct {
-	SchemaVersion    int                        `json:"schema_version"`
-	NodeConfigSHA256 string                     `json:"node_config_sha256,omitempty"`
-	Health           *public.OperationsHealthV1 `json:"health,omitempty"`
-	Search           *public.SearchResponseV1   `json:"search,omitempty"`
-	ErrorCode        public.ErrorCodeV1         `json:"error_code,omitempty"`
-	Error            string                     `json:"error,omitempty"`
+	SchemaVersion    int                          `json:"schema_version"`
+	NodeConfigSHA256 string                       `json:"node_config_sha256,omitempty"`
+	Health           *public.OperationsHealthV1   `json:"health,omitempty"`
+	Search           *public.SearchResponseV1     `json:"search,omitempty"`
+	FastEvidence     *public.FastSearchEvidenceV1 `json:"fast_evidence,omitempty"`
+	ErrorCode        public.ErrorCodeV1           `json:"error_code,omitempty"`
+	Error            string                       `json:"error,omitempty"`
 }
 
 func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
@@ -1026,6 +1045,12 @@ func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
 
 func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	var pinned *public.PinnedSearchSnapshotV1
+	defer func() {
+		if pinned != nil {
+			_ = pinned.Close()
+		}
+	}()
 	reader := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(s.idleTimeout)); err != nil {
@@ -1054,6 +1079,50 @@ func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn n
 					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
 				} else {
 					response.Search = &result
+				}
+			case "search_fast":
+				if request.FastOptions == nil {
+					response.Error, response.ErrorCode = "fast search options are required", public.ErrorInvalidRequestV1
+					break
+				}
+				result, evidence, err := s.operations.SearchFast(ctx, request.Search, *request.FastOptions)
+				if err != nil {
+					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
+				} else {
+					response.Search, response.FastEvidence = &result, &evidence
+				}
+			case "pin_search_snapshot":
+				if request.PinOptions == nil || pinned != nil {
+					response.Error, response.ErrorCode = "one pin options object and no existing pin are required", public.ErrorInvalidRequestV1
+					break
+				}
+				var err error
+				pinned, err = s.operations.PinSearchSnapshot(ctx, *request.PinOptions)
+				if err != nil {
+					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
+					pinned = nil
+				} else {
+					evidence := pinned.Evidence()
+					response.FastEvidence = &evidence
+				}
+			case "search_pinned":
+				if pinned == nil {
+					response.Error, response.ErrorCode = "pinned search snapshot is unavailable", public.ErrorUnavailableV1
+					break
+				}
+				result, err := pinned.Search(ctx, request.Search)
+				if err != nil {
+					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
+				} else {
+					response.Search = &result
+				}
+			case "close_pinned_snapshot":
+				if pinned != nil {
+					err := pinned.Close()
+					pinned = nil
+					if err != nil {
+						response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
+					}
 				}
 			default:
 				response.Error = "unsupported system operation"

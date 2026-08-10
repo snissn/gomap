@@ -330,6 +330,140 @@ func TestVectorPartitionServingSnapshotStrictAcquireUsesOneProofAndDrainsV1(t *t
 	}
 }
 
+func TestVectorPartitionServingSnapshotFastWatermarkAndPinnedDrainV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.publisher.opts.MaxPinnedSessions = 1
+	fixture.publisher.opts.MaxRetainedSnapshots = 1
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	waiting := make(chan *VectorPartitionServingSnapshotLeaseV1, 1)
+	errs := make(chan error, 1)
+	go func() {
+		lease, err := fixture.publisher.AcquireFastV1(ctx, time.Minute, 12)
+		waiting <- lease
+		errs <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if err := fixture.publisher.PublishStateV1(t.Context(), 12, strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	fast := <-waiting
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if got := fast.IdentityV1().IndexedThrough; got != 12 {
+		t.Fatalf("fast watermark=%d want=12", got)
+	}
+	before := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	local, err := fixture.publisher.AcquireFastV1(t.Context(), time.Minute, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	if after.Total.Reads != before.Total.Reads || after.Total.NoLogProofs != before.Total.NoLogProofs || after.Total.LogBarriers != before.Total.LogBarriers {
+		t.Fatalf("fast acquisition performed catalog work before=%+v after=%+v", before, after)
+	}
+	_ = local.Close()
+	_ = fast.Close()
+
+	pinned, err := fixture.publisher.AcquirePinnedV1(t.Context(), time.Minute, 12, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned.proof = vectorPartitionServingAuthorityProofV1{}
+	proof, err := pinned.validatePinnedProofV1()
+	if err != nil {
+		t.Fatalf("background-refreshed proof was not returned: %v", err)
+	}
+	if proof.read.CatalogAppliedIndex == 0 {
+		t.Fatal("background-refreshed proof was empty")
+	}
+	if err := pinned.ValidatePinnedV1(); err != nil {
+		t.Fatalf("background-refreshed proof did not keep pin valid: %v", err)
+	}
+	if _, err := fixture.publisher.AcquirePinnedV1(t.Context(), time.Minute, 12, time.Second); err == nil {
+		t.Fatal("pinned session cap was not enforced")
+	}
+	if err := fixture.publisher.PublishStateV1(t.Context(), 13, strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if err := pinned.ValidatePinnedV1(); err != nil {
+		t.Fatalf("replacement invalidated retained pin: %v", err)
+	}
+	current, err := fixture.publisher.AcquirePinnedV1(t.Context(), time.Minute, 13, time.Second)
+	if err == nil {
+		_ = current.Close()
+		t.Fatal("pinned session cap admitted a second handle")
+	}
+	if err := fixture.publisher.InvalidateV1(); err != nil {
+		t.Fatal(err)
+	}
+	if err := pinned.ValidatePinnedV1(); err == nil {
+		t.Fatal("invalidation left a pinned session usable")
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats := fixture.publisher.StatsV1()
+	if stats.FastAcquisitions != 2 || stats.PinnedAcquisitions != 1 || stats.CurrentPinnedSessions != 0 || stats.RetainedSnapshots != 0 || stats.CurrentPins != 0 {
+		t.Fatalf("fast/pinned stats=%+v", stats)
+	}
+}
+
+func TestVectorPartitionServingSnapshotFastRejectsStaleAndCanceledV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := fixture.publisher.AcquirePinnedV1(t.Context(), time.Minute, 0, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinned.expires = time.Now().Add(-time.Nanosecond)
+	if err := pinned.ValidatePinnedV1(); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("expired pinned session error=%v", err)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture.publisher.mu.Lock()
+	fixture.publisher.current.publishedAt = time.Now().Add(-time.Second)
+	fixture.publisher.mu.Unlock()
+	if _, err := fixture.publisher.AcquireFastV1(t.Context(), time.Millisecond, 0); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("stale fast acquisition error=%v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := fixture.publisher.AcquireFastV1(ctx, time.Minute, 12); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled watermark wait error=%v", err)
+	}
+}
+
+func TestVectorPartitionAuthorizationOverlayFiltersAndFailsClosedV1(t *testing.T) {
+	digestA, digestB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	overlay, err := newVectorPartitionAuthorizationOverlayV1(digestA, []string{"revoked"}, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := VectorPartitionCoordinatorResponseV1{Neighbors: []VectorPartitionCoordinatorNeighborV1{{ID: "allowed"}, {ID: "revoked"}}}
+	if err := overlay.filterV1(digestA, &response); err != nil || len(response.Neighbors) != 1 || response.Neighbors[0].ID != "allowed" {
+		t.Fatalf("filtered response=%+v err=%v", response, err)
+	}
+	if err := overlay.publishV1(digestB, []string{"allowed"}, 64); err != nil {
+		t.Fatal(err)
+	}
+	if err := overlay.filterV1(digestA, &response); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("stale overlay error=%v", err)
+	}
+	if err := (&vectorPartitionAuthorizationOverlayV1{}).filterV1(digestB, &response); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("missing overlay error=%v", err)
+	}
+}
+
 func TestVectorPartitionServingSnapshotReplacementIdentityAdvancesV1(t *testing.T) {
 	previous := &vectorPartitionServingSnapshotV1{identity: VectorPartitionServingSnapshotIdentityV1{PublishedAtUnixNano: 7}}
 	next := &vectorPartitionServingSnapshotV1{identity: previous.identity}

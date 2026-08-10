@@ -9,13 +9,36 @@ import (
 )
 
 type serviceBackendV1 struct {
-	search func(context.Context, SearchRequestV1) (SearchResponseV1, error)
-	states map[GenerationIDV1]GenerationStatusV1
+	search   func(context.Context, SearchRequestV1) (SearchResponseV1, error)
+	states   map[GenerationIDV1]GenerationStatusV1
+	snapshot *serviceBackendSnapshotV1
 }
 
 func (b *serviceBackendV1) SearchVectorPartitionV1(ctx context.Context, r SearchRequestV1) (SearchResponseV1, error) {
 	return b.search(ctx, r)
 }
+func (b *serviceBackendV1) SearchVectorPartitionFastV1(ctx context.Context, r SearchRequestV1, options FastSearchOptionsV1) (SearchResponseV1, FastSearchEvidenceV1, error) {
+	response, err := b.search(ctx, r)
+	return response, FastSearchEvidenceV1{Generation: r.Generation, IndexedThrough: options.MinIndexedThrough, PublishedAt: time.Now(), IndexAge: time.Nanosecond, TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay"}, err
+}
+func (b *serviceBackendV1) PinVectorPartitionSearchSnapshotV1(_ context.Context, options PinSearchSnapshotOptionsV1) (SearchSnapshotBackendV1, FastSearchEvidenceV1, error) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	b.snapshot = &serviceBackendSnapshotV1{backend: b}
+	return b.snapshot, FastSearchEvidenceV1{Generation: id, IndexedThrough: options.MinIndexedThrough, PublishedAt: time.Now(), IndexAge: time.Nanosecond, TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay"}, nil
+}
+
+type serviceBackendSnapshotV1 struct {
+	backend *serviceBackendV1
+	closed  bool
+}
+
+func (s *serviceBackendSnapshotV1) SearchVectorPartitionV1(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+	if s.closed {
+		return SearchResponseV1{}, errors.New("closed")
+	}
+	return s.backend.search(ctx, request)
+}
+func (s *serviceBackendSnapshotV1) Close() error { s.closed = true; return nil }
 func (b *serviceBackendV1) RegisterVectorPartitionV1(_ context.Context, r GenerationRegistrationV1) (GenerationStatusV1, error) {
 	s := GenerationStatusV1{Generation: r.GenerationIDV1, State: GenerationBuildingV1}
 	b.states[r.GenerationIDV1] = s
@@ -95,6 +118,44 @@ func TestServiceV1PublicContract(t *testing.T) {
 	}
 	if eligibility, err := svc.CleanupEligibility(context.Background(), id); err != nil || eligibility.Status.State != GenerationRetiredV1 {
 		t.Fatalf("cleanup eligibility = %#v, %v", eligibility, err)
+	}
+}
+
+func TestServiceV1FastAndPinnedContract(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &serviceBackendV1{states: make(map[GenerationIDV1]GenerationStatusV1)}
+	backend.search = func(_ context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+		return SearchResponseV1{Generation: request.Generation, Neighbors: []NeighborV1{{ID: "a", Score: .9}}}, nil
+	}
+	service, err := NewServiceV1(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validSearchRequestV1(id)
+	if _, _, err := service.SearchFast(t.Context(), request, FastSearchOptionsV1{}); !hasCodeV1(err, ErrorInvalidRequestV1) {
+		t.Fatalf("unbounded fast search error=%v", err)
+	}
+	response, evidence, err := service.SearchFast(t.Context(), request, FastSearchOptionsV1{MaxIndexAge: time.Second})
+	if err != nil || len(response.Neighbors) != 1 || evidence.Generation != id || evidence.IndexedThrough != 0 {
+		t.Fatalf("fast response=%+v evidence=%+v err=%v", response, evidence, err)
+	}
+	pinned, err := service.pinSearchSnapshotV1(t.Context(), PinSearchSnapshotOptionsV1{FastSearchOptionsV1: FastSearchOptionsV1{MaxIndexAge: time.Second}, MaxSessionAge: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, err := pinned.Search(t.Context(), request); err != nil || len(response.Neighbors) != 1 {
+		t.Fatalf("pinned response=%+v err=%v", response, err)
+	}
+	other := request
+	other.Generation.Generation++
+	if _, err := pinned.Search(t.Context(), other); !hasCodeV1(err, ErrorGenerationMismatchV1) {
+		t.Fatalf("pinned generation mismatch error=%v", err)
+	}
+	if err := pinned.Close(); err != nil || !backend.snapshot.closed {
+		t.Fatalf("pinned close=%v backend_closed=%v", err, backend.snapshot.closed)
+	}
+	if _, err := pinned.Search(t.Context(), request); !hasCodeV1(err, ErrorUnavailableV1) {
+		t.Fatalf("closed pinned search error=%v", err)
 	}
 }
 
