@@ -171,6 +171,10 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		return errors.Join(ErrVectorPartitionShardSearchGenerationMismatch, next.close())
 	}
 	previous := p.current
+	if err := vectorPartitionServingSnapshotAdvanceIdentityV1(next, previous); err != nil {
+		p.mu.Unlock()
+		return errors.Join(err, next.close())
+	}
 	p.current = next
 	p.stats.Publications++
 	p.stats.CurrentSnapshots++
@@ -187,6 +191,17 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 	}
 	p.wakeRefreshV1()
 	return nil
+}
+
+func vectorPartitionServingSnapshotAdvanceIdentityV1(next, previous *vectorPartitionServingSnapshotV1) error {
+	if next == nil || previous == nil || next.identity.PublishedAtUnixNano > previous.identity.PublishedAtUnixNano {
+		return nil
+	}
+	next.identity.PublishedAtUnixNano = previous.identity.PublishedAtUnixNano + 1
+	next.publishedAt = time.Unix(0, next.identity.PublishedAtUnixNano)
+	var err error
+	next.identity.SnapshotDigest, err = vectorPartitionServingSnapshotDigestV1(next.identity)
+	return err
 }
 
 type vectorPartitionServingSnapshotBuildCountsV1 struct {
@@ -445,7 +460,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) installProofV1(snapshot *vec
 		}
 		return ErrVectorPartitionShardSearchGenerationMismatch
 	}
-	if fresh.read.ValidThroughUnixNano <= snapshot.proof.read.ValidThroughUnixNano {
+	if !snapshot.proof.read.ValidThroughV1().Before(fresh.read.ValidThroughV1()) {
 		return nil
 	}
 	if err := p.opts.Authority.validateVectorPartitionServingAuthorityV1(fresh); err != nil {
@@ -518,7 +533,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) refreshLoopV1() {
 				continue
 			}
 		}
-		delay := vectorPartitionServingSnapshotRefreshDelayV1(proof, time.Now())
+		delay := vectorPartitionServingSnapshotRefreshDelayV1(proof.ValidThroughV1(), time.Now())
 		timer := time.NewTimer(delay)
 		select {
 		case <-p.ctx.Done():
@@ -535,8 +550,8 @@ func (p *VectorPartitionServingSnapshotPublisherV1) refreshLoopV1() {
 	}
 }
 
-func vectorPartitionServingSnapshotRefreshDelayV1(proof raftcluster.CatalogMetaReadProofV1, now time.Time) time.Duration {
-	delay := time.Unix(0, proof.ValidThroughUnixNano).Sub(now) / 2
+func vectorPartitionServingSnapshotRefreshDelayV1(deadline, now time.Time) time.Duration {
+	delay := deadline.Sub(now) / 2
 	if delay < 10*time.Millisecond {
 		return 10 * time.Millisecond
 	}

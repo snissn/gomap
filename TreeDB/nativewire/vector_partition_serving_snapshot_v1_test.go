@@ -241,6 +241,7 @@ func TestVectorPartitionServingSnapshotProofRefreshIsMonotonicV1(t *testing.T) {
 	snapshot := fixture.publisher.current
 	older := snapshot.proof
 	fixture.publisher.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
 	placement := fixture.coordinator.placement
 	newer, err := fixture.authority.captureVectorPartitionServingAuthorityV1(
 		t.Context(), placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
@@ -249,8 +250,8 @@ func TestVectorPartitionServingSnapshotProofRefreshIsMonotonicV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if newer.read.ValidThroughUnixNano <= older.read.ValidThroughUnixNano {
-		t.Fatalf("new proof deadline=%d old=%d", newer.read.ValidThroughUnixNano, older.read.ValidThroughUnixNano)
+	if !older.read.ValidThroughV1().Before(newer.read.ValidThroughV1()) {
+		t.Fatalf("new proof deadline=%s old=%s", newer.read.ValidThroughV1(), older.read.ValidThroughV1())
 	}
 	if err := fixture.publisher.installProofV1(snapshot, newer, nil); err != nil {
 		t.Fatal(err)
@@ -268,12 +269,25 @@ func TestVectorPartitionServingSnapshotProofRefreshIsMonotonicV1(t *testing.T) {
 
 func TestVectorPartitionServingSnapshotProofRefreshRetriesWithinRemainingLeaseV1(t *testing.T) {
 	now := time.Unix(100, 0)
-	proof := raftcluster.CatalogMetaReadProofV1{
-		IssuedAtUnixNano:     now.Add(-100 * time.Millisecond).UnixNano(),
-		ValidThroughUnixNano: now.Add(100 * time.Millisecond).UnixNano(),
-	}
-	if got, want := vectorPartitionServingSnapshotRefreshDelayV1(proof, now), 50*time.Millisecond; got != want {
+	if got, want := vectorPartitionServingSnapshotRefreshDelayV1(now.Add(100*time.Millisecond), now), 50*time.Millisecond; got != want {
 		t.Fatalf("refresh retry delay=%s want %s", got, want)
+	}
+}
+
+func TestVectorPartitionServingSnapshotReplacementIdentityAdvancesV1(t *testing.T) {
+	previous := &vectorPartitionServingSnapshotV1{identity: VectorPartitionServingSnapshotIdentityV1{PublishedAtUnixNano: 7}}
+	next := &vectorPartitionServingSnapshotV1{identity: previous.identity}
+	var err error
+	previous.identity.SnapshotDigest, err = vectorPartitionServingSnapshotDigestV1(previous.identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.identity.SnapshotDigest = previous.identity.SnapshotDigest
+	if err := vectorPartitionServingSnapshotAdvanceIdentityV1(next, previous); err != nil {
+		t.Fatal(err)
+	}
+	if next.identity.PublishedAtUnixNano != 8 || next.identity.SnapshotDigest == previous.identity.SnapshotDigest {
+		t.Fatalf("replacement identity=%+v previous=%+v", next.identity, previous.identity)
 	}
 }
 

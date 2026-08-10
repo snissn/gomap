@@ -112,6 +112,12 @@ type CatalogMetaReadProofV1 struct {
 	validThrough         time.Time
 }
 
+// ValidThroughV1 returns the provider-owned lease deadline, including its
+// process-local monotonic clock reading.
+func (p CatalogMetaReadProofV1) ValidThroughV1() time.Time {
+	return p.validThrough
+}
+
 type CatalogMetaLinearizableReadStageStatsV1 struct {
 	Reads             uint64 `json:"reads"`
 	Successes         uint64 `json:"successes"`
