@@ -407,21 +407,21 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	if maxDocuments <= 0 {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner requires a positive work cap", errMongoFindScanCapExceeded)
 	}
-	if len(prefixes) > maxDocuments {
-		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner has %d prefix probes for a %d-document work cap", errMongoFindScanCapExceeded, len(prefixes), maxDocuments)
-	}
-	// A direct range invocation has a physical cap of Limit*64. Splitting the
-	// document budget across all prefix probes makes that cap global for this
-	// query rather than allowing each $in branch to consume a fresh budget.
-	perPrefixLimit := maxDocuments / len(prefixes)
-	if perPrefixLimit == 0 {
-		perPrefixLimit = 1
-	}
 	ids := make([][]byte, 0, maxDocuments)
 	seenIDs := make(map[string]struct{})
+	remainingCandidates := maxDocuments
 	for _, prefix := range prefixes {
+		// Every prefix shares one candidate budget. Once it is exhausted, a
+		// one-ID probe can only establish whether another candidate exists; it
+		// never contributes an ID to the result. This avoids both the former
+		// even split (which rejected a sparse later prefix) and unbounded work
+		// across $in branches.
+		probeLimit := remainingCandidates
+		if probeLimit == 0 {
+			probeLimit = 1
+		}
 		found, truncated, err := col.FindByCompoundIndexRange(candidate.idx.Name, collections.CompoundIndexRangeOptions{
-			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: perPrefixLimit, Desc: candidate.reverse,
+			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: probeLimit, Desc: candidate.reverse,
 			// Mongo's compatible sort contract uses _id as the deterministic tie
 			// breaker even when the physical secondary key is traversed backwards.
 			StableDocumentIDTies: candidate.reverse,
@@ -429,12 +429,15 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		if err != nil {
 			return nil, candidate, true, err
 		}
+		if len(found) > remainingCandidates {
+			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index candidate scan exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
+		}
 		if truncated {
 			// For one exact ordered probe with no residual filtering, skip+limit
 			// already bounds all IDs execution can observe. The direct primitive
 			// marks the next entry as truncated; that is sufficient, not a scan
 			// cap failure, because later IDs cannot affect this result page.
-			if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 && len(found) == perPrefixLimit {
+			if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
 				for _, id := range found {
 					if _, duplicate := seenIDs[string(id)]; duplicate {
 						continue
@@ -448,6 +451,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index candidate scan exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 		}
 		for _, id := range found {
+			remainingCandidates--
 			if _, duplicate := seenIDs[string(id)]; duplicate {
 				continue
 			}

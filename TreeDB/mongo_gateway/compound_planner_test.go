@@ -337,6 +337,36 @@ func TestMongoCompoundPlanInPrefixSharesOneBoundedWorkBudget(t *testing.T) {
 	assertCommandError(t, resp, "BadValue")
 }
 
+func TestMongoCompoundPlanInPrefixUsesSharedRemainingBudget(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 4
+	assertOK(t, serveCommand(t, server, 4065271, bson.D{
+		{Key: "createIndexes", Value: "events"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(1)}}}, {Key: "name", Value: "tenant_created"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 4065272, bson.D{
+		{Key: "insert", Value: "events"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}},
+			bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(3)}},
+		}}, {Key: "$db", Value: "app"},
+	}))
+	query := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: bson.A{"acme", "other"}}}}}}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 4065273, query)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b", "c"})
+
+	assertOK(t, serveCommand(t, server, 4065274, bson.D{
+		{Key: "insert", Value: "events"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "d"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(4)}},
+			bson.D{{Key: "_id", Value: "e"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(5)}},
+		}}, {Key: "$db", Value: "app"},
+	}))
+	assertCommandError(t, serveCommand(t, server, 4065275, query), "BadValue")
+}
+
 func TestMongoCompoundPlanSupportsNullEqualityPrefix(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406528, bson.D{
