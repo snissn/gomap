@@ -4079,6 +4079,9 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, commi
 		return nil, 0, 0, err
 	}
 	defer func() { _ = materializer.Close() }()
+	if maxDocs < 0 || maxDocs > len(cursor.compoundIDs)-start {
+		maxDocs = len(cursor.compoundIDs) - start
+	}
 	out := make(bson.A, 0, maxDocs)
 	batchBytes, materializedBytes, added, decoded := 0, 0, 0, 0
 	for start+decoded < len(cursor.compoundIDs) && added < maxDocs {

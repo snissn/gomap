@@ -162,6 +162,23 @@ func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublicatio
 	}
 }
 
+func TestMongoCompoundPlannerCursorCumulativeGetMoreCap(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxCursorRetainedBytes = 1000
+	assertOK(t, serveCommand(t, server, 4065113, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}}}}, {Key: "$db", Value: "app"}}))
+	payload := string(make([]byte, 600))
+	assertOK(t, serveCommand(t, server, 4065114, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}, {Key: "payload", Value: payload}}, bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}, {Key: "payload", Value: payload}}}}, {Key: "$db", Value: "app"}}))
+	first := serveCommand(t, server, 4065115, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, first), []string{"a"})
+	id := cursorIDFromResponse(t, first)
+	assertCommandError(t, serveCommand(t, server, 4065116, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if _, ok := server.cursors[id]; ok {
+		t.Fatal("cursor retained after cumulative cap failure")
+	}
+}
+
 func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406511, bson.D{
