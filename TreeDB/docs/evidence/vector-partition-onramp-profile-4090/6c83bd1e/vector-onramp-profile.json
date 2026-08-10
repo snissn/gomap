@@ -1,0 +1,1024 @@
+{
+  "execution_identity": {
+    "container_image_sha256": "sha256:63845dd3d628b68514606286b49cd4bbb1fb488011532c836ea36ee184cde80d",
+    "executable_path": "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/bin/treedb_vector_partition_bench",
+    "executable_sha256": "00b6594b4d14b13169bd4cdc114020d79904facb5c139359602d661a9a7ce99b",
+    "source_revision": "6c83bd1e1f8b0a0aab29bf0fe1cc846fdc944580",
+    "vcs_modified": false
+  },
+  "fixture_truth_identity": {
+    "dataset_checksum": "d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69",
+    "truth_artifact_sha256": "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"
+  },
+  "inputs": [
+    {
+      "client_attestation_sha256": {
+        "command": "51c1e1a70832be27810d30e139c88c8e911a86d4958d557b0d4a292e2533a0fa",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "d2cfaea0a0b48fed6e92bdf0bbe65590b21bf919bcb2c6ce4b60ccc504fbc908"
+      },
+      "control": "single",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/single/repeat-1/search.json",
+      "ready_sha256": {
+        "single": "176a3b16be48bfb4e5fbb05a569c8e54a71870b717995fab94b546f36cc54f14"
+      },
+      "repetition": 1,
+      "runner_sha256": "27526bd8bc56accc661340dd34d52b966d35756e51ca9aac308d876820501b3c",
+      "sha256": "fee6b935e3bdce9dbd3b0dd38d3bb64ae751873335890b2e1a31cfd13f65154c",
+      "topology_identity_sha256": "b9b977e98be4ca5916276d799d2c48886429d992e340ddd70a4d831cc8098bd6"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "a9afadc97344dcb205ee052a0e32fda47d5630762c5aab91f85fa065df8984aa",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "7e378497a5a9b0c8515de8a50c321410be9da74848e6bac0294df03399acb03c"
+      },
+      "control": "single",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/single/repeat-2/search.json",
+      "ready_sha256": {
+        "single": "f357b738264d848c8ab861cd95adce2762c830771a0f962460a035408d943a45"
+      },
+      "repetition": 2,
+      "runner_sha256": "92473c76895045918e4729de4bead8dad3ad19c4b6e21be7ec2950e62e39dff1",
+      "sha256": "983f186d10fa9527e74bbe9f2e814c5341a52c73d156a548fd5d69a0e0a48937",
+      "topology_identity_sha256": "5ce439433d60b8cb54f947f2e60157f3edd5fc0870b57817a75c9ce72a0c9e7e"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "8e8775be18f67331c2960bf700df18d8835237a9f75185ca4790dd6cbcd1f87a",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "692bfe558609b5b7ec91cecb3abb52447b632f88bb3293c36bab1f9cf6f4267a"
+      },
+      "control": "single",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/single/repeat-3/search.json",
+      "ready_sha256": {
+        "single": "4b77de0ee6a95a6d71a32c0db065d32a2b1fe870d0909086a7067970e3321800"
+      },
+      "repetition": 3,
+      "runner_sha256": "bae0529d2a16ce7804d3363461e7fba4afcd753b32194698a486787ec276945a",
+      "sha256": "dfa30a042748b2d1e1cc051eaed7a13416e2277edaefa7279e2481493b63ed01",
+      "topology_identity_sha256": "21ad3df6d4241c530a072f9374ce76976df9e67eef4c2de519a9de01f973c148"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "c77353737715c3609c7806762621e12cc9995b947e4d96fb371687e4b3a313be",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "eddc009fb5a4005558c13d24d2200b5c033ceb9888992b6419ef42bf091d5142"
+      },
+      "control": "native-default",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-default/repeat-1/search.json",
+      "ready_sha256": {
+        "native-group-a": "c3e0f1955eb6eaa0362cf087888b578679e436311e3aa4ea5d1b51d6f4fe1b5c",
+        "native-group-b": "5a2f8140eb8f7d13ad2a3a7595824c3c5f0be8672537a11a11da0ede7192df3f",
+        "native-group-c": "3e5771c1d424f3be766f537f2876daf78070af53513c0b31f795c1c7ab5a615f",
+        "native-group-d": "89ec4210a19c422029ae59883d6948ec4bf449bfc1f5f7de566f913d14483978"
+      },
+      "repetition": 1,
+      "runner_sha256": "ec229febbaaaa1149799764ae8ca90089707a4f3237b3dec63fe09fe8c7ae365",
+      "sha256": "88279c02a13968025c6beca232931e1a1a0dc2c9425eca8b756cb61c6ea9b585",
+      "topology_identity_sha256": "632e76cfe303d96279afed9019cdb4b933a4895dcadac5277dfd5a7bef4d0cbd"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "c6b7781c7e8006d6d0891ad48104159675d8f6d7c647c41418a8980a3c5ed18e",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "83737a29693f65d66a89d486aca82adf098e4ee8dd0dfb77fe2c9aa3a0376be1"
+      },
+      "control": "native-default",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-default/repeat-2/search.json",
+      "ready_sha256": {
+        "native-group-a": "7d6d0979ddaed086b80e7d707efcf889ea2443505d4bf16b9c8b4cd412671a81",
+        "native-group-b": "f033d633a526ef2ae4c1b88dc8667f1e46f9b51ed1466a4be4eb9ccebae05ba5",
+        "native-group-c": "440c9b69647cfe7dbb228258c13cd02594a7d63a5fb7f8fbab119230aed5f182",
+        "native-group-d": "86463d9e45db4bcf7a84157055c609334a1ec733a997f94c52bcc0f92ae386f9"
+      },
+      "repetition": 2,
+      "runner_sha256": "6367783034e4ca949d99009db7d1fae28d002f46a85c676efbe00858e2e18e98",
+      "sha256": "d9d382a9e9055804e069412a4a849d1c1c659f8191cc69cc2e61cd1d39d9a855",
+      "topology_identity_sha256": "7b33394ae2ff03243b3f3047f28f66c12c841d892c825c0a1baf0e7fd7f3677a"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "71eb69880fa3c148229db4040caf9db594534ef5299f3963c652d2378a9c6f00",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "7d4b589be081633a635ddd050d79702b00314b98330c0f61f77da371f275b8ff"
+      },
+      "control": "native-default",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-default/repeat-3/search.json",
+      "ready_sha256": {
+        "native-group-a": "4328eed93411da35aab325c60d4a9cb2c751e5373b6afc3d9e50084f77e47de3",
+        "native-group-b": "7d637adc8743c8df1fb615392eb701aff57fe27093ea2dccde6e30d5d7a4486d",
+        "native-group-c": "b58a7ffc36c49bab09eaa51b5271fea56451835e60beacd864b4b5bd55bb8f85",
+        "native-group-d": "8a77f157e8c722cecc526df6c1eccd78d772d7ddebbc214e80e087bb1ff789e5"
+      },
+      "repetition": 3,
+      "runner_sha256": "bed57c723d5075020e694bc0f70ca759627f496c668632987cdd278fafc29ec8",
+      "sha256": "86153002f251a614e0a2c713f3c48df3d74fd89be4c1353380ae9fddcf302ecb",
+      "topology_identity_sha256": "b6e6dd7e30b30673fdf55c5b61a1780474538d584611909e216c112ed9d0ab97"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "d4efe2aab6ebc075c2604c258be7b53a5417ba0c53a7f3b6735f42a727ee3ffb",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "cc2aaf531c5dc54a3ba7f71c1153e177429eae9a34d8feb254b2470b777963aa"
+      },
+      "control": "native-budgeted",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-budgeted/repeat-1/search.json",
+      "ready_sha256": {
+        "native-group-a": "659419802e801259bef0abf42d7a81eb07491fb60e3413ad5e9405d0eb8ff950",
+        "native-group-b": "07d301e35827cd2afa4f0d7b1c71c11ce311695b57157a68f43d5f4cf2c523ae",
+        "native-group-c": "85ec9f3ddbbb045e30d3159f3b43c8a0f8b841084a540f93cb8a2efe5a2dbbf1",
+        "native-group-d": "6edabc8a361f88c1eb5b309fe720237917866be29ebd9de80c143ca0fab70263"
+      },
+      "repetition": 1,
+      "runner_sha256": "076f571958de9c4c86e75edc88da483113a8c36b9d1e1641f25dcb1a9d1d3af0",
+      "sha256": "3b54d61fe7a47672741fc23f655c741d40f7b5188660dd2a33b43dadd6b9b4f8",
+      "topology_identity_sha256": "d0122c0ea1ced819dd9d78c44dc6a5fc82adf56af088de91418d5d885f90d8f7"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "0472b54590ec3fae6ce2e8f25975ecdde26c4cbaed4493872b1a0c95a91b034f",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "2a41891f4a72218521ae1f49e016c756f044565f5c7346b4d9039ff742800fd7"
+      },
+      "control": "native-budgeted",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-budgeted/repeat-2/search.json",
+      "ready_sha256": {
+        "native-group-a": "b84bc6fb53db12b3d09b01ba9a82b588e0321ec0b4f3277edb7f15478826d193",
+        "native-group-b": "a889b89eb532f08fa779c9307dc664312956bda6b9c4764ba6ce578d41b6aae7",
+        "native-group-c": "513ffd6a23988c207042ba251e2ff59bd43bfb4074da17d080492ea19e59b0e0",
+        "native-group-d": "b9166d2bd633e93d4c29feaa1950e954d4e13c725e8514f849a8b7168e7ba85b"
+      },
+      "repetition": 2,
+      "runner_sha256": "ef18af58acd04a50286d8f6e772e353f85ce5e2c07b7cd93d1641fb8614a89bb",
+      "sha256": "4e9c8111d3980c2aa9d38e45119c5e653fe0a0d2d35799fdcf35e44fb1346393",
+      "topology_identity_sha256": "55c56b64372c80e9055dcbcabe9d31837ec83b54e4c6cc542181373a6c5ec986"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "d07ebbc11bc24c4b4dd362a01de6946ecc143c3ee31b8b1cc075848bb5491232",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "time": "7c16d6477a3cf40d5a4fa369d9cf2cc7102051c30990d935a55df77b127b9e03"
+      },
+      "control": "native-budgeted",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/native-budgeted/repeat-3/search.json",
+      "ready_sha256": {
+        "native-group-a": "5fcd2e9ced7fc263a1a8bd1f58cd8778320f3dde24b4505e4aefaa621dc68402",
+        "native-group-b": "7e6ff5a4cd2f641037733ca060e2c23ef976fde9f3747e2be46302d415752ac7",
+        "native-group-c": "fc973bedc6ef0e446c04c16d6bef8da6e902daeaa3e69d387097892c4ddc124f",
+        "native-group-d": "d635eebd9519a8c1cd0321d4ed388a1d3a9bd5a940fde0473b58b084651c5974"
+      },
+      "repetition": 3,
+      "runner_sha256": "24882f0b732b88fc0ccefa73db4c38fb88f323447f21cee4d84ccd361f543272",
+      "sha256": "760ae3a1ebd7d327caab028b5f524a45612a46392722dec3c5c96a92db777c6c",
+      "topology_identity_sha256": "58379df37a5e2090003d0fa47b619302c7a5a29933ee4ac919fa4368566c1e29"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "c45a3cb6662615dc9892710cee3ea9f57665c9de1d872baca8ac3e54487f435a",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      },
+      "control": "container",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/container/repeat-1/client/search.json",
+      "ready_sha256": {
+        "native-group-a": "08cc3b2ece2e35d19a54e7190636d2923cee4ae290202b36160ff1fa5a900136",
+        "native-group-b": "438b303cd3c7548eed9316c3ae319cbfb1463070e4a436d71a7e4a69be12a248",
+        "native-group-c": "e5c1f0625f25ed003925c17c0387a66acef655b3c26ee4091bb7300c91e50ce8",
+        "native-group-d": "f820101ad7e583e612a7687bb978d1ea7e962956071ed5e12bf31223a112ad1d"
+      },
+      "repetition": 1,
+      "runner_sha256": "d83d99984d0c5b77553e3c479e9978a37e303c1cc4ce641db780c66713827144",
+      "sha256": "b676afd74d974285e0f93b1f3e049c28e66506d69407a7b196f3b5ea5d1c0d71",
+      "topology_identity_sha256": "55a6718ce948da47d684345156f1ec1de0342982cb4c0917335fa5138cf335f2"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "f7450276b89f41a502abf09fa4e3f24cb175ae6ea2d259d4dad2cfc03cfbf885",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      },
+      "control": "container",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/container/repeat-2/client/search.json",
+      "ready_sha256": {
+        "native-group-a": "017d25c670dc4daf38307debe4dda429a8ee49158d2f9e18cfa59c54697b5240",
+        "native-group-b": "8f3e1fa0aa2de9dc98cfc6abf7113fa182ccdf0da2f3c6fb7a96b5c1593229ef",
+        "native-group-c": "3c3866a17d4ba61bdfb5300f13e9da03139894e2d4155baa9eca3f20ea0b6fdc",
+        "native-group-d": "e3f1943151aaa96b371d57038ae3c45c877aa05584b1fc603c3859530de3d376"
+      },
+      "repetition": 2,
+      "runner_sha256": "78a9ebe52afc5f6455a91214de652e76d519f820ba824c907053c9067522feb0",
+      "sha256": "b0cb4ae7526363bcbcee3e77d0547c8150f5bb167a2946c3d1f3e43781364292",
+      "topology_identity_sha256": "c43b998c7bf3e321a09c4875f4ae50f2775eb31ff1d10c0088a634df0afd35b5"
+    },
+    {
+      "client_attestation_sha256": {
+        "command": "55b85c495dccb048a9a182231559387dd3dce26f98ef1400b8343ace3f58d8c6",
+        "rc": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+      },
+      "control": "container",
+      "path": "TreeDB/docs/evidence/vector-partition-onramp-profile-4090/6c83bd1e/runs/container/repeat-3/client/search.json",
+      "ready_sha256": {
+        "native-group-a": "bb1488bf93808c8bdb13f585d242280cfece73b56c28237da7e777c32ea909f0",
+        "native-group-b": "d1801c9768510908b787364e819265c4baee6aee7ebf2432f80295cff70b3e62",
+        "native-group-c": "6f46e6247b14bd7dbcd08a9396edc2b2aacecf1ed875b23b8ef4a96882a22a2d",
+        "native-group-d": "ae5e27d428c0911ce8dda21d2162d6bf73df7b9e22c9d4fe10682a572bc580bb"
+      },
+      "repetition": 3,
+      "runner_sha256": "cfc7da3f02ec71321450e5d9b268ee3963b46d1596013407e4109f6c79653a30",
+      "sha256": "72075d69631a6c58d2d6aa814443d3b0e383f86a9bbc1d8cc60dd2acfa29f7bd",
+      "topology_identity_sha256": "40c3fcf0a823955982494d6618f09be9a39944b23f3fb9da0b9b1e86a26710c3"
+    }
+  ],
+  "result_kind": "vector_partition_onramp_profile_v1",
+  "rows": [
+    {
+      "concurrency": 1,
+      "controls": {
+        "container": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 7740034.533,
+              "operations_health": 7467940.897,
+              "shard_lifecycle": 19586976.181,
+              "total": 34794951.611,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 7762361.541,
+              "operations_health": 7498366.974,
+              "shard_lifecycle": 19635489.42,
+              "total": 34896217.935,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1954.74,
+            "public_response_frame_bytes": 1114.595,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.14320311001256494,
+          "p95_nanos_max": 51962434,
+          "p95_nanos_median": 49663673,
+          "p95_nanos_min": 47429606,
+          "qps_max": 38.07312933361909,
+          "qps_median": 34.916196149319155,
+          "qps_min": 33.073021455227845,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 5602436.0,
+            "frees_per_query": 4727.168,
+            "mallocs_per_query": 4660.177,
+            "nonvoluntary_context_switches_per_query": 6.642,
+            "num_gc_per_query": 0.069,
+            "pause_total_nanos_per_query": 4659.807,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 1073546.736,
+            "voluntary_context_switches_per_query": 299.353
+          },
+          "wall_median": {
+            "accounting_kind": "serial_wall",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 37917.564,
+              "client_encode": 20910.57,
+              "client_response_read": 28563090.104,
+              "client_write": 13684.503,
+              "unexplained": 2170.919
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 7767781.875,
+              "dedupe": 1977.596,
+              "dispatch": 12618509.71,
+              "merge": 4715.321,
+              "placement": 407482.407,
+              "router_open": 2019.463,
+              "router_search": 94966.569,
+              "unexplained": 10352.427
+            },
+            "elapsed_nanos_per_query": 28640004.075,
+            "public_exclusive_nanos_per_query": {
+              "admission": 774.895,
+              "coordinator_total": 20919301.299,
+              "operations_health": 7527401.431,
+              "public_adapter": 5288.056,
+              "service_adapter": 3176.386,
+              "unexplained": 172.605
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 1972.958,
+            "shard_work_nanos_per_query": {
+              "generation_open": 19659781.719,
+              "network": 534351.753,
+              "queue": 30750.657,
+              "read_index_apply": 52765.899,
+              "response": 3505.667,
+              "rpc": 20968756.608,
+              "shard_search": 629487.709
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 0.0005246044295473796
+          }
+        },
+        "native-budgeted": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 7614303.445,
+              "operations_health": 7377151.277,
+              "shard_lifecycle": 19616343.542,
+              "total": 34607798.264,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 7633923.898,
+              "operations_health": 7404302.507,
+              "shard_lifecycle": 19660766.273,
+              "total": 34698992.678,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.735,
+            "public_response_frame_bytes": 1114.54,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.3906719167472135,
+          "p95_nanos_max": 50104405,
+          "p95_nanos_median": 49599493,
+          "p95_nanos_min": 30727276,
+          "qps_max": 41.662421948092316,
+          "qps_median": 35.27157995315675,
+          "qps_min": 34.213963018247874,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 5219606.0,
+            "frees_per_query": 4597.055,
+            "mallocs_per_query": 4633.528,
+            "nonvoluntary_context_switches_per_query": 5.562,
+            "num_gc_per_query": 0.067,
+            "pause_total_nanos_per_query": 3597.985,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 1071685.512,
+            "voluntary_context_switches_per_query": 300.842
+          },
+          "wall_median": {
+            "accounting_kind": "serial_wall",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 35449.1,
+              "client_encode": 19737.489,
+              "client_response_read": 28264434.098,
+              "client_write": 18656.134,
+              "unexplained": 2115.154
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 7638504.477,
+              "dedupe": 1835.629,
+              "dispatch": 12565728.96,
+              "merge": 4600.715,
+              "placement": 398679.1,
+              "router_open": 1896.325,
+              "router_search": 91980.181,
+              "unexplained": 9862.504
+            },
+            "elapsed_nanos_per_query": 28351437.654,
+            "public_exclusive_nanos_per_query": {
+              "admission": 702.115,
+              "coordinator_total": 20715145.096,
+              "operations_health": 7430691.409,
+              "public_adapter": 4854.415,
+              "service_adapter": 3018.74,
+              "unexplained": 166.629
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 1934.479,
+            "shard_work_nanos_per_query": {
+              "generation_open": 19682056.661,
+              "network": 542795.676,
+              "queue": 27099.577,
+              "read_index_apply": 50819.113,
+              "response": 3382.034,
+              "rpc": 20922395.207,
+              "shard_search": 626265.802
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 0.0004962194923478641
+          }
+        },
+        "native-default": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 7811677.245,
+              "operations_health": 7412568.641,
+              "shard_lifecycle": 19371443.806,
+              "total": 34595689.692,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 7838188.659,
+              "operations_health": 7446975.382,
+              "shard_lifecycle": 19423353.185,
+              "total": 34708517.226,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.73,
+            "public_response_frame_bytes": 1114.589,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.27139700514546705,
+          "p95_nanos_max": 51821027,
+          "p95_nanos_median": 49553325,
+          "p95_nanos_min": 38372403,
+          "qps_max": 39.413946645878504,
+          "qps_median": 34.96010875566831,
+          "qps_min": 33.40967577552647,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 5693297.0,
+            "frees_per_query": 4603.821,
+            "mallocs_per_query": 4660.548,
+            "nonvoluntary_context_switches_per_query": 2.066,
+            "num_gc_per_query": 0.069,
+            "pause_total_nanos_per_query": 3498.806,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 1079744.736,
+            "voluntary_context_switches_per_query": 347.943
+          },
+          "wall_median": {
+            "accounting_kind": "serial_wall",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 35424.33,
+              "client_encode": 19670.718,
+              "client_response_read": 28515679.385,
+              "client_write": 17629.2,
+              "unexplained": 2101.577
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 7844109.383,
+              "dedupe": 1882.351,
+              "dispatch": 12492376.769,
+              "merge": 4697.114,
+              "placement": 394057.64,
+              "router_open": 1845.921,
+              "router_search": 90966.251,
+              "unexplained": 9559.888
+            },
+            "elapsed_nanos_per_query": 28604030.01,
+            "public_exclusive_nanos_per_query": {
+              "admission": 746.242,
+              "coordinator_total": 20895530.215,
+              "operations_health": 7479508.863,
+              "public_adapter": 4730.395,
+              "service_adapter": 2864.188,
+              "unexplained": 165.704
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 2031.605,
+            "shard_work_nanos_per_query": {
+              "generation_open": 19448984.54,
+              "network": 510228.838,
+              "queue": 24510.932,
+              "read_index_apply": 48773.072,
+              "response": 3111.255,
+              "rpc": 20867724.039,
+              "shard_search": 603624.93
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 0.0005440646015471765
+          }
+        },
+        "single": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 7520813.168,
+              "operations_health": 7259847.069,
+              "shard_lifecycle": 15922735.447,
+              "total": 30618573.729,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 7539011.705,
+              "operations_health": 7285333.156,
+              "shard_lifecycle": 16665608.11,
+              "total": 31386008.554,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.736,
+            "public_response_frame_bytes": 1114.176,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.15650599599066306,
+          "p95_nanos_max": 50541088,
+          "p95_nanos_median": 43741896,
+          "p95_nanos_min": 43695219,
+          "qps_max": 38.764377546905344,
+          "qps_median": 38.749160560514824,
+          "qps_min": 34.543997798311494,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 4295799.0,
+            "frees_per_query": 3647.144,
+            "mallocs_per_query": 3654.008,
+            "nonvoluntary_context_switches_per_query": 1.619,
+            "num_gc_per_query": 0.025,
+            "pause_total_nanos_per_query": 1248.621,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 977514.08,
+            "voluntary_context_switches_per_query": 160.304
+          },
+          "wall_median": {
+            "accounting_kind": "serial_wall",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 34366.87,
+              "client_encode": 19356.58,
+              "client_response_read": 25731571.608,
+              "client_write": 17276.804,
+              "unexplained": 1999.958
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 7543083.463,
+              "dedupe": 1844.553,
+              "dispatch": 10387713.288,
+              "merge": 4382.286,
+              "placement": 390237.392,
+              "router_open": 1736.363,
+              "router_search": 91931.519,
+              "unexplained": 9458.668
+            },
+            "elapsed_nanos_per_query": 25807010.669,
+            "public_exclusive_nanos_per_query": {
+              "admission": 693.906,
+              "coordinator_total": 18345497.743,
+              "operations_health": 7310223.831,
+              "public_adapter": 4941.272,
+              "service_adapter": 2858.058,
+              "unexplained": 157.777
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 1988.17,
+            "shard_work_nanos_per_query": {
+              "generation_open": 16684204.298,
+              "network": 481219.072,
+              "queue": 25632.192,
+              "read_index_apply": 46212.7,
+              "response": 3172.686,
+              "rpc": 17842491.682,
+              "shard_search": 627610.558
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 0.0005254471061530371
+          }
+        }
+      },
+      "probes": 2
+    },
+    {
+      "concurrency": 32,
+      "controls": {
+        "container": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 59681315.231,
+              "operations_health": 58731688.732,
+              "shard_lifecycle": 78092477.275,
+              "total": 196505481.238,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 89442358.522,
+              "operations_health": 85696646.312,
+              "shard_lifecycle": 103633704.708,
+              "total": 278772709.542,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1954.74,
+            "public_response_frame_bytes": 1121.943,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.4808525652994815,
+          "p95_nanos_max": 530502238,
+          "p95_nanos_median": 402615448,
+          "p95_nanos_min": 336903567,
+          "qps_max": 133.09004753021176,
+          "qps_median": 119.41751910639525,
+          "qps_min": 104.22544098879231,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 3543383.0,
+            "frees_per_query": 2511.572,
+            "mallocs_per_query": 2585.734,
+            "nonvoluntary_context_switches_per_query": 5.03,
+            "num_gc_per_query": 0.051,
+            "pause_total_nanos_per_query": 6375.441,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 789170.584,
+            "voluntary_context_switches_per_query": 177.189
+          },
+          "wall_median": {
+            "accounting_kind": "aggregate_request_work",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 34321.917,
+              "client_encode": 19384.414,
+              "client_response_read": 253721763.82,
+              "client_write": 16328.281,
+              "unexplained": 1854.375
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 89445096.318,
+              "dedupe": 2067.193,
+              "dispatch": 77625121.119,
+              "merge": 4479.843,
+              "placement": 458376.773,
+              "router_open": 2969.464,
+              "router_search": 109242.104,
+              "unexplained": 8386.337
+            },
+            "elapsed_nanos_per_query": 8373980.698,
+            "public_exclusive_nanos_per_query": {
+              "admission": 522.07,
+              "coordinator_total": 167672189.779,
+              "operations_health": 85720655.88,
+              "public_adapter": 12729.488,
+              "service_adapter": 2272.599,
+              "unexplained": 159.362
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 0.0,
+            "shard_work_nanos_per_query": {
+              "generation_open": 103665742.154,
+              "network": 5502545.81,
+              "queue": 734048.723,
+              "read_index_apply": 101808.815,
+              "response": 3747.686,
+              "rpc": 113680158.002,
+              "shard_search": 755392.045
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 4.0978358628616786e-05
+          }
+        },
+        "native-budgeted": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 53809736.594,
+              "operations_health": 52967809.47,
+              "shard_lifecycle": 75865127.638,
+              "total": 180468934.402,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 83906220.451,
+              "operations_health": 82951798.167,
+              "shard_lifecycle": 101591570.023,
+              "total": 268449588.641,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.74,
+            "public_response_frame_bytes": 1121.315,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.4836211815555243,
+          "p95_nanos_max": 532117964,
+          "p95_nanos_median": 426064006,
+          "p95_nanos_min": 326064386,
+          "qps_max": 138.9779828287535,
+          "qps_median": 127.18947041903725,
+          "qps_min": 93.48847011250992,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 3318582.0,
+            "frees_per_query": 2470.417,
+            "mallocs_per_query": 2511.62,
+            "nonvoluntary_context_switches_per_query": 4.13,
+            "num_gc_per_query": 0.049,
+            "pause_total_nanos_per_query": 5102.68,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 778908.52,
+            "voluntary_context_switches_per_query": 170.54
+          },
+          "wall_median": {
+            "accounting_kind": "aggregate_request_work",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 33454.286,
+              "client_encode": 18928.535,
+              "client_response_read": 238751107.834,
+              "client_write": 24984.567,
+              "unexplained": 1894.16
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 83908559.923,
+              "dedupe": 1978.652,
+              "dispatch": 71006728.588,
+              "merge": 4474.767,
+              "placement": 469300.412,
+              "router_open": 1120.87,
+              "router_search": 107251.673,
+              "unexplained": 9150.808
+            },
+            "elapsed_nanos_per_query": 7862286.058,
+            "public_exclusive_nanos_per_query": {
+              "admission": 464.687,
+              "coordinator_total": 155435731.525,
+              "operations_health": 82974069.084,
+              "public_adapter": 14655.662,
+              "service_adapter": 2172.802,
+              "unexplained": 166.931
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 0.0,
+            "shard_work_nanos_per_query": {
+              "generation_open": 101609157.577,
+              "network": 6329771.971,
+              "queue": 858238.991,
+              "read_index_apply": 104943.561,
+              "response": 4612.787,
+              "rpc": 108261195.918,
+              "shard_search": 748612.12
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 4.354662413590588e-05
+          }
+        },
+        "native-default": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 58172947.078,
+              "operations_health": 58015783.559,
+              "shard_lifecycle": 73134943.693,
+              "total": 189323674.33,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 103381965.208,
+              "operations_health": 101398000.112,
+              "shard_lifecycle": 103564705.021,
+              "total": 308686744.758,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.727,
+            "public_response_frame_bytes": 1121.605,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.05439083426233326,
+          "p95_nanos_max": 384863528,
+          "p95_nanos_median": 382786201,
+          "p95_nanos_min": 369168726,
+          "qps_max": 115.23106752739504,
+          "qps_median": 110.8396352256299,
+          "qps_min": 109.20240729814033,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 4155929.0,
+            "frees_per_query": 2723.881,
+            "mallocs_per_query": 2772.881,
+            "nonvoluntary_context_switches_per_query": 2.615,
+            "num_gc_per_query": 0.053,
+            "pause_total_nanos_per_query": 3507.191,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 821131.288,
+            "voluntary_context_switches_per_query": 205.962
+          },
+          "wall_median": {
+            "accounting_kind": "aggregate_request_work",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 35541.139,
+              "client_encode": 20149.492,
+              "client_response_read": 282475666.626,
+              "client_write": 26381.64,
+              "unexplained": 1945.115
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 103385203.258,
+              "dedupe": 2211.225,
+              "dispatch": 76564209.652,
+              "merge": 4696.693,
+              "placement": 483056.733,
+              "router_open": 1840.104,
+              "router_search": 111581.072,
+              "unexplained": 10902.036
+            },
+            "elapsed_nanos_per_query": 9022043.405,
+            "public_exclusive_nanos_per_query": {
+              "admission": 591.534,
+              "coordinator_total": 180903149.264,
+              "operations_health": 101424538.837,
+              "public_adapter": 11156.609,
+              "service_adapter": 3055.574,
+              "unexplained": 181.715
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 0.0,
+            "shard_work_nanos_per_query": {
+              "generation_open": 103585245.034,
+              "network": 3762768.21,
+              "queue": 31204.906,
+              "read_index_apply": 63586.817,
+              "response": 3618.254,
+              "rpc": 108177191.161,
+              "shard_search": 747360.212
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 4.607818883278617e-05
+          }
+        },
+        "single": {
+          "catalog_median": {
+            "barrier_nanos_per_query": {
+              "coordinator_lifecycle": 32448626.926,
+              "operations_health": 32101733.082,
+              "shard_lifecycle": 59603559.996,
+              "total": 124153920.004,
+              "unknown": 0.0
+            },
+            "log_barriers_per_query": 3.834,
+            "raft_log_entries_per_query": 3.834,
+            "reads_per_query": 3.834,
+            "work_nanos_per_query": {
+              "coordinator_lifecycle": 60345766.379,
+              "operations_health": 61639970.636,
+              "shard_lifecycle": 113810444.08,
+              "total": 235796181.095,
+              "unknown": 0.0
+            }
+          },
+          "counters_per_query_median": {
+            "candidate_bytes": 248925.184,
+            "candidates": 3889.456,
+            "edges": 8663.66,
+            "public_request_frame_bytes": 1959.734,
+            "public_response_frame_bytes": 1121.28,
+            "query_bytes": 512.0,
+            "redirects": 0.0,
+            "request_bytes": 1895.186,
+            "requests": 1.834,
+            "response_bytes": 1245.504,
+            "retries": 0.0,
+            "rpcs": 1.834,
+            "selected_groups": 1.834,
+            "selected_partitions": 2.0
+          },
+          "max_relative_spread": 0.6353446914344287,
+          "p95_nanos_max": 390293534,
+          "p95_nanos_median": 242389226,
+          "p95_nanos_min": 236292826,
+          "qps_max": 175.11322233013223,
+          "qps_median": 163.31083627706124,
+          "qps_min": 127.16179469859986,
+          "recall_at_10_median": 0.9246999999999927,
+          "runtime_median": {
+            "cpu_time_nanos_per_query": 3502810.0,
+            "frees_per_query": 2179.436,
+            "mallocs_per_query": 2156.332,
+            "nonvoluntary_context_switches_per_query": 1.86,
+            "num_gc_per_query": 0.018,
+            "pause_total_nanos_per_query": 1575.078,
+            "peak_rss_bytes_per_query": 0.0,
+            "total_alloc_bytes_per_query": 743351.872,
+            "voluntary_context_switches_per_query": 72.248
+          },
+          "wall_median": {
+            "accounting_kind": "aggregate_request_work",
+            "client_exclusive_nanos_per_query": {
+              "client_decode": 35329.741,
+              "client_encode": 20456.552,
+              "client_response_read": 192197253.813,
+              "client_write": 26347.828,
+              "unexplained": 1819.477
+            },
+            "coordinator_exclusive_nanos_per_query": {
+              "coordinator_lifecycle": 60348904.68,
+              "dedupe": 2176.879,
+              "dispatch": 69312655.657,
+              "merge": 5013.326,
+              "placement": 548143.599,
+              "router_open": 2328.021,
+              "router_search": 123666.923,
+              "unexplained": 10414.808
+            },
+            "elapsed_nanos_per_query": 6123292.384,
+            "public_exclusive_nanos_per_query": {
+              "admission": 516.256,
+              "coordinator_total": 130354201.919,
+              "operations_health": 61669083.697,
+              "public_adapter": 12312.873,
+              "service_adapter": 5584.243,
+              "unexplained": 185.381
+            },
+            "serial_scheduling_unexplained_nanos_per_query": 0.0,
+            "shard_work_nanos_per_query": {
+              "generation_open": 113836754.895,
+              "network": 4958812.82,
+              "queue": 42710.119,
+              "read_index_apply": 72758.295,
+              "response": 4832.103,
+              "rpc": 120536505.242,
+              "shard_search": 1017352.565
+            },
+            "unexplained_defect": false,
+            "unexplained_fraction": 6.645664444102514e-05
+          }
+        }
+      },
+      "probes": 2
+    }
+  ],
+  "schema_version": 1,
+  "status": "tainted"
+}

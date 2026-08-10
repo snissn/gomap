@@ -1,0 +1,27 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:11:56 HST
+Showing nodes accounting for 22.07ms, 99.82% of 22.11ms total
+Dropped 101 nodes (cum <= 0.11ms)
+      flat  flat%   sum%        cum   cum%
+   21.91ms 99.10% 99.10%    21.91ms 99.10%  sync.(*Mutex).Unlock (inline)
+         0     0% 99.10%    21.91ms 99.09%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 99.10%    21.23ms 96.04%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 99.10%    21.23ms 96.02%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 99.10%    21.23ms 96.02%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 99.10%     0.68ms  3.06%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.10%     0.67ms  3.04%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.10%     0.67ms  3.03%  go.etcd.io/bbolt.(*DB).beginTx
+    0.16ms  0.72% 99.82%     0.16ms  0.72%  runtime.unlock

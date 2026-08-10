@@ -1,0 +1,78 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: alloc_space
+Time: 2026-08-09 14:06:32 HST
+Showing nodes accounting for 1068.26MB, 51.99% of 2054.88MB total
+Dropped 305 nodes (cum <= 10.27MB)
+Showing top 70 nodes out of 155
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%  1423.01MB 69.25%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0%     0%  1423.01MB 69.25%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0%     0%  1408.98MB 68.57%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0%     0%   995.92MB 48.47%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierWithContextV1
+         0     0%     0%   967.44MB 47.08%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleAuthorityWithContextV1
+         0     0%     0%   966.94MB 47.06%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1
+  801.16MB 38.99% 38.99%   802.72MB 39.06%  encoding/json.Marshal
+         0     0% 38.99%   790.70MB 38.48%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1
+         0     0% 38.99%   790.70MB 38.48%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func2
+         0     0% 38.99%   789.70MB 38.43%  github.com/snissn/gomap/TreeDB/collections.writeVectorPartitionJSONSliceWithContextV1[go.shape.struct { VectorOrdinal uint64; PartitionID uint32 }]
+         0     0% 38.99%   725.50MB 35.31%  github.com/snissn/gomap/TreeDB/collections.reduceVectorPartitionLifecycleCheckpointTailV1
+         0     0% 38.99%   681.78MB 33.18%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionProductionNodeGenerationSourceV1.PinVectorPartitionGenerationV1
+         0     0% 38.99%   681.28MB 33.15%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0% 38.99%   679.78MB 33.08%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).loadGeneration
+         0     0% 38.99%   672.91MB 32.75%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierV1 (inline)
+         0     0% 38.99%   668.20MB 32.52%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func4
+         0     0% 38.99%   553.82MB 26.95%  github.com/snissn/gomap/TreeDB/collections.applyVectorPartitionReadyPromotionV1
+         0     0% 38.99%   553.82MB 26.95%  github.com/snissn/gomap/TreeDB/collections.reduceVectorPartitionLifecycleRecordV1
+   62.08MB  3.02% 42.01%   549.08MB 26.72%  github.com/snissn/gomap/TreeDB/collections.encodeVectorPartitionManifestWithContextV1
+         0     0% 42.01%   499.55MB 24.31%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 42.01%   499.55MB 24.31%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 42.01%   499.55MB 24.31%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 42.01%   499.55MB 24.31%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 42.01%   498.06MB 24.24%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReader
+         0     0% 42.01%   498.06MB 24.24%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot
+         0     0% 42.01%   485.48MB 23.63%  github.com/snissn/gomap/TreeDB/collections.(*Collection).acquireColumnVectorGraphSharedPreparedSearch
+         0     0% 42.01%   485.48MB 23.63%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot.func1
+         0     0% 42.01%   485.48MB 23.63%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot
+         0     0% 42.01%   478.10MB 23.27%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.validateWithContextV1
+         0     0% 42.01%   385.33MB 18.75%  main.(*vectorPartitionOperationsTCPServerV1).serve
+         0     0% 42.01%   385.33MB 18.75%  main.(*vectorPartitionOperationsTCPServerV1).start.func1.1
+         0     0% 42.01%   371.72MB 18.09%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Search
+       1MB 0.049% 42.06%   368.72MB 17.94%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).SearchVectorPartitionV1
+         0     0% 42.06%   368.72MB 17.94%  github.com/snissn/gomap/TreeDB/vectorpartition.(*ServiceV1).Search
+         0     0% 42.06%   367.22MB 17.87%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).Search
+         0     0% 42.06%   365.01MB 17.76%  github.com/snissn/gomap/TreeDB/collections.EncodeVectorPartitionManifestV1 (inline)
+         0     0% 42.06%   343.30MB 16.71%  github.com/snissn/gomap/TreeDB/collections.(*Collection).PreparedVectorPartitionManifestWithContextV1
+         0     0% 42.06%   342.80MB 16.68%  github.com/snissn/gomap/TreeDB/collections.(*Collection).PreparedVectorPartitionManifestWithContextV1.func1
+         0     0% 42.06%   329.61MB 16.04%  github.com/snissn/gomap/TreeDB/collections.(*Collection).AcquireVectorPartitionReaderPinWithContextV1
+         0     0% 42.06%   329.61MB 16.04%  github.com/snissn/gomap/TreeDB/collections.(*Collection).AcquireVectorPartitionReaderPinWithContextV1.func1
+         0     0% 42.06%   329.61MB 16.04%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).OpenWithContext
+         0     0% 42.06%   328.81MB 16.00%  github.com/snissn/gomap/TreeDB/collections.canonicalVectorPartitionLifecycleCheckpointWithContextV1
+         0     0% 42.06%   323.01MB 15.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenPreparedVectorPartitionRouterForGenerationWithContextV1
+         0     0% 42.06%   323.01MB 15.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionRouterWithContextV1
+         0     0% 42.06%   323.01MB 15.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionRouterWithContextV1.func1
+         0     0% 42.06%   323.01MB 15.72%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).acquireRouterSessionV1
+         0     0% 42.06%   323.01MB 15.72%  github.com/snissn/gomap/TreeDB/nativewire.CollectionVectorPartitionCoordinatorRouterSourceV1.OpenVectorPartitionCoordinatorRouterV1
+         0     0% 42.06%   323.01MB 15.72%  main.m8TopologyRouterSourceV1.OpenVectorPartitionCoordinatorRouterV1
+         0     0% 42.06%   315.21MB 15.34%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenPreparedVectorPartitionRouterForGenerationWithContextV1.func1
+         0     0% 42.06%   312.61MB 15.21%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionManifestV1).canonicalizeWithContextV1
+         0     0% 42.06%   299.19MB 14.56%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphAdjacencyStateSourcesForReader
+         0     0% 42.06%   299.19MB 14.56%  github.com/snissn/gomap/TreeDB/collections.newColumnVectorGraphAdjacencyStateDirectSourceFromRoot
+         0     0% 42.06%   299.19MB 14.56%  github.com/snissn/gomap/TreeDB/collections.openColumnVectorGraphAdjacencyStateSourcesFromRoot
+         0     0% 42.06%   277.61MB 13.51%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.ColumnPartFromImageWithOptions
+         0     0% 42.06%   236.32MB 11.50%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).searchCosineWithContext
+         0     0% 42.06%   235.82MB 11.48%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphNativeSearchScratch).prepareHNSWSearchPack
+         0     0% 42.06%   231.19MB 11.25%  github.com/snissn/gomap/TreeDB/collections.vectorPartitionBuildingPromotionIdentityV1
+         0     0% 42.06%   230.62MB 11.22%  github.com/snissn/gomap/TreeDB/collections.DecodeVectorPartitionManifestWithContextV1
+         0     0% 42.06%      229MB 11.14%  github.com/snissn/gomap/TreeDB/collections.decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1
+         0     0% 42.06%   226.66MB 11.03%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionLocalSearcherV1).SearchWithOptionsV1
+         0     0% 42.06%   226.66MB 11.03%  github.com/snissn/gomap/TreeDB/nativewire.searchVectorPartitionDirectV1
+         0     0% 42.06%   224.16MB 10.91%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterPartFromImageWithoutRowLocators (inline)
+         0     0% 42.06%   224.16MB 10.91%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterPartFromImageWithoutRowLocatorsWithDiagnostics
+         0     0% 42.06%   220.14MB 10.71%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.attachColumnPayloadsFromImage
+         0     0% 42.06%   204.02MB  9.93%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManager
+         0     0% 42.06%   204.02MB  9.93%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerInto (inline)
+  204.02MB  9.93% 51.99%   204.02MB  9.93%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerIntoWithIntegrity
+         0     0% 51.99%   196.26MB  9.55%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.attachUint32OffsetsListColumnPayloadsFromImage
+         0     0% 51.99%   188.99MB  9.20%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 51.99%   171.18MB  8.33%  github.com/snissn/gomap/TreeDB/collections.canonicalVectorPartitionLifecycleCheckpointV1 (inline)

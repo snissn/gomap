@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:11:11 HST
+Showing nodes accounting for 360.94us, 99.63% of 362.29us total
+Dropped 53 nodes (cum <= 1.81us)
+Showing top 40 nodes out of 85
+      flat  flat%   sum%        cum   cum%
+  235.75us 65.07% 65.07%   235.75us 65.07%  runtime.unlock (partial-inline)
+         0     0% 65.07%   134.45us 37.11%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 65.07%   126.78us 34.99%  runtime.mcall
+  125.19us 34.56% 99.63%   125.19us 34.56%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 99.63%   121.72us 33.60%  runtime.park_m
+         0     0% 99.63%    99.15us 27.37%  runtime.selparkcommit
+         0     0% 99.63%    86.75us 23.95%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 99.63%    86.75us 23.95%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0% 99.63%    81.70us 22.55%  runtime.systemstack
+         0     0% 99.63%    78.48us 21.66%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 99.63%    78.48us 21.66%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 99.63%    78.48us 21.66%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0% 99.63%    78.48us 21.66%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*DB).allocate
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*DB).mmap
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*DB).munmap
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*Tx).allocate
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.(*Tx).commitFreelist
+         0     0% 99.63%    78.48us 21.66%  go.etcd.io/bbolt.munmap
+         0     0% 99.63%    78.48us 21.66%  golang.org/x/sys/unix.(*mmapper).Munmap
+         0     0% 99.63%    78.48us 21.66%  golang.org/x/sys/unix.Munmap (inline)
+         0     0% 99.63%    53.83us 14.86%  runtime.gcBgMarkWorker
+         0     0% 99.63%    53.83us 14.86%  runtime.gcMarkDone
+         0     0% 99.63%    50.79us 14.02%  runtime.forEachP (inline)
+         0     0% 99.63%    50.79us 14.02%  runtime.forEachPInternal
+         0     0% 99.63%    47.69us 13.16%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 99.63%    47.69us 13.16%  github.com/hashicorp/raft.(*Raft).pipelineSend
+         0     0% 99.63%    47.69us 13.16%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 99.63%    47.69us 13.16%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 99.63%    46.71us 12.89%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).GetLog
+         0     0% 99.63%    46.71us 12.89%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+         0     0% 99.63%    46.71us 12.89%  go.etcd.io/bbolt.(*DB).Begin
+         0     0% 99.63%    46.71us 12.89%  go.etcd.io/bbolt.(*DB).beginTx
+         0     0% 99.63%    40.14us 11.08%  runtime.gcMarkTermination
+         0     0% 99.63%    36.92us 10.19%  runtime.schedule
+         0     0% 99.63%    33.71us  9.30%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 99.63%    30.82us  8.51%  runtime.findRunnable
+         0     0% 99.63%    25.94us  7.16%  github.com/hashicorp/raft.(*Raft).setPreviousLog
+         0     0% 99.63%    24.57us  6.78%  runtime.(*traceAdvancerState).start.func1

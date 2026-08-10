@@ -1,0 +1,24 @@
+File: treedb_vector_partition_bench
+Type: delay
+Showing nodes accounting for 148.82s, 98.83% of 150.58s total
+Dropped 287 nodes (cum <= 0.75s)
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     85.98s 57.10%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0%     0%     85.98s 57.10%  github.com/hashicorp/raft.(*Raft).run
+         0     0%     0%     85.98s 57.10%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0%     0%     85.98s 57.10%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0%     0%     85.48s 56.76%  go.etcd.io/bbolt.fdatasync
+    85.48s 56.76% 56.76%     85.48s 56.76%  syscall.Fdatasync
+         0     0% 56.76%     63.35s 42.07%  runtime/pprof.profileWriter
+    63.35s 42.07% 98.83%     63.35s 42.07%  runtime.(*profBuf).read
+         0     0% 98.83%     63.35s 42.07%  runtime/pprof.readProfile
+         0     0% 98.83%     60.32s 40.06%  github.com/hashicorp/raft.(*Raft).appendEntries
+         0     0% 98.83%     60.32s 40.06%  github.com/hashicorp/raft.(*Raft).processRPC
+         0     0% 98.83%     60.32s 40.06%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0% 98.83%     43.64s 28.98%  go.etcd.io/bbolt.(*Tx).write
+         0     0% 98.83%     42.24s 28.05%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 98.83%     25.66s 17.04%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 98.83%     25.66s 17.04%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 98.83%     25.66s 17.04%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 98.83%      0.93s  0.62%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 98.83%      0.93s  0.62%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn

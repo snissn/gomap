@@ -48,9 +48,18 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	if term == 0 || index == 0 || !bytes.Equal(state.command, []byte("generation-1")) || state.index != index {
 		t.Fatalf("term/index/state=%d/%d/%q/%d", term, index, state.command, state.index)
 	}
-	linearizableIndex, err := p.LinearizableCatalogMetaAppliedIndexV1(ctx)
+	linearizableIndex, err := p.LinearizableCatalogMetaAppliedIndexV1(WithCatalogMetaReadSourceV1(ctx, CatalogMetaReadSourceOperationsHealthV1))
 	if err != nil || linearizableIndex != index {
 		t.Fatalf("linearizable applied index=%d err=%v want %d", linearizableIndex, err, index)
+	}
+	for _, source := range []CatalogMetaReadSourceV1{CatalogMetaReadSourceCoordinatorLifecycleV1, CatalogMetaReadSourceShardLifecycleV1, CatalogMetaReadSourceUnknownV1} {
+		if got, err := p.LinearizableCatalogMetaAppliedIndexV1(WithCatalogMetaReadSourceV1(ctx, source)); err != nil || got != index {
+			t.Fatalf("attributed linearizable applied index=%d err=%v want %d", got, err, index)
+		}
+	}
+	stats := p.CatalogMetaLinearizableReadStatsV1()
+	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 4 || stats.Total.TotalNanos == 0 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
+		t.Fatalf("catalog read stats=%+v", stats)
 	}
 	if err := p.SnapshotCatalogMetaV1(ctx); err != nil {
 		t.Fatal(err)

@@ -97,17 +97,23 @@ func TestVectorPartitionShardEndpointProbeBindsLiveInstanceV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
+	reads := uint64(1)
 	go func() {
 		conn, acceptErr := listener.Accept()
 		if acceptErr == nil {
-			(VectorPartitionShardSearchTCPServerV1{EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-a", InstanceIdentity: "config-sha"}}).ServeConn(context.Background(), conn)
+			(VectorPartitionShardSearchTCPServerV1{
+				EndpointIdentity: VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-a", InstanceIdentity: "config-sha"},
+				EndpointIdentityProvider: func() VectorPartitionShardEndpointIdentityV1 {
+					return VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-a", InstanceIdentity: "config-sha", CatalogMetaReadStats: VectorPartitionCatalogMetaLinearizableReadStatsV1{Total: VectorPartitionCatalogMetaLinearizableReadStageStatsV1{Reads: reads}}}
+				},
+			}).ServeConn(context.Background(), conn)
 		}
 	}()
 	identity, err := ProbeVectorPartitionShardEndpointV1(t.Context(), listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.GroupID != "group-a" || identity.InstanceIdentity != "config-sha" {
+	if identity.GroupID != "group-a" || identity.InstanceIdentity != "config-sha" || identity.CatalogMetaReadStats.Total.Reads != 1 {
 		t.Fatalf("endpoint identity = %+v", identity)
 	}
 }

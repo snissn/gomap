@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:06:07 HST
+Showing nodes accounting for 4015.39us, 95.15% of 4219.98us total
+Dropped 82 nodes (cum <= 21.10us)
+Showing top 40 nodes out of 124
+      flat  flat%   sum%        cum   cum%
+ 4015.39us 95.15% 95.15%  4015.39us 95.15%  runtime.unlock (partial-inline)
+         0     0% 95.15%  3425.59us 81.18%  runtime.systemstack
+         0     0% 95.15%  3192.75us 75.66%  runtime.gcBgMarkWorker
+         0     0% 95.15%  2658.30us 62.99%  runtime.gcMarkDone
+         0     0% 95.15%  2656.25us 62.94%  runtime.forEachP (inline)
+         0     0% 95.15%  2656.25us 62.94%  runtime.forEachPInternal
+         0     0% 95.15%  2618.80us 62.06%  runtime.gcMarkTermination
+         0     0% 95.15%  2616.75us 62.01%  runtime.gcMarkTermination.forEachP.func7
+         0     0% 95.15%   667.91us 15.83%  runtime.(*mheap).allocSpan
+         0     0% 95.15%   545.75us 12.93%  runtime.mcall
+         0     0% 95.15%   534.45us 12.66%  runtime.gcBgMarkWorker.func2
+         0     0% 95.15%   534.45us 12.66%  runtime.gcDrain
+         0     0% 95.15%   510.39us 12.09%  runtime.(*mheap).allocManual
+         0     0% 95.15%   510.39us 12.09%  runtime.getempty
+         0     0% 95.15%   510.39us 12.09%  runtime.getempty.func1
+         0     0% 95.15%   510.39us 12.09%  runtime.markroot
+         0     0% 95.15%   510.39us 12.09%  runtime.markroot.func1
+         0     0% 95.15%   510.39us 12.09%  runtime.scanframeworker
+         0     0% 95.15%   510.39us 12.09%  runtime.scanstack
+         0     0% 95.15%   499.53us 11.84%  runtime.park_m
+         0     0% 95.15%   418.83us  9.93%  runtime.schedule
+         0     0% 95.15%   418.49us  9.92%  runtime.scanblock
+         0     0% 95.15%   410.18us  9.72%  runtime.(*stackScanState).putPtr
+         0     0% 95.15%   373.79us  8.86%  runtime.findRunnable
+         0     0% 95.15%   363.43us  8.61%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 95.15%   171.03us  4.05%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 95.15%   168.89us  4.00%  runtime.mallocgc
+         0     0% 95.15%   163.41us  3.87%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 95.15%   163.41us  3.87%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 95.15%   163.41us  3.87%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 95.15%   158.27us  3.75%  runtime.(*mcache).allocLarge
+         0     0% 95.15%   158.27us  3.75%  runtime.(*mheap).alloc
+         0     0% 95.15%   158.27us  3.75%  runtime.(*mheap).alloc.func1
+         0     0% 95.15%   158.27us  3.75%  runtime.mallocgcLarge
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleAuthorityWithContextV1
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func2
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierV1 (inline)
+         0     0% 95.15%   136.95us  3.25%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierWithContextV1

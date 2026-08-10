@@ -9,6 +9,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,17 +34,44 @@ type vectorPartitionSystemBenchMetricsV1 struct {
 }
 
 type vectorPartitionSystemBenchCellV1 struct {
-	Status       string                              `json:"status"`
-	Error        string                              `json:"error,omitempty"`
-	Budget       map[string]int                      `json:"budget"`
-	Concurrency  int                                 `json:"concurrency"`
-	Generation   public.GenerationIDV1               `json:"generation"`
-	Metrics      vectorPartitionSystemBenchMetricsV1 `json:"metrics"`
-	Counters     map[string]uint64                   `json:"counters"`
-	Timings      map[string]uint64                   `json:"timings"`
-	ElapsedNanos uint64                              `json:"elapsed_nanos"`
-	TotalNanos   []uint64                            `json:"total_nanos"`
+	Status       string                               `json:"status"`
+	Error        string                               `json:"error,omitempty"`
+	Budget       map[string]int                       `json:"budget"`
+	Concurrency  int                                  `json:"concurrency"`
+	Generation   public.GenerationIDV1                `json:"generation"`
+	Metrics      vectorPartitionSystemBenchMetricsV1  `json:"metrics"`
+	Counters     map[string]uint64                    `json:"counters"`
+	Timings      map[string]uint64                    `json:"timings"`
+	CatalogReads vectorPartitionSystemCatalogReadsV1  `json:"catalog_reads"`
+	Runtime      []vectorPartitionSystemRuntimeNodeV1 `json:"runtime"`
+	ElapsedNanos uint64                               `json:"elapsed_nanos"`
+	TotalNanos   []uint64                             `json:"total_nanos"`
 }
+
+type vectorPartitionSystemCatalogReadNodeV1 struct {
+	NodeConfigSHA256 string                                                       `json:"node_config_sha256"`
+	Before           nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1 `json:"before"`
+	After            nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1 `json:"after"`
+	Delta            nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1 `json:"delta"`
+}
+
+type vectorPartitionSystemCatalogReadsV1 struct {
+	Nodes []vectorPartitionSystemCatalogReadNodeV1                     `json:"nodes"`
+	Total nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1 `json:"total"`
+}
+
+type vectorPartitionSystemNodeObservationV1 struct {
+	Catalog nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1
+	Runtime nativewire.VectorPartitionProcessRuntimeStatsV1
+}
+
+type vectorPartitionSystemRuntimeNodeV1 struct {
+	NodeConfigSHA256 string                                          `json:"node_config_sha256"`
+	Before           nativewire.VectorPartitionProcessRuntimeStatsV1 `json:"before"`
+	After            nativewire.VectorPartitionProcessRuntimeStatsV1 `json:"after"`
+}
+
+type vectorPartitionSystemCatalogSnapshotV1 func(context.Context) (map[string]vectorPartitionSystemNodeObservationV1, error)
 
 type vectorPartitionSystemBenchResultV1 struct {
 	SchemaVersion          int                                `json:"schema_version"`
@@ -64,7 +93,7 @@ func runVectorPartitionSystemBenchV1(args []string, stdout io.Writer) error {
 	return runVectorPartitionSystemBenchWithCellV1(args, stdout, vectorPartitionSystemBenchCell, nativewire.ProbeVectorPartitionShardEndpointV1)
 }
 
-func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int) (vectorPartitionSystemBenchCellV1, error), probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
+func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, runCell func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error), probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench system-bench", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var endpoint, topologyPath, dataset, truthCache, truthSHA, probeText, concurrencyText, out string
@@ -165,7 +194,10 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 			if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, probe); err != nil {
 				return fmt.Errorf("system-bench live topology before probes=%d concurrency=%d: %w", probes, workers, err)
 			}
-			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup)
+			snapshot := func(ctx context.Context) (map[string]vectorPartitionSystemNodeObservationV1, error) {
+				return vectorPartitionSystemCatalogReadSnapshotV1(ctx, topology, probe)
+			}
+			cell, runErr := runCell(ctx, endpoint, publicNodeConfigSHA, queries, truth, topK, probes, efSearch, workers, warmup, snapshot)
 			if runErr == nil {
 				if err := validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx, topology, probe); err != nil {
 					runErr = fmt.Errorf("live topology after cell: %w", err)
@@ -201,34 +233,49 @@ func runVectorPartitionSystemBenchWithCellV1(args []string, stdout io.Writer, ru
 }
 
 func validateVectorPartitionSystemLiveEndpointsWithProbeV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1, probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) error {
+	_, err := vectorPartitionSystemCatalogReadSnapshotV1(ctx, topology, probe)
+	return err
+}
+
+func vectorPartitionSystemCatalogReadSnapshotV1(ctx context.Context, topology vectorPartitionSystemTopologyEvidenceV1, probe func(context.Context, string) (nativewire.VectorPartitionShardEndpointIdentityV1, error)) (map[string]vectorPartitionSystemNodeObservationV1, error) {
 	ownedGroups := make(map[string]bool, len(topology.Endpoints))
 	for _, node := range topology.Nodes {
 		for _, group := range node.LocalGroups {
 			endpoint, ok := topology.Endpoints[group.GroupID]
 			if !ok || ownedGroups[group.GroupID] || !stringsHostPortEquivalentV1(endpoint, group.Listen) {
-				return errors.New("system-bench checked topology group ownership or listener binding is invalid")
+				return nil, errors.New("system-bench checked topology group ownership or listener binding is invalid")
 			}
 			ownedGroups[group.GroupID] = true
 		}
 	}
 	if len(ownedGroups) != len(topology.Endpoints) {
-		return errors.New("system-bench checked topology does not own every endpoint")
+		return nil, errors.New("system-bench checked topology does not own every endpoint")
 	}
+	snapshot := make(map[string]vectorPartitionSystemNodeObservationV1, len(topology.Nodes))
 	for _, node := range topology.Nodes {
 		for _, group := range node.LocalGroups {
 			identity, err := probe(ctx, group.Listen)
 			if err != nil {
-				return fmt.Errorf("node %q group %q: %w", node.NodeID, group.GroupID, err)
+				return nil, fmt.Errorf("node %q group %q: %w", node.NodeID, group.GroupID, err)
 			}
 			if identity.GroupID != group.GroupID || identity.InstanceIdentity != node.NodeConfigSHA256 {
-				return fmt.Errorf("node %q group %q live endpoint identity does not match checked topology", node.NodeID, group.GroupID)
+				return nil, fmt.Errorf("node %q group %q live endpoint identity does not match checked topology", node.NodeID, group.GroupID)
+			}
+			if retained, ok := snapshot[identity.InstanceIdentity]; ok && !reflect.DeepEqual(retained.Catalog, identity.CatalogMetaReadStats) {
+				return nil, fmt.Errorf("node %q publishes inconsistent catalog read statistics", node.NodeID)
+			}
+			if _, ok := snapshot[identity.InstanceIdentity]; !ok {
+				snapshot[identity.InstanceIdentity] = vectorPartitionSystemNodeObservationV1{Catalog: identity.CatalogMetaReadStats, Runtime: identity.ProcessRuntimeStats}
 			}
 		}
 	}
-	return nil
+	if len(snapshot) != len(topology.Nodes) {
+		return nil, errors.New("system-bench catalog read snapshot does not cover every node")
+	}
+	return snapshot, nil
 }
 
-func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int) (vectorPartitionSystemBenchCellV1, error) {
+func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfigSHA string, queries [][]float32, truth [][]m8CanonicalResultV1, topK, probes, efSearch, workers, warmup int, snapshot vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
 	cell := vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": probes}, Concurrency: workers, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: len(queries)}}
 	clients := make([]*vectorPartitionOperationsTCPClientV1, workers)
 	defer func() {
@@ -270,13 +317,17 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	}); err != nil {
 		return cell, fmt.Errorf("warmup: %w", err)
 	}
+	proofsBefore, err := snapshot(ctx)
+	if err != nil {
+		return cell, fmt.Errorf("catalog read snapshot before measurement: %w", err)
+	}
 	outcomes := make([]*public.SearchResponseV1, len(queries))
 	durations := make([]uint64, len(queries))
+	transport := make([]vectorPartitionSystemFrameTimingV1, len(queries))
 	started := time.Now()
 	err = vectorPartitionSystemRunQueriesV1(ctx, clients, len(queries), func(index int) error {
-		queryStarted := time.Now()
-		wire, callErr := clients[index%workers].call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: request(queries[index])})
-		durations[index] = uint64(time.Since(queryStarted))
+		wire, callTiming, callErr := clients[index%workers].callWithTiming(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: request(queries[index])})
+		durations[index], transport[index] = callTiming.TotalNanos, callTiming
 		if callErr != nil {
 			return callErr
 		}
@@ -287,9 +338,13 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 	if err != nil {
 		return cell, err
 	}
+	proofsAfter, err := snapshot(ctx)
+	if err != nil {
+		return cell, fmt.Errorf("catalog read snapshot after measurement: %w", err)
+	}
 	var recall float64
-	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0}
-	timings := map[string]uint64{"router_open": 0, "router_search": 0, "placement": 0, "queue": 0, "rpc": 0, "network": 0, "read_index_apply": 0, "generation_open": 0, "shard_search": 0, "response": 0, "dedupe": 0, "merge": 0, "total": 0}
+	counters := map[string]uint64{"selected_partitions": 0, "selected_groups": 0, "requests": 0, "rpcs": 0, "retries": 0, "redirects": 0, "candidates": 0, "edges": 0, "query_bytes": 0, "request_bytes": 0, "candidate_bytes": 0, "response_bytes": 0, "public_request_frame_bytes": 0, "public_response_frame_bytes": 0}
+	timings := map[string]uint64{"admission": 0, "operations_health": 0, "service_adapter": 0, "public_adapter": 0, "router_open": 0, "router_search": 0, "placement": 0, "coordinator_lifecycle": 0, "dispatch": 0, "queue": 0, "rpc": 0, "network": 0, "read_index_apply": 0, "generation_open": 0, "shard_search": 0, "response": 0, "dedupe": 0, "merge": 0, "coordinator_total": 0, "total": 0, "client_encode": 0, "client_write": 0, "client_response_read": 0, "client_decode": 0, "client_total": 0}
 	for index, outcome := range outcomes {
 		if outcome == nil {
 			return cell, fmt.Errorf("query %d returned no search response", index)
@@ -312,18 +367,175 @@ func vectorPartitionSystemBenchCell(ctx context.Context, endpoint, wantNodeConfi
 			}
 			counters[key] += value
 		}
-		for key, value := range map[string]time.Duration{"router_open": outcome.Timing.RouterOpen, "router_search": outcome.Timing.RouterSearch, "placement": outcome.Timing.Placement, "queue": outcome.Timing.Queue, "rpc": outcome.Timing.RPC, "network": outcome.Timing.Network, "read_index_apply": outcome.Timing.ReadIndexApply, "generation_open": outcome.Timing.GenerationOpen, "shard_search": outcome.Timing.ShardSearch, "response": outcome.Timing.Response, "dedupe": outcome.Timing.Dedupe, "merge": outcome.Timing.Merge, "total": outcome.Timing.Total} {
+		for key, value := range map[string]time.Duration{"admission": outcome.Timing.Admission, "operations_health": outcome.Timing.OperationsHealth, "service_adapter": outcome.Timing.ServiceAdapter, "public_adapter": outcome.Timing.PublicAdapter, "router_open": outcome.Timing.RouterOpen, "router_search": outcome.Timing.RouterSearch, "placement": outcome.Timing.Placement, "coordinator_lifecycle": outcome.Timing.CoordinatorLifecycle, "dispatch": outcome.Timing.Dispatch, "queue": outcome.Timing.Queue, "rpc": outcome.Timing.RPC, "network": outcome.Timing.Network, "read_index_apply": outcome.Timing.ReadIndexApply, "generation_open": outcome.Timing.GenerationOpen, "shard_search": outcome.Timing.ShardSearch, "response": outcome.Timing.Response, "dedupe": outcome.Timing.Dedupe, "merge": outcome.Timing.Merge, "coordinator_total": outcome.Timing.CoordinatorTotal, "total": outcome.Timing.Total} {
 			if value < 0 || math.MaxUint64-timings[key] < uint64(value) {
 				return cell, errors.New("system-bench timing overflow")
 			}
 			timings[key] += uint64(value)
 		}
+		for key, value := range map[string]uint64{"public_request_frame_bytes": transport[index].RequestBytes, "public_response_frame_bytes": transport[index].ResponseBytes} {
+			if math.MaxUint64-counters[key] < value {
+				return cell, errors.New("system-bench public transport byte overflow")
+			}
+			counters[key] += value
+		}
+		for key, value := range map[string]uint64{"client_encode": transport[index].EncodeNanos, "client_write": transport[index].WriteNanos, "client_response_read": transport[index].ReadNanos, "client_decode": transport[index].DecodeNanos, "client_total": transport[index].TotalNanos} {
+			if math.MaxUint64-timings[key] < value {
+				return cell, errors.New("system-bench public transport timing overflow")
+			}
+			timings[key] += value
+		}
 	}
 	cell.Metrics.CompletedQueries, cell.Metrics.ResultCount = len(queries), len(queries)*topK
 	cell.Metrics.RecallAt10, cell.Metrics.QPS = recall/float64(len(queries)), float64(len(queries))/elapsed.Seconds()
 	cell.Metrics.P50Nanos, cell.Metrics.P95Nanos, cell.Metrics.P99Nanos = m8PercentileV1(durations, 50), m8PercentileV1(durations, 95), m8PercentileV1(durations, 99)
-	cell.Counters, cell.Timings, cell.ElapsedNanos, cell.TotalNanos = counters, timings, uint64(elapsed), durations
+	catalogReads, runtimeStats, err := vectorPartitionSystemCatalogReadDeltaV1(proofsBefore, proofsAfter, uint64(len(queries)), counters["selected_groups"])
+	if err != nil {
+		return cell, err
+	}
+	cell.Counters, cell.Timings, cell.CatalogReads, cell.Runtime, cell.ElapsedNanos, cell.TotalNanos = counters, timings, catalogReads, runtimeStats, uint64(elapsed), durations
 	return cell, nil
+}
+
+func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPartitionSystemNodeObservationV1, queries, selectedGroups uint64) (vectorPartitionSystemCatalogReadsV1, []vectorPartitionSystemRuntimeNodeV1, error) {
+	var result vectorPartitionSystemCatalogReadsV1
+	if len(before) == 0 || len(before) != len(after) {
+		return result, nil, errors.New("system-bench catalog read snapshots do not cover the same nodes")
+	}
+	identities := make([]string, 0, len(before))
+	for identity := range before {
+		if _, ok := after[identity]; !ok {
+			return result, nil, errors.New("system-bench catalog read snapshot changed node identity")
+		}
+		identities = append(identities, identity)
+	}
+	sort.Strings(identities)
+	runtimeStats := make([]vectorPartitionSystemRuntimeNodeV1, 0, len(identities))
+	for _, identity := range identities {
+		beforeNode, afterNode := before[identity], after[identity]
+		delta, ok := vectorPartitionSystemCatalogReadStatsSubtractV1(afterNode.Catalog, beforeNode.Catalog)
+		if !ok || delta.Total.Reads > 0 && (afterNode.Catalog.LastTerm == 0 || afterNode.Catalog.LastCatalogApplied == 0 || afterNode.Catalog.LastRaftApplied == 0 || afterNode.Catalog.LastRaftLog == 0 || afterNode.Catalog.LastRaftLog < beforeNode.Catalog.LastRaftLog || afterNode.Catalog.LastRaftLog-beforeNode.Catalog.LastRaftLog < delta.Total.LogBarriers) {
+			return result, nil, errors.New("system-bench catalog read statistics are non-monotonic or lack proof identity")
+		}
+		if !vectorPartitionSystemCatalogReadStatsAddV1(&result.Total, delta) {
+			return result, nil, errors.New("system-bench catalog read statistics overflow")
+		}
+		if !vectorPartitionSystemRuntimeMonotonicV1(beforeNode.Runtime, afterNode.Runtime) {
+			return result, nil, errors.New("system-bench process runtime statistics are non-monotonic")
+		}
+		result.Nodes = append(result.Nodes, vectorPartitionSystemCatalogReadNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Catalog, After: afterNode.Catalog, Delta: delta})
+		runtimeStats = append(runtimeStats, vectorPartitionSystemRuntimeNodeV1{NodeConfigSHA256: identity, Before: beforeNode.Runtime, After: afterNode.Runtime})
+	}
+	wantReads, ok := vectorPartitionSystemAddUint64V1(queries, queries)
+	if ok {
+		wantReads, ok = vectorPartitionSystemAddUint64V1(wantReads, selectedGroups)
+	}
+	if !ok || result.Total.Total.Reads != wantReads || result.Total.OperationsHealth.Reads != queries || result.Total.CoordinatorLifecycle.Reads != queries || result.Total.ShardLifecycle.Reads != selectedGroups || result.Total.Unknown.Reads != 0 {
+		return result, nil, errors.New("system-bench catalog proof counts do not match measured search work")
+	}
+	sources := []nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{result.Total.OperationsHealth, result.Total.CoordinatorLifecycle, result.Total.ShardLifecycle, result.Total.Unknown}
+	var summed nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1
+	for _, source := range sources {
+		exclusive, ok := vectorPartitionSystemAddUint64V1(source.AdmissionNanos, source.VerifyLeaderNanos)
+		if ok {
+			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.BarrierNanos)
+		}
+		if ok {
+			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.AppliedReadNanos)
+		}
+		if !ok || source.Successes != source.Reads || source.Failures != 0 || source.VerifyLeaderCalls != source.Reads || source.LogBarriers != source.Reads || source.TotalNanos < exclusive || !vectorPartitionSystemCatalogReadStageAddV1(&summed, source) {
+			return result, nil, errors.New("system-bench catalog read stage evidence is malformed")
+		}
+	}
+	if !reflect.DeepEqual(summed, result.Total.Total) {
+		return result, nil, errors.New("system-bench catalog read totals do not match attributed sources")
+	}
+	return result, runtimeStats, nil
+}
+
+func vectorPartitionSystemRuntimeMonotonicV1(before, after nativewire.VectorPartitionProcessRuntimeStatsV1) bool {
+	if before.SampleUnixNano == 0 || after.SampleUnixNano <= before.SampleUnixNano || after.Goroutines == 0 {
+		return false
+	}
+	beforeValues := [...]uint64{before.CPUTimeNanos, before.VoluntaryContextSwitches, before.NonvoluntaryContextSwitches, before.PeakRSSBytes, before.TotalAllocBytes, before.Mallocs, before.Frees, before.NumGC, before.PauseTotalNanos}
+	afterValues := [...]uint64{after.CPUTimeNanos, after.VoluntaryContextSwitches, after.NonvoluntaryContextSwitches, after.PeakRSSBytes, after.TotalAllocBytes, after.Mallocs, after.Frees, after.NumGC, after.PauseTotalNanos}
+	for i := range beforeValues {
+		if afterValues[i] < beforeValues[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func vectorPartitionSystemCatalogReadStatsSubtractV1(after, before nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1) (nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1, bool) {
+	var out nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1
+	var ok bool
+	if out.Total, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.Total, before.Total); !ok {
+		return out, false
+	}
+	if out.OperationsHealth, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.OperationsHealth, before.OperationsHealth); !ok {
+		return out, false
+	}
+	if out.CoordinatorLifecycle, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.CoordinatorLifecycle, before.CoordinatorLifecycle); !ok {
+		return out, false
+	}
+	if out.ShardLifecycle, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.ShardLifecycle, before.ShardLifecycle); !ok {
+		return out, false
+	}
+	if out.Unknown, ok = vectorPartitionSystemCatalogReadStageSubtractV1(after.Unknown, before.Unknown); !ok {
+		return out, false
+	}
+	out.LastTerm, out.LastCatalogApplied, out.LastRaftApplied, out.LastRaftLog = after.LastTerm, after.LastCatalogApplied, after.LastRaftApplied, after.LastRaftLog
+	return out, true
+}
+
+func vectorPartitionSystemCatalogReadStageSubtractV1(after, before nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1) (nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1, bool) {
+	valuesAfter := [...]uint64{after.Reads, after.Successes, after.Failures, after.VerifyLeaderCalls, after.LogBarriers, after.TotalNanos, after.AdmissionNanos, after.VerifyLeaderNanos, after.BarrierNanos, after.AppliedReadNanos}
+	valuesBefore := [...]uint64{before.Reads, before.Successes, before.Failures, before.VerifyLeaderCalls, before.LogBarriers, before.TotalNanos, before.AdmissionNanos, before.VerifyLeaderNanos, before.BarrierNanos, before.AppliedReadNanos}
+	var delta [len(valuesAfter)]uint64
+	for i := range valuesAfter {
+		if valuesAfter[i] < valuesBefore[i] {
+			return nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{}, false
+		}
+		delta[i] = valuesAfter[i] - valuesBefore[i]
+	}
+	return nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{
+		Reads: delta[0], Successes: delta[1], Failures: delta[2], VerifyLeaderCalls: delta[3], LogBarriers: delta[4],
+		TotalNanos: delta[5], AdmissionNanos: delta[6], VerifyLeaderNanos: delta[7], BarrierNanos: delta[8], AppliedReadNanos: delta[9],
+	}, true
+}
+
+func vectorPartitionSystemCatalogReadStatsAddV1(total *nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1, value nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1) bool {
+	if total == nil || !vectorPartitionSystemCatalogReadStageAddV1(&total.Total, value.Total) || !vectorPartitionSystemCatalogReadStageAddV1(&total.OperationsHealth, value.OperationsHealth) || !vectorPartitionSystemCatalogReadStageAddV1(&total.CoordinatorLifecycle, value.CoordinatorLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.ShardLifecycle, value.ShardLifecycle) || !vectorPartitionSystemCatalogReadStageAddV1(&total.Unknown, value.Unknown) {
+		return false
+	}
+	total.LastTerm = max(total.LastTerm, value.LastTerm)
+	total.LastCatalogApplied = max(total.LastCatalogApplied, value.LastCatalogApplied)
+	total.LastRaftApplied = max(total.LastRaftApplied, value.LastRaftApplied)
+	total.LastRaftLog = max(total.LastRaftLog, value.LastRaftLog)
+	return true
+}
+
+func vectorPartitionSystemCatalogReadStageAddV1(total *nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1, value nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1) bool {
+	if total == nil {
+		return false
+	}
+	left := []*uint64{&total.Reads, &total.Successes, &total.Failures, &total.VerifyLeaderCalls, &total.LogBarriers, &total.TotalNanos, &total.AdmissionNanos, &total.VerifyLeaderNanos, &total.BarrierNanos, &total.AppliedReadNanos}
+	right := [...]uint64{value.Reads, value.Successes, value.Failures, value.VerifyLeaderCalls, value.LogBarriers, value.TotalNanos, value.AdmissionNanos, value.VerifyLeaderNanos, value.BarrierNanos, value.AppliedReadNanos}
+	for i := range left {
+		if math.MaxUint64-*left[i] < right[i] {
+			return false
+		}
+		*left[i] += right[i]
+	}
+	return true
+}
+
+func vectorPartitionSystemAddUint64V1(a, b uint64) (uint64, bool) {
+	if math.MaxUint64-a < b {
+		return 0, false
+	}
+	return a + b, true
 }
 
 func vectorPartitionSystemRunQueriesV1(ctx context.Context, clients []*vectorPartitionOperationsTCPClientV1, count int, run func(int) error) error {
