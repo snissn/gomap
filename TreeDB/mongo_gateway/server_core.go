@@ -103,6 +103,10 @@ type Server struct {
 	// has been established for this connection. Authorization remains #4059.
 	AuthenticationEnabled bool
 	AuthCatalog           *AuthCatalog
+	// diagnosticCommandWALEnabled is set by the standalone owner. It is a
+	// read-only inventory seam so diagnostics never infer persistence state by
+	// inspecting WAL files.
+	diagnosticCommandWALEnabled func() bool
 
 	nextResponseID            atomic.Int32
 	nextConnectionID          atomic.Int64
@@ -152,18 +156,20 @@ type Server struct {
 	// boundary. That exclusion prevents a concurrent collection mutation from
 	// holding a domain lock while waiting on the command-WAL publish lock that
 	// the journal boundary owns while draining collection barriers.
-	standaloneWriteBoundaryMu  sync.RWMutex
-	standaloneWriteConcernSync func() (bool, error)
-	writeConcernStats          standaloneWriteConcernStats
-	authConnections            sync.Map // map[int64]*authConnectionState
-	nextSASLConversation       atomic.Int32
-	authFailures               atomic.Uint64
-	authorizationAllowed       atomic.Uint64
-	authorizationDenied        atomic.Uint64
-	diagnosticsStartedAt       time.Time
-	diagnosticsMu              sync.Mutex
-	diagnosticsCommands        map[string]mongoCommandDiagnostic
-	diagnosticsNamespaces      map[string]mongoNamespaceDiagnostic
+	standaloneWriteBoundaryMu    sync.RWMutex
+	standaloneWriteConcernSync   func() (bool, error)
+	writeConcernStats            standaloneWriteConcernStats
+	authConnections              sync.Map // map[int64]*authConnectionState
+	nextSASLConversation         atomic.Int32
+	authFailures                 atomic.Uint64
+	authorizationAllowed         atomic.Uint64
+	authorizationDenied          atomic.Uint64
+	diagnosticsStartedAt         time.Time
+	diagnosticsMu                sync.Mutex
+	diagnosticsCommands          map[string]mongoCommandDiagnostic
+	diagnosticsNamespaces        map[string]mongoNamespaceDiagnostic
+	diagnosticsDroppedCommands   int64
+	diagnosticsDroppedNamespaces int64
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool

@@ -701,6 +701,9 @@ func commandAuthorizationTarget(name string, command wire.Document) (authorizati
 	case "hostInfo":
 		target.privilege = authorizationServerAdmin
 		return target, nil
+	case "serverStatus", "top":
+		target.privilege = authorizationServerAdmin
+		return target, nil
 	case "listDatabases":
 		target.privilege = authorizationListDatabases
 		return target, nil
@@ -709,6 +712,16 @@ func commandAuthorizationTarget(name string, command wire.Document) (authorizati
 	case "find", "aggregate", "count", "distinct", "getMore", "killCursors":
 		target.privilege = authorizationRead
 	case "listIndexes":
+		target.privilege = authorizationMetadataRead
+	case "dbStats":
+		target.privilege = authorizationMetadataRead
+		db, err := commandStringBytes(command, "$db")
+		if err != nil {
+			return target, err
+		}
+		target.databaseRaw = db
+		return target, nil
+	case "collStats":
 		target.privilege = authorizationMetadataRead
 	case "insert", "update", "delete", "findAndModify":
 		target.privilege = authorizationWrite

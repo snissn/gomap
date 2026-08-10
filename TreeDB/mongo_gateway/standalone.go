@@ -232,6 +232,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	manager := collections.NewCollectionManager(backend)
 	server := NewServer()
 	server.Collections = manager
+	server.diagnosticCommandWALEnabled = backend.CommandWALEnabled
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
 	server.ClusterSubmitter = normalized.ClusterSubmitter
