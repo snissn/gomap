@@ -3686,8 +3686,9 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 }
 
 // ListCollectionsBounded returns catalog metadata in deterministic order and
-// stops before materializing more than maxCollections live entries when that
-// limit is positive. Callers can use the truncation result to fail closed.
+// stops after inspecting at most maxCollections catalog entries when that limit
+// is positive. Deleted entries consume the same work budget, so callers can
+// fail closed without walking unbounded catalog history.
 func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
 	if m == nil {
 		return nil, false, errCollectionManagerNil
@@ -3715,15 +3716,17 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	defer func() { _ = it.Close() }()
 
 	var out []CollectionMeta
+	inspected := 0
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
+		if maxCollections > 0 && inspected >= maxCollections {
+			return out, true, nil
+		}
+		inspected++
 		if !it.IsDeleted() {
-			if maxCollections > 0 && len(out) >= maxCollections {
-				return out, true, nil
-			}
 			meta, err := decodeCollectionMeta(it.ValueCopy(nil))
 			if err != nil {
 				return nil, false, err
