@@ -285,6 +285,92 @@ func TestValidVectorPartitionLocalGraphL0V1RejectsFutureOffset(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	rows := make([]columnGraphRebuildInputRowV2A, 64)
+	state := uint64(0x4105)
+	for i := range rows {
+		vector := make([]float32, 8)
+		for d := range vector {
+			state += 0x9e3779b97f4a7c15
+			x := state
+			x = (x ^ x>>30) * 0xbf58476d1ce4e5b9
+			x = (x ^ x>>27) * 0x94d049bb133111eb
+			x ^= x >> 31
+			vector[d] = float32(int32(x>>32)) / float32(1<<31)
+		}
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: vector}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.Collection, m.IndexName = "building", col.name, def.Name
+	m.IndexDefinitionDigest, m.Generation, m.PartitionCount = VectorIndexDefinitionDigestV1(def), 93, 1
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	native, nr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nr.Release()
+	overlay, or, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 984, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer or.Release()
+	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	o, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, overlay[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	displaced03 := false
+	for _, edge := range comparison.Rows[0].DisplacedEdges {
+		displaced03 = displaced03 || edge.NeighborOrdinal == 3
+	}
+	if !displaced03 {
+		t.Fatalf("missing displaced native edge 0->3: %+v", comparison.Rows[0])
+	}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1}
+	nativeResults, nativeMetrics, nativeTrace, err := n.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayResults, overlayMetrics, overlayTrace, err := o.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nativeResults) != 1 || nativeResults[0].ID != "v40" || len(overlayResults) != 1 || overlayResults[0].ID != "v0" {
+		t.Fatalf("native=%+v overlay=%+v", nativeResults, overlayResults)
+	}
+	if nativeMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || overlayMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || nativeTrace.VisitedOrdinalsSHA256 == overlayTrace.VisitedOrdinalsSHA256 {
+		t.Fatalf("native metrics/trace=%+v/%+v overlay=%+v/%+v", nativeMetrics, nativeTrace, overlayMetrics, overlayTrace)
+	}
+	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
+		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
+	}
+}
+
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
