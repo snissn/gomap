@@ -124,6 +124,12 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 	for component < len(components) {
 		predicates := predicatesForField(plan.predicates, components[component].Field)
 		eq, eqOK := oneCompoundEqualityPredicate(predicates)
+		// Gateway null equality also matches a missing field. BSON-v2 stores
+		// those as distinct keys, so an exact null prefix would silently omit
+		// missing documents unless it probes both encodings.
+		if eqOK && predicateContainsNull(eq) {
+			return compoundIndexPlan{}, false
+		}
 		if eqOK {
 			// `$in` is a supported query predicate, but a multi-value equality
 			// prefix needs a k-way ordered merge.  Until that bounded merge is
@@ -321,8 +327,10 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 	// Keep direct primary-key lookup as the established winner for supported
 	// `_id` equality/$in shapes. Compound planning must be additive, never a
 	// regression of that bounded path.
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		return nil, compoundIndexPlan{}, false, nil
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			return nil, compoundIndexPlan{}, false, nil
+		}
 	}
 	candidates := compoundIndexPlans(col.MetaView(), plan)
 	if len(candidates) == 0 {
@@ -367,8 +375,10 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 // decoding documents. Cursor execution retains these small primary keys and
 // materializes BSON only as each batch is requested.
 func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan) ([][]byte, compoundIndexPlan, bool, error) {
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		return nil, compoundIndexPlan{}, false, nil
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			return nil, compoundIndexPlan{}, false, nil
+		}
 	}
 	candidates := compoundIndexPlans(col.MetaView(), plan)
 	if len(candidates) == 0 {
@@ -376,6 +386,12 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	}
 	candidate := candidates[0]
 	maxDocuments := s.maxFindScanDocuments()
+	if candidate.residualFilters == 0 && plan.limit > 0 {
+		needed := int(plan.skip + plan.limit)
+		if needed > 0 && needed < maxDocuments {
+			maxDocuments = needed
+		}
+	}
 	if maxDocuments <= 0 {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner requires a positive work cap", errMongoFindScanCapExceeded)
 	}
@@ -403,6 +419,21 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			return nil, candidate, true, err
 		}
 		if truncated {
+			// For one exact ordered probe with no residual filtering, skip+limit
+			// already bounds all IDs execution can observe. The direct primitive
+			// marks the next entry as truncated; that is sufficient, not a scan
+			// cap failure, because later IDs cannot affect this result page.
+			if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 && len(found) == perPrefixLimit {
+				for _, id := range found {
+					if _, duplicate := seenIDs[string(id)]; duplicate {
+						continue
+					}
+					seenIDs[string(id)] = struct{}{}
+					ids = append(ids, id)
+					plan.recordCandidate()
+				}
+				continue
+			}
 			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index candidate scan exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 		}
 		for _, id := range found {

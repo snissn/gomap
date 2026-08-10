@@ -180,10 +180,12 @@ type serverCursor struct {
 	compoundIDs        [][]byte
 	compoundCollection *collections.Collection
 	compoundPlan       *findPlan
-	materializedBytes  int
-	projection         compiledProjection
-	pos                int
-	lastUsed           time.Time
+	// cursorMu guards compoundIDs, compoundPlan, materializedBytes, and pos.
+	// Every getMore reader/writer must hold it while observing cursor progress.
+	materializedBytes int
+	projection        compiledProjection
+	pos               int
+	lastUsed          time.Time
 }
 
 func NewServer() *Server {

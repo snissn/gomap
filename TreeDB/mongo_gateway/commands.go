@@ -4038,7 +4038,8 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 		}
 		retained += len(id)
 	}
-	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, compoundPlan: &plan, projection: plan.projection, lastUsed: time.Now()}
+	retainedPlan := cloneFindPlanForCursor(plan)
+	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, compoundPlan: &retainedPlan, projection: plan.projection, lastUsed: time.Now()}
 	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize, 0)
 	if err != nil {
 		return 0, nil, err

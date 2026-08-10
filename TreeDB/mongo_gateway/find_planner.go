@@ -66,6 +66,32 @@ type findPlan struct {
 	stats      *findExecutionStats
 }
 
+// cloneFindPlanForCursor detaches predicate BSON values from the wire command
+// buffer before a getMore may reuse that buffer on another request.
+func cloneFindPlanForCursor(plan findPlan) findPlan {
+	clonePredicates := func(in []findPredicate) []findPredicate {
+		out := make([]findPredicate, len(in))
+		for i := range in {
+			out[i] = in[i]
+			out[i].values = make([]bson.RawValue, len(in[i].values))
+			for j := range in[i].values {
+				out[i].values[j] = in[i].values[j]
+				out[i].values[j].Value = bytes.Clone(in[i].values[j].Value)
+			}
+		}
+		return out
+	}
+	out := plan
+	out.predicates = clonePredicates(plan.predicates)
+	out.orBranches = make([][]findPredicate, len(plan.orBranches))
+	for i := range plan.orBranches {
+		out.orBranches[i] = clonePredicates(plan.orBranches[i])
+	}
+	out.sort.terms = append([]findSortTerm(nil), plan.sort.terms...)
+	out.hint.components = append([]collections.IndexComponent(nil), plan.hint.components...)
+	return out
+}
+
 type findResultSet struct {
 	docs       []wire.Document
 	projection compiledProjection
