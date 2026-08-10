@@ -2,9 +2,14 @@ package main
 
 import (
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestLocalHNSWAttributionCalibrationV1Build(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "calibration-test", Generator: qualificationEmbeddingGeneratorV1, Arithmetic: fixtureArithmetic, Vectors: 16, Queries: 16, Dimensions: 3, Metric: "cosine", Seed: 4016, Checksum: "test"}
 	vectors := fixtureVectors(fixture)
 	source, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, 4)
