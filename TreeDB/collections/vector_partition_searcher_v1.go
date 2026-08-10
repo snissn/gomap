@@ -79,6 +79,19 @@ type VectorPartitionLocalGraphComparisonV1 struct {
 // CompareVectorPartitionLocalGraphPacksV1 is an offline-only prepared-pack
 // comparison. It never decodes assets or participates in serving.
 func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocalSearcherV1) (VectorPartitionLocalGraphComparisonV1, error) {
+	if native == nil || final == nil {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := native.Acquire(); err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	defer native.Release()
+	if final != native {
+		if err := final.Acquire(); err != nil {
+			return VectorPartitionLocalGraphComparisonV1{}, err
+		}
+		defer final.Release()
+	}
 	nd, err := native.PackDiagnosticsV1()
 	if err != nil {
 		return VectorPartitionLocalGraphComparisonV1{}, err
@@ -87,15 +100,15 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	if err != nil {
 		return VectorPartitionLocalGraphComparisonV1{}, err
 	}
-	if native == nil || final == nil {
-		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
-	}
 	native.mu.Lock()
 	np := native.prepared
 	native.mu.Unlock()
 	final.mu.Lock()
 	fp := final.prepared
 	final.mu.Unlock()
+	if np == nil || fp == nil || np.validateLive() != nil || fp.validateLive() != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
 	if np == nil || fp == nil || np.Header.Rows != fp.Header.Rows || np.Header.Dimensions != fp.Header.Dimensions || np.Header.M != fp.Header.M || np.Header.EfConstruction != fp.Header.EfConstruction || np.Header.EfSearch != fp.Header.EfSearch || np.Header.EntryOrdinal != fp.Header.EntryOrdinal || np.Header.MaxLayer != fp.Header.MaxLayer || np.Header.BaseManifestGeneration != fp.Header.BaseManifestGeneration || np.Header.BaseManifestChecksum != fp.Header.BaseManifestChecksum || np.Header.BaseSchemaHash != fp.Header.BaseSchemaHash || np.Header.MembershipDigest != fp.Header.MembershipDigest || !slices.Equal(np.Levels, fp.Levels) || !slices.Equal(np.NormalizedVectors, fp.NormalizedVectors) || !slices.Equal(np.DocumentIDOffsets, fp.DocumentIDOffsets) || !bytes.Equal(np.DocumentIDBytes, fp.DocumentIDBytes) || !slices.Equal(np.RowRefGenerations, fp.RowRefGenerations) || !slices.Equal(np.RowRefPartIDs, fp.RowRefPartIDs) || !slices.Equal(np.RowRefRowIndexes, fp.RowRefRowIndexes) || !slices.Equal(np.RowRefAppliedLSNs, fp.RowRefAppliedLSNs) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
@@ -110,9 +123,28 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	out := VectorPartitionLocalGraphComparisonV1{Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
 	limit := np.Header.M * 2
 	for i := 0; i < np.Header.Rows; i++ {
+		if np.Header.EntryOrdinal != 0 {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
 		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
+		if len(a.Offsets) != np.Header.Rows+1 || len(b.Offsets) != np.Header.Rows+1 || a.Offsets[i+1] < a.Offsets[i] || b.Offsets[i+1] < b.Offsets[i] || a.Offsets[i+1] > uint64(len(a.Neighbors)) || b.Offsets[i+1] > uint64(len(b.Neighbors)) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
 		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
 		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
+		check := func(edges []uint32) bool {
+			seen := map[uint32]bool{}
+			for _, x := range edges {
+				if int(x) >= np.Header.Rows || int(x) == i || seen[x] {
+					return false
+				}
+				seen[x] = true
+			}
+			return true
+		}
+		if !check(nn) || !check(fn) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
 		tree, treeErr := vectorPartitionLocalNavigationEdgesV1(i, np.Header.Rows, limit)
 		if treeErr != nil {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
