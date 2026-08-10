@@ -871,6 +871,10 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	}
 	col, err := s.openCollectionCached(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
+		if plan.hint.present {
+			doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway find hint does not name an existing index")
+			return findResponsePayload{document: doc}, err
+		}
 		doc, err := marshalCursorResponse(db, collection, bson.A{})
 		return findResponsePayload{document: doc}, err
 	}
@@ -889,14 +893,16 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
-	if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayload(col, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
-		if err != nil {
-			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
-			return findResponsePayload{document: doc}, err
+	if !plan.hint.present {
+		if payload, ok, err := s.findSimpleProjectedPrimaryEqualityPayload(col, ns, plan, int(batchSize), batchSizeSet); ok || err != nil {
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			return payload, nil
 		}
-		return payload, nil
 	}
-	if !plan.projection.present {
+	if !plan.projection.present && !plan.hint.present {
 		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.MetaView(), plan, s.maxFindScanDocuments())
 		if err != nil {
 			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())

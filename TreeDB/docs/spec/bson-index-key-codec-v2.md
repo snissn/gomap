@@ -101,8 +101,18 @@ The direct collection compound-range primitive requires a positive result
 limit. In addition to emitting at most that many document IDs, it examines at
 most `limit * 64` physical entries while merging buffered and persisted overlay
 runs. Tombstones and shadowed duplicate entries count against this bound; when
-either bound is reached the primitive returns `truncated=true`. It is not a
-query-planner capability.
+either bound is reached the primitive returns `truncated=true`.
+
+The standalone Mongo gateway consumes this primitive only for canonical
+top-level conjunctions: an equality (or bounded `$in` fanout) prefix followed
+by at most one range component, with remaining predicates rechecked after
+materialization. It allocates one global result/work budget across all `$in`
+prefixes and rejects on truncation rather than returning a partial result. A
+requested sort is direct only when the remaining index components match its
+declared directions or their complete reverse; document IDs remain the stable
+final tie order. Missing, malformed, incompatible, or unsupported hints reject
+from catalog metadata before any index or document read. Routed reads reject
+rather than falling back locally.
 
 ## Durability and compatibility boundary
 

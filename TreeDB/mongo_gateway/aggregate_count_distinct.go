@@ -259,6 +259,10 @@ func (s *Server) aggregateResponse(ctx context.Context, command wire.Document, c
 		plan = stages[0].plan
 		consumed++
 	}
+	if len(stages) > consumed && stages[consumed].name == "$sort" {
+		plan.sort = stages[consumed].plan.sort
+		consumed++
+	}
 	if len(stages) > consumed && stages[consumed].name == "$skip" && stages[consumed].amount <= math.MaxInt32 {
 		plan.skip = int32(stages[consumed].amount)
 		consumed++
@@ -386,31 +390,7 @@ func parseAggregateStages(pipeline []wire.Document) ([]aggregateStage, error) {
 }
 
 func parseAggregateSort(doc wire.Document) (findSort, error) {
-	elements, err := bson.Raw(doc).Elements()
-	if err != nil {
-		return findSort{}, err
-	}
-	if len(elements) != 1 {
-		return findSort{}, errors.New("Mongo gateway aggregate $sort currently supports one field")
-	}
-	field, err := elements[0].KeyErr()
-	if err != nil {
-		return findSort{}, err
-	}
-	if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
-		return findSort{}, errors.New("Mongo gateway aggregate $sort field must be a supported top-level field")
-	}
-	value := elements[0].Value()
-	if isAscendingIndexKey(value) {
-		return findSort{field: field}, nil
-	}
-	if v, ok := strictBSONInt64(value); ok && v == -1 {
-		return findSort{field: field, desc: true}, nil
-	}
-	if v, ok := value.DoubleOK(); ok && v == -1 {
-		return findSort{field: field, desc: true}, nil
-	}
-	return findSort{}, errors.New("Mongo gateway aggregate $sort direction must be 1 or -1")
+	return parseFindSortDocument(doc)
 }
 
 func aggregateNonnegativeInteger(value bson.RawValue, stage string) (int, error) {

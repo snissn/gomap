@@ -87,6 +87,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "crud.find-by-id-equality", Category: "crud", Feature: "find by _id equality", Status: MongoCapabilitySupported},
 		{ID: "query.indexed-equality-and-range-predicates", Category: "query", Feature: "indexed equality and range predicates", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.in-on-indexed-scalar-fields", Category: "query", Feature: "$in on indexed scalar fields", Status: MongoCapabilitySupportedSubset},
+		{ID: "query.compound-descending-bson-v2-planner", Category: "query", Feature: "bounded BSON v2 compound and descending index planning", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.top-level-or-expressions", Category: "query", Feature: "top-level $or expressions", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.projection-sort-skip-and-limit", Category: "query", Feature: "projection, sort, skip, and limit", Status: MongoCapabilitySupportedSubset},
 		{ID: "cursor.getmore-and-killcursors", Category: "cursor", Feature: "getMore and killCursors", Status: MongoCapabilitySupported},
@@ -100,7 +101,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "metadata.listdatabases", Category: "metadata", Feature: "listDatabases", Status: MongoCapabilitySupportedSubset},
 		{ID: "metadata.create-collection", Category: "metadata", Feature: "create collection", Status: MongoCapabilitySupportedSubset},
 		{ID: "session.logical-session-handshake-and-endsessions", Category: "session", Feature: "logical session handshake and endSessions", Status: MongoCapabilitySupportedSubset},
-		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc; no planner selection)", Status: MongoCapabilitySupportedSubset},
+		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc)", Status: MongoCapabilitySupportedSubset},
 		{ID: "document.native-bson-storage-mode", Category: "document", Feature: "native BSON storage mode", Status: MongoCapabilitySupportedSubset},
 		{ID: "query-gap.dotted-projection", Category: "query gap", Feature: "dotted projection", Status: MongoCapabilityRejected},
 		{ID: "update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify", Category: "update subset", Feature: "natural-order arbitrary-filter update, delete, and findAndModify", Status: MongoCapabilitySupportedSubset},
@@ -157,7 +158,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"read-command.distinct-top-level-field-with-filter",
 				"read-command.explain-bounded-read-plans",
 			},
-			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
+			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, compound_index_scan, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/sort/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
 		},
 		{
 			ID:    "administrative-diagnostics",
@@ -185,10 +186,11 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			ID:    "scalar-indexes",
 			Label: "Scalar indexes",
 			CapabilityIDs: []string{
+				"query.compound-descending-bson-v2-planner",
 				"metadata.createindexes-listindexes-and-dropindexes",
 				"index.bson-ordered-v2-without-treedbvaluetype",
 			},
-			Note: "BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Ordered BSON v2 compound and descending definitions reject multikey metadata before catalog mutation; sparse, partial, TTL, collation, and hidden options also reject before catalog mutation.",
+			Note: "Standalone find/count/distinct and initial aggregate match/sort prefixes can select ordered BSON v2 indexes with one through four ascending or descending components for canonical equality prefixes, bounded $in fanout, and one range suffix. A supported sort must match the remaining index directions or their complete reverse; all other shapes use their existing bounded scan path, while a supplied missing, malformed, incompatible, or unsupported hint rejects before data reads. Every planned scan is capped by MaxFindScanDocuments and direct scalar work is capped at 64 physical entries per allocated result slot; materialized BSON is capped by MaxCursorRetainedBytes. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Ordered BSON v2 compound and descending definitions reject multikey metadata before catalog mutation; sparse, partial, TTL, collation, and hidden options also reject before catalog mutation.",
 		},
 		{
 			ID:            "authentication-authorization",

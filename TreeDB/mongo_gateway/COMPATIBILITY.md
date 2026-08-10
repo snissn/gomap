@@ -58,6 +58,7 @@ an extra probe outside the manifest.
 | crud | find by _id equality | supported | `crud.find-by-id-equality` |
 | query | indexed equality and range predicates | supported subset | `query.indexed-equality-and-range-predicates` |
 | query | $in on indexed scalar fields | supported subset | `query.in-on-indexed-scalar-fields` |
+| query | bounded BSON v2 compound and descending index planning | supported subset | `query.compound-descending-bson-v2-planner` |
 | query | top-level $or expressions | supported subset | `query.top-level-or-expressions` |
 | query | projection, sort, skip, and limit | supported subset | `query.projection-sort-skip-and-limit` |
 | cursor | getMore and killCursors | supported | `cursor.getmore-and-killcursors` |
@@ -71,7 +72,7 @@ an extra probe outside the manifest.
 | metadata | listDatabases | supported subset | `metadata.listdatabases` |
 | metadata | create collection | supported subset | `metadata.create-collection` |
 | session | logical session handshake and endSessions | supported subset | `session.logical-session-handshake-and-endsessions` |
-| metadata | createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc; no planner selection) | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
+| metadata | createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc) | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
 | document | native BSON storage mode | supported subset | `document.native-bson-storage-mode` |
 | query gap | dotted projection | rejected | `query-gap.dotted-projection` |
 | update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset | `update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify` |

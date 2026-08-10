@@ -18,6 +18,7 @@ import (
 type findExecutionStats struct {
 	candidatesExamined     int64
 	candidatesMaterialized int64
+	materializedBytes      int64
 	documentsReturned      int64
 	stage                  string
 	indexName              string
@@ -46,6 +47,12 @@ func (p findPlan) recordCandidates(n int) {
 func (p findPlan) recordMaterialized() {
 	if p.stats != nil {
 		p.stats.candidatesMaterialized++
+	}
+}
+
+func (p findPlan) recordMaterializedBytes(n int) {
+	if p.stats != nil && n > 0 {
+		p.stats.materializedBytes += int64(n)
 	}
 }
 
@@ -153,7 +160,7 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain is disabled in cluster mode until routed reads are supported")
 	}
 	if err := validateMongoReadCommandFields(command, "find", map[string]struct{}{
-		"find": {}, "filter": {}, "projection": {}, "sort": {}, "skip": {}, "limit": {}, "batchSize": {}, "singleBatch": {}, "readConcern": {},
+		"find": {}, "filter": {}, "projection": {}, "sort": {}, "skip": {}, "limit": {}, "batchSize": {}, "singleBatch": {}, "hint": {}, "readConcern": {},
 	}); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -315,6 +322,10 @@ func (s *Server) explainAggregateResponse(ctx context.Context, command wire.Docu
 		plan = stages[0].plan
 		consumed++
 	}
+	if len(stages) > consumed && stages[consumed].name == "$sort" {
+		plan.sort = stages[consumed].plan.sort
+		consumed++
+	}
 	if len(stages) > consumed && stages[consumed].name == "$skip" && stages[consumed].amount <= math.MaxInt32 {
 		plan.skip = int32(stages[consumed].amount)
 		consumed++
@@ -366,24 +377,41 @@ func (s *Server) explainCollectionRead(ctx context.Context, db, collection strin
 }
 
 func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, db, collection string, plan findPlan, verbosity string, execute func(findPlan) (int64, error)) (wire.Document, error) {
+	if missing && plan.hint.present {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway find hint does not name an existing index")
+	}
+	if !missing {
+		if err := validateCompoundHint(col.MetaView(), plan); err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+	}
 	selection := findPlannerSelection{stage: "bounded_scan"}
 	if !missing {
 		selection = explainPlannerSelection(col, plan)
 	}
+	sortSatisfied := selection.sortSatisfied
 	winning := bson.D{{Key: "stage", Value: selection.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, selection)}}
 	if selection.indexName != "" {
 		winning = append(winning, bson.E{Key: "indexName", Value: selection.indexName})
 	}
-	if plan.sort.field != "" {
-		winning = append(winning, bson.E{Key: "inMemorySort", Value: true})
+	if selection.stage == "compound_index_scan" {
+		winning = append(winning,
+			bson.E{Key: "equalityPrefix", Value: int32(selection.equalityPrefix)},
+			bson.E{Key: "range", Value: selection.hasRange},
+			bson.E{Key: "reverse", Value: selection.reverse},
+		)
 	}
+	if plan.sort.field != "" {
+		winning = append(winning, bson.E{Key: "inMemorySort", Value: !sortSatisfied})
+	}
+	sortDescription := explainSort(plan, sortSatisfied)
 	planner := bson.D{
 		{Key: "namespace", Value: db + "." + collection},
 		{Key: "winningPlan", Value: winning},
 		{Key: "usableIndexes", Value: explainUsableIndexes(col, plan)},
 		{Key: "rejectedIndexes", Value: explainRejectedIndexes(col, plan)},
 		{Key: "scanBounds", Value: explainScanBounds(plan)},
-		{Key: "sort", Value: explainSort(plan)},
+		{Key: "sort", Value: sortDescription},
 		{Key: "maxScanDocuments", Value: int64(s.maxFindScanDocuments())},
 		{Key: "cursorWork", Value: "none"},
 	}
@@ -406,6 +434,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 						{Key: "truncated", Value: reason == "scan_cap_exceeded"},
 						{Key: "rejectionReason", Value: reason},
 						{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
+						{Key: "candidateMaterializedBytes", Value: stats.materializedBytes},
 						{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 						{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 						{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
@@ -431,7 +460,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 				winning = append(winning, bson.E{Key: "indexName", Value: stats.indexName})
 			}
 			if plan.sort.field != "" {
-				winning = append(winning, bson.E{Key: "inMemorySort", Value: true})
+				winning = append(winning, bson.E{Key: "inMemorySort", Value: stats.stage != "compound_index_scan"})
 			}
 			planner[1].Value = winning
 		}
@@ -445,6 +474,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			// gateway-owned counter, not MongoDB's winner-plan-only metric.
 			{Key: "candidateDocumentsExamined", Value: stats.candidatesExamined},
 			{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
+			{Key: "candidateMaterializedBytes", Value: stats.materializedBytes},
 			{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 			{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 			{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
@@ -484,6 +514,9 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 	if selection.stage == "primary_lookup" {
 		return len(plan.predicates) != 1
 	}
+	if selection.stage == "compound_index_scan" {
+		return selection.residualFilters != 0
+	}
 	equalityPredicates := 0
 	for _, pred := range plan.predicates {
 		if pred.field != selection.indexField {
@@ -522,6 +555,9 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 	for _, probe := range findIndexProbes(col.MetaView(), plan) {
 		out = append(out, bson.D{{Key: "stage", Value: probe.stage}, {Key: "indexName", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}})
 	}
+	for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+		out = append(out, bson.D{{Key: "stage", Value: "compound_index_scan"}, {Key: "indexName", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
+	}
 	return out
 }
 
@@ -546,6 +582,13 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		}
 		seen[probe.idx.Name] = struct{}{}
 		out = append(out, bson.D{{Key: "name", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}, {Key: "kind", Value: probe.stage}})
+	}
+	for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+		if _, ok := seen[compound.idx.Name]; ok {
+			continue
+		}
+		seen[compound.idx.Name] = struct{}{}
+		out = append(out, bson.D{{Key: "name", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "kind", Value: "compound_index_scan"}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
 	}
 	return out
 }
@@ -652,9 +695,13 @@ func explainPredicateOperator(op findPredicateOp) string {
 	}
 }
 
-func explainSort(plan findPlan) bson.D {
+func explainSort(plan findPlan, satisfied bool) bson.D {
 	if plan.sort.field == "" {
 		return bson.D{{Key: "satisfied", Value: true}}
 	}
-	return bson.D{{Key: "field", Value: plan.sort.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[plan.sort.desc]}, {Key: "satisfied", Value: false}}
+	terms := bson.A{}
+	for _, term := range findSortTerms(plan.sort) {
+		terms = append(terms, bson.D{{Key: "field", Value: term.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[term.desc]}})
+	}
+	return bson.D{{Key: "field", Value: plan.sort.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[plan.sort.desc]}, {Key: "terms", Value: terms}, {Key: "satisfied", Value: satisfied}}
 }

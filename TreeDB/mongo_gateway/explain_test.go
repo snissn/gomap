@@ -453,16 +453,13 @@ func TestMongoExplainReadCommandAdapters(t *testing.T) {
 	}
 }
 
-func TestMongoExplainAggregateRejectsUnrepresentablePipelineSort(t *testing.T) {
+func TestMongoExplainAggregateRepresentsInitialPipelineSort(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	resp := serveCommand(t, server, 107, bson.D{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{bson.D{{Key: "$sort", Value: bson.D{{Key: "name", Value: int32(1)}}}}}}, {Key: "cursor", Value: bson.D{}}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, resp, "BadValue")
-	planner, ok := bson.Raw(resp).Lookup("queryPlanner").DocumentOK()
-	if !ok {
-		t.Fatalf("rejected aggregate must retain planner context: %s", resp)
-	}
-	if reason, ok := planner.Lookup("rejectionReason").StringValueOK(); !ok || reason != "unsupported_aggregate_pipeline" {
-		t.Fatalf("rejection reason=%q ok=%v", reason, ok)
+	assertOK(t, resp)
+	sortInfo, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("sort").DocumentOK()
+	if !ok || sortInfo.Lookup("field").StringValue() != "name" {
+		t.Fatalf("initial aggregate sort missing from explain: %s", resp)
 	}
 }
 
