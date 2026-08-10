@@ -3025,6 +3025,9 @@ func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("CreateIndex error=%v, want ErrCommandWALRejected", err)
 	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "tenant_created", Components: []IndexComponent{{Field: "tenant", Direction: IndexDirectionAscending}, {Field: "createdAt", Direction: IndexDirectionDescending}}, ValueType: IndexValueBSONOrderedV2}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("CreateIndex compound error=%v, want ErrCommandWALRejected", err)
+	}
 	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("DropIndex error=%v, want ErrCommandWALRejected", err)
 	}

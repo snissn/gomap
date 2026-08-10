@@ -49,6 +49,19 @@ type transportMetrics struct {
 	accepted, closed, activeConnections                atomic.Uint64
 }
 
+// recordHandshakeDuration records a completed TLS handshake. A handshake can
+// complete within the clock's nanosecond resolution, but completed handshakes
+// must remain visible in both duration metrics.
+func (m *transportMetrics) recordHandshakeDuration(elapsed time.Duration) {
+	nanoseconds := uint64(elapsed)
+	if nanoseconds == 0 {
+		nanoseconds = 1
+	}
+	m.totalNS.Add(nanoseconds)
+	for prior := m.maxNS.Load(); nanoseconds > prior && !m.maxNS.CompareAndSwap(prior, nanoseconds); prior = m.maxNS.Load() {
+	}
+}
+
 // StandaloneOptions configures a TreeDB-backed MongoDB gateway process.
 //
 // The standalone server intentionally exposes a small MongoDB-compatible subset
@@ -690,10 +703,7 @@ func (c *tlsHandshakeConn) handshake() error {
 		started := time.Now()
 		defer func() {
 			c.metrics.active.Add(^uint64(0))
-			elapsed := uint64(time.Since(started))
-			c.metrics.totalNS.Add(elapsed)
-			for prior := c.metrics.maxNS.Load(); elapsed > prior && !c.metrics.maxNS.CompareAndSwap(prior, elapsed); prior = c.metrics.maxNS.Load() {
-			}
+			c.metrics.recordHandshakeDuration(time.Since(started))
 		}()
 		c.tlsConn = tls.Server(c.Conn, c.config)
 		ctx, cancel := context.WithTimeout(context.Background(), c.timeout)

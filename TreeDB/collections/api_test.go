@@ -6127,6 +6127,75 @@ func TestBufferedRootRunsIteratorSingleRunIncludesTombstones(t *testing.T) {
 	}
 }
 
+func TestBufferedRootRunsIteratorWorkCapBoundsRawSingleRootForwardAndReverse(t *testing.T) {
+	// A catalog root without overlays is deliberately wrapped in this iterator
+	// for direct compound scans. Keep this lower-level fixture non-vacuous: it
+	// has more physical records than the cap, rather than relying on a compacted
+	// collection where historical tombstones have already been discarded.
+	table := newCollectionRunTable(65)
+	defer resetCollectionRunTable(table)
+	for i := 0; i < 65; i++ {
+		key := []byte(fmt.Sprintf("%03d", i))
+		if i%2 == 0 {
+			table.DeleteSteal(key)
+		} else {
+			setCollectionRunValue(table, key, []byte("live"))
+		}
+	}
+	table.Freeze()
+	for _, reverse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "forward", true: "reverse"}[reverse], func(t *testing.T) {
+			var source iterator.UnsafeIterator
+			if reverse {
+				source = table.NewReverseIterator(nil, nil)
+			} else {
+				source = table.NewIterator(nil, nil)
+			}
+			it := newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(
+				[]bufferedRootRunIteratorSource{{iter: source}}, nil, nil, true, false, reverse, 64,
+			)
+			defer func() { _ = it.Close() }()
+			count := 0
+			for it.Valid() {
+				count++
+				it.Next()
+			}
+			if count != 64 {
+				t.Fatalf("physical entries returned=%d want 64", count)
+			}
+			if !errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+				t.Fatalf("iterator error=%v want work cap", it.Error())
+			}
+		})
+	}
+}
+
+func TestBufferedRootRunsIteratorWorkCapRejectsOverlaySourceFanout(t *testing.T) {
+	// The capped compositor must reject before opening/seeking an arbitrary
+	// number of overlay roots. Each table has one physical entry; a 64-entry
+	// budget therefore cannot admit 65 sources.
+	tables := make([]memtable.Table, 65)
+	for i := range tables {
+		table := newCollectionRunTable(1)
+		setCollectionRunValue(table, []byte(fmt.Sprintf("%03d", i)), []byte("value"))
+		table.Freeze()
+		tables[i] = table
+	}
+	defer resetCollectionTables(tables)
+	for _, reverse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "forward", true: "reverse"}[reverse], func(t *testing.T) {
+			it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(tables, nil, nil, true, reverse, 64)
+			defer func() { _ = it.Close() }()
+			if it.Valid() {
+				t.Fatalf("iterator valid despite source fanout above cap")
+			}
+			if !errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+				t.Fatalf("iterator error=%v want work cap", it.Error())
+			}
+		})
+	}
+}
+
 func TestBufferedRootRunsIteratorMultiRunIncludesNewestTombstone(t *testing.T) {
 	older := newCollectionRunTable(2)
 	setCollectionRunValue(older, []byte("a"), []byte("older"))
@@ -18155,6 +18224,67 @@ func TestCollectionFindDocumentsByIndexRangeTypedInt64(t *testing.T) {
 		Upper: IndexRangeBound{Unbounded: true},
 	}); err == nil || !strings.Contains(err.Error(), "positive limit") {
 		t.Fatalf("unlimited document range err=%v want positive limit", err)
+	}
+}
+
+func TestCollectionDocumentIndexRangeRejectsOrderedBSONV2Indexes(t *testing.T) {
+	valueDocument, err := bson.Marshal(bson.D{{Key: "createdAt", Value: int32(7)}})
+	if err != nil {
+		t.Fatalf("marshal valid BSON range value: %v", err)
+	}
+	value := bson.Raw(valueDocument).Lookup("createdAt")
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: value, Inclusive: true},
+		Upper: IndexRangeBound{Value: value, Inclusive: true},
+		Limit: 1,
+	}
+	for _, index := range []IndexDefinition{
+		{
+			Name:       "created_desc",
+			ValueType:  IndexValueBSONOrderedV2,
+			Components: []IndexComponent{{Field: "createdAt", Direction: IndexDirectionDescending}},
+		},
+		{
+			Name:      "tenant_created",
+			ValueType: IndexValueBSONOrderedV2,
+			Components: []IndexComponent{
+				{Field: "tenant", Direction: IndexDirectionAscending},
+				{Field: "createdAt", Direction: IndexDirectionDescending},
+			},
+		},
+	} {
+		t.Run(index.Name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			mgr := NewCollectionManager(db)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name:    "events",
+				Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+				Indexes: []IndexDefinition{index},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("events")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+
+			records, truncated, err := col.FindDocumentsByIndexRange(index.Name, opts)
+			if err == nil || !strings.Contains(err.Error(), "require FindByCompoundIndexRange") || records != nil || truncated {
+				t.Fatalf("FindDocumentsByIndexRange records=%v truncated=%v err=%v want ordered BSON v2 rejection", records, truncated, err)
+			}
+			called := false
+			truncated, err = col.ScanBorrowedDocumentsByIndexRange(index.Name, opts, func(BorrowedDocumentRecord) (bool, error) {
+				called = true
+				return true, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "require FindByCompoundIndexRange") || called || truncated {
+				t.Fatalf("ScanBorrowedDocumentsByIndexRange called=%v truncated=%v err=%v want ordered BSON v2 rejection", called, truncated, err)
+			}
+		})
 	}
 }
 

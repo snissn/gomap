@@ -28,11 +28,11 @@ func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("unmarshal collectionMetaDisk: %v", err)
 	}
-	if collectionMetaVersion != 5 {
-		t.Fatalf("collectionMetaVersion=%d want scalar_u8_calibration metadata version 5", collectionMetaVersion)
+	if collectionMetaVersion != 6 {
+		t.Fatalf("collectionMetaVersion=%d want compound-index metadata version 6", collectionMetaVersion)
 	}
 	if disk.Version != collectionMetaVersion {
-		t.Fatalf("collection metadata version=%d want current scalar_u8_calibration metadata version %d", disk.Version, collectionMetaVersion)
+		t.Fatalf("collection metadata version=%d want current compound-index metadata version %d", disk.Version, collectionMetaVersion)
 	}
 	if len(disk.VectorIndexes) != 1 || disk.VectorIndexes[0].Name != "embedding_graph" {
 		t.Fatalf("encoded vector indexes=%+v", disk.VectorIndexes)

@@ -862,17 +862,24 @@ reject older metadata versions instead of migrating them.
 ### 3.2.1 BSON-ordered scalar secondary-index keys (v2)
 
 An index whose persisted metadata selects `bson-ordered-v2` is valid only for a
-BSON collection. Its ordered-root entry key is exactly one frozen BSON v2
-scalar component followed by one explicit BSON v2 document-ID suffix. The
-component is the `0xb2`-marked, self-delimiting scalar encoding defined in
-`bson-index-key-codec-v2.md`; the suffix has its own marker, zero escaping, and
-terminator. It is not a scalar component and does not participate in scalar
-ordering. The suffix makes otherwise equal scalar keys unique per document.
+BSON collection. Metadata version 6 stores an optional ordered `components`
+list of one through four `{field,direction}` members; direction is exactly `1`
+or `-1`. An explicit ordered definition persists `components`. A field-only
+legacy definition omits `components` on disk and a decoder treats it as one
+ascending component named by `field`.
+Its ordered-root entry key is the concatenation of those frozen BSON v2 scalar
+components followed by one explicit BSON v2 document-ID suffix. The components
+are the self-delimiting `0xb2` ascending or `0x4d` descending encodings defined
+in `bson-index-key-codec-v2.md`; the suffix has its own marker, zero escaping,
+and terminator. It is not a scalar component and does not participate in scalar
+ordering. The suffix makes otherwise equal compound scalar keys unique per
+document.
 
 Missing fields and BSON null have distinct scalar components. Numerically equal
 Int32, Int64, Double, and Decimal128 values have the same scalar component.
 Unsupported BSON scalar values fail before a document or index mutation is
-published. Unique indexes consequently treat equal normalized numeric values
+published. Compound components reject arrays rather than expanding multikey
+entries. Unique indexes consequently treat equal normalized numeric values
 as conflicts, while missing and null follow their distinct-key policy.
 
 The persisted index `value_type` metadata, not a byte prefix or any inference

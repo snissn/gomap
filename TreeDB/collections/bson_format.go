@@ -35,6 +35,9 @@ func bsonOrderedIndexStateForDocumentWithArena(document []byte, runtimes []index
 }
 
 func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, opts collectionOptions, encoder *indexEncodeArena) error {
+	if len(runtime.def.components) > 1 || (len(runtime.def.components) == 1 && runtime.def.components[0].Direction == IndexDirectionDescending) {
+		return appendBSONCompoundIndexRuntimeState(raw, state, runtimeIdx, runtime, encoder)
+	}
 	if len(runtime.path) == 1 {
 		value := raw.Lookup(runtime.path[0])
 		if value.IsZero() {
@@ -82,6 +85,40 @@ func appendBSONIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, 
 	default:
 		state[runtimeIdx] = normalizeOwnedEncodedIndexValues(encoded)
 	}
+	return nil
+}
+
+func appendBSONCompoundIndexRuntimeState(raw bson.Raw, state orderedDocumentIndexState, runtimeIdx int, runtime indexRuntime, encoder *indexEncodeArena) error {
+	if runtime.def.valueType != IndexValueBSONOrderedV2 {
+		return fmt.Errorf("collections: compound index requires BSON v2 key format")
+	}
+	start := len(encoder.buf)
+	for i, component := range runtime.def.components {
+		path := runtime.componentPaths[i]
+		values, found, fromArray, err := bsonIndexValuesForPath(raw, path)
+		if err != nil {
+			return err
+		}
+		if fromArray || len(values) > 1 {
+			return fmt.Errorf("collections: array value not allowed for compound index component %q", component.Field)
+		}
+		var value bson.RawValue
+		if found {
+			value = values[0]
+		}
+		next, encoded, err := appendBSONIndexKeyComponentV2(encoder.buf, value)
+		if err != nil {
+			return err
+		}
+		encoder.buf = next
+		if component.Direction == IndexDirectionDescending {
+			complementBSONIndexBytesV2(encoded)
+		}
+	}
+	if len(encoder.buf)-start > bsonIndexKeyComponentV2MaxBytes {
+		return errBSONIndexKeyV2TooLarge
+	}
+	state[runtimeIdx] = encoder.appendSingleValueRef(encoder.buf[start:])
 	return nil
 }
 
@@ -161,7 +198,10 @@ func bsonDescendantIndexValues(value bson.RawValue, path []string) ([]bson.RawVa
 		return nil, false, false, err
 	}
 	var out []bson.RawValue
-	fromArray := false
+	// Traversing an intermediate array is multikey even when no child matches
+	// the remaining dotted path. Reporting it as missing would silently encode
+	// a compound missing component instead of rejecting the unsupported shape.
+	fromArray := true
 	for _, item := range values {
 		doc, ok := item.DocumentOK()
 		if !ok {
@@ -173,7 +213,6 @@ func bsonDescendantIndexValues(value bson.RawValue, path []string) ([]bson.RawVa
 		}
 		if found {
 			out = append(out, itemValues...)
-			fromArray = true
 		}
 	}
 	return out, len(out) > 0, fromArray, nil

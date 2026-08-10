@@ -90,7 +90,7 @@ func findIndexProbes(meta collections.CollectionMeta, plan findPlan) []findIndex
 // for one index. Keep this stricter than a generic bounded scan: a lossy
 // numeric coercion must not be presented as an indexed range probe.
 func findIndexProbesForIndex(plan findPlan, idx collections.IndexDefinition) []findIndexProbe {
-	if len(plan.orBranches) != 0 {
+	if len(plan.orBranches) != 0 || !legacyFindPlannerIndexUsable(idx) {
 		return nil
 	}
 	probes := make([]findIndexProbe, 0, 2)
@@ -325,7 +325,7 @@ func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, m
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	for _, idx := range meta.Indexes {
-		if idx.Field != pred.field {
+		if !legacyFindPlannerIndexUsable(idx) || idx.Field != pred.field {
 			continue
 		}
 		opts, ok, empty, err := indexRangeOptionsForPredicates(plan.predicates, idx)
@@ -859,7 +859,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 				continue
 			}
 			for _, idx := range meta.Indexes {
-				if idx.Field == pred.field {
+				if legacyFindPlannerIndexUsable(idx) && idx.Field == pred.field {
 					return true
 				}
 			}
@@ -869,7 +869,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 			continue
 		}
 		for _, idx := range meta.Indexes {
-			if idx.Field != pred.field {
+			if !legacyFindPlannerIndexUsable(idx) || idx.Field != pred.field {
 				continue
 			}
 			_, ok, _, err := indexRangeOptionsForPredicates(predicates, idx)
@@ -879,6 +879,17 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 		}
 	}
 	return false
+}
+
+// legacyFindPlannerIndexUsable limits the existing single-field Mongo find
+// planner to definitions accepted by FindByIndexValue/FindByIndexRange.
+// Ordered BSON compound and explicit descending indexes have direct collection
+// APIs; automatic planner selection is deliberately deferred to #4065.
+func legacyFindPlannerIndexUsable(idx collections.IndexDefinition) bool {
+	if idx.ValueType != collections.IndexValueBSONOrderedV2 {
+		return true
+	}
+	return len(idx.Components) == 0 || (len(idx.Components) == 1 && idx.Components[0].Direction != collections.IndexDirectionDescending)
 }
 
 func (s *Server) limitCandidateDocuments(docs []wire.Document) ([]wire.Document, error) {
@@ -895,6 +906,9 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, mate
 	bestStage, bestName := "", ""
 	bestSet := false
 	for _, idx := range meta.Indexes {
+		if !legacyFindPlannerIndexUsable(idx) {
+			continue
+		}
 		docs, stage, ok, work, err := documentsForIndexedFieldPredicates(col, materializer, plan, idx, maxDocuments)
 		if err != nil {
 			return nil, "", "", false, err
@@ -1025,6 +1039,9 @@ func documentsForIndexedPredicate(col *collections.Collection, materializer *col
 }
 
 func documentsForIndexedFieldPredicates(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan, idx collections.IndexDefinition, maxDocuments int) ([]wire.Document, string, bool, int, error) {
+	if !legacyFindPlannerIndexUsable(idx) {
+		return nil, "", false, 0, nil
+	}
 	var best []wire.Document
 	bestStage := ""
 	work := 0
