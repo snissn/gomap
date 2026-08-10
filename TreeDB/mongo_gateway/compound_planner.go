@@ -425,15 +425,22 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	candidate := candidates[0]
 	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
+	paginationBudgetCoversResult := false
 	// Pagination can bound the index walk only when its physical order is the
 	// complete gateway order. With no requested sort, pagination is likewise
 	// safe in the physical prefix order. A fallback in-memory sort must see every
 	// bounded candidate before applying skip/limit; otherwise a later null or
 	// missing value may precede an early physical entry under Mongo ordering.
 	if compoundPlanPaginationSafe(candidate, plan) && plan.limit > 0 && len(prefixes) == 1 {
-		needed := int(plan.skip + plan.limit)
-		if needed > 0 && needed < maxDocuments {
-			maxDocuments = needed
+		// skip and limit are int32 wire values. Add them at a wider width so
+		// a syntactically valid but unrepresentable page cannot wrap negative
+		// and accidentally accept a scan truncated by the global work cap.
+		needed := int64(plan.skip) + int64(plan.limit)
+		if needed > 0 && needed <= int64(maxDocuments) {
+			paginationBudgetCoversResult = true
+			if needed < int64(maxDocuments) {
+				maxDocuments = int(needed)
+			}
 		}
 	}
 	if maxDocuments <= 0 {
@@ -471,7 +478,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			// already bounds all IDs execution can observe. The direct primitive
 			// marks the next entry as truncated; that is sufficient, not a scan
 			// cap failure, because later IDs cannot affect this result page.
-			if compoundPlanPaginationSafe(candidate, plan) && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
+			if paginationBudgetCoversResult && len(found) == probeLimit {
 				for _, id := range found {
 					if _, duplicate := seenIDs[string(id)]; duplicate {
 						continue

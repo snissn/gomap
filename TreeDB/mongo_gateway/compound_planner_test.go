@@ -532,6 +532,34 @@ func TestMongoCompoundPlanNoSortLimitPushesExactPrefixWorkBound(t *testing.T) {
 	}
 }
 
+func TestMongoCompoundPlanNoSortLimitRequiresGlobalPageBudget(t *testing.T) {
+	newServer := func(t *testing.T, cap int) *Server {
+		t.Helper()
+		server := newMongoCompatibilityMatrixServer(t)
+		server.MaxFindScanDocuments = cap
+		assertOK(t, serveCommand(t, server, 40652641, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+		assertOK(t, serveCommand(t, server, 40652642, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(2)}},
+			bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "acme"}, {Key: "createdAt", Value: int32(3)}},
+		}}, {Key: "$db", Value: "app"}}))
+		return server
+	}
+	query := func(skip, limit int32) bson.D {
+		return bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "skip", Value: skip}, {Key: "limit", Value: limit}, {Key: "$db", Value: "app"}}
+	}
+
+	// A direct range's truncation only establishes page completeness when the
+	// global cap covers the entire skip+limit page. It must not turn a cap hit
+	// into a successful empty result.
+	assertCommandError(t, serveCommand(t, newServer(t, 2), 40652643, query(2, 1)), "BadValue")
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, newServer(t, 3), 40652644, query(2, 1))), []string{"c"})
+
+	// The wire values are individually valid int32s, but their page sum must
+	// not wrap when deciding whether a direct truncation is safe to accept.
+	assertCommandError(t, serveCommand(t, newServer(t, 2), 40652645, query(1<<31-1, 1<<31-1)), "BadValue")
+}
+
 func TestMongoCompoundHintExplainExcludesAllLegacyProbes(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065265, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{
