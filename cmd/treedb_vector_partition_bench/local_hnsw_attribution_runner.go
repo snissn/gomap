@@ -341,7 +341,7 @@ func validateLocalHNSWAttributionReportV1(report localHNSWAttributionReportV1) e
 		return errors.New("invalid local HNSW attribution report input digests")
 	}
 	for i, historical := range report.Inputs.Historical {
-		if historical.SHA256 != localHNSWAttributionHistoricalSHA256V1[i] || historical.Probe2.Probes != 2 || historical.Probe16.Probes != 16 {
+		if historical.SHA256 != localHNSWAttributionHistoricalSHA256V1[i] || historical.TopologyIdentitySHA256 != localHNSWAttributionHistoricalTopologySHA256V1[i] || historical.Probe2.Probes != 2 || historical.Probe16.Probes != 16 {
 			return errors.New("invalid local HNSW attribution historical report")
 		}
 	}

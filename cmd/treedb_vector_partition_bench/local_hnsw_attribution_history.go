@@ -9,7 +9,11 @@ import (
 	"os"
 )
 
-const localHNSWAttributionHistoricalTopologySHA256V1 = "ab794fe123d72ef8c84f6fdd46d513b029f08a57f3665bcd88b4e2a88f502b29"
+var localHNSWAttributionHistoricalTopologySHA256V1 = [3]string{
+	"ab794fe123d72ef8c84f6fdd46d513b029f08a57f3665bcd88b4e2a88f502b29",
+	"6f170c01c0f69a7ecfee4b1554ac7c57d87c0adf0ac0ff19dd1b98d53c990545",
+	"c1745e47b20b52d9981a97da1cfa2c0d321fcc347b2ce8233cd06ede04484f51",
+}
 
 type localHNSWAttributionHistoricalCellV1 struct {
 	Probes     int                                 `json:"probes"`
@@ -19,10 +23,11 @@ type localHNSWAttributionHistoricalCellV1 struct {
 }
 
 type localHNSWAttributionHistoricalReportV1 struct {
-	Path    string                               `json:"path"`
-	SHA256  string                               `json:"sha256"`
-	Probe2  localHNSWAttributionHistoricalCellV1 `json:"probe_2"`
-	Probe16 localHNSWAttributionHistoricalCellV1 `json:"probe_16"`
+	Path                   string                               `json:"path"`
+	SHA256                 string                               `json:"sha256"`
+	TopologyIdentitySHA256 string                               `json:"topology_identity_sha256"`
+	Probe2                 localHNSWAttributionHistoricalCellV1 `json:"probe_2"`
+	Probe16                localHNSWAttributionHistoricalCellV1 `json:"probe_16"`
 }
 
 func localHNSWAttributionHistoricalBaselineV1(cfg localHNSWAttributionInputConfigV1) ([3]localHNSWAttributionHistoricalReportV1, error) {
@@ -46,11 +51,11 @@ func localHNSWAttributionHistoricalBaselineV1(cfg localHNSWAttributionInputConfi
 		if err != nil {
 			return evidence, err
 		}
-		probe2, probe16, err := validateLocalHNSWAttributionHistoricalReportV1(report, cfg.Fixture.Checksum, cfg.TruthArtifactSHA256)
+		probe2, probe16, err := validateLocalHNSWAttributionHistoricalReportV1(report, localHNSWAttributionHistoricalTopologySHA256V1[i], cfg.Fixture.Checksum, cfg.TruthArtifactSHA256)
 		if err != nil {
 			return evidence, err
 		}
-		evidence[i] = localHNSWAttributionHistoricalReportV1{Path: path, SHA256: cfg.HistoricalReportSHA256[i], Probe2: probe2, Probe16: probe16}
+		evidence[i] = localHNSWAttributionHistoricalReportV1{Path: path, SHA256: cfg.HistoricalReportSHA256[i], TopologyIdentitySHA256: report.TopologyIdentitySHA256, Probe2: probe2, Probe16: probe16}
 	}
 	return evidence, nil
 }
@@ -73,9 +78,9 @@ func loadLocalHNSWAttributionHistoricalReportV1(path string) (vectorPartitionSys
 	return report, nil
 }
 
-func validateLocalHNSWAttributionHistoricalReportV1(report vectorPartitionSystemBenchResultV1, fixtureChecksum, truthSHA256 string) (localHNSWAttributionHistoricalCellV1, localHNSWAttributionHistoricalCellV1, error) {
+func validateLocalHNSWAttributionHistoricalReportV1(report vectorPartitionSystemBenchResultV1, topologySHA256, fixtureChecksum, truthSHA256 string) (localHNSWAttributionHistoricalCellV1, localHNSWAttributionHistoricalCellV1, error) {
 	var probe2, probe16 localHNSWAttributionHistoricalCellV1
-	if report.SchemaVersion != 1 || report.ResultKind != "vector_partition_system_bench_v1" || report.Topology != "single_daemon_four_group" || report.TopologyIdentitySHA256 != localHNSWAttributionHistoricalTopologySHA256V1 || report.DatasetChecksum != fixtureChecksum || report.TruthArtifactSHA256 != truthSHA256 || report.TopK != 10 || report.EfSearch != 128 {
+	if report.SchemaVersion != 1 || report.ResultKind != "vector_partition_system_bench_v1" || report.Topology != "single_daemon_four_group" || report.TopologyIdentitySHA256 != topologySHA256 || report.DatasetChecksum != fixtureChecksum || report.TruthArtifactSHA256 != truthSHA256 || report.TopK != 10 || report.EfSearch != 128 {
 		return probe2, probe16, fmt.Errorf("invalid local HNSW historical report identity: schema=%d kind=%q topology=%q topology_sha256=%q dataset=%q want_dataset=%q truth=%q want_truth=%q top_k=%d ef_search=%d", report.SchemaVersion, report.ResultKind, report.Topology, report.TopologyIdentitySHA256, report.DatasetChecksum, fixtureChecksum, report.TruthArtifactSHA256, truthSHA256, report.TopK, report.EfSearch)
 	}
 	for _, cell := range report.Cells {
