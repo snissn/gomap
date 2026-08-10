@@ -39,6 +39,7 @@ type diskFixture struct {
 	Collection                     string                 `json:"collection"`
 	Smoke                          bool                   `json:"smoke"`
 	Seed                           []json.RawMessage      `json:"seed"`
+	Setup                          []json.RawMessage      `json:"setup"`
 	Command                        json.RawMessage        `json:"command"`
 	IgnoreFields                   []string               `json:"ignore_fields"`
 	IgnoreStateFields              []string               `json:"ignore_state_fields"`
@@ -127,6 +128,13 @@ func loadFixtures(dir string, smokeOnly bool) ([]compatdiff.Fixture, error) {
 				return nil, fmt.Errorf("%s seed: %w", path, err)
 			}
 			fixture.Seed = append(fixture.Seed, value)
+		}
+		for _, setup := range disk.Setup {
+			value, err := extJSON(setup)
+			if err != nil {
+				return nil, fmt.Errorf("%s setup: %w", path, err)
+			}
+			fixture.Setup = append(fixture.Setup, value)
 		}
 		if err := fixture.Validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
@@ -226,6 +234,11 @@ func (t target) Execute(ctx context.Context, fixture compatdiff.Fixture) (compat
 			docs[i] = fixture.Seed[i]
 		}
 		if _, err := coll.InsertMany(ctx, docs); err != nil {
+			return compatdiff.Observation{}, t.seedError(ctx, err)
+		}
+	}
+	for _, setup := range fixture.Setup {
+		if _, err := db.RunCommand(ctx, setup).Raw(); err != nil {
 			return compatdiff.Observation{}, t.seedError(ctx, err)
 		}
 	}
