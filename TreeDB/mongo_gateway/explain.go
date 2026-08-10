@@ -648,7 +648,11 @@ func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
 	out := bson.A{}
 	for _, idx := range col.MetaView().Indexes {
 		if _, ok := usableNames[idx.Name]; !ok {
-			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: "filter_not_covered"}})
+			reason := "filter_or_sort_not_covered"
+			if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
+				reason = "hint_not_selected"
+			}
+			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: reason}})
 		}
 	}
 	return out
