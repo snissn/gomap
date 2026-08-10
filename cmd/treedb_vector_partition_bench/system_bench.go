@@ -261,6 +261,9 @@ func vectorPartitionSystemCatalogReadSnapshotV1(ctx context.Context, topology ve
 			if identity.GroupID != group.GroupID || identity.InstanceIdentity != node.NodeConfigSHA256 {
 				return nil, fmt.Errorf("node %q group %q live endpoint identity does not match checked topology", node.NodeID, group.GroupID)
 			}
+			if !vectorPartitionSystemRuntimeOwnershipMatchesStatsV1(node.RuntimeOwnership, identity.ProcessRuntimeStats) {
+				return nil, fmt.Errorf("node %q effective runtime ownership does not match checked topology", node.NodeID)
+			}
 			if retained, ok := snapshot[identity.InstanceIdentity]; ok && !reflect.DeepEqual(retained.Catalog, identity.CatalogMetaReadStats) {
 				return nil, fmt.Errorf("node %q publishes inconsistent catalog read statistics", node.NodeID)
 			}
