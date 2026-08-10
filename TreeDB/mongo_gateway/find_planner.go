@@ -109,6 +109,9 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 	for _, branch := range plan.orBranches {
 		add(branch)
 	}
+	for field := range plan.projection.fields {
+		bytes += len(field)
+	}
 	return bytes
 }
 
