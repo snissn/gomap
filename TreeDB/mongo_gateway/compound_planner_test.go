@@ -453,6 +453,30 @@ func TestMongoCompoundHintedExplainExcludesPrimaryCandidate(t *testing.T) {
 	}
 }
 
+func TestMongoUnhintedPrimaryExplainExcludesDeferredCompoundCandidate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40650560, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40650561, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}}}, {Key: "$db", Value: "app"}}
+	for _, verbosity := range []string{"queryPlanner", "executionStats"} {
+		t.Run(verbosity, func(t *testing.T) {
+			response := serveCommand(t, server, 40650562, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: verbosity}, {Key: "$db", Value: "app"}})
+			assertOK(t, response)
+			planner := bson.Raw(response).Lookup("queryPlanner").Document()
+			if stage, ok := planner.Lookup("winningPlan").Document().Lookup("stage").StringValueOK(); !ok || stage != "primary_lookup" {
+				t.Fatalf("%s winning stage=%q ok=%v want primary_lookup: %s", verbosity, stage, ok, response)
+			}
+			if candidatePlans := planner.Lookup("candidatePlans"); candidatePlans.Type != 0 {
+				t.Fatalf("%s retained unreachable compound candidate: %s", verbosity, response)
+			}
+			usable, err := planner.Lookup("usableIndexes").Array().Values()
+			if err != nil || len(usable) != 0 {
+				t.Fatalf("%s usable indexes=%v err=%v want none because primary lookup wins: %s", verbosity, usable, err, response)
+			}
+		})
+	}
+}
+
 func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065054, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))

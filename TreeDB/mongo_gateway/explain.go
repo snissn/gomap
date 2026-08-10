@@ -602,8 +602,14 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 	for _, probe := range findIndexProbes(col.MetaView(), plan) {
 		out = append(out, bson.D{{Key: "stage", Value: probe.stage}, {Key: "indexName", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}})
 	}
-	for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
-		out = append(out, bson.D{{Key: "stage", Value: "compound_index_scan"}, {Key: "indexName", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
+	// documentsForCompoundIndexPlan deliberately preserves a direct unhinted
+	// primary lookup as the winner. Do not present a compound plan that the
+	// executor will decline before walking it: queryPlanner candidates describe
+	// executable alternatives, not merely syntactically coverable indexes.
+	if !compoundPlanDeferredToPrimaryLookup(plan) {
+		for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+			out = append(out, bson.D{{Key: "stage", Value: "compound_index_scan"}, {Key: "indexName", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
+		}
 	}
 	return out
 }
@@ -630,14 +636,24 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		seen[probe.idx.Name] = struct{}{}
 		out = append(out, bson.D{{Key: "name", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}, {Key: "kind", Value: probe.stage}})
 	}
-	for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
-		if _, ok := seen[compound.idx.Name]; ok {
-			continue
+	if !compoundPlanDeferredToPrimaryLookup(plan) {
+		for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+			if _, ok := seen[compound.idx.Name]; ok {
+				continue
+			}
+			seen[compound.idx.Name] = struct{}{}
+			out = append(out, bson.D{{Key: "name", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "kind", Value: "compound_index_scan"}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
 		}
-		seen[compound.idx.Name] = struct{}{}
-		out = append(out, bson.D{{Key: "name", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "kind", Value: "compound_index_scan"}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
 	}
 	return out
+}
+
+func compoundPlanDeferredToPrimaryLookup(plan findPlan) bool {
+	if plan.hint.present {
+		return false
+	}
+	_, primary := primaryCandidatePredicate(plan.predicates)
+	return primary
 }
 
 func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
