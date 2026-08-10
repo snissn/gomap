@@ -4039,11 +4039,11 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 		retained += len(id)
 	}
 	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, projection: projection, lastUsed: time.Now()}
-	batch, consumed, bytes, err := s.compoundCursorBatch(cursor, 0, batchSize)
+	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize)
 	if err != nil {
 		return 0, nil, err
 	}
-	cursor.pos, cursor.materializedBytes = consumed, bytes
+	cursor.pos, cursor.materializedBytes = consumed, materialized
 	if consumed >= len(ids) {
 		return 0, batch, nil
 	}
@@ -4080,7 +4080,7 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs int) (
 	}
 	defer func() { _ = materializer.Close() }()
 	out := make(bson.A, 0, maxDocs)
-	batchBytes, added, decoded := 0, 0, 0
+	batchBytes, materializedBytes, added, decoded := 0, 0, 0, 0
 	for start+decoded < len(cursor.compoundIDs) && added < maxDocs {
 		stored, err := cursor.compoundCollection.Get(cursor.compoundIDs[start+decoded])
 		if err != nil {
@@ -4111,9 +4111,10 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs int) (
 		}
 		out = append(out, bson.Raw(projected))
 		batchBytes += docBytes
+		materializedBytes += len(doc)
 		added++
 	}
-	return out, decoded, batchBytes, nil
+	return out, decoded, materializedBytes, nil
 }
 
 func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, explicitBatchSize bool, defaultBatchSize int) (int64, bson.A, bool, error) {
@@ -4143,7 +4144,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 				effectiveBatchSize = defaultBatchSize
 			}
 			s.cursorMu.Unlock()
-			batch, consumed, bytes, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize)
+			batch, consumed, materialized, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize)
 			if err != nil {
 				s.cursorMu.Lock()
 				if current := s.cursors[cursorID]; current == cursor && current.pos == startPos {
@@ -4163,7 +4164,7 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 				continue
 			}
 			current.pos += consumed
-			current.materializedBytes += bytes
+			current.materializedBytes += materialized
 			current.lastUsed = time.Now()
 			if current.pos >= len(current.compoundIDs) {
 				s.deleteCursorLocked(cursorID)
