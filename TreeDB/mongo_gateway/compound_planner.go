@@ -164,9 +164,15 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 		}
 		if hasRange {
 			candidate.lower, candidate.upper, candidate.hasRange = lower, upper, true
-			for i, pred := range plan.predicates {
-				if pred.field == components[component].Field && isRangePredicate(pred.op) {
-					used[i] = struct{}{}
+			// BSON comparison ranges are type-bracketed, while BSON-v2 storage
+			// orders missing and null before scalar values. Keep range predicates
+			// residual until bounds encode that bracket exactly; otherwise a
+			// skip/limit page could stop at a non-matching cross-type candidate.
+			if compoundRangeIsExactlyTypeBracketed(lower, upper) {
+				for i, pred := range plan.predicates {
+					if pred.field == components[component].Field && isRangePredicate(pred.op) {
+						used[i] = struct{}{}
+					}
 				}
 			}
 		}
@@ -390,8 +396,9 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		return nil, compoundIndexPlan{}, false, nil
 	}
 	candidate := candidates[0]
+	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
-	if candidate.residualFilters == 0 && plan.limit > 0 {
+	if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 {
 		needed := int(plan.skip + plan.limit)
 		if needed > 0 && needed < maxDocuments {
 			maxDocuments = needed
@@ -400,7 +407,6 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	if maxDocuments <= 0 {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner requires a positive work cap", errMongoFindScanCapExceeded)
 	}
-	prefixes := compoundPrefixes(candidate.prefixChoices)
 	if len(prefixes) > maxDocuments {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner has %d prefix probes for a %d-document work cap", errMongoFindScanCapExceeded, len(prefixes), maxDocuments)
 	}
@@ -451,6 +457,15 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		}
 	}
 	return ids, candidate, true, nil
+}
+
+func compoundRangeIsExactlyTypeBracketed(lower, upper collections.IndexRangeBound) bool {
+	if lower.Unbounded || upper.Unbounded || lower.Value == nil || upper.Value == nil {
+		return false
+	}
+	lowerValue, lowerOK := lower.Value.(bson.RawValue)
+	upperValue, upperOK := upper.Value.(bson.RawValue)
+	return lowerOK && upperOK && lowerValue.Type == upperValue.Type
 }
 
 func compoundIndexPlanFor(meta collections.CollectionMeta, plan findPlan) (compoundIndexPlan, bool) {

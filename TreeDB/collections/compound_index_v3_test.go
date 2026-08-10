@@ -357,8 +357,9 @@ func TestFindByCompoundIndexRangeHonorsDirectionsBoundsAndTieIDs(t *testing.T) {
 	if err != nil || !truncated {
 		t.Fatalf("stable reverse limited scan err=%v truncated=%v", err, truncated)
 	}
-	// The two-ID tie at createdAt=3 cannot be partially emitted after a,c.
-	assertIDs(got, "a", "c")
+	// The limit selects an ascending-ID prefix of the fully buffered tie at
+	// createdAt=3, so the page remains deterministic without a full scan sort.
+	assertIDs(got, "a", "c", "b")
 	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Lower: IndexRangeBound{Value: intRaw(2), Inclusive: true}, Upper: IndexRangeBound{Value: intRaw(3), Inclusive: true}, Limit: 3})
 	if err != nil || truncated {
 		t.Fatalf("range scan err=%v truncated=%v", err, truncated)

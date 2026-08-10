@@ -141,6 +141,39 @@ func TestMongoCompoundPlanReverseTieUsesStableDocumentID(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b", "c"})
 }
 
+func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065054, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065055, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "missing"}, {Key: "tenant", Value: "t"}},
+		bson.D{{Key: "_id", Value: "null"}, {Key: "tenant", Value: "t"}, {Key: "x", Value: nil}},
+		bson.D{{Key: "_id", Value: "number"}, {Key: "tenant", Value: "t"}, {Key: "x", Value: int32(4)}},
+	}}, {Key: "$db", Value: "app"}}))
+	filter := bson.D{{Key: "tenant", Value: "t"}, {Key: "x", Value: bson.D{{Key: "$lt", Value: int32(5)}}}}
+	response := serveCommand(t, server, 4065056, bson.D{
+		{Key: "find", Value: "events"},
+		{Key: "filter", Value: filter},
+		{Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"number"})
+}
+
+func TestMongoCompoundPlanMultiValuePrefixDoesNotConsumeResultLimitAsProbeBudget(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065057, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065058, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "x", Value: "a"}}, bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "x", Value: "b"}}}}, {Key: "$db", Value: "app"}}))
+	filter := bson.D{{Key: "tenant", Value: "t"}, {Key: "x", Value: bson.D{{Key: "$in", Value: bson.A{"a", "b"}}}}}
+	response := serveCommand(t, server, 4065059, bson.D{
+		{Key: "find", Value: "events"},
+		{Key: "filter", Value: filter},
+		{Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	if got := len(cursorFirstBatch(t, response)); got != 1 {
+		t.Fatalf("limited $in first batch=%d want 1", got)
+	}
+}
+
 func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406506, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
@@ -149,7 +182,7 @@ func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
 		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(3)}},
 	}}, {Key: "$db", Value: "app"}}))
-	find := serveCommand(t, server, 406508, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "tenant", Value: "t"}}, bson.D{{Key: "created", Value: bson.D{{Key: "$gte", Value: int32(1)}}}}}}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "skip", Value: int64(1)}, {Key: "limit", Value: int64(2)}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	find := serveCommand(t, server, 406508, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "tenant", Value: "t"}}, bson.D{{Key: "created", Value: bson.D{{Key: "$gte", Value: int32(1)}}}}, bson.D{{Key: "created", Value: bson.D{{Key: "$lte", Value: int32(3)}}}}}}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "skip", Value: int64(1)}, {Key: "limit", Value: int64(2)}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
 	assertBatchIDs(t, cursorFirstBatch(t, find), []string{"b"})
 	cursorID := cursorIDFromResponse(t, find)
 	if cursorID == 0 {

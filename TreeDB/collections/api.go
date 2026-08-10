@@ -20264,9 +20264,9 @@ type CompoundIndexRangeOptions struct {
 	Desc   bool
 	// StableDocumentIDTies makes a descending BSON v2 scan emit equal logical
 	// index keys in ascending document-ID order. The default retains the
-	// historical physical reverse order for direct callers. A stable group is
-	// emitted atomically: if its complete IDs do not fit the result/work bound,
-	// the scan returns truncated without emitting a partial group.
+	// historical physical reverse order for direct callers. A result limit may
+	// return the ascending-ID prefix of a fully buffered group; a work-cap stop
+	// never publishes an incomplete group and reports truncation instead.
 	StableDocumentIDTies bool
 }
 
@@ -21367,13 +21367,17 @@ func scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt iterator.
 		if len(groupIDs) == 0 {
 			return true, false, nil
 		}
-		// A limit may not cut a tie group: that would make a stable order depend
-		// on storage traversal rather than the promised document-ID tiebreaker.
-		if maxResults > 0 && len(groupIDs) > maxResults-emitted {
-			return false, true, nil
-		}
 		sort.Slice(groupIDs, func(i, j int) bool { return bytes.Compare(groupIDs[i], groupIDs[j]) < 0 })
-		for _, id := range groupIDs {
+		remaining := len(groupIDs)
+		truncated := false
+		if maxResults > 0 && remaining > maxResults-emitted {
+			// The sorted prefix of a complete tie group is still deterministic.
+			// Work caps never enter this path: they return before a group can be
+			// completed, so they cannot expose an ambiguously incomplete group.
+			remaining = maxResults - emitted
+			truncated = true
+		}
+		for _, id := range groupIDs[:remaining] {
 			cont, err := fn(id)
 			if err != nil {
 				return false, false, err
@@ -21384,7 +21388,7 @@ func scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt iterator.
 			}
 		}
 		groupIDs = groupIDs[:0]
-		return true, false, nil
+		return true, truncated, nil
 	}
 	for {
 		key, ok, capped, err := nextLiveKey()
