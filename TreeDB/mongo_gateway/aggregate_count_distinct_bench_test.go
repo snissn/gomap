@@ -56,3 +56,20 @@ func BenchmarkMongoAggregateCountDistinctBoundedScan(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMongoFindExplainDisabled is the ordinary find hot path after the
+// optional explain accounting hooks. Keep this separate from explain itself:
+// callers that do not request explain must not pay material diagnostic cost.
+func BenchmarkMongoFindExplainDisabled(b *testing.B) {
+	server := newMongoCompatibilityMatrixServer(b)
+	command := mustDocument(b, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "active", Value: true}}}, {Key: "$db", Value: "app"}})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		response, err := server.commandResponse(context.Background(), "find", command, nil, 0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMongoReadCommandSink = response
+	}
+}
