@@ -26,6 +26,9 @@ var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partit
 // once to FP32.
 const VectorPartitionCanonicalScoreContractV1 = "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1"
 
+// VectorPartitionLocalGraphComparisonSchemaV1 identifies offline graph-delta evidence.
+const VectorPartitionLocalGraphComparisonSchemaV1 = "treedb_vector_partition_local_graph_comparison_v1"
+
 // CanonicalVectorPartitionCosineScoreV1 executes the public V1 score contract
 // over caller-owned source vectors.
 func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, error) {
@@ -69,6 +72,7 @@ type VectorPartitionLocalGraphDistanceDistributionV1 struct {
 	Max   float64 `json:"max,omitempty"`
 }
 type VectorPartitionLocalGraphComparisonV1 struct {
+	Schema                string                                          `json:"schema"`
 	EntryOrdinal          int                                             `json:"entry_ordinal"`
 	Native                VectorPartitionPackDiagnosticsV1                `json:"native"`
 	Final                 VectorPartitionPackDiagnosticsV1                `json:"final"`
@@ -126,7 +130,7 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	out := VectorPartitionLocalGraphComparisonV1{EntryOrdinal: np.Header.EntryOrdinal, Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
+	out := VectorPartitionLocalGraphComparisonV1{Schema: VectorPartitionLocalGraphComparisonSchemaV1, EntryOrdinal: np.Header.EntryOrdinal, Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
 	limit := np.Header.M * 2
 	has := func(edges []uint32, want uint32) bool {
 		for _, edge := range edges {
