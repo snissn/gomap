@@ -234,6 +234,7 @@ type VectorPartitionCoordinatorCountersV1 struct {
 
 type VectorPartitionCoordinatorTimingV1 struct {
 	RouterOpenNanos, RouterSearchNanos, PlacementNanos uint64
+	LifecycleNanos, DispatchNanos                      uint64
 	QueueNanos, RPCNanos, NetworkNanos                 uint64
 	ReadIndexApplyNanos, GenerationOpenNanos           uint64
 	ShardSearchNanos, ResponseNanos                    uint64
@@ -827,7 +828,11 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		}
 		return response, c.wrapError(err, "")
 	}
-	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(requestCtx, status)
+	lifecycleStarted := time.Now()
+	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(
+		raftcluster.WithCatalogMetaReadSourceV1(requestCtx, raftcluster.CatalogMetaReadSourceCoordinatorLifecycleV1), status,
+	)
+	response.Timing.LifecycleNanos = elapsedNanosV1(lifecycleStarted)
 	if err != nil {
 		if vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err) {
 			c.retireRouterSessionV1(routerLease)
@@ -874,7 +879,9 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 		counters.MaxShardPartitions = max(counters.MaxShardPartitions, uint64(len(task.partitionIDs)))
 	}
 	response.Counters = counters
+	dispatchStarted := time.Now()
 	taskResults, dispatchErr := c.dispatch(requestCtx, tasks)
+	response.Timing.DispatchNanos = elapsedNanosV1(dispatchStarted)
 	for _, result := range taskResults {
 		if !accumulateVectorPartitionCoordinatorResponseCountersV1(&counters, result.response) {
 			return response, c.wrapError(ErrVectorPartitionCoordinatorBudgetExceeded, "")

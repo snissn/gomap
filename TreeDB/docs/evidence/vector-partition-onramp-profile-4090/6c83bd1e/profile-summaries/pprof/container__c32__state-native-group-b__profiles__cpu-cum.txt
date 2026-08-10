@@ -1,0 +1,69 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: cpu
+Time: 2026-08-09 14:11:38 HST
+Duration: 17.26s, Total samples = 3.71s (21.49%)
+Showing nodes accounting for 1.10s, 29.65% of 3.71s total
+Dropped 237 nodes (cum <= 0.02s)
+Showing top 60 nodes out of 332
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      2.94s 79.25%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0%     0%      2.94s 79.25%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0%     0%      2.78s 74.93%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0%     0%      1.45s 39.08%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0%     0%      1.45s 39.08%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionProductionNodeGenerationSourceV1.PinVectorPartitionGenerationV1
+         0     0%     0%      1.44s 38.81%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierV1 (inline)
+         0     0%     0%      1.44s 38.81%  github.com/snissn/gomap/TreeDB/collections.WithVectorPartitionStorageBarrierWithContextV1
+         0     0%     0%      1.44s 38.81%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).loadGeneration
+         0     0%     0%      1.42s 38.27%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleAuthorityWithContextV1
+         0     0%     0%      1.42s 38.27%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).loadVectorPartitionLifecycleCheckpointStateFromDirWithContextV1
+         0     0%     0%      1.21s 32.61%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1
+         0     0%     0%      1.21s 32.61%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func2
+         0     0%     0%      1.21s 32.61%  github.com/snissn/gomap/TreeDB/collections.writeVectorPartitionJSONSliceWithContextV1[go.shape.struct { VectorOrdinal uint64; PartitionID uint32 }]
+         0     0%     0%      1.04s 28.03%  github.com/snissn/gomap/TreeDB/collections.reduceVectorPartitionLifecycleCheckpointTailV1
+         0     0%     0%      1.02s 27.49%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.integrityDigestWithContextV1.func4
+         0     0%     0%      0.87s 23.45%  github.com/snissn/gomap/TreeDB/collections.encodeVectorPartitionManifestWithContextV1
+         0     0%     0%      0.86s 23.18%  encoding/json.Marshal
+         0     0%     0%      0.85s 22.91%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0%     0%      0.85s 22.91%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0%     0%      0.85s 22.91%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0%     0%      0.85s 22.91%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+     0.02s  0.54%  0.54%      0.84s 22.64%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.validateWithContextV1
+         0     0%  0.54%      0.83s 22.37%  github.com/snissn/gomap/TreeDB/collections.applyVectorPartitionReadyPromotionV1
+         0     0%  0.54%      0.83s 22.37%  github.com/snissn/gomap/TreeDB/collections.reduceVectorPartitionLifecycleRecordV1
+         0     0%  0.54%      0.80s 21.56%  encoding/json.(*encodeState).marshal
+         0     0%  0.54%      0.80s 21.56%  encoding/json.(*encodeState).reflectValue
+     0.06s  1.62%  2.16%      0.80s 21.56%  encoding/json.arrayEncoder.encode
+         0     0%  2.16%      0.80s 21.56%  encoding/json.sliceEncoder.encode
+         0     0%  2.16%      0.76s 20.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).AcquireVectorPartitionReaderPinWithContextV1
+         0     0%  2.16%      0.76s 20.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).AcquireVectorPartitionReaderPinWithContextV1.func1
+         0     0%  2.16%      0.76s 20.49%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionStoreV1).OpenWithContext
+         0     0%  2.16%      0.74s 19.95%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReader
+         0     0%  2.16%      0.74s 19.95%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot
+         0     0%  2.16%      0.71s 19.14%  github.com/snissn/gomap/TreeDB/collections.(*Collection).acquireColumnVectorGraphSharedPreparedSearch
+         0     0%  2.16%      0.71s 19.14%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot.func1
+         0     0%  2.16%      0.71s 19.14%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnVectorGraphPhysicalRowReaderSourcesAtSnapshot
+     0.23s  6.20%  8.36%      0.69s 18.60%  encoding/json.structEncoder.encode
+         0     0%  8.36%      0.68s 18.33%  github.com/snissn/gomap/TreeDB/collections.(*Collection).PreparedVectorPartitionManifestWithContextV1
+         0     0%  8.36%      0.68s 18.33%  github.com/snissn/gomap/TreeDB/collections.(*Collection).PreparedVectorPartitionManifestWithContextV1.func1
+         0     0%  8.36%      0.56s 15.09%  github.com/snissn/gomap/TreeDB/collections.EncodeVectorPartitionManifestV1 (inline)
+         0     0%  8.36%      0.48s 12.94%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionManifestV1).canonicalizeWithContextV1
+         0     0%  8.36%      0.47s 12.67%  github.com/snissn/gomap/TreeDB/collections.(*VectorPartitionLocalSearcherV1).SearchWithOptionsV1
+         0     0%  8.36%      0.47s 12.67%  github.com/snissn/gomap/TreeDB/nativewire.searchVectorPartitionDirectV1
+         0     0%  8.36%      0.46s 12.40%  github.com/snissn/gomap/TreeDB/collections.canonicalVectorPartitionLifecycleCheckpointWithContextV1
+     0.01s  0.27%  8.63%      0.43s 11.59%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.01s  0.27%  8.89%      0.42s 11.32%  crypto/internal/fips140/sha256.block
+     0.41s 11.05% 19.95%      0.41s 11.05%  crypto/internal/fips140/sha256.blockSHANI
+         0     0% 19.95%      0.40s 10.78%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+     0.06s  1.62% 21.56%      0.39s 10.51%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).searchCosineWithContext
+         0     0% 21.56%      0.37s  9.97%  github.com/snissn/gomap/TreeDB/collections.decodeVectorPartitionLifecycleCheckpointCanonicalWithContextV1
+         0     0% 21.56%      0.33s  8.89%  github.com/snissn/gomap/TreeDB/collections.vectorPartitionBuildingPromotionIdentityV1
+         0     0% 21.56%      0.31s  8.36%  github.com/snissn/gomap/TreeDB/collections.DecodeVectorPartitionManifestWithContextV1
+         0     0% 21.56%      0.31s  8.36%  runtime.systemstack
+         0     0% 21.56%      0.29s  7.82%  github.com/hashicorp/raft.(*Raft).run
+     0.04s  1.08% 22.64%      0.26s  7.01%  encoding/json.uintEncoder
+     0.26s  7.01% 29.65%      0.26s  7.01%  internal/runtime/syscall/linux.Syscall6
+         0     0% 29.65%      0.25s  6.74%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphAdjacencyStateSourcesForReader
+         0     0% 29.65%      0.25s  6.74%  github.com/snissn/gomap/TreeDB/collections.newColumnVectorGraphAdjacencyStateDirectSourceFromRoot
+         0     0% 29.65%      0.25s  6.74%  github.com/snissn/gomap/TreeDB/collections.openColumnVectorGraphAdjacencyStateSourcesFromRoot
+         0     0% 29.65%      0.25s  6.74%  syscall.RawSyscall6

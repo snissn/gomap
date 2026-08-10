@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
@@ -315,7 +316,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateActive(ctx context
 	}
 	if s.replicatedLifecycle != nil {
 		readySetDigest, err := s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
-			ctx,
+			raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceShardLifecycleV1),
 			s.replicatedCollection,
 			entry.manifest.IndexName,
 			entry.manifest.Generation,
@@ -344,7 +345,7 @@ func (s *CollectionVectorPartitionGenerationSourceV1) validateReplicatedLifecycl
 		return "", ErrVectorPartitionShardSearchGenerationMismatch
 	}
 	return s.replicatedLifecycle.ValidateVectorPartitionGenerationSearchV1(
-		ctx,
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceShardLifecycleV1),
 		s.replicatedCollection,
 		key.index,
 		key.generation,

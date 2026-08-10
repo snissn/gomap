@@ -1,0 +1,69 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: cpu
+Time: 2026-08-09 14:11:38 HST
+Duration: 17.26s, Total samples = 3.71s (21.49%)
+Showing nodes accounting for 3.01s, 81.13% of 3.71s total
+Dropped 237 nodes (cum <= 0.02s)
+Showing top 60 nodes out of 332
+      flat  flat%   sum%        cum   cum%
+     0.41s 11.05% 11.05%      0.41s 11.05%  crypto/internal/fips140/sha256.blockSHANI
+     0.26s  7.01% 18.06%      0.26s  7.01%  internal/runtime/syscall/linux.Syscall6
+     0.23s  6.20% 24.26%      0.69s 18.60%  encoding/json.structEncoder.encode
+     0.19s  5.12% 29.38%      0.19s  5.12%  runtime.memmove
+     0.17s  4.58% 33.96%      0.17s  4.58%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.16s  4.31% 38.27%      0.16s  4.31%  github.com/tphakala/simd/f32.dotProductAVX512
+     0.12s  3.23% 41.51%      0.12s  3.23%  bytes.(*Buffer).tryGrowByReslice (inline)
+     0.08s  2.16% 43.67%      0.20s  5.39%  runtime.scanObject
+     0.06s  1.62% 45.28%      0.80s 21.56%  encoding/json.arrayEncoder.encode
+     0.06s  1.62% 46.90%      0.09s  2.43%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).prepareSectionViewsWithContext
+     0.06s  1.62% 48.52%      0.39s 10.51%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).searchCosineWithContext
+     0.06s  1.62% 50.13%      0.08s  2.16%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DecodeRawUint32OffsetsListFallback
+     0.06s  1.62% 51.75%      0.06s  1.62%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.05s  1.35% 53.10%      0.12s  3.23%  bytes.(*Buffer).Write
+     0.05s  1.35% 54.45%      0.10s  2.70%  bytes.(*Buffer).WriteString
+     0.05s  1.35% 55.80%      0.05s  1.35%  runtime.memclrNoHeapPointers
+     0.05s  1.35% 57.14%      0.06s  1.62%  runtime.typePointers.next
+     0.04s  1.08% 58.22%      0.08s  2.16%  bytes.(*Buffer).WriteByte
+     0.04s  1.08% 59.30%      0.04s  1.08%  encoding/binary.littleEndian.Uint64 (inline)
+     0.04s  1.08% 60.38%      0.26s  7.01%  encoding/json.uintEncoder
+     0.04s  1.08% 61.46%      0.06s  1.62%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphNativeSearchScratch).insertTop
+     0.04s  1.08% 62.53%      0.06s  1.62%  github.com/snissn/gomap/TreeDB/collections.canonicalVectorPartitionNormalizedScoreV1
+     0.04s  1.08% 63.61%      0.04s  1.08%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.encodeLittleEndian4Payload[go.shape.uint32]
+     0.04s  1.08% 64.69%      0.13s  3.50%  internal/strconv.AppendUint
+     0.04s  1.08% 65.77%      0.04s  1.08%  internal/strconv.formatBase10
+     0.04s  1.08% 66.85%      0.04s  1.08%  runtime.futex
+     0.04s  1.08% 67.92%      0.05s  1.35%  runtime.tryDeferToSpanScan
+     0.03s  0.81% 68.73%      0.09s  2.43%  github.com/snissn/gomap/TreeDB/collections.validateMembershipsWithContextVPM
+     0.03s  0.81% 69.54%      0.03s  0.81%  internal/abi.Name.IsExported (inline)
+     0.02s  0.54% 70.08%      0.21s  5.66%  github.com/hashicorp/raft.(*Raft).runFollower
+     0.02s  0.54% 70.62%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).adjacencyLayerForOrdinal
+     0.02s  0.54% 71.16%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphNativeSearchScratch).frontierSiftDown
+     0.02s  0.54% 71.70%      0.06s  1.62%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphRowRefStateSource).rowRefForOrdinal
+     0.02s  0.54% 72.24%      0.84s 22.64%  github.com/snissn/gomap/TreeDB/collections.VectorPartitionManifestV1.validateWithContextV1
+     0.02s  0.54% 72.78%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphRowRefFromPreparedValues
+     0.02s  0.54% 73.32%      0.04s  1.08%  github.com/snissn/gomap/TreeDB/collections.validateColumnVectorIndexStateAdjacencySections
+     0.02s  0.54% 73.85%      0.02s  0.54%  internal/runtime/atomic.(*Uint32).CompareAndSwap (inline)
+     0.02s  0.54% 74.39%      0.02s  0.54%  internal/runtime/maps.(*groupReference).key (inline)
+     0.02s  0.54% 74.93%      0.07s  1.89%  reflect.Value.Field
+     0.02s  0.54% 75.47%      0.02s  0.54%  runtime.madvise
+     0.02s  0.54% 76.01%      0.05s  1.35%  runtime.selectgo
+     0.01s  0.27% 76.28%      0.43s 11.59%  crypto/internal/fips140/sha256.(*Digest).Write
+     0.01s  0.27% 76.55%      0.42s 11.32%  crypto/internal/fips140/sha256.block
+     0.01s  0.27% 76.82%      0.15s  4.04%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+     0.01s  0.27% 77.09%      0.08s  2.16%  github.com/hashicorp/raft.(*Raft).leaderLoop
+     0.01s  0.27% 77.36%      0.09s  2.43%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+     0.01s  0.27% 77.63%      0.07s  1.89%  github.com/hashicorp/raft.(*Raft).setupAppendEntries
+     0.01s  0.27% 77.90%      0.02s  0.54%  github.com/hashicorp/raft.(*saturationMetric).sleeping
+     0.01s  0.27% 78.17%      0.22s  5.93%  github.com/snissn/gomap/TreeDB/collections.(*Collection).newColumnVectorGraphTypedColumnVectorSource
+     0.01s  0.27% 78.44%      0.24s  6.47%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).scoreAndPushFrontierVisitedTile
+     0.01s  0.27% 78.71%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphTypedColumnVectorSource).Close
+     0.01s  0.27% 78.98%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.canonicalVectorPartitionAccumulateV1 (inline)
+     0.01s  0.27% 79.25%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.putU64VPM
+     0.01s  0.27% 79.51%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.validateDecodedRowLocators
+     0.01s  0.27% 79.78%      0.04s  1.08%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.validateRawUint32OffsetsListBytes
+     0.01s  0.27% 80.05%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/internal/typeddecode.PreparedInt64DirectView.Value (inline)
+     0.01s  0.27% 80.32%      0.17s  4.58%  github.com/snissn/gomap/TreeDB/internal/vectorops.dotFloat32IndexedScalar
+     0.01s  0.27% 80.59%      0.03s  0.81%  go.etcd.io/bbolt.(*DB).allocate
+     0.01s  0.27% 80.86%      0.02s  0.54%  internal/runtime/maps.NewMap
+     0.01s  0.27% 81.13%      0.02s  0.54%  internal/runtime/syscall/linux.EpollWait

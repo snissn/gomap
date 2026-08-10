@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from system_qualification import ContractError
-from topology_tax import summarize
+from topology_tax import _listener_matches, summarize
 
 
 SOURCE_REVISION = "d" * 40
@@ -25,6 +25,11 @@ def summarize_checked(single: list[Path], native: list[Path]) -> dict:
 
 
 class TopologyTaxTest(unittest.TestCase):
+    def test_listener_accepts_only_exact_or_equivalent_wildcard(self) -> None:
+        self.assertTrue(_listener_matches("[::]:47101", "0.0.0.0:47101"))
+        self.assertFalse(_listener_matches("127.0.0.1:47101", "0.0.0.0:47101"))
+        self.assertFalse(_listener_matches("[::]:47102", "0.0.0.0:47101"))
+
     def test_retained_runner_preserves_timing_wrapper_after_readiness(self) -> None:
         script = Path(__file__).parents[2] / "TreeDB/docs/evidence/vector-partition-local-system-qualification-4019/m2-95c60cbe/run_m2.py"
         spec = importlib.util.spec_from_file_location("m2_retained_runner", script)
@@ -47,6 +52,8 @@ class TopologyTaxTest(unittest.TestCase):
             "node_id": node["node_id"], "dataset_directory": topology["dataset_directory"], "database_directory": node["database_directory"],
             "state_directory": node["state_directory"],
         }
+        if "profile_directory" in node:
+            config["profile_directory"] = node["profile_directory"]
         if "public_listen" in node:
             config["public_listen"] = node["public_listen"]
         config.update({

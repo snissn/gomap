@@ -331,20 +331,50 @@ func vectorPartitionShardSearchTCPReconnectableV1(err error) bool {
 // VectorPartitionShardSearchTCPServerV1 serves one M5 service over the same
 // bounded framing contract used by the dispatcher.
 type VectorPartitionShardSearchTCPServerV1 struct {
-	Service          VectorPartitionShardSearchHandlerV1
-	EndpointIdentity VectorPartitionShardEndpointIdentityV1
-	MaxFrame         uint32
-	MaxResponseFrame uint32
-	InitialTimeout   time.Duration
+	Service                  VectorPartitionShardSearchHandlerV1
+	EndpointIdentity         VectorPartitionShardEndpointIdentityV1
+	EndpointIdentityProvider func() VectorPartitionShardEndpointIdentityV1
+	MaxFrame                 uint32
+	MaxResponseFrame         uint32
+	InitialTimeout           time.Duration
 }
 
 // VectorPartitionShardEndpointIdentityV1 binds a live shard listener to the
 // retained node configuration that opened it.
 type VectorPartitionShardEndpointIdentityV1 struct {
-	Version          uint32
-	GroupID          string
-	InstanceIdentity string
+	Version              uint32
+	GroupID              string
+	InstanceIdentity     string
+	CatalogMetaReadStats raftcluster.CatalogMetaLinearizableReadStatsV1
+	ProcessRuntimeStats  VectorPartitionProcessRuntimeStatsV1
 }
+
+type VectorPartitionProcessRuntimeStatsV1 struct {
+	SampleUnixNano              uint64 `json:"sample_unix_nano"`
+	CPUTimeNanos                uint64 `json:"cpu_time_nanos"`
+	RunQueueDelayNanos          uint64 `json:"run_queue_delay_nanos"`
+	Timeslices                  uint64 `json:"timeslices"`
+	VoluntaryContextSwitches    uint64 `json:"voluntary_context_switches"`
+	NonvoluntaryContextSwitches uint64 `json:"nonvoluntary_context_switches"`
+	RSSBytes                    uint64 `json:"rss_bytes"`
+	PeakRSSBytes                uint64 `json:"peak_rss_bytes"`
+	HeapAllocBytes              uint64 `json:"heap_alloc_bytes"`
+	HeapObjects                 uint64 `json:"heap_objects"`
+	TotalAllocBytes             uint64 `json:"total_alloc_bytes"`
+	Mallocs                     uint64 `json:"mallocs"`
+	Frees                       uint64 `json:"frees"`
+	NumGC                       uint64 `json:"num_gc"`
+	PauseTotalNanos             uint64 `json:"pause_total_nanos"`
+	Goroutines                  uint64 `json:"goroutines"`
+}
+
+// VectorPartitionCatalogMetaLinearizableReadStatsV1 is the bounded catalog
+// read evidence published by a production shard endpoint.
+type VectorPartitionCatalogMetaLinearizableReadStatsV1 = raftcluster.CatalogMetaLinearizableReadStatsV1
+
+// VectorPartitionCatalogMetaLinearizableReadStageStatsV1 is one attributed
+// source within the published catalog read evidence.
+type VectorPartitionCatalogMetaLinearizableReadStageStatsV1 = raftcluster.CatalogMetaLinearizableReadStageStatsV1
 
 type vectorPartitionShardEndpointProbeV1 struct {
 	Version uint32
@@ -385,11 +415,15 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 			return
 		}
 		if frame.Probe != nil && frame.Request == nil && frame.Response == nil && frame.Error == nil && frame.ProbeResponse == nil {
-			if frame.Probe.Version != 1 || s.EndpointIdentity.Version != 1 || s.EndpointIdentity.GroupID == "" || s.EndpointIdentity.InstanceIdentity == "" {
+			identity := s.EndpointIdentity
+			if s.EndpointIdentityProvider != nil {
+				identity = s.EndpointIdentityProvider()
+			}
+			if frame.Probe.Version != 1 || identity.Version != 1 || identity.GroupID == "" || identity.InstanceIdentity == "" {
 				_ = s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorInvalidRequestV1, Message: "M5 endpoint identity is unavailable"}}, maxResponseFrame, time.Now().Add(initialTimeout))
 				return
 			}
-			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &s.EndpointIdentity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
+			if s.writeFrame(conn, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}, maxResponseFrame, time.Now().Add(initialTimeout)) != nil {
 				return
 			}
 			continue
