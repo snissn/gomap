@@ -79,7 +79,7 @@ func localHNSWAttributionGraphEvidenceV1(source *m8ProductionMultiGroupAssetsV1,
 			return nil, aggregate, errors.New("retained local HNSW overlay asset drift")
 		}
 		comparison, err := collections.CompareVectorPartitionLocalGraphPacksV1(native.searchers[partition], overlay.searchers[partition])
-		if err != nil || comparison.Schema != collections.VectorPartitionLocalGraphComparisonSchemaV1 || comparison.Native.Rows != loads[partition] || comparison.Final.Rows != loads[partition] || comparison.Native.ReachableRows > comparison.Native.Rows || comparison.Final.ReachableRows > comparison.Final.Rows || len(comparison.Rows) != int(comparison.Native.Rows) {
+		if err != nil || comparison.Schema != collections.VectorPartitionLocalGraphComparisonSchemaV1 || comparison.Native.Rows != loads[partition] || comparison.Final.Rows != loads[partition] || comparison.Native.ReachableRows > comparison.Native.Rows || comparison.Final.ReachableRows > comparison.Final.Rows || comparison.Native.TraversalRoots == 0 || comparison.Final.TraversalRoots == 0 || len(comparison.Rows) != int(comparison.Native.Rows) {
 			return nil, aggregate, errors.New("retained local HNSW graph comparison")
 		}
 		for _, row := range comparison.Rows {
@@ -99,7 +99,7 @@ func localHNSWAttributionGraphHarnessV1(source *m8ProductionMultiGroupAssetsV1, 
 	}
 	for partition, retained := range source.manifest.Assets {
 		asset := harness.packAssets[partition]
-		if retained.PartitionID != uint32(partition) || asset.PartitionID != uint32(partition) || harness.searchers[partition] == nil || asset.Bytes == 0 || !localHNSWAttributionSHA256V1(asset.MembershipDigest) || asset.MembershipDigest != retained.MembershipDigest {
+		if retained.PartitionID != uint32(partition) || asset.PartitionID != uint32(partition) || harness.searchers[partition] == nil || asset.ID == "" || asset.Bytes == 0 || !localHNSWAttributionSHA256V1(asset.Checksum) || !localHNSWAttributionSHA256V1(asset.MembershipDigest) || asset.MembershipDigest != retained.MembershipDigest {
 			return errors.New("retained local HNSW partition asset")
 		}
 	}
