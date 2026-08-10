@@ -20263,11 +20263,16 @@ type CompoundIndexRangeOptions struct {
 	Limit  int
 	Desc   bool
 	// StableDocumentIDTies makes a BSON v2 scan emit equal logical index keys in
-	// ascending document-ID order. The default retains the historical physical
-	// order for direct callers. A result limit may
+	// ascending document-ID order (or DocumentIDLess order when supplied). The
+	// default retains the historical physical order for direct callers. A result limit may
 	// return the ascending-ID prefix of a fully buffered group; a work-cap stop
 	// never publishes an incomplete group and reports truncation instead.
 	StableDocumentIDTies bool
+	// DocumentIDLess optionally supplies the ordering for IDs within a stable
+	// logical-index-key tie group. Nil uses the historical encoded-byte order.
+	// Callers whose document IDs have a higher-level collation may provide their
+	// own deterministic comparator without materializing the whole result set.
+	DocumentIDLess func(left, right []byte) bool
 }
 
 const defaultIndexRangeResultCap = 16
@@ -20428,6 +20433,7 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		CloneDocumentID:      true,
 		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
 		StableDocumentIDTies: opts.StableDocumentIDTies,
+		DocumentIDLess:       opts.DocumentIDLess,
 		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
 	}, func(id []byte) (bool, error) {
 		ids = append(ids, id)
@@ -21110,6 +21116,7 @@ type scanMergedCollectionIndexIDOptions struct {
 	CloneDocumentID      bool
 	DedupeDocumentID     bool
 	StableDocumentIDTies bool
+	DocumentIDLess       func(left, right []byte) bool
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
@@ -21365,7 +21372,11 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 		if len(groupIDs) == 0 {
 			return true, false, nil
 		}
-		sort.Slice(groupIDs, func(i, j int) bool { return bytes.Compare(groupIDs[i], groupIDs[j]) < 0 })
+		less := opts.DocumentIDLess
+		if less == nil {
+			less = func(left, right []byte) bool { return bytes.Compare(left, right) < 0 }
+		}
+		sort.Slice(groupIDs, func(i, j int) bool { return less(groupIDs[i], groupIDs[j]) })
 		remaining := len(groupIDs)
 		truncated := false
 		if maxResults > 0 && remaining > maxResults-emitted {

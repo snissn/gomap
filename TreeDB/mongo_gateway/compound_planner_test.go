@@ -560,6 +560,36 @@ func TestMongoCompoundPlanNoSortLimitRequiresGlobalPageBudget(t *testing.T) {
 	assertCommandError(t, serveCommand(t, newServer(t, 2), 40652645, query(1<<31-1, 1<<31-1)), "BadValue")
 }
 
+func TestMongoCompoundPlanStableSortUsesBSONIDTieOrder(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40652646, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40652647, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "z"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "aa"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 40652648, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"aa"})
+}
+
+func TestMongoCompoundPlanSortWithUnfixedTrailingComponentFallsBack(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40652649, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}, {Key: "y", Value: int32(1)}}}, {Key: "name", Value: "tenant_x_y"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40652650, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "x", Value: int32(1)}, {Key: "y", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "x", Value: int32(1)}, {Key: "y", Value: int32(1)}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "x", Value: int32(1)}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 40652651, command)
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a"})
+	explain := serveCommand(t, server, 40652652, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "queryPlanner"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	if got, ok := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("sort").Document().Lookup("satisfied").BooleanOK(); !ok || got {
+		t.Fatalf("sort satisfied=%v ok=%v want false: %s", got, ok, explain)
+	}
+}
+
 func TestMongoCompoundHintExplainExcludesAllLegacyProbes(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065265, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{

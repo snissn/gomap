@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -74,6 +75,25 @@ func compoundIndexPlans(meta collections.CollectionMeta, plan findPlan) []compou
 // requested sort, the physical walk must satisfy the complete gateway order.
 func compoundPlanPaginationSafe(candidate compoundIndexPlan, plan findPlan) bool {
 	return candidate.residualFilters == 0 && (plan.sort.field == "" || candidate.sortSatisfied)
+}
+
+// mongoPrimaryKeyLess compares canonical gateway primary keys by their BSON
+// _id values. Storage byte order is intentionally not Mongo's public _id
+// order (for example strings retain BSON's little-endian length).
+func mongoPrimaryKeyLess(left, right []byte) bool {
+	decode := func(key []byte) (bson.RawValue, bool) {
+		if len(key) < 2 || key[0] != primaryKeyPrefixBSONValue {
+			return bson.RawValue{}, false
+		}
+		value := bson.RawValue{Type: bson.Type(key[1]), Value: key[2:]}
+		return value, value.Validate() == nil
+	}
+	leftValue, leftOK := decode(left)
+	rightValue, rightOK := decode(right)
+	if !leftOK || !rightOK {
+		return bytes.Compare(left, right) < 0
+	}
+	return compareRawValues(leftValue, rightValue) < 0
 }
 
 func findHintMatchesIndex(hint findHint, idx collections.IndexDefinition) bool {
@@ -198,7 +218,9 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			return compoundIndexPlan{}, false
 		}
 		terms := findSortTerms(plan.sort)
-		if component+len(terms) > len(components) || components[component].Field != terms[0].field {
+		// Every remaining unfixed component must participate in the requested
+		// order. Otherwise it physically orders equal sort values before _id.
+		if component+len(terms) != len(components) || components[component].Field != terms[0].field {
 			return compoundIndexPlan{}, false
 		}
 		candidate.sortSatisfied = true
@@ -466,6 +488,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			// Mongo compares them as equal, so stable grouping is required in both
 			// physical directions.
 			StableDocumentIDTies: candidate.sortSatisfied,
+			DocumentIDLess:       mongoPrimaryKeyLess,
 		})
 		if err != nil {
 			return nil, candidate, true, err
