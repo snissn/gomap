@@ -449,6 +449,7 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 	insert("a", 1)
 	insert("b", 3)
 	insert("c", 2)
+	insert("e", 3)
 	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
 		t.Fatalf("compact persisted insert overlays: %v", err)
 	}
@@ -461,11 +462,11 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}
 	assertReverse := func(collection *Collection) {
 		t.Helper()
-		ids, truncated, err := collection.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Desc: true, Limit: 4})
+		ids, truncated, err := collection.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Desc: true, StableDocumentIDTies: true, Limit: 4})
 		if err != nil || truncated {
 			t.Fatalf("reverse scan ids=%q truncated=%v err=%v", ids, truncated, err)
 		}
-		want := []string{"a", "b"}
+		want := []string{"a", "b", "e"}
 		if len(ids) != len(want) {
 			t.Fatalf("reverse ids=%q want %q", ids, want)
 		}
