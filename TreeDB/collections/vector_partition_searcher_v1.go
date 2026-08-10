@@ -46,21 +46,34 @@ type VectorPartitionLocalGraphEdgeEvidenceV1 struct {
 	FinalReciprocal  bool    `json:"final_reciprocal"`
 }
 type VectorPartitionLocalGraphRowEvidenceV1 struct {
-	Ordinal                                                               uint32                                    `json:"ordinal"`
-	TreeRole                                                              string                                    `json:"tree_role"`
-	NativeDegree, FinalDegree, OverlayEdges, OverlayDuplicates, Displaced int                                       `json:"native_degree,omitempty"`
-	NativeSaturated, FinalSaturated                                       bool                                      `json:"native_saturated"`
-	DisplacedEdges                                                        []VectorPartitionLocalGraphEdgeEvidenceV1 `json:"displaced_edges,omitempty"`
+	Ordinal           uint32                                    `json:"ordinal"`
+	TreeRole          string                                    `json:"tree_role"`
+	NativeDegree      int                                       `json:"native_degree"`
+	FinalDegree       int                                       `json:"final_degree"`
+	OverlayEdges      int                                       `json:"overlay_edges"`
+	OverlayDuplicates int                                       `json:"overlay_duplicates"`
+	Displaced         int                                       `json:"displaced"`
+	NativeSaturated   bool                                      `json:"native_saturated"`
+	FinalSaturated    bool                                      `json:"final_saturated"`
+	DisplacedEdges    []VectorPartitionLocalGraphEdgeEvidenceV1 `json:"displaced_edges,omitempty"`
 }
 type VectorPartitionLocalGraphDistanceDistributionV1 struct {
-	Count                         uint64  `json:"count"`
-	Min, Mean, P50, P95, P99, Max float64 `json:"min,omitempty"`
+	Count uint64  `json:"count"`
+	Min   float64 `json:"min,omitempty"`
+	Mean  float64 `json:"mean,omitempty"`
+	P50   float64 `json:"p50,omitempty"`
+	P95   float64 `json:"p95,omitempty"`
+	P99   float64 `json:"p99,omitempty"`
+	Max   float64 `json:"max,omitempty"`
 }
 type VectorPartitionLocalGraphComparisonV1 struct {
-	Native, Final                               VectorPartitionPackDiagnosticsV1                `json:"native"`
-	Rows                                        []VectorPartitionLocalGraphRowEvidenceV1        `json:"rows"`
-	NativeDistances, FinalDistances             VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_distances"`
-	NativeReciprocalEdges, FinalReciprocalEdges uint64                                          `json:"native_reciprocal_edges"`
+	Native                VectorPartitionPackDiagnosticsV1                `json:"native"`
+	Final                 VectorPartitionPackDiagnosticsV1                `json:"final"`
+	Rows                  []VectorPartitionLocalGraphRowEvidenceV1        `json:"rows"`
+	NativeDistances       VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_distances"`
+	FinalDistances        VectorPartitionLocalGraphDistanceDistributionV1 `json:"final_distances"`
+	NativeReciprocalEdges uint64                                          `json:"native_reciprocal_edges"`
+	FinalReciprocalEdges  uint64                                          `json:"final_reciprocal_edges"`
 }
 
 // CompareVectorPartitionLocalGraphPacksV1 is an offline-only prepared-pack
@@ -100,19 +113,40 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
 		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
 		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
-		row := VectorPartitionLocalGraphRowEvidenceV1{Ordinal: uint32(i), TreeRole: "leaf", NativeDegree: len(nn), FinalDegree: len(fn), NativeSaturated: len(nn) >= limit, FinalSaturated: len(fn) >= limit}
-		if i == np.Header.EntryOrdinal {
+		tree, treeErr := vectorPartitionLocalNavigationEdgesV1(i, np.Header.Rows, limit)
+		if treeErr != nil {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		expected := append([]uint32(nil), tree...)
+		seenExpected := map[uint32]bool{}
+		for _, x := range tree {
+			seenExpected[x] = true
+		}
+		for _, x := range nn {
+			if len(expected) >= limit {
+				break
+			}
+			if !seenExpected[x] {
+				expected = append(expected, x)
+				seenExpected[x] = true
+			}
+		}
+		if !slices.Equal(expected, fn) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		row := VectorPartitionLocalGraphRowEvidenceV1{Ordinal: uint32(i), TreeRole: "leaf", NativeDegree: len(nn), FinalDegree: len(fn), NativeSaturated: len(nn) >= limit, FinalSaturated: len(fn) >= limit, OverlayEdges: len(tree)}
+		if i == 0 {
 			row.TreeRole = "root"
-		} else if len(fn)-len(nn) > 1 {
+		} else if len(tree) > 1 {
 			row.TreeRole = "internal"
 		}
 		seen := map[uint32]bool{}
 		for _, x := range nn {
 			seen[x] = true
 		}
-		for _, x := range fn {
-			if !seen[x] {
-				row.OverlayEdges++
+		for _, x := range tree {
+			if seen[x] {
+				row.OverlayDuplicates++
 			}
 		}
 		for pos, x := range nn {
