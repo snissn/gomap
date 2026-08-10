@@ -85,6 +85,10 @@ func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testin
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 406514, byPattern)), []string{"a"})
 	bad := append(append(bson.D(nil), base[:2]...), bson.E{Key: "hint", Value: "missing"}, base[2])
 	assertCommandError(t, serveCommand(t, server, 406515, bad), "BadValue")
+	malformed := append(append(bson.D(nil), base[:2]...), bson.E{Key: "hint", Value: bson.D{{Key: "tenant", Value: int32(0)}}}, base[2])
+	assertCommandError(t, serveCommand(t, server, 406516, malformed), "BadValue")
+	incompatible := append(append(bson.D(nil), base[:2]...), bson.E{Key: "hint", Value: bson.D{{Key: "createdAt", Value: int64(-1)}}}, base[2])
+	assertCommandError(t, serveCommand(t, server, 406517, incompatible), "BadValue")
 }
 
 func TestMongoCompoundPlanInEqualityPrefix(t *testing.T) {
