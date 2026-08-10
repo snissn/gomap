@@ -253,7 +253,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Counters["public_request_frame_bytes"] == 0 || cell.Counters["public_response_frame_bytes"] == 0 || cell.Timings["total"] == 0 || cell.Timings["coordinator_total"] == 0 || cell.Timings["client_total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] == 0 || cell.Timings["shard_search"] == 0 || cell.CatalogReads.Total.Total.Reads != uint64(2*len(queries))+cell.Counters["selected_groups"] || cell.CatalogReads.Total.Total.LogBarriers != cell.CatalogReads.Total.Total.Reads || len(cell.TotalNanos) != len(queries) {
+	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Counters["public_request_frame_bytes"] == 0 || cell.Counters["public_response_frame_bytes"] == 0 || cell.Timings["total"] == 0 || cell.Timings["coordinator_total"] == 0 || cell.Timings["client_total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] == 0 || cell.Timings["shard_search"] == 0 || cell.CatalogReads.Total.Total.Reads != uint64(2*len(queries))+cell.Counters["selected_groups"] || cell.CatalogReads.Total.Total.LogBarriers != 0 || cell.CatalogReads.Total.Total.NoLogProofs != cell.CatalogReads.Total.Total.Reads || len(cell.TotalNanos) != len(queries) {
 		t.Fatalf("system benchmark cell = %+v", cell)
 	}
 	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
@@ -264,7 +264,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 
 func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 	stage := func(reads uint64) nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1 {
-		return nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{Reads: reads, Successes: reads, VerifyLeaderCalls: reads, LogBarriers: reads, TotalNanos: reads * 10, AdmissionNanos: reads, VerifyLeaderNanos: reads, BarrierNanos: reads, AppliedReadNanos: reads}
+		return nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{Reads: reads, Successes: reads, VerifyLeaderCalls: reads, NoLogProofs: reads, TotalNanos: reads * 10, AdmissionNanos: reads, VerifyLeaderNanos: reads, CurrentTermNanos: reads, RaftApplyNanos: reads, AppliedReadNanos: reads}
 	}
 	before := map[string]vectorPartitionSystemNodeObservationV1{"node": {
 		Catalog: nativewire.VectorPartitionCatalogMetaLinearizableReadStatsV1{LastTerm: 1, LastCatalogApplied: 2, LastRaftApplied: 5, LastRaftLog: 5},
@@ -287,7 +287,7 @@ func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 	node.Catalog.LastRaftLog = 11
 	missingLog["node"] = node
 	if _, _, err := vectorPartitionSystemCatalogReadDeltaV1(before, missingLog, 2, 3); err == nil || !strings.Contains(err.Error(), "non-monotonic or lack proof") {
-		t.Fatalf("missing LogBarrier evidence error = %v", err)
+		t.Fatalf("invalid no-log proof evidence error = %v", err)
 	}
 }
 

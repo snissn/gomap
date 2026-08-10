@@ -48,9 +48,13 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	if term == 0 || index == 0 || !bytes.Equal(state.command, []byte("generation-1")) || state.index != index {
 		t.Fatalf("term/index/state=%d/%d/%q/%d", term, index, state.command, state.index)
 	}
-	linearizableIndex, err := p.LinearizableCatalogMetaAppliedIndexV1(WithCatalogMetaReadSourceV1(ctx, CatalogMetaReadSourceOperationsHealthV1))
-	if err != nil || linearizableIndex != index {
-		t.Fatalf("linearizable applied index=%d err=%v want %d", linearizableIndex, err, index)
+	lastLogBeforeReads := p.raft.LastIndex()
+	proof, err := p.LinearizableCatalogMetaReadProofV1(WithCatalogMetaReadSourceV1(ctx, CatalogMetaReadSourceOperationsHealthV1))
+	if err != nil || proof.CatalogAppliedIndex != index || proof.CommitIndex == 0 || proof.RaftAppliedIndex < proof.CommitIndex || !proof.QuorumVerified {
+		t.Fatalf("linearizable proof=%+v err=%v want catalog index %d", proof, err, index)
+	}
+	if err := p.ValidateCatalogMetaReadProofLeaseV1(proof); err != nil {
+		t.Fatalf("validate proof lease: %v", err)
 	}
 	for _, source := range []CatalogMetaReadSourceV1{CatalogMetaReadSourceCoordinatorLifecycleV1, CatalogMetaReadSourceShardLifecycleV1, CatalogMetaReadSourceUnknownV1} {
 		if got, err := p.LinearizableCatalogMetaAppliedIndexV1(WithCatalogMetaReadSourceV1(ctx, source)); err != nil || got != index {
@@ -58,9 +62,23 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 		}
 	}
 	stats := p.CatalogMetaLinearizableReadStatsV1()
-	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 4 || stats.Total.TotalNanos == 0 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
+	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 0 || stats.Total.NoLogProofs != 4 || stats.Total.CurrentTermNanos == 0 || stats.Total.TotalNanos == 0 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
 		t.Fatalf("catalog read stats=%+v", stats)
 	}
+	if got := p.raft.LastIndex(); got != lastLogBeforeReads {
+		t.Fatalf("catalog reads advanced raft log from %d to %d", lastLogBeforeReads, got)
+	}
+	expired := proof
+	expired.validThrough = time.Now().Add(-time.Nanosecond)
+	if err := p.ValidateCatalogMetaReadProofLeaseV1(expired); !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("expired proof err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+	proofLease := p.proofLease
+	p.proofLease = time.Nanosecond
+	if _, err := p.LinearizableCatalogMetaReadProofV1(ctx); !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("proof whose lease expires during capture err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+	p.proofLease = proofLease
 	if err := p.SnapshotCatalogMetaV1(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +87,9 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	}
 	if _, _, err := p.SubmitCatalogMetaCommandV1(context.Background(), []byte("generation-2")); err != nil {
 		t.Fatal(err)
+	}
+	if err := p.ValidateCatalogMetaReadProofLeaseV1(proof); !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("stale proof err=%v want ErrReadBarrierNotSatisfied", err)
 	}
 	if err := state.InstallCatalogMetaSnapshotBytesV1(catalogMetaRestoreCapabilityV1(), state.snapshot); err != nil {
 		t.Fatal(err)
@@ -273,6 +294,10 @@ func TestCatalogMetaRaftProviderFixedPeersFailoverSnapshotReopenAndRejoin(t *tes
 		t.Fatalf("leader submit generation-1: %v", err)
 	}
 	waitCatalogMetaStates(t, states, []NodeID{"node-a", "node-b", "node-c"}, []byte("generation-1"))
+	oldProof, err := providers[leaderID].LinearizableCatalogMetaReadProofV1(context.Background())
+	if err != nil {
+		t.Fatalf("old leader proof: %v", err)
+	}
 	for id, provider := range providers {
 		if id == leaderID {
 			continue
@@ -287,9 +312,23 @@ func TestCatalogMetaRaftProviderFixedPeersFailoverSnapshotReopenAndRejoin(t *tes
 	if err := oldLeader.Close(); err != nil {
 		t.Fatalf("close old leader %s: %v", leaderID, err)
 	}
+	if err := oldLeader.ValidateCatalogMetaReadProofLeaseV1(oldProof); err == nil {
+		t.Fatal("closed leader accepted retained proof")
+	}
 	delete(providers, leaderID)
 	disconnectCatalogMetaTransport(leaderID, peers, transports)
 	newLeaderID := waitCatalogMetaLeader(t, providers)
+	newProof, err := providers[newLeaderID].LinearizableCatalogMetaReadProofV1(context.Background())
+	if err != nil || newProof.LeaderTerm == oldProof.LeaderTerm || newProof.CommitIndex == 0 {
+		t.Fatalf("new leader proof=%+v err=%v old term=%d", newProof, err, oldProof.LeaderTerm)
+	}
+	lastLog := providers[newLeaderID].raft.LastIndex()
+	if _, err := providers[newLeaderID].LinearizableCatalogMetaReadProofV1(context.Background()); err != nil {
+		t.Fatalf("repeat new leader proof: %v", err)
+	}
+	if got := providers[newLeaderID].raft.LastIndex(); got != lastLog {
+		t.Fatalf("repeat new leader proof advanced raft log from %d to %d", lastLog, got)
+	}
 	if _, _, err := providers[newLeaderID].SubmitCatalogMetaCommandV1(context.Background(), []byte("generation-2")); err != nil {
 		t.Fatalf("new leader submit generation-2: %v", err)
 	}
@@ -510,6 +549,12 @@ func (s *concurrentCatalogMetaRaftTestState) currentCommand() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return bytes.Clone(s.command)
+}
+
+func (s *concurrentCatalogMetaRaftTestState) CatalogMetaAppliedIndexV1() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.index, s.index != 0
 }
 
 func catalogMetaCapablePeer(id NodeID) Peer {

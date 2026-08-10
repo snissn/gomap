@@ -73,6 +73,15 @@ type VectorPartitionLifecycleMutationFenceStatusV1 struct {
 	Pending    bool
 }
 
+// VectorPartitionServingAuthoritySnapshotV1 is one atomic catalog/lifecycle
+// identity captured at an exact applied index. Local serving snapshots bind
+// their immutable router and partition assets to this value.
+type VectorPartitionServingAuthoritySnapshotV1 struct {
+	Catalog  CatalogMetaStatusV1
+	Identity VectorPartitionLifecycleIdentityV1
+	Record   VectorPartitionLifecycleRecordV1
+}
+
 func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleMutationFencesV1() []VectorPartitionLifecycleMutationFenceStatusV1 {
 	if a == nil {
 		return nil
@@ -361,34 +370,124 @@ func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionGenerationSearchAtApplie
 	sourceSchemaHash uint64,
 	sourceRowCount uint64,
 ) (string, error) {
+	snapshot, err := a.vectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+		ctx, requiredAppliedIndex, false, collection, index, generation, indexDefinitionDigest,
+		sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount,
+	)
+	if err != nil {
+		return "", err
+	}
+	return snapshot.Record.ReadySetDigest, nil
+}
+
+// VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1 captures the exact
+// catalog and lifecycle identity installed at requiredAppliedIndex. It rejects
+// both lagging and newer views so publication cannot mix generations.
+func (a *CatalogMetaAuthorityV1) VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+	ctx context.Context,
+	requiredAppliedIndex uint64,
+	collection CollectionRefV1,
+	index string,
+	generation uint64,
+	indexDefinitionDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+) (VectorPartitionServingAuthoritySnapshotV1, error) {
+	return a.vectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+		ctx, requiredAppliedIndex, true, collection, index, generation, indexDefinitionDigest,
+		sourceGeneration, sourceChecksum, sourceSchemaHash, sourceRowCount,
+	)
+}
+
+// ValidateVectorPartitionServingAuthoritySnapshotAtAppliedIndexV1 validates a
+// retained serving identity against the exact local applied view without
+// cloning the lifecycle record. The required index must come from a retained
+// linearizable read proof.
+func (a *CatalogMetaAuthorityV1) ValidateVectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+	ctx context.Context,
+	requiredAppliedIndex uint64,
+	expected VectorPartitionServingAuthoritySnapshotV1,
+) error {
 	if a == nil {
-		return "", ErrCatalogMetaUnavailable
+		return ErrCatalogMetaUnavailable
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return err
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if requiredAppliedIndex == 0 || a.applied < requiredAppliedIndex {
-		return "", errors.Join(ErrCatalogMetaUnavailable, fmt.Errorf("catalog applied index %d is behind required linearizable index %d", a.applied, requiredAppliedIndex))
+	retainedWireBytes := uint64(len(a.recordBytes)+len(a.command)) + a.lifecycleBytes
+	if requiredAppliedIndex == 0 || a.applied != requiredAppliedIndex || expected.Catalog.AppliedIndex != requiredAppliedIndex ||
+		a.record.Epoch != expected.Catalog.Epoch || a.record.Digest != expected.Catalog.Digest ||
+		a.record.Catalog.Features.ConfigVersion != expected.Catalog.Features.ConfigVersion ||
+		!slices.Equal(a.record.Catalog.Features.Required, expected.Catalog.Features.Required) ||
+		retainedWireBytes != expected.Catalog.RetainedWireBytes || a.refusal != expected.Catalog.Refusal {
+		return errors.Join(ErrCatalogMetaUnavailable, fmt.Errorf("catalog serving authority changed"))
+	}
+	identity, ok := a.activeNames[vectorPartitionLifecycleServingKeyV1{
+		Collection: expected.Identity.Index.Collection,
+		IndexName:  expected.Identity.Index.IndexName,
+	}]
+	if !ok || identity != expected.Identity {
+		return ErrVectorPartitionLifecycleIdentity
+	}
+	record, ok := a.lifecycle[identity]
+	if !ok || !equalVectorPartitionLifecycleRecordV1(record, expected.Record) {
+		return ErrVectorPartitionLifecycleIdentity
+	}
+	return record.CanSearch(VectorPartitionLifecycleSearchProofV1{
+		Identity: identity, ReadySetDigest: expected.Record.ReadySetDigest,
+	})
+}
+
+func (a *CatalogMetaAuthorityV1) vectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+	ctx context.Context,
+	requiredAppliedIndex uint64,
+	requireExact bool,
+	collection CollectionRefV1,
+	index string,
+	generation uint64,
+	indexDefinitionDigest string,
+	sourceGeneration uint64,
+	sourceChecksum uint64,
+	sourceSchemaHash uint64,
+	sourceRowCount uint64,
+) (VectorPartitionServingAuthoritySnapshotV1, error) {
+	if a == nil {
+		return VectorPartitionServingAuthoritySnapshotV1{}, ErrCatalogMetaUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorPartitionServingAuthoritySnapshotV1{}, err
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if requiredAppliedIndex == 0 || a.applied < requiredAppliedIndex || requireExact && a.applied != requiredAppliedIndex {
+		return VectorPartitionServingAuthoritySnapshotV1{}, errors.Join(ErrCatalogMetaUnavailable, fmt.Errorf("catalog applied index %d does not satisfy required linearizable index %d", a.applied, requiredAppliedIndex))
 	}
 	identity, ok := a.activeNames[vectorPartitionLifecycleServingKeyV1{Collection: collection, IndexName: index}]
 	if !ok {
-		return "", errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("no active generation"))
+		return VectorPartitionServingAuthoritySnapshotV1{}, errors.Join(ErrVectorPartitionLifecycleGuard, fmt.Errorf("no active generation"))
 	}
 	record, ok := a.lifecycle[identity]
 	if !ok || identity.Generation != generation || identity.Index.IndexDefinitionDigest != indexDefinitionDigest ||
 		identity.Source.Generation != sourceGeneration || identity.Source.Checksum != sourceChecksum ||
 		identity.Source.SchemaHash != sourceSchemaHash || identity.Source.RowCount != sourceRowCount {
-		return "", ErrVectorPartitionLifecycleIdentity
+		return VectorPartitionServingAuthoritySnapshotV1{}, ErrVectorPartitionLifecycleIdentity
 	}
 	if err := record.CanSearch(VectorPartitionLifecycleSearchProofV1{Identity: identity, ReadySetDigest: record.ReadySetDigest}); err != nil {
-		return "", err
+		return VectorPartitionServingAuthoritySnapshotV1{}, err
 	}
-	return record.ReadySetDigest, nil
+	return VectorPartitionServingAuthoritySnapshotV1{
+		Catalog: a.statusLocked(), Identity: identity, Record: cloneVectorPartitionLifecycleRecordV1(record),
+	}, nil
 }
 
 func (a *CatalogMetaAuthorityV1) VectorPartitionLifecycleRecordV1(identity VectorPartitionLifecycleIdentityV1) (VectorPartitionLifecycleRecordV1, bool) {
@@ -673,6 +772,17 @@ func cloneVectorPartitionLifecycleRecordV1(record VectorPartitionLifecycleRecord
 	record.ReadyGroups = slices.Clone(record.ReadyGroups)
 	record.CleanedGroups = slices.Clone(record.CleanedGroups)
 	return record
+}
+
+func equalVectorPartitionLifecycleRecordV1(a, b VectorPartitionLifecycleRecordV1) bool {
+	return a.Format == b.Format && a.Revision == b.Revision && a.State == b.State && a.Identity == b.Identity &&
+		a.PreviousActiveGeneration == b.PreviousActiveGeneration && a.MutationEpoch == b.MutationEpoch &&
+		slices.Equal(a.RequiredGroups, b.RequiredGroups) && slices.Equal(a.ReadyGroups, b.ReadyGroups) &&
+		a.ReadySetDigest == b.ReadySetDigest && a.InvalidationReason == b.InvalidationReason &&
+		a.InvalidationEpoch == b.InvalidationEpoch && a.MutationConfirmed == b.MutationConfirmed &&
+		a.Aborted == b.Aborted && a.RetirementReason == b.RetirementReason &&
+		a.SupersededByGeneration == b.SupersededByGeneration && slices.Equal(a.CleanedGroups, b.CleanedGroups) &&
+		a.CleanupComplete == b.CleanupComplete && a.LastCommandDigest == b.LastCommandDigest
 }
 
 func cloneVectorPartitionLifecycleActiveV1(source map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1) map[VectorPartitionLifecycleIndexIdentityV1]VectorPartitionLifecycleIdentityV1 {

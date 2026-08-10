@@ -359,7 +359,7 @@ func (n *VectorPartitionProductionNodeV1) Close() error {
 
 func vectorPartitionProductionNodePinnedManifestV1(manifest collections.VectorPartitionManifestV1) VectorPartitionPinnedManifestV1 {
 	return VectorPartitionPinnedManifestV1{
-		State: manifest.State, Collection: manifest.Collection, IndexName: manifest.IndexName, IndexDefinitionDigest: manifest.IndexDefinitionDigest,
+		State: manifest.State, Collection: manifest.Collection, IndexName: manifest.IndexName, IndexDefinitionDigest: manifest.IndexDefinitionDigest, IntegrityDigest: manifest.IntegrityDigest,
 		SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRowCount: manifest.SourceRowCount,
 		Generation: manifest.Generation, RouterGeneration: manifest.RouterGeneration, ReadySetDigest: manifest.ReadySetDigest, PartitionCount: manifest.PartitionCount,
 		Placements: slices.Clone(manifest.Placements),

@@ -1,0 +1,273 @@
+package nativewire
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+)
+
+type vectorPartitionServingSnapshotFixtureV1 struct {
+	harness     *raftplacement.CatalogMetaLifecycleHarnessV1
+	lifecycle   raftplacement.VectorPartitionLifecycleCoordinatorV1
+	identity    raftplacement.VectorPartitionLifecycleIdentityV1
+	coordinator *VectorPartitionCoordinatorV1
+	authority   *LinearizableCatalogVectorPartitionLifecycleAuthorityV1
+	publisher   *VectorPartitionServingSnapshotPublisherV1
+	sources     map[raftcluster.GroupID]*fakeVectorPartitionGenerationSourceV1
+}
+
+func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionServingSnapshotFixtureV1 {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
+	features := raftplacement.DefaultFeatureSet()
+	features.Required = append(features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})
+	catalogSpec := raftplacement.CatalogV1{
+		Features: features,
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-b"}, LeaderHint: "node-b"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{{Collection: ref, GroupID: "group-a", Mode: raftplacement.PlacementModeCollectionV1}},
+	}
+	catalog, err := raftplacement.Validate(catalogSpec)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	harness, err := raftplacement.OpenCatalogMetaLifecycleHarnessV1(ctx, raftplacement.CatalogMetaLifecycleHarnessOptionsV1{Catalog: catalogSpec, Prefix: "serving-snapshot"})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	meta, ok := harness.LeaderAuthority().Status()
+	if !ok {
+		_ = harness.Close()
+		tb.Fatal("catalog authority unavailable")
+	}
+	identity := raftplacement.VectorPartitionLifecycleIdentityV1{
+		Index: raftplacement.VectorPartitionLifecycleIndexIdentityV1{
+			Collection: ref, CollectionIncarnation: 1, IndexName: "embedding",
+			IndexDefinitionDigest: strings.Repeat("a", 64), IndexEpoch: 1,
+			CatalogEpoch: meta.Epoch, CatalogDigest: meta.Digest,
+		},
+		Source:     raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2},
+		Generation: 7,
+	}
+	lifecycle := harness.LifecycleCoordinator()
+	required := []raftcluster.GroupID{"group-a", "group-b"}
+	if _, err := lifecycle.BeginBuildV1(ctx, identity, required, 0, 1); err != nil {
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	for i, group := range required {
+		if _, err := lifecycle.RecordGroupReadyV1(ctx, identity, raftplacement.VectorPartitionLifecycleGroupReadyV1{
+			GroupID: group, AppliedIndex: uint64(9 + i), AssetSetDigest: fmt.Sprintf("%064x", 100+i),
+		}); err != nil {
+			_ = harness.Close()
+			tb.Fatal(err)
+		}
+	}
+	if _, err := lifecycle.PrepareV1(ctx, identity); err != nil {
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	active, err := lifecycle.ActivateV1(ctx, identity)
+	if err != nil {
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	placement := raftplacement.VectorPartitionPlacementRecordV1{
+		Collection: ref, IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest,
+		SourceGeneration: identity.Source.Generation, SourceChecksum: identity.Source.Checksum,
+		SourceSchemaHash: identity.Source.SchemaHash, SourceRowCount: identity.Source.RowCount,
+		PartitionGeneration: identity.Generation, PartitionCount: 2,
+		Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
+	}
+	manifest := collections.VectorPartitionManifestV1{
+		Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection,
+		IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest,
+		IntegrityDigest: strings.Repeat("d", 64), SourceGeneration: identity.Source.Generation,
+		SourceChecksum: identity.Source.Checksum, SourceSchemaHash: identity.Source.SchemaHash,
+		SourceRowCount: identity.Source.RowCount, Generation: identity.Generation, RouterGeneration: identity.Generation,
+		PartitionCount: 2, ReadySetDigest: active.ReadySetDigest,
+		Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
+	}
+	router := &testVectorPartitionCoordinatorRouterV1{
+		status: collections.VectorPartitionRouterRuntimeStatusV1{
+			Manifest: manifest, ModelDigest: strings.Repeat("c", 64), Representatives: 2, Partitions: 2,
+		},
+		partitions: []collections.VectorPartitionRouterPartitionScoreV1{{PartitionID: 0}, {PartitionID: 1}},
+	}
+	authority, err := NewLinearizableCatalogVectorPartitionLifecycleAuthorityV1(harness.LeaderAuthority(), harness.LeaderFence())
+	if err != nil {
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	coordinator, err := NewVectorPartitionCoordinatorV1(VectorPartitionCoordinatorOptionsV1{
+		Catalog: catalog, Placement: placement, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{router: router},
+		Dispatcher: &testVectorPartitionCoordinatorDispatcherV1{}, ReplicatedLifecycle: authority, RequireReplicatedLifecycle: true,
+	})
+	if err != nil {
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	sources := map[raftcluster.GroupID]*fakeVectorPartitionGenerationSourceV1{
+		"group-a": {manifest: manifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
+		"group-b": {manifest: manifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{1: vectorPartitionShardSearchAssetTestV1(1, []string{"b"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
+	}
+	generationSources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(sources))
+	for group, source := range sources {
+		generationSources[group] = source
+	}
+	publisher, err := NewVectorPartitionServingSnapshotPublisherV1(VectorPartitionServingSnapshotPublisherOptionsV1{
+		Coordinator: coordinator, Authority: authority, GenerationSources: generationSources,
+		TopologyDigest: strings.Repeat("e", 64), AuthorizationOverlayDigest: strings.Repeat("f", 64), IndexedThrough: 11,
+	})
+	if err != nil {
+		_ = coordinator.Close()
+		_ = harness.Close()
+		tb.Fatal(err)
+	}
+	fixture := &vectorPartitionServingSnapshotFixtureV1{
+		harness: harness, lifecycle: lifecycle, identity: identity, coordinator: coordinator,
+		authority: authority, publisher: publisher, sources: sources,
+	}
+	tb.Cleanup(func() {
+		_ = fixture.publisher.Close()
+		_ = fixture.coordinator.Close()
+		_ = fixture.harness.Close()
+	})
+	return fixture
+}
+
+func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	injected := errors.New("injected partition open failure")
+	fixture.sources["group-b"].openErr[1] = injected
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, injected) {
+		t.Fatalf("partial publication error = %v", err)
+	}
+	for group, source := range fixture.sources {
+		pins, releases, _ := source.counts()
+		if pins != 1 || releases != 1 {
+			t.Fatalf("partial publication group=%s pins/releases=%d/%d", group, pins, releases)
+		}
+	}
+	delete(fixture.sources["group-b"].openErr, uint32(1))
+	fixture.sources["group-b"].manifest.IntegrityDigest = strings.Repeat("9", 64)
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("mixed manifest publication error = %v", err)
+	}
+	fixture.sources["group-b"].manifest.IntegrityDigest = strings.Repeat("d", 64)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	first, err := fixture.publisher.AcquireV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstIdentity := first.IdentityV1()
+	if firstIdentity.SnapshotDigest == "" || firstIdentity.ReadySetDigest == "" || firstIdentity.IndexedThrough != 11 ||
+		firstIdentity.ManifestIntegrityDigest != strings.Repeat("d", 64) || len(firstIdentity.ReadyGroups) != 2 || len(firstIdentity.LocalGroups) != 2 {
+		t.Fatalf("published identity = %+v", firstIdentity)
+	}
+	before := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	if err := fixture.publisher.RefreshProofV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after := fixture.harness.LeaderFence().CatalogMetaLinearizableReadStatsV1()
+	if after.LastRaftLog != before.LastRaftLog || after.Total.LogBarriers != 0 || after.Total.NoLogProofs <= before.Total.NoLogProofs {
+		t.Fatalf("proof refresh stats before=%+v after=%+v", before, after)
+	}
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := fixture.publisher.AcquireV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.IdentityV1().SnapshotDigest == firstIdentity.SnapshotDigest {
+		t.Fatal("replacement reused snapshot publication identity")
+	}
+	for group, source := range fixture.sources {
+		_, releases, _ := source.counts()
+		if releases != 2 {
+			// The first failed open and manifest-mismatch publication closed; the
+			// first successful publication remains pinned by first.
+			t.Fatalf("pre-drain group=%s releases=%d want=2", group, releases)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for group, source := range fixture.sources {
+		_, releases, _ := source.counts()
+		if releases != 3 {
+			t.Fatalf("old snapshot group=%s releases=%d want=3", group, releases)
+		}
+	}
+	if _, err := fixture.lifecycle.InvalidateGenerationBeforeRelevantMutationV1(t.Context(), fixture.identity, "snapshot test"); err != nil {
+		t.Fatal(err)
+	}
+	if lease, err := fixture.publisher.AcquireV1(); err == nil {
+		_ = lease.Close()
+		t.Fatal("acquisition admitted invalidated authority")
+	}
+	if err := fixture.publisher.InvalidateV1(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for group, source := range fixture.sources {
+		_, releases, _ := source.counts()
+		if releases != 4 {
+			t.Fatalf("replacement drain group=%s releases=%d want=4", group, releases)
+		}
+	}
+	stats := fixture.publisher.StatsV1()
+	if stats.Publications != 2 || stats.Replacements != 1 || stats.Invalidations != 1 || stats.Acquisitions != 2 ||
+		stats.AcquisitionRejections == 0 || stats.CurrentPins != 0 || stats.CurrentSnapshots != 0 || stats.ProofRefreshes == 0 {
+		t.Fatalf("publisher stats = %+v", stats)
+	}
+}
+
+func BenchmarkVectorPartitionServingSnapshotAcquireV1(b *testing.B) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(b)
+	if err := fixture.publisher.PublishV1(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	b.Run("snapshot_pin", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			lease, err := fixture.publisher.AcquireV1()
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := lease.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("fresh_no_log_authority", func(b *testing.B) {
+		placement := fixture.coordinator.placement
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := fixture.authority.ValidateVectorPartitionGenerationSearchV1(
+				context.Background(), placement.Collection, placement.IndexName,
+				placement.PartitionGeneration, placement.IndexDefinitionDigest,
+				placement.SourceGeneration, placement.SourceChecksum,
+				placement.SourceSchemaHash, placement.SourceRowCount,
+			); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

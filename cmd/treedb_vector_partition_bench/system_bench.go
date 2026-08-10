@@ -414,7 +414,7 @@ func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPart
 	for _, identity := range identities {
 		beforeNode, afterNode := before[identity], after[identity]
 		delta, ok := vectorPartitionSystemCatalogReadStatsSubtractV1(afterNode.Catalog, beforeNode.Catalog)
-		if !ok || delta.Total.Reads > 0 && (afterNode.Catalog.LastTerm == 0 || afterNode.Catalog.LastCatalogApplied == 0 || afterNode.Catalog.LastRaftApplied == 0 || afterNode.Catalog.LastRaftLog == 0 || afterNode.Catalog.LastRaftLog < beforeNode.Catalog.LastRaftLog || afterNode.Catalog.LastRaftLog-beforeNode.Catalog.LastRaftLog < delta.Total.LogBarriers) {
+		if !ok || delta.Total.Reads > 0 && (afterNode.Catalog.LastTerm == 0 || afterNode.Catalog.LastCatalogApplied == 0 || afterNode.Catalog.LastRaftApplied < afterNode.Catalog.LastCatalogApplied || afterNode.Catalog.LastRaftLog < afterNode.Catalog.LastRaftApplied || afterNode.Catalog.LastRaftLog < beforeNode.Catalog.LastRaftLog) {
 			return result, nil, errors.New("system-bench catalog read statistics are non-monotonic or lack proof identity")
 		}
 		if !vectorPartitionSystemCatalogReadStatsAddV1(&result.Total, delta) {
@@ -438,12 +438,15 @@ func vectorPartitionSystemCatalogReadDeltaV1(before, after map[string]vectorPart
 	for _, source := range sources {
 		exclusive, ok := vectorPartitionSystemAddUint64V1(source.AdmissionNanos, source.VerifyLeaderNanos)
 		if ok {
-			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.BarrierNanos)
+			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.CurrentTermNanos)
+		}
+		if ok {
+			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.RaftApplyNanos)
 		}
 		if ok {
 			exclusive, ok = vectorPartitionSystemAddUint64V1(exclusive, source.AppliedReadNanos)
 		}
-		if !ok || source.Successes != source.Reads || source.Failures != 0 || source.VerifyLeaderCalls != source.Reads || source.LogBarriers != source.Reads || source.TotalNanos < exclusive || !vectorPartitionSystemCatalogReadStageAddV1(&summed, source) {
+		if !ok || source.Successes != source.Reads || source.Failures != 0 || source.VerifyLeaderCalls != source.Reads || source.LogBarriers != 0 || source.BarrierNanos != 0 || source.NoLogProofs != source.Reads || source.TotalNanos < exclusive || !vectorPartitionSystemCatalogReadStageAddV1(&summed, source) {
 			return result, nil, errors.New("system-bench catalog read stage evidence is malformed")
 		}
 	}
@@ -490,8 +493,8 @@ func vectorPartitionSystemCatalogReadStatsSubtractV1(after, before nativewire.Ve
 }
 
 func vectorPartitionSystemCatalogReadStageSubtractV1(after, before nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1) (nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1, bool) {
-	valuesAfter := [...]uint64{after.Reads, after.Successes, after.Failures, after.VerifyLeaderCalls, after.LogBarriers, after.TotalNanos, after.AdmissionNanos, after.VerifyLeaderNanos, after.BarrierNanos, after.AppliedReadNanos}
-	valuesBefore := [...]uint64{before.Reads, before.Successes, before.Failures, before.VerifyLeaderCalls, before.LogBarriers, before.TotalNanos, before.AdmissionNanos, before.VerifyLeaderNanos, before.BarrierNanos, before.AppliedReadNanos}
+	valuesAfter := [...]uint64{after.Reads, after.Successes, after.Failures, after.VerifyLeaderCalls, after.LogBarriers, after.NoLogProofs, after.TotalNanos, after.AdmissionNanos, after.VerifyLeaderNanos, after.BarrierNanos, after.CurrentTermNanos, after.RaftApplyNanos, after.AppliedReadNanos}
+	valuesBefore := [...]uint64{before.Reads, before.Successes, before.Failures, before.VerifyLeaderCalls, before.LogBarriers, before.NoLogProofs, before.TotalNanos, before.AdmissionNanos, before.VerifyLeaderNanos, before.BarrierNanos, before.CurrentTermNanos, before.RaftApplyNanos, before.AppliedReadNanos}
 	var delta [len(valuesAfter)]uint64
 	for i := range valuesAfter {
 		if valuesAfter[i] < valuesBefore[i] {
@@ -501,7 +504,7 @@ func vectorPartitionSystemCatalogReadStageSubtractV1(after, before nativewire.Ve
 	}
 	return nativewire.VectorPartitionCatalogMetaLinearizableReadStageStatsV1{
 		Reads: delta[0], Successes: delta[1], Failures: delta[2], VerifyLeaderCalls: delta[3], LogBarriers: delta[4],
-		TotalNanos: delta[5], AdmissionNanos: delta[6], VerifyLeaderNanos: delta[7], BarrierNanos: delta[8], AppliedReadNanos: delta[9],
+		NoLogProofs: delta[5], TotalNanos: delta[6], AdmissionNanos: delta[7], VerifyLeaderNanos: delta[8], BarrierNanos: delta[9], CurrentTermNanos: delta[10], RaftApplyNanos: delta[11], AppliedReadNanos: delta[12],
 	}, true
 }
 
@@ -520,8 +523,8 @@ func vectorPartitionSystemCatalogReadStageAddV1(total *nativewire.VectorPartitio
 	if total == nil {
 		return false
 	}
-	left := []*uint64{&total.Reads, &total.Successes, &total.Failures, &total.VerifyLeaderCalls, &total.LogBarriers, &total.TotalNanos, &total.AdmissionNanos, &total.VerifyLeaderNanos, &total.BarrierNanos, &total.AppliedReadNanos}
-	right := [...]uint64{value.Reads, value.Successes, value.Failures, value.VerifyLeaderCalls, value.LogBarriers, value.TotalNanos, value.AdmissionNanos, value.VerifyLeaderNanos, value.BarrierNanos, value.AppliedReadNanos}
+	left := []*uint64{&total.Reads, &total.Successes, &total.Failures, &total.VerifyLeaderCalls, &total.LogBarriers, &total.NoLogProofs, &total.TotalNanos, &total.AdmissionNanos, &total.VerifyLeaderNanos, &total.BarrierNanos, &total.CurrentTermNanos, &total.RaftApplyNanos, &total.AppliedReadNanos}
+	right := [...]uint64{value.Reads, value.Successes, value.Failures, value.VerifyLeaderCalls, value.LogBarriers, value.NoLogProofs, value.TotalNanos, value.AdmissionNanos, value.VerifyLeaderNanos, value.BarrierNanos, value.CurrentTermNanos, value.RaftApplyNanos, value.AppliedReadNanos}
 	for i := range left {
 		if math.MaxUint64-*left[i] < right[i] {
 			return false
