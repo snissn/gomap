@@ -1775,8 +1775,8 @@ func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredica
 }
 
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
-	if field == "" || strings.HasPrefix(field, "$") {
-		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q", field)
+	if err := validateMongoDocumentPath(field); err != nil {
+		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q: %w", field, err)
 	}
 	if doc, ok := value.DocumentOK(); ok {
 		isOperatorDoc, err := operatorDocument(doc)
@@ -1791,11 +1791,16 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			return nil, err
 		}
 		out := make([]findPredicate, 0, len(elements))
+		seen := make(map[string]struct{}, len(elements))
 		for _, elem := range elements {
 			op, err := elem.KeyErr()
 			if err != nil {
 				return nil, err
 			}
+			if _, duplicate := seen[op]; duplicate {
+				return nil, fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+			}
+			seen[op] = struct{}{}
 			opValue := elem.Value()
 			switch op {
 			case "$in", "$nin":
@@ -1830,7 +1835,7 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 					return nil, fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
 				}
 				inner, err := parseFieldPredicate(field, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: notDoc})
-				if err != nil || len(inner) != 1 {
+				if err != nil || len(inner) != 1 || inner[0].negate || !findPredicateSupportsNot(inner[0].op) {
 					if err != nil {
 						return nil, err
 					}
@@ -1847,6 +1852,35 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 		return out, nil
 	}
 	return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
+}
+
+func findPredicateSupportsNot(op findPredicateOp) bool {
+	switch op {
+	case findPredicateIn, findPredicateNIN, findPredicateNE, findPredicateExists,
+		findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateMongoDocumentPath is shared by query, sort, and projection parsing.
+// Query paths deliberately remain document-only at evaluation time; parsing
+// still permits numeric field names because BSON documents may use them.
+func validateMongoDocumentPath(path string) error {
+	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return errors.New("path must contain non-empty segments")
+	}
+	segments := strings.Split(path, ".")
+	if len(segments) > mongoMutationMaxPathDepth {
+		return fmt.Errorf("path exceeds %d components", mongoMutationMaxPathDepth)
+	}
+	for _, segment := range segments {
+		if strings.HasPrefix(segment, "$") {
+			return errors.New("path has unsupported segment")
+		}
+	}
+	return nil
 }
 
 func operatorDocument(doc bson.Raw) (bool, error) {
@@ -2145,8 +2179,8 @@ func parseFindSortDocument(sortDoc wire.Document) (findSort, error) {
 		if err != nil {
 			return findSort{}, err
 		}
-		if field == "" || strings.HasPrefix(field, "$") {
-			return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
+		if err := validateMongoDocumentPath(field); err != nil {
+			return findSort{}, fmt.Errorf("Mongo gateway find sort field %q is invalid: %w", field, err)
 		}
 		if _, duplicate := seen[field]; duplicate {
 			return findSort{}, fmt.Errorf("Mongo gateway find sort repeats field %q", field)
@@ -2308,15 +2342,12 @@ type projectionNode struct {
 func projectionTree(fields map[string]struct{}) (*projectionNode, error) {
 	root := &projectionNode{children: make(map[string]*projectionNode)}
 	for field := range fields {
-		parts := strings.Split(field, ".")
-		if len(parts) > mongoMutationMaxPathDepth {
-			return nil, fmt.Errorf("Mongo gateway projection path exceeds %d components", mongoMutationMaxPathDepth)
+		if err := validateMongoDocumentPath(field); err != nil {
+			return nil, fmt.Errorf("Mongo gateway projection has invalid path %q: %w", field, err)
 		}
+		parts := strings.Split(field, ".")
 		node := root
 		for _, part := range parts {
-			if part == "" || strings.HasPrefix(part, "$") {
-				return nil, fmt.Errorf("Mongo gateway projection has invalid path %q", field)
-			}
 			if node.terminal {
 				return nil, fmt.Errorf("Mongo gateway projection paths overlap at %q", field)
 			}

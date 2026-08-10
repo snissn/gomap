@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestMongoNegativeAndExistsPredicatesRespectMissingNullAndDottedValues(t *testing.T) {
@@ -163,6 +164,69 @@ func TestMongoNegativePredicateRejectsMalformedOperands(t *testing.T) {
 		}
 		if _, err := parseFindPredicates(wire.Document(raw)); err == nil {
 			t.Fatalf("filter %v unexpectedly accepted", filter)
+		}
+	}
+}
+
+func TestMongoNegativePredicateRejectsNestedAndDuplicateOperators(t *testing.T) {
+	nestedNot, err := bson.Marshal(bson.D{{Key: "a", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gt", Value: int32(1)}}}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(nestedNot)); err == nil {
+		t.Fatal("nested $not unexpectedly accepted")
+	}
+
+	operatorStart, operatorDoc := bsoncore.AppendDocumentStart(nil)
+	operatorDoc = bsoncore.AppendInt32Element(operatorDoc, "$exists", 1)
+	operatorDoc = bsoncore.AppendInt32Element(operatorDoc, "$exists", 0)
+	operatorDoc, _ = bsoncore.AppendDocumentEnd(operatorDoc, operatorStart)
+	filterStart, filter := bsoncore.AppendDocumentStart(nil)
+	filter = bsoncore.AppendDocumentElement(filter, "a", operatorDoc)
+	filter, _ = bsoncore.AppendDocumentEnd(filter, filterStart)
+	if _, err := parseFindPredicates(wire.Document(filter)); err == nil {
+		t.Fatal("duplicate $exists unexpectedly accepted")
+	}
+
+	notStart, notDoc := bsoncore.AppendDocumentStart(nil)
+	notDoc = bsoncore.AppendInt32Element(notDoc, "$gt", 1)
+	notDoc = bsoncore.AppendInt32Element(notDoc, "$gt", 2)
+	notDoc, _ = bsoncore.AppendDocumentEnd(notDoc, notStart)
+	operatorStart, operatorDoc = bsoncore.AppendDocumentStart(nil)
+	operatorDoc = bsoncore.AppendDocumentElement(operatorDoc, "$not", notDoc)
+	operatorDoc, _ = bsoncore.AppendDocumentEnd(operatorDoc, operatorStart)
+	filterStart, filter = bsoncore.AppendDocumentStart(nil)
+	filter = bsoncore.AppendDocumentElement(filter, "a", operatorDoc)
+	filter, _ = bsoncore.AppendDocumentEnd(filter, filterStart)
+	if _, err := parseFindPredicates(wire.Document(filter)); err == nil {
+		t.Fatal("duplicate $not inner operator unexpectedly accepted")
+	}
+}
+
+func TestMongoQuerySortAndProjectionPathsRejectMalformedOrOverDepth(t *testing.T) {
+	deep := strings.Repeat("a.", mongoMutationMaxPathDepth) + "a"
+	for _, filter := range []bson.D{
+		{{Key: "a..b", Value: int32(1)}},
+		{{Key: deep, Value: int32(1)}},
+	} {
+		raw, err := bson.Marshal(filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseFindPredicates(wire.Document(raw)); err == nil {
+			t.Fatalf("filter %v unexpectedly accepted", filter)
+		}
+	}
+	for _, sortDoc := range []bson.D{
+		{{Key: "a..b", Value: int32(1)}},
+		{{Key: deep, Value: int32(1)}},
+	} {
+		raw, err := bson.Marshal(sortDoc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseFindSortDocument(wire.Document(raw)); err == nil {
+			t.Fatalf("sort %v unexpectedly accepted", sortDoc)
 		}
 	}
 }
