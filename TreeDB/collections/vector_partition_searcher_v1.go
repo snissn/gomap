@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"sync"
 	"unsafe"
 )
@@ -67,6 +68,7 @@ type VectorPartitionLocalGraphDistanceDistributionV1 struct {
 	Max   float64 `json:"max,omitempty"`
 }
 type VectorPartitionLocalGraphComparisonV1 struct {
+	EntryOrdinal          int                                             `json:"entry_ordinal"`
 	Native                VectorPartitionPackDiagnosticsV1                `json:"native"`
 	Final                 VectorPartitionPackDiagnosticsV1                `json:"final"`
 	Rows                  []VectorPartitionLocalGraphRowEvidenceV1        `json:"rows"`
@@ -123,7 +125,7 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	out := VectorPartitionLocalGraphComparisonV1{Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
+	out := VectorPartitionLocalGraphComparisonV1{EntryOrdinal: np.Header.EntryOrdinal, Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
 	limit := np.Header.M * 2
 	has := func(edges []uint32, want uint32) bool {
 		for _, edge := range edges {
@@ -133,6 +135,12 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 		}
 		return false
 	}
+	distance := func(left, right int) (float64, bool) {
+		score, e := canonicalVectorPartitionNormalizedScoreV1(np.NormalizedVectors[left*np.Header.VectorStride:left*np.Header.VectorStride+np.Header.Dimensions], np.NormalizedVectors[right*np.Header.VectorStride:right*np.Header.VectorStride+np.Header.Dimensions])
+		d := 1 - float64(score)
+		return d, e == nil && !math.IsNaN(d) && !math.IsInf(d, 0)
+	}
+	var nativeDistances, finalDistances []float64
 	for i := 0; i < np.Header.Rows; i++ {
 		if np.Header.EntryOrdinal != 0 {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
@@ -140,6 +148,22 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
 		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
 		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
+		rowDistances := make(map[uint32]float64, len(nn))
+		for _, x := range nn {
+			d, ok := distance(i, int(x))
+			if !ok {
+				return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			rowDistances[x] = d
+			nativeDistances = append(nativeDistances, d)
+		}
+		for _, x := range fn {
+			d, ok := distance(i, int(x))
+			if !ok {
+				return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			finalDistances = append(finalDistances, d)
+		}
 		tree, treeErr := vectorPartitionLocalNavigationEdgesV1(i, np.Header.Rows, limit)
 		if treeErr != nil {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
@@ -185,23 +209,10 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 			}
 			if !found {
 				row.Displaced++
-				distance := func(left, right int) float64 {
-					score, e := canonicalVectorPartitionNormalizedScoreV1(np.NormalizedVectors[left*np.Header.VectorStride:left*np.Header.VectorStride+np.Header.Dimensions], np.NormalizedVectors[right*np.Header.VectorStride:right*np.Header.VectorStride+np.Header.Dimensions])
-					if e != nil || math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
-						return math.NaN()
-					}
-					return 1 - float64(score)
-				}
-				d := distance(i, int(x))
-				if math.IsNaN(d) {
-					return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
-				}
+				d := rowDistances[x]
 				rank := 1
 				for _, y := range nn {
-					dy := distance(i, int(y))
-					if math.IsNaN(dy) {
-						return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
-					}
+					dy := rowDistances[y]
 					if dy < d || (dy == d && y < x) {
 						rank++
 					}
@@ -223,7 +234,22 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 		}
 		out.Rows[i] = row
 	}
+	out.NativeDistances = vectorPartitionLocalGraphDistanceSummaryV1(nativeDistances)
+	out.FinalDistances = vectorPartitionLocalGraphDistanceSummaryV1(finalDistances)
 	return out, nil
+}
+
+func vectorPartitionLocalGraphDistanceSummaryV1(values []float64) VectorPartitionLocalGraphDistanceDistributionV1 {
+	if len(values) == 0 {
+		return VectorPartitionLocalGraphDistanceDistributionV1{}
+	}
+	sort.Float64s(values)
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	pick := func(p int) float64 { return values[(p*len(values)+99)/100-1] }
+	return VectorPartitionLocalGraphDistanceDistributionV1{Count: uint64(len(values)), Min: values[0], Mean: sum / float64(len(values)), P50: pick(50), P95: pick(95), P99: pick(99), Max: values[len(values)-1]}
 }
 
 func validVectorPartitionLocalGraphL0V1(rows int, layer columnHNSWSearchPackPreparedLayer) bool {
