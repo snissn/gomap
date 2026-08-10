@@ -209,8 +209,23 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer o.Close()
-	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, o); err != nil {
+	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if comparison.NativeReciprocalEdges == 0 || comparison.FinalReciprocalEdges == 0 {
+		t.Fatalf("reciprocity native=%d final=%d", comparison.NativeReciprocalEdges, comparison.FinalReciprocalEdges)
+	}
+	found := false
+	for _, row := range comparison.Rows {
+		for _, edge := range row.DisplacedEdges {
+			if edge.DistanceRank > 0 && edge.Distance >= 0 && edge.NativeReciprocal {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing scored reciprocal displaced edge: %+v", comparison.Rows)
 	}
 	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("native pack accepted as overlay err=%v", err)

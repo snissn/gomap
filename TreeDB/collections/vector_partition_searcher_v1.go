@@ -122,6 +122,14 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	}
 	out := VectorPartitionLocalGraphComparisonV1{Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
 	limit := np.Header.M * 2
+	has := func(edges []uint32, want uint32) bool {
+		for _, edge := range edges {
+			if edge == want {
+				return true
+			}
+		}
+		return false
+	}
 	for i := 0; i < np.Header.Rows; i++ {
 		if np.Header.EntryOrdinal != 0 {
 			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
@@ -190,7 +198,40 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 			}
 			if !found {
 				row.Displaced++
-				row.DisplacedEdges = append(row.DisplacedEdges, VectorPartitionLocalGraphEdgeEvidenceV1{NeighborOrdinal: x, NativePosition: pos})
+				distance := func(left, right int) float64 {
+					score, e := canonicalVectorPartitionNormalizedScoreV1(np.NormalizedVectors[left*np.Header.VectorStride:left*np.Header.VectorStride+np.Header.Dimensions], np.NormalizedVectors[right*np.Header.VectorStride:right*np.Header.VectorStride+np.Header.Dimensions])
+					if e != nil || math.IsNaN(float64(score)) || math.IsInf(float64(score), 0) {
+						return math.NaN()
+					}
+					return 1 - float64(score)
+				}
+				d := distance(i, int(x))
+				if math.IsNaN(d) {
+					return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+				}
+				rank := 1
+				for _, y := range nn {
+					dy := distance(i, int(y))
+					if math.IsNaN(dy) {
+						return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+					}
+					if dy < d || (dy == d && y < x) {
+						rank++
+					}
+				}
+				nback := a.Neighbors[a.Offsets[x]:a.Offsets[x+1]]
+				fback := b.Neighbors[b.Offsets[x]:b.Offsets[x+1]]
+				row.DisplacedEdges = append(row.DisplacedEdges, VectorPartitionLocalGraphEdgeEvidenceV1{NeighborOrdinal: x, NativePosition: pos, DistanceRank: rank, Distance: d, NativeReciprocal: has(nback, uint32(i)), FinalReciprocal: has(fback, uint32(i))})
+			}
+		}
+		for _, x := range nn {
+			if has(a.Neighbors[a.Offsets[x]:a.Offsets[x+1]], uint32(i)) {
+				out.NativeReciprocalEdges++
+			}
+		}
+		for _, x := range fn {
+			if has(b.Neighbors[b.Offsets[x]:b.Offsets[x+1]], uint32(i)) {
+				out.FinalReciprocalEdges++
 			}
 		}
 		out.Rows[i] = row
