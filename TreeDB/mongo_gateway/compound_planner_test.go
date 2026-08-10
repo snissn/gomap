@@ -94,6 +94,20 @@ func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 	assertCommandError(t, serveCommand(t, server, 406510, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "CursorNotFound")
 }
 
+func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublication(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxCursorRetainedBytes = 32
+	assertOK(t, serveCommand(t, server, 4065110, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 4065111, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}, {Key: "payload", Value: "too-large"}}}}, {Key: "$db", Value: "app"}}))
+	resp := serveCommand(t, server, 4065112, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite materialization cap: %d", len(server.cursors))
+	}
+}
+
 func TestMongoCompoundPlanHintForcesExactIndexOrRejectsBeforeExecution(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406511, bson.D{
