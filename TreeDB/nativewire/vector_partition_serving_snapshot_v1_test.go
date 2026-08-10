@@ -96,9 +96,11 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		IntegrityDigest: strings.Repeat("d", 64), SourceGeneration: identity.Source.Generation,
 		SourceChecksum: identity.Source.Checksum, SourceSchemaHash: identity.Source.SchemaHash,
 		SourceRowCount: identity.Source.RowCount, Generation: identity.Generation, RouterGeneration: identity.Generation,
-		PartitionCount: 2, ReadySetDigest: active.ReadySetDigest,
+		PartitionCount: 2, ReadySetDigest: strings.Repeat("b", 64),
 		Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
 	}
+	pinnedManifest := manifest
+	pinnedManifest.ReadySetDigest = active.ReadySetDigest
 	router := &testVectorPartitionCoordinatorRouterV1{
 		status: collections.VectorPartitionRouterRuntimeStatusV1{
 			Manifest: manifest, ModelDigest: strings.Repeat("c", 64), Representatives: 2, Partitions: 2,
@@ -119,8 +121,8 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		tb.Fatal(err)
 	}
 	sources := map[raftcluster.GroupID]*fakeVectorPartitionGenerationSourceV1{
-		"group-a": {manifest: manifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
-		"group-b": {manifest: manifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{1: vectorPartitionShardSearchAssetTestV1(1, []string{"b"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
+		"group-a": {manifest: pinnedManifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{0: vectorPartitionShardSearchAssetTestV1(0, []string{"a"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
+		"group-b": {manifest: pinnedManifest, assets: map[uint32]collections.VectorPartitionSearchAssetV1{1: vectorPartitionShardSearchAssetTestV1(1, []string{"b"}, [][]float32{{1, 0}})}, openErr: map[uint32]error{}},
 	}
 	generationSources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(sources))
 	for group, source := range sources {
@@ -155,6 +157,34 @@ func TestVectorPartitionServingSnapshotPublicationClosesMalformedLeaseV1(t *test
 	}}
 	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) || malformedCloses != 1 {
 		t.Fatalf("malformed lease publication error=%v closes=%d", err, malformedCloses)
+	}
+}
+
+func TestVectorPartitionServingSnapshotPublicationRejectsNilGenerationV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.sources["group-a"].nilPin = true
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("nil generation publication error=%v", err)
+	}
+}
+
+func TestVectorPartitionServingSnapshotInvalidationWinsPublicationRaceV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	fixture.sources["group-a"].pinStarted, fixture.sources["group-a"].pinContinue = started, proceed
+	done := make(chan error, 1)
+	go func() { done <- fixture.publisher.PublishV1(t.Context()) }()
+	<-started
+	if err := fixture.publisher.InvalidateV1(); err != nil {
+		t.Fatal(err)
+	}
+	close(proceed)
+	if err := <-done; !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("publication after invalidation error=%v", err)
+	}
+	if lease, err := fixture.publisher.AcquireV1(); err == nil {
+		_ = lease.Close()
+		t.Fatal("publication that raced with invalidation became acquirable")
 	}
 }
 

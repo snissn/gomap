@@ -50,21 +50,31 @@ func (f *fakeVectorPartitionReadCoordinatorV1) callCount() int {
 }
 
 type fakeVectorPartitionGenerationSourceV1 struct {
-	mu        sync.Mutex
-	manifest  collections.VectorPartitionManifestV1
-	assets    map[uint32]collections.VectorPartitionSearchAssetV1
-	openErr   map[uint32]error
-	openLease map[uint32]*VectorPartitionPartitionSearchLeaseV1
-	pins      int
-	releases  int
-	opens     int
-	searchers map[uint32]*collections.VectorPartitionLocalSearcherV1
-	pinErr    error
+	mu                      sync.Mutex
+	manifest                collections.VectorPartitionManifestV1
+	assets                  map[uint32]collections.VectorPartitionSearchAssetV1
+	openErr                 map[uint32]error
+	openLease               map[uint32]*VectorPartitionPartitionSearchLeaseV1
+	pins                    int
+	releases                int
+	opens                   int
+	searchers               map[uint32]*collections.VectorPartitionLocalSearcherV1
+	pinErr                  error
+	nilPin                  bool
+	pinStarted, pinContinue chan struct{}
 }
 
 func (f *fakeVectorPartitionGenerationSourceV1) PinVectorPartitionGenerationV1(ctx context.Context, index string, generation uint64) (VectorPartitionPinnedGenerationV1, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if f.pinStarted != nil {
+		close(f.pinStarted)
+		select {
+		case <-f.pinContinue:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -72,6 +82,9 @@ func (f *fakeVectorPartitionGenerationSourceV1) PinVectorPartitionGenerationV1(c
 		return nil, f.pinErr
 	}
 	f.pins++
+	if f.nilPin {
+		return nil, nil
+	}
 	return &fakeVectorPartitionPinnedGenerationV1{
 		source:   f,
 		manifest: pinnedVectorPartitionManifestV1(f.manifest),

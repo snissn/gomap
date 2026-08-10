@@ -85,10 +85,11 @@ type vectorPartitionServingSnapshotV1 struct {
 type VectorPartitionServingSnapshotPublisherV1 struct {
 	opts VectorPartitionServingSnapshotPublisherOptionsV1
 
-	mu      sync.Mutex
-	current *vectorPartitionServingSnapshotV1
-	closed  bool
-	stats   VectorPartitionServingSnapshotPublisherStatsV1
+	mu       sync.Mutex
+	current  *vectorPartitionServingSnapshotV1
+	closed   bool
+	revision uint64
+	stats    VectorPartitionServingSnapshotPublisherStatsV1
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -148,6 +149,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		return fmt.Errorf("%w: serving snapshot publisher closed", ErrVectorPartitionShardSearchAssetsUnavailable)
 	}
 	p.stats.Builds++
+	revision := p.revision
 	p.mu.Unlock()
 
 	next, counts, err := p.buildSnapshotV1(ctx)
@@ -160,9 +162,13 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		p.mu.Unlock()
 		return err
 	}
-	if p.closed {
+	closed, stale := p.closed, p.revision != revision
+	if closed || stale {
 		p.mu.Unlock()
-		return errors.Join(fmt.Errorf("%w: serving snapshot publisher closed", ErrVectorPartitionShardSearchAssetsUnavailable), next.close())
+		if closed {
+			return errors.Join(fmt.Errorf("%w: serving snapshot publisher closed", ErrVectorPartitionShardSearchAssetsUnavailable), next.close())
+		}
+		return errors.Join(ErrVectorPartitionShardSearchGenerationMismatch, next.close())
 	}
 	previous := p.current
 	p.current = next
@@ -215,8 +221,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		p.opts.Coordinator.retireRouterSessionV1(snapshot.router)
 		return fail(err)
 	}
-	if !isVectorPartitionShardSearchDigestV1(routerStatus.Manifest.IntegrityDigest) ||
-		routerStatus.Manifest.ReadySetDigest != before.authority.Record.ReadySetDigest {
+	if !isVectorPartitionShardSearchDigestV1(routerStatus.Manifest.IntegrityDigest) {
 		return fail(ErrVectorPartitionCoordinatorGenerationMismatch)
 	}
 	if err := p.opts.Coordinator.recordRouterSessionIdentityV1(snapshot.router, routerStatus, before.authority.Record.ReadySetDigest); err != nil {
@@ -233,6 +238,9 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		generation, pinErr := p.opts.GenerationSources[group].PinVectorPartitionGenerationV1(ctx, placement.IndexName, placement.PartitionGeneration)
 		if pinErr != nil {
 			return fail(pinErr)
+		}
+		if generation == nil {
+			return fail(ErrVectorPartitionShardSearchAssetsUnavailable)
 		}
 		counts.generationPins++
 		snapshot.generations[group] = generation
@@ -442,6 +450,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) InvalidateV1() error {
 		return nil
 	}
 	p.mu.Lock()
+	p.revision++
 	current := p.current
 	p.current = nil
 	if current != nil {
