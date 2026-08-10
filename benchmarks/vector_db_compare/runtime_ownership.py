@@ -26,6 +26,8 @@ SEMANTIC_COUNTERS = (
     "selected_partitions", "selected_groups", "requests", "rpcs", "retries", "redirects",
     "candidates", "edges", "query_bytes", "request_bytes", "candidate_bytes", "response_bytes",
 )
+PARITY_COUNTERS = SEMANTIC_COUNTERS
+POSITIVE_COUNTERS = tuple(key for key in SEMANTIC_COUNTERS if key not in ("retries", "redirects"))
 FRAME_COUNTERS = ("public_request_frame_bytes", "public_response_frame_bytes")
 CUMULATIVE_RUNTIME = (
     "cpu_time_nanos", "run_queue_delay_nanos", "timeslices", "voluntary_context_switches",
@@ -84,6 +86,10 @@ def _proof_projection(cell: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def _proof_parity(cell: dict[str, Any]) -> tuple[tuple[str, int], ...]:
+    return tuple(cell["_proof_projection"].items())
+
+
 def _validate_result(value: dict[str, Any], topology: str, nodes: list[dict[str, Any]], dataset_checksum: str, truth_sha256: str) -> dict[int, dict[str, Any]]:
     required = {"schema_version", "result_kind", "endpoint", "topology", "topology_identity_sha256", "dataset_checksum", "truth_artifact_sha256", "top_k", "ef_search", "warmup_queries", "started_at", "completed_at", "cells"}
     _require(set(value) == required and value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_bench_v1" and value.get("topology") == topology, "runtime-ownership result identity changed")
@@ -105,7 +111,7 @@ def _validate_result(value: dict[str, Any], topology: str, nodes: list[dict[str,
         _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "runtime-ownership QPS changed")
         counters = cell.get("counters")
         _require(isinstance(counters, dict) and set(counters) == set(SEMANTIC_COUNTERS) | set(FRAME_COUNTERS) and all(_uint(counters[key]) for key in counters), "runtime-ownership counters are invalid")
-        _require(counters["retries"] == counters["redirects"] == 0 and all(counters[key] > 0 for key in counters if key not in ("retries", "redirects")), "runtime-ownership counters are incomplete")
+        _require(counters["retries"] == counters["redirects"] == 0 and all(counters[key] > 0 for key in POSITIVE_COUNTERS), "runtime-ownership counters are incomplete")
         generation = cell.get("generation")
         _require(generation == {"Index": "embedding_graph", "Generation": 1}, "runtime-ownership generation changed")
         cell["_runtime_projection"] = _runtime_projection(cell, nodes)
@@ -216,8 +222,8 @@ def summarize(root: Path) -> dict[str, Any]:
     rows = []
     for concurrency in CONCURRENCIES:
         cells = {topology: [run[concurrency] for run in runs[topology]] for topology in TOPOLOGIES}
-        _require(len({tuple(cell["counters"][key] for key in SEMANTIC_COUNTERS) for values in cells.values() for cell in values}) == 1, "runtime-ownership logical work or service payload bytes changed")
-        _require(len({tuple(cell["_proof_projection"].items()) for values in cells.values() for cell in values}) == 1, "runtime-ownership proof counts changed")
+        _require(len({tuple(cell["counters"][key] for key in PARITY_COUNTERS) for values in cells.values() for cell in values}) == 1, "runtime-ownership logical work or service payload bytes changed")
+        _require(len({_proof_parity(cell) for values in cells.values() for cell in values}) == 1, "runtime-ownership proof counts changed")
         distributions = {topology: _distribution(values) for topology, values in cells.items()}
         native, container = distributions["native"], distributions["container"]
         qps_ratio = native["qps_median"] / container["qps_median"]

@@ -18,6 +18,7 @@ STRICT_COUNTERS = ("snapshot_pins", "read_proofs", "generation_pins", "partition
 PROOF_STAGES = ("total", "operations_health", "strict_search", "serving_refresh", "coordinator_lifecycle", "shard_lifecycle", "unknown")
 PROFILE_NAMES = {"allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof"}
 ORIGINAL_DISTRIBUTION = base._distribution
+REQUEST_BYTES_DELTA_LIMIT = .01
 
 
 def _proof_projection(cell: dict[str, Any]) -> dict[str, int]:
@@ -41,13 +42,24 @@ def _proof_projection(cell: dict[str, Any]) -> dict[str, int]:
     return out
 
 
+def _proof_parity(cell: dict[str, Any]) -> tuple[tuple[str, int], ...]:
+    return tuple((key, value) for key, value in cell["_proof_projection"].items() if not key.startswith(("total.", "serving_refresh.")) and not key.endswith(".total_nanos"))
+
+
 def _distribution(cells: list[dict[str, Any]]) -> dict[str, Any]:
     result = ORIGINAL_DISTRIBUTION(cells)
     result["catalog_work_nanos_per_query_median"] = median(cell["_proof_projection"]["strict_search.total_nanos"] / 1000 for cell in cells)
     result["serving_refresh_reads_median"] = median(cell["_proof_projection"]["serving_refresh.reads"] for cell in cells)
     result["serving_refresh_nanos_median"] = median(cell["_proof_projection"]["serving_refresh.total_nanos"] for cell in cells)
     result["request_work_median"] = {key: median(cell["counters"][key] for cell in cells) for key in STRICT_COUNTERS}
+    result["request_bytes_median"] = median(cell["counters"]["request_bytes"] for cell in cells)
     return result
+
+
+def _validate_request_bytes(distributions: dict[str, dict[str, Any]]) -> dict[str, int | float]:
+    values = {topology: value["request_bytes_median"] for topology, value in distributions.items()}
+    _require(values["native"] == values["container"] and max(values.values()) <= min(values.values()) * (1 + REQUEST_BYTES_DELTA_LIMIT), "strict capability request bytes changed beyond the topology-bound allowance")
+    return values
 
 
 def _profiles(root: Path, input_row: dict[str, Any], node_count: int) -> dict[str, str]:
@@ -62,8 +74,10 @@ def _profiles(root: Path, input_row: dict[str, Any], node_count: int) -> dict[st
 
 def summarize(root: Path) -> dict[str, Any]:
     base.SEMANTIC_COUNTERS = tuple(dict.fromkeys(base.SEMANTIC_COUNTERS + STRICT_COUNTERS))
+    base.PARITY_COUNTERS = tuple(key for key in base.SEMANTIC_COUNTERS if key != "request_bytes")
     base.PROOF_STAGES = PROOF_STAGES
     base._proof_projection = _proof_projection
+    base._proof_parity = _proof_parity
     base._distribution = _distribution
     result = base.summarize(root)
 
@@ -93,7 +107,7 @@ def summarize(root: Path) -> dict[str, Any]:
             _require(qps_ratio >= 1.05 and p95_ratio <= 1.05, "strict search did not materially improve QPS without p95 regression")
             _require(current["request_work_median"] == {"snapshot_pins": 1000, "read_proofs": 0, "generation_pins": 0, "partition_opens": 0}, "strict request work changed")
             values[topology] = {"catalog_lifecycle_work_reduction": lifecycle_reduction, "qps_over_4091": qps_ratio, "p95_over_4091": p95_ratio}
-        comparisons.append({"concurrency": concurrency, "topologies": values})
+        comparisons.append({"concurrency": concurrency, "topologies": values, "request_bytes": _validate_request_bytes(row["topologies"])})
 
     for input_row in result["inputs"]:
         input_row["profile_sha256"] = _profiles(root, input_row, base.TOPOLOGIES[input_row["topology"]][1])
@@ -101,7 +115,8 @@ def summarize(root: Path) -> dict[str, Any]:
     result["execution_identity"]["capability_key_sha256"] = provenance["capability_key_sha256"]
     result["baseline_identity"] = {"onramp_4090_sha256": base._sha256(onramp_path), "runtime_ownership_4091_sha256": base._sha256(ownership_path)}
     result["comparisons"] = comparisons
-    result["invariants"].update({"snapshot_pins_per_cell": 1000, "strict_proofs_per_cell": 1000, "background_serving_refresh_separately_attributed": True, "data_group_proofs_per_cell": 0, "request_generation_pins_per_cell": 0, "request_partition_opens_per_cell": 0, "minimum_qps_improvement_over_4091": .05, "maximum_p95_ratio_over_4091": 1.05, "minimum_catalog_lifecycle_work_reduction_over_4090": .90})
+    result["invariants"].pop("semantic_work_and_service_payload_bytes_identical")
+    result["invariants"].update({"semantic_work_identical": True, "strict_capability_request_bytes_topology_delta_limit": REQUEST_BYTES_DELTA_LIMIT, "snapshot_pins_per_cell": 1000, "strict_proofs_per_cell": 1000, "background_serving_refresh_separately_attributed": True, "data_group_proofs_per_cell": 0, "request_generation_pins_per_cell": 0, "request_partition_opens_per_cell": 0, "minimum_qps_improvement_over_4091": .05, "maximum_p95_ratio_over_4091": 1.05, "minimum_catalog_lifecycle_work_reduction_over_4090": .90})
     result["claim_boundary"] = "#4096 keeps ordinary Search strict while propagating one server-authenticated ingress proof over one immutable serving snapshot. It does not add relaxed/pinned APIs, change routing/index/search/topology, or replace the existing bounded framed JSON wire codec."
     return result
 

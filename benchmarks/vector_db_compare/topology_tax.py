@@ -71,12 +71,15 @@ def _node_config_identity(value: dict[str, Any], node: dict[str, Any]) -> str:
         "node_id": node["node_id"], "dataset_directory": value["dataset_directory"], "database_directory": node["database_directory"],
         "state_directory": node["state_directory"],
     }
-    if "profile_directory" in node:
-        config["profile_directory"] = node["profile_directory"]
+    if "capability_key_path" in node:
+        config["capability_key_path"] = node["capability_key_path"]
     if "public_listen" in node:
         config["public_listen"] = node["public_listen"]
+    config["ready_path"] = node["ready_path"]
+    if "profile_directory" in node:
+        config["profile_directory"] = node["profile_directory"]
     config.update({
-        "ready_path": node["ready_path"], "local_groups": node["local_groups"],
+        "local_groups": node["local_groups"],
         "endpoints": {key: value["endpoints"][key] for key in sorted(value["endpoints"])},
         "group_applied_indexes": {key: value["group_applied_indexes"][key] for key in sorted(value["group_applied_indexes"])},
     })
@@ -101,7 +104,7 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
     for node in nodes:
         _require(isinstance(node, dict), "system-bench topology node is invalid")
         required = {"node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path", "local_groups"}
-        optional = {"public_listen", "profile_directory", "runtime_ownership"}
+        optional = {"capability_key_path", "public_listen", "profile_directory", "runtime_ownership"}
         _require(required <= set(node) <= required | optional, "system-bench topology node structure is invalid")
         _require(isinstance(node.get("node_id"), str) and node["node_id"] and _is_sha256(node.get("node_config_sha256")), "system-bench topology node identity is invalid")
         _require(all(isinstance(node.get(key), str) and node[key] for key in ("database_directory", "state_directory", "ready_path")), "system-bench topology persistent roots are invalid")
@@ -111,7 +114,11 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
         _require(owned_groups.isdisjoint(group_ids), "system-bench topology group ownership is invalid")
         owned_groups.update(group_ids)
         _require(node["node_config_sha256"] == _node_config_identity(value, node), "system-bench node config identity digest mismatch")
-        canonical_node = {key: node[key] for key in ("node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path")}
+        canonical_node = {key: node[key] for key in ("node_id", "node_config_sha256", "database_directory", "state_directory")}
+        if "capability_key_path" in node:
+            _require(isinstance(node["capability_key_path"], str) and node["capability_key_path"], "system-bench topology capability key path is invalid")
+            canonical_node["capability_key_path"] = node["capability_key_path"]
+        canonical_node["ready_path"] = node["ready_path"]
         if "profile_directory" in node:
             _require(isinstance(node["profile_directory"], str) and node["profile_directory"], "system-bench topology profile directory is invalid")
             canonical_node["profile_directory"] = node["profile_directory"]
