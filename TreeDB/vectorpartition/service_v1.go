@@ -72,9 +72,10 @@ type NeighborV1 struct {
 }
 
 type SearchCountersV1 struct {
-	SelectedPartitions, SelectedGroups                      uint64
-	Requests, RPCs, Retries, Redirects, Candidates, Edges   uint64
-	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes uint64
+	SelectedPartitions, SelectedGroups                       uint64
+	Requests, RPCs, Retries, Redirects, Candidates, Edges    uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens uint64
+	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes  uint64
 }
 
 // SearchTimingV1 retains exclusive public/coordinator stages plus per-shard

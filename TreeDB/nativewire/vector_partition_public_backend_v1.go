@@ -73,7 +73,7 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		r.DeadlineUnixNano = request.Deadline.UnixNano()
 	}
 	adapterNanos := time.Since(adapterStarted)
-	response, err := b.opts.Topology.Coordinator().Search(ctx, r)
+	response, err := b.opts.Topology.searchStrictV1(ctx, r)
 	if err != nil {
 		return public.SearchResponseV1{}, publicBackendErrorV1(err)
 	}
@@ -85,6 +85,7 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
 		Candidates: response.Counters.Candidates, Edges: response.Counters.Edges,
+		SnapshotPins: response.Counters.SnapshotPins, ReadProofs: response.Counters.ReadProofs, GenerationPins: response.Counters.GenerationPins, PartitionOpens: response.Counters.PartitionOpens,
 		QueryBytes: response.Counters.QueryBytes, RequestBytes: response.Counters.RequestBytes, CandidateBytes: response.Counters.CandidateBytes, ResponseBytes: response.Counters.ResponseBytes,
 	}, Timing: public.SearchTimingV1{
 		PublicAdapter:        adapterNanos,
@@ -176,10 +177,16 @@ func (b *VectorPartitionPublicBackendV1) ActivateVectorPartitionV1(ctx context.C
 		return public.GenerationStatusV1{}, err
 	}
 	r, err := b.opts.Lifecycle.ActivateV1(ctx, b.opts.Identity)
+	if err == nil {
+		err = b.opts.Topology.PublishServingSnapshotV1(ctx)
+	}
 	return publicStatusV1(r), err
 }
 func (b *VectorPartitionPublicBackendV1) InvalidateVectorPartitionV1(ctx context.Context, id public.GenerationIDV1, reason string) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
+		return public.GenerationStatusV1{}, err
+	}
+	if err := b.opts.Topology.InvalidateServingSnapshotV1(); err != nil {
 		return public.GenerationStatusV1{}, err
 	}
 	_, err := b.opts.Lifecycle.InvalidateGenerationBeforeRelevantMutationV1(ctx, b.opts.Identity, reason)
@@ -193,6 +200,9 @@ func (b *VectorPartitionPublicBackendV1) InvalidateVectorPartitionV1(ctx context
 }
 func (b *VectorPartitionPublicBackendV1) RetireVectorPartitionV1(ctx context.Context, id public.GenerationIDV1) (public.GenerationStatusV1, error) {
 	if err := b.checkID(id); err != nil {
+		return public.GenerationStatusV1{}, err
+	}
+	if err := b.opts.Topology.InvalidateServingSnapshotV1(); err != nil {
 		return public.GenerationStatusV1{}, err
 	}
 	r, err := b.opts.Lifecycle.RetireV1(ctx, b.opts.Identity)

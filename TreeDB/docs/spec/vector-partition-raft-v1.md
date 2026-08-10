@@ -282,10 +282,20 @@ same authority. The snapshot binds the lifecycle, catalog, topology,
 ready-set, manifest, router, authorization-overlay, and source-watermark
 identities. Publication swaps one complete snapshot; replacement or
 invalidation prevents new pins while existing pins drain. Snapshot acquisition
-only validates the retained local proof and exact applied identity: it performs
-no quorum call, catalog-log append, manifest reconstruction, generation open,
-or partition open. #4096 owns strict request propagation and #4098 owns the
-explicit relaxed and pinned-session public shapes.
+validates the retained local proof and exact applied identity with no quorum call,
+catalog log append, manifest reconstruction, generation open, or partition open.
+Ordinary `OperationsV1.Search` remains strict: after bounded admission it takes
+exactly one fresh current-term quorum-backed no-log catalog proof, pins the
+matching snapshot, and sends a server-authenticated short-lived capability to
+the coordinator and shards. Those stages require an exact snapshot identity
+and applied-index floor but perform no additional catalog or data-group
+consensus and no request-side asset opens. Forged, expired, wrong-generation,
+or invalidated capabilities fail closed; a request pinned before invalidation
+may drain. The background serving-proof refresh remains quorum-backed and
+no-log, but is retained as separate work rather than charged to a request.
+#4096 owns this strict proof propagation. #4098 owns separate
+explicit relaxed and pinned-session shapes; it does not weaken this strict
+default or accept caller-authored authority.
 
 The concrete replica-local catalog authority intentionally does not implement
 the serving interface; only the linearizable adapter can capture or refresh a
