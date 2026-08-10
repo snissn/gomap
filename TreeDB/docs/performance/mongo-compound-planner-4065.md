@@ -6,8 +6,8 @@ cursor stream. It is not a MongoDB-comparison or production-throughput claim.
 ## Provenance
 
 - Base: `3eea650b65261267b412560955bc6f4c19f7ef18`
-- Source capture: `93d91136e44b99fef3ea4b68007f7b9f2a9af4b5`
-- Benchmark source SHA-256: `5f194ea9e0d1f7c47fee2f8289d157276963566cf78b3fd9a1b394335e4d286d` (`TreeDB/mongo_gateway/compound_planner_test.go`)
+- Source capture: `d4a2373c14d132c88cab2c08569ed11a1e3c76c8`
+- Benchmark source SHA-256: `518c18fca9925b7b4e10478da047a1c327636c8d5472f9fe46cedf65c2b5b6ce` (`TreeDB/mongo_gateway/compound_planner_test.go`)
 - Host: Apple M3, darwin/arm64, Go test default `GOMAXPROCS=8`
 - Command: `GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' -bench BenchmarkMongoCompoundPlannerCursor -benchtime=25x -count=10 -benchmem`
 
@@ -20,9 +20,9 @@ alternative plus sort. Index creation and seed insertion are excluded.
 
 | variant | p50 ns/op | p95/p99 ns/op | p50 ops/sec | B/op range | allocs/op range |
 | --- | ---: | ---: | ---: | ---: |
-| compound stream | 60,889 | 70,915 / 70,915 | 16,423 | 59,072–59,426 | 795–796 |
-| bounded scan + sort | 489,237 | 544,085 / 544,085 | 2,044 | 438,507–440,234 | 17,856–17,859 |
-| single-field + sort | 498,719 | 543,428 / 543,428 | 2,005 | 474,043–474,741 | 18,263–18,265 |
+| compound stream | 68,649 | 82,768 / 82,768 | 14,567 | 59,072–59,542 | 795–796 |
+| bounded scan + sort | 485,810 | 509,502 / 509,502 | 2,058 | 438,588–439,774 | 17,856–17,858 |
+| single-field + sort | 608,648 | 640,978 / 640,978 | 1,643 | 474,046–475,044 | 18,263–18,266 |
 
 Percentiles use the 10 observed per-variant samples: p50 is the midpoint of
 the fifth and sixth sorted samples; p95/p99 use the conservative nearest-rank
@@ -30,9 +30,9 @@ maximum at this sample size. These are local microbenchmark observations, not
 release SLOs.
 
 An operation-heavy exact-source compound-stream capture used `-benchtime=10000x`:
-`54,225 ns/op`, `59,245 B/op`, `801 allocs/op`; CPU SHA-256
-`1b330e729a5d37a9129479cbc239965b116ad61ba776dbccbf591b0f505b4d61`, heap
-SHA-256 `6116bbade55e68ec448b0775198c70cc06229194a30204fe593e678311b4a5eb`.
+`55,480 ns/op`, `59,243 B/op`, `801 allocs/op`; CPU SHA-256
+`30910a619864e3cdab46082d0e2b558fa5915bb9e316a9552eb7bc91db7eb1a0`, heap
+SHA-256 `0b393053e5b9d4dcf6cec9bb3a42b421c5d0cb96352059956fcb3afc0b26f5ca`.
 The profiles are local `/tmp` diagnostic artifacts, not repository content;
 their top includes scheduler/runtime activity, so they are diagnostic only.
 
