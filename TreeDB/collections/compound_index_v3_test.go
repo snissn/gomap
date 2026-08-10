@@ -906,6 +906,48 @@ func TestScanMergedCompoundIndexIDsStableRejectsOversizedTieBufferBeforePublicat
 	}
 }
 
+func TestScanMergedCompoundIndexIDsStableDedupeKeysShareTieByteBudgetAcrossGroups(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(3)
+	defer resetCollectionRunTable(table)
+	// Each entry consumes one retained dedupe key and one temporary group ID.
+	// With this cap, the first two completed groups may publish, but retaining
+	// the third ID's dedupe key leaves no room for its group clone. The scanner
+	// must stop before publishing that partial third group rather than allowing
+	// the seen map to grow outside the stable-memory contract.
+	setCollectionRunValue(table, key("a", "a"), nil)
+	setCollectionRunValue(table, key("b", "b"), nil)
+	setCollectionRunValue(table, key("c", "c"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 3, false, 3, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		DedupeDocumentID:     true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+		MaxStableTieBytes:    150,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(got) != "[a b]" {
+		t.Fatalf("stable dedupe byte cap ids=%q truncated=%v err=%v want [a b],true,nil", got, truncated, err)
+	}
+}
+
 func TestScanMergedCompoundIndexIDsStableRequiresPositiveWorkCap(t *testing.T) {
 	_, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, nil, IndexValueBSONOrderedV2, 1, false, 0, scanMergedCollectionIndexIDOptions{
 		StableDocumentIDTies: true,
