@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -23,6 +24,8 @@ func TestMongoNegativeAndExistsPredicatesRespectMissingNullAndDottedValues(t *te
 		{"ne null matches scalar", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: nil}}}}, bson.D{{Key: "a", Value: int32(1)}}, true},
 		{"ne rejects numeric equivalent", bson.D{{Key: "a", Value: bson.D{{Key: "$ne", Value: int32(1)}}}}, bson.D{{Key: "a", Value: int64(1)}}, false},
 		{"nin matches null", bson.D{{Key: "a", Value: bson.D{{Key: "$nin", Value: bson.A{int32(1)}}}}}, bson.D{{Key: "a", Value: nil}}, true},
+		{"nin empty matches missing", bson.D{{Key: "a", Value: bson.D{{Key: "$nin", Value: bson.A{}}}}}, bson.D{{Key: "_id", Value: 1}}, true},
+		{"nin empty matches scalar", bson.D{{Key: "a", Value: bson.D{{Key: "$nin", Value: bson.A{}}}}}, bson.D{{Key: "a", Value: int32(1)}}, true},
 		{"exists distinguishes null from missing", bson.D{{Key: "a", Value: bson.D{{Key: "$exists", Value: true}}}}, bson.D{{Key: "a", Value: nil}}, true},
 		{"exists false matches missing", bson.D{{Key: "a", Value: bson.D{{Key: "$exists", Value: false}}}}, bson.D{{Key: "_id", Value: 1}}, true},
 		{"not matches missing", bson.D{{Key: "a", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gt", Value: int32(3)}}}}}}, bson.D{{Key: "_id", Value: 1}}, true},
@@ -279,6 +282,54 @@ func TestMongoNegativeQueryWorkCapsRejectBeforeCursorOrMutation(t *testing.T) {
 	assertOK(t, check)
 	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 {
 		t.Fatal("over-cap filter write mutated document")
+	}
+}
+
+func TestMongoMalformedNegativeFilterRejectsBeforeRoutedObservation(t *testing.T) {
+	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+	lookups := 0
+	server.clusterCollectionLookupHook = func() { lookups++ }
+	choices := make(bson.A, mongoQueryMaxNegativeChoices+1)
+	for i := range choices {
+		choices[i] = int32(i)
+	}
+	response := serveCommand(t, server, 406632, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "score", Value: bson.D{{Key: "$nin", Value: choices}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if lookups != 0 {
+		t.Fatalf("local collection lookups=%d want 0", lookups)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0", len(routes))
+	}
+}
+
+func TestMongoNegativeExplainReportsResidualCandidatesAndMaterialization(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406633, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}}}, {Key: "name", Value: "tenant_1"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406634, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a1"}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "a2"}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "b1"}, {Key: "tenant", Value: "b"}, {Key: "score", Value: int32(2)}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "a"}, {Key: "score", Value: bson.D{{Key: "$ne", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 406635, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	winning := bson.Raw(response).Lookup("queryPlanner", "winningPlan").Document()
+	if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+		t.Fatalf("residualFilter=%v ok=%v want true: %s", residual, ok, response)
+	}
+	stats := bson.Raw(response).Lookup("executionStats").Document()
+	if got, ok := stats.Lookup("nReturned").Int64OK(); !ok || got != 1 {
+		t.Fatalf("nReturned=%d ok=%v want 1: %s", got, ok, response)
+	}
+	if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 2 {
+		t.Fatalf("candidateDocumentsExamined=%d ok=%v want 2: %s", got, ok, response)
+	}
+	if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got != 2 {
+		t.Fatalf("candidateDocumentsMaterialized=%d ok=%v want 2: %s", got, ok, response)
+	}
+	if got, ok := stats.Lookup("candidateMaterializedBytes").Int64OK(); !ok || got <= 0 {
+		t.Fatalf("candidateMaterializedBytes=%d ok=%v want >0: %s", got, ok, response)
 	}
 }
 

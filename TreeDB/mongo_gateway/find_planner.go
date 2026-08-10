@@ -1163,6 +1163,9 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, mate
 		// The selector has materialized every usable index candidate to make
 		// its choice. Account for all of that work, not merely the winner.
 		plan.recordCandidates(work)
+		for _, doc := range docs {
+			plan.recordMaterializedBytes(len(doc))
+		}
 		if !bestSet || len(docs) < len(best) {
 			best = docs
 			bestStage, bestName = stage, idx.Name
