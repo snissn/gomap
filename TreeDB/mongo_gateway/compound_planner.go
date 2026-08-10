@@ -131,10 +131,9 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			return compoundIndexPlan{}, false
 		}
 		if eqOK {
-			// `$in` is a supported query predicate, but a multi-value equality
-			// prefix needs a k-way ordered merge.  Until that bounded merge is
-			// available, retain it as a residual rather than returning a partial
-			// index order.
+			// `$in` fans out one bounded probe per prefix combination. Results are
+			// concatenated rather than k-way merged, so the later sort check rejects
+			// multi-value prefixes from supplying index order.
 			if len(eq.values) == 0 {
 				return compoundIndexPlan{}, false
 			}
@@ -332,11 +331,6 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 			return nil, compoundIndexPlan{}, false, nil
 		}
 	}
-	candidates := compoundIndexPlans(col.MetaView(), plan)
-	if len(candidates) == 0 {
-		return nil, compoundIndexPlan{}, false, nil
-	}
-	candidate := candidates[0]
 	ids, candidate, ok, err := s.compoundIndexPlanIDs(col, plan)
 	if !ok || err != nil {
 		return nil, candidate, ok, err
@@ -466,5 +460,3 @@ func compoundIndexPlanFor(meta collections.CollectionMeta, plan findPlan) (compo
 	}
 	return plans[0], true
 }
-
-func isCompoundPlanCapError(err error) bool { return errors.Is(err, errMongoFindScanCapExceeded) }

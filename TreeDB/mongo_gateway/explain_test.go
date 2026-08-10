@@ -463,6 +463,19 @@ func TestMongoExplainAggregateRepresentsInitialPipelineSort(t *testing.T) {
 	}
 }
 
+func TestMongoExplainAggregateRejectsNonInitialPipelineSort(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 108, bson.D{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{
+		bson.D{{Key: "$match", Value: bson.D{{Key: "city", Value: "hnl"}}}},
+		bson.D{{Key: "$project", Value: bson.D{{Key: "city", Value: int32(1)}}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "city", Value: int32(1)}}}},
+	}}, {Key: "cursor", Value: bson.D{}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	if got, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("rejectionReason").StringValueOK(); !ok || got != "unsupported_aggregate_pipeline" {
+		t.Fatalf("reason=%q ok=%v response=%s", got, ok, resp)
+	}
+}
+
 func TestMongoExplainAdaptiveMultiIndexPlanDoesNotClaimAnUnexecutedWinner(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	command := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}, {Key: "age", Value: bson.D{{Key: "$gte", Value: int32(20)}}}}}}}, {Key: "$db", Value: "app"}}
