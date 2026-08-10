@@ -1,0 +1,56 @@
+File: treedb_vector_partition_bench
+Type: delay
+Showing nodes accounting for 1681409157.65us, 100% of 1681450952.79us total
+Dropped 102 nodes (cum <= 8407254.76us)
+Showing top 50 nodes out of 57
+      flat  flat%   sum%        cum   cum%
+1431455326.31us 85.13% 85.13% 1431455326.31us 85.13%  runtime.selectgo
+         0     0% 85.13% 484509165.99us 28.81%  main.(*vectorPartitionOperationsTCPServerV1).serve
+         0     0% 85.13% 484509165.99us 28.81%  main.(*vectorPartitionOperationsTCPServerV1).start.func1.1
+         0     0% 85.13% 484503298.99us 28.81%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Search
+         0     0% 85.13% 351442182.68us 20.90%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).SearchVectorPartitionV1
+         0     0% 85.13% 351442182.68us 20.90%  github.com/snissn/gomap/TreeDB/vectorpartition.(*ServiceV1).Search
+         0     0% 85.13% 351442133.20us 20.90%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).Search
+         0     0% 85.13% 339591976.13us 20.20%  github.com/snissn/gomap/TreeDB/internal/raftcluster.(*CatalogMetaRaftProviderV1).LinearizableCatalogMetaAppliedIndexV1
+         0     0% 85.13% 334813218.87us 19.91%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 85.13% 327283551.39us 19.46%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture
+         0     0% 85.13% 318550523.64us 18.94%  github.com/snissn/gomap/TreeDB/internal/raftcluster.waitHashicorpRaftFuture.func1
+         0     0% 85.13% 244635599.09us 14.55%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPInterruptOnCancelV1.func2
+         0     0% 85.13% 206526123.11us 12.28%  github.com/snissn/gomap/TreeDB/nativewire.(*LinearizableCatalogVectorPartitionLifecycleAuthorityV1).ValidateVectorPartitionGenerationSearchV1
+         0     0% 85.13% 203648475.23us 12.11%  github.com/hashicorp/raft.(*logFuture).Error
+         0     0% 85.13% 194198435.95us 11.55%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch
+194198435.95us 11.55% 96.68% 194198435.95us 11.55%  sync.(*WaitGroup).Wait
+         0     0% 96.68% 140213977.70us  8.34%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).validateReplicatedLifecycle
+         0     0% 96.68% 133066983.32us  7.91%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionPublicBackendV1).OperationsHealthV1
+         0     0% 96.68% 133066983.32us  7.91%  github.com/snissn/gomap/TreeDB/vectorpartition.(*OperationsV1).Status
+         0     0% 96.68% 114902048.41us  6.83%  github.com/hashicorp/raft.(*verifyFuture).Error
+         0     0% 96.68% 79474760.78us  4.73%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 96.68% 79474760.78us  4.73%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 96.68% 79408059.91us  4.72%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+    7.42us 4.4e-07% 96.68% 75616856.01us  4.50%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).PinVectorPartitionGenerationV1
+         0     0% 96.68% 75616856.01us  4.50%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionProductionNodeGenerationSourceV1.PinVectorPartitionGenerationV1
+         0     0% 96.68% 74639034.17us  4.44%  github.com/hashicorp/raft.(*Raft).pipelineDecode
+         0     0% 96.68% 74639034.17us  4.44%  github.com/hashicorp/raft.(*Raft).pipelineReplicate.func1
+         0     0% 96.68% 74258505.71us  4.42%  github.com/hashicorp/raft.(*Raft).pipelineReplicate
+         0     0% 96.68% 74258505.71us  4.42%  github.com/hashicorp/raft.(*Raft).replicate
+         0     0% 96.68% 74258505.71us  4.42%  github.com/hashicorp/raft.(*Raft).startStopReplication.func1
+         0     0% 96.68% 74012942.59us  4.40%  github.com/hashicorp/raft.(*inmemPipeline).decodeResponses
+         0     0% 96.68% 71117201.67us  4.23%  github.com/hashicorp/raft.(*Raft).heartbeat
+         0     0% 96.68% 71117201.67us  4.23%  github.com/hashicorp/raft.(*Raft).replicate.func1
+         0     0% 96.68% 70131430.21us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0% 96.68% 70131430.21us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0% 96.68% 70131430.21us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0% 96.68% 70131430.21us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+   12.54us 7.5e-07% 96.68% 70110449.98us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).acquire
+         0     0% 96.68% 70110437.44us  4.17%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionShardSearchTCPEndpointPoolV1).acquire
+         0     0% 96.68% 67678964.11us  4.03%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 96.68% 66306197.64us  3.94%  github.com/snissn/gomap/TreeDB/nativewire.(*CollectionVectorPartitionGenerationSourceV1).validateActive
+55755375.43us  3.32%   100% 55755375.43us  3.32%  runtime.chanrecv1
+         0     0%   100% 48861703.76us  2.91%  github.com/hashicorp/raft.(*Raft).runFollower
+         0     0%   100% 47119513.20us  2.80%  github.com/hashicorp/raft.(*Raft).runFSM
+         0     0%   100% 36652041.79us  2.18%  runtime.(*wakeableSleep).sleep
+         0     0%   100% 21488477.32us  1.28%  github.com/hashicorp/raft.(*InmemTransport).AppendEntries
+         0     0%   100% 21488477.32us  1.28%  github.com/hashicorp/raft.(*InmemTransport).makeRPC
+         0     0%   100% 20000983.23us  1.19%  github.com/hashicorp/raft.emitLogStoreMetrics
+         0     0%   100% 18817260.36us  1.12%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0%   100% 18817260.36us  1.12%  github.com/hashicorp/raft.(*Raft).runLeader

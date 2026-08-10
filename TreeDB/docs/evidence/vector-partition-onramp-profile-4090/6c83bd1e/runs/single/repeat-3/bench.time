@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/bin/treedb_vector_partition_bench system-bench -endpoint 127.0.0.1:46025 -topology /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/single/repeat-3/topology.json -dataset /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset -truth-cache /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache -truth-cache-sha256 5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e -probes 2 -concurrency 1,32 -top-k 10 -ef-search 128 -warmup 1000 -out /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/runs/single/repeat-3/search.json"
+	User time (seconds): 0.63
+	System time (seconds): 0.29
+	Percent of CPU this job got: 1%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:12.58
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 306944
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 76292
+	Voluntary context switches: 13855
+	Involuntary context switches: 244
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 136
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

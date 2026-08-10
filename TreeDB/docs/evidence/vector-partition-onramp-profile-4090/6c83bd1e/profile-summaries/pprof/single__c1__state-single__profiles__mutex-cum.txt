@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:03:33 HST
+Showing nodes accounting for 20652.55us, 97.73% of 21132.35us total
+Dropped 210 nodes (cum <= 105.66us)
+Showing top 40 nodes out of 118
+      flat  flat%   sum%        cum   cum%
+17994.24us 85.15% 85.15% 17994.24us 85.15%  runtime.unlock (partial-inline)
+         0     0% 85.15% 15340.77us 72.59%  runtime.systemstack
+         0     0% 85.15% 14828.86us 70.17%  runtime.gcBgMarkWorker
+         0     0% 85.15% 13427.71us 63.54%  runtime.forEachP (inline)
+         0     0% 85.15% 13427.71us 63.54%  runtime.forEachPInternal
+         0     0% 85.15% 13422.32us 63.52%  runtime.gcMarkDone
+         0     0% 85.15% 13335.16us 63.10%  runtime.gcMarkTermination
+         0     0% 85.15% 13335.16us 63.10%  runtime.gcMarkTermination.forEachP.func7
+ 2658.31us 12.58% 97.73%  2658.31us 12.58%  sync.(*Mutex).Unlock
+         0     0% 97.73%  2036.57us  9.64%  runtime.mcall
+         0     0% 97.73%  1771.88us  8.38%  runtime.schedule
+         0     0% 97.73%  1732.66us  8.20%  runtime.park_m
+         0     0% 97.73%  1649.19us  7.80%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 97.73%  1443.54us  6.83%  runtime.(*mheap).allocSpan
+         0     0% 97.73%  1414.62us  6.69%  runtime.(*mheap).allocManual
+         0     0% 97.73%  1406.54us  6.66%  runtime.gcBgMarkWorker.func2
+         0     0% 97.73%  1406.54us  6.66%  runtime.gcDrain
+         0     0% 97.73%  1406.54us  6.66%  runtime.markroot
+         0     0% 97.73%  1406.54us  6.66%  runtime.markroot.func1
+         0     0% 97.73%  1406.54us  6.66%  runtime.scanstack
+         0     0% 97.73%  1367.03us  6.47%  runtime.getempty
+         0     0% 97.73%  1367.03us  6.47%  runtime.getempty.func1
+         0     0% 97.73%  1367.03us  6.47%  runtime.scanframeworker
+         0     0% 97.73%   968.38us  4.58%  runtime.findRunnable
+         0     0% 97.73%   914.07us  4.33%  runtime.scanblock
+         0     0% 97.73%   898.92us  4.25%  runtime.gcDrainMarkWorkerIdle (inline)
+         0     0% 97.73%   883.75us  4.18%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 97.73%   883.75us  4.18%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 97.73%   882.84us  4.18%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 97.73%   850.52us  4.02%  runtime.wakep
+         0     0% 97.73%   813.04us  3.85%  runtime.(*stackScanState).putPtr
+         0     0% 97.73%   808.46us  3.83%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatch.func1
+         0     0% 97.73%   808.46us  3.83%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionCoordinatorV1).dispatchTask
+         0     0% 97.73%   808.46us  3.83%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).DispatchVectorPartitionShardSearchV1
+         0     0% 97.73%   808.46us  3.83%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchTCPDispatcherV1).dispatchVectorPartitionShardSearchOnceV1
+         0     0% 97.73%   807.13us  3.82%  context.(*cancelCtx).propagateCancel
+         0     0% 97.73%   807.13us  3.82%  context.WithDeadline (inline)
+         0     0% 97.73%   807.13us  3.82%  context.WithDeadlineCause
+         0     0% 97.73%   807.13us  3.82%  github.com/snissn/gomap/TreeDB/nativewire.vectorPartitionShardSearchTCPRequestContextV1
+         0     0% 97.73%   803.49us  3.80%  runtime.resetspinning

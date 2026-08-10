@@ -45,6 +45,21 @@ def _paths_overlap(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
 
 
+def _listener_matches(actual: str, configured: str) -> bool:
+    if actual == configured:
+        return True
+
+    def split(value: str) -> tuple[str, str]:
+        if value.startswith("[") and "]:" in value:
+            host, port = value[1:].rsplit("]:", 1)
+            return host, port
+        return value.rsplit(":", 1) if ":" in value else ("", "")
+
+    actual_host, actual_port = split(actual)
+    configured_host, configured_port = split(configured)
+    return actual_port == configured_port and actual_host in ("0.0.0.0", "::") and configured_host in ("0.0.0.0", "::")
+
+
 def _go_json_sha256(value: dict[str, Any]) -> str:
     raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029").encode()
     return hashlib.sha256(raw).hexdigest()
@@ -153,7 +168,7 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
         ready.get("source_revision") == source_revision and ready.get("vcs_modified") is False and ready.get("executable_sha256") == executable_sha256,
         "system-bench readiness executable provenance is invalid",
     )
-    _require(ready.get("public_endpoint", "") == node.get("public_listen", ""), "system-bench readiness public endpoint is invalid")
+    _require(_listener_matches(ready.get("public_endpoint", ""), node.get("public_listen", "")), "system-bench readiness public endpoint is invalid")
     _require(ready.get("profile_directory", "") == node.get("profile_directory", ""), "system-bench readiness profile directory is invalid")
     if runtime <= set(ready):
         _require(_uint(ready["logical_cpus"], positive=True) and _uint(ready["gomaxprocs"], positive=True) and isinstance(ready["go_memory_limit"], int) and ready["go_memory_limit"] > 0 and isinstance(ready["effective_cpu_set"], str), "system-bench readiness runtime budget is invalid")

@@ -1,0 +1,48 @@
+File: treedb_vector_partition_bench
+Build ID: 6e601df17e91fc834d40505729b45018b8011783
+Type: delay
+Time: 2026-08-09 14:07:00 HST
+Showing nodes accounting for 57.76ms, 99.69% of 57.94ms total
+Dropped 208 nodes (cum <= 0.29ms)
+Showing top 40 nodes out of 60
+      flat  flat%   sum%        cum   cum%
+   52.53ms 90.66% 90.66%    52.53ms 90.66%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 90.66%    45.72ms 78.90%  github.com/hashicorp/raft.(*raftState).goFunc.func1
+         0     0% 90.66%    45.31ms 78.19%  github.com/hashicorp/raft.(*Raft).run
+         0     0% 90.66%    45.28ms 78.15%  github.com/hashicorp/raft.(*Raft).leaderLoop
+         0     0% 90.66%    45.28ms 78.15%  github.com/hashicorp/raft.(*Raft).runLeader
+         0     0% 90.66%    45.18ms 77.98%  github.com/hashicorp/raft-boltdb/v2.(*BoltStore).StoreLogs
+         0     0% 90.66%    45.18ms 77.97%  go.etcd.io/bbolt.(*Tx).Commit
+         0     0% 90.66%    45.17ms 77.96%  github.com/hashicorp/raft.(*Raft).dispatchLogs
+         0     0% 90.66%    45.17ms 77.95%  go.etcd.io/bbolt.(*Tx).writeMeta
+         0     0% 90.66%    44.77ms 77.27%  github.com/hashicorp/raft.(*Raft).run-fm
+         0     0% 90.66%     7.53ms 12.99%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionProductionTopologyV1).serve.func1.2
+         0     0% 90.66%     7.53ms 12.99%  github.com/snissn/gomap/TreeDB/nativewire.VectorPartitionShardSearchTCPServerV1.ServeConn
+         0     0% 90.66%     7.53ms 12.99%  github.com/snissn/gomap/TreeDB/nativewire.(*VectorPartitionShardSearchServiceV1).Search
+         0     0% 90.66%     7.35ms 12.68%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorPartitionLocalSearcherForGenerationSearchPlanWithContextV1
+         0     0% 90.66%     7.35ms 12.68%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1
+         0     0% 90.66%     7.35ms 12.68%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationCacheV1).openPartition
+         0     0% 90.66%     7.35ms 12.68%  github.com/snissn/gomap/TreeDB/nativewire.(*collectionVectorPartitionGenerationLeaseV1).OpenPartition
+         0     0% 90.66%     7.35ms 12.68%  github.com/snissn/gomap/TreeDB/nativewire.(*vectorPartitionProductionNodePinnedGenerationV1).OpenPartition
+         0     0% 90.66%     7.34ms 12.67%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Handle).Release
+         0     0% 90.66%     7.34ms 12.67%  github.com/snissn/gomap/TreeDB/internal/mappedresource.(*Manager).AcquireFileRange.func1
+         0     0% 90.66%     7.34ms 12.67%  github.com/snissn/gomap/TreeDB/internal/mappedresource.munmapFile (inline)
+         0     0% 90.66%     7.34ms 12.67%  syscall.(*mmapper).Munmap
+         0     0% 90.66%     7.34ms 12.67%  syscall.Munmap (inline)
+         0     0% 90.66%     7.31ms 12.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).Close
+         0     0% 90.66%     7.31ms 12.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).releaseSharedPreparedSearch
+         0     0% 90.66%     7.31ms 12.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearch).close
+         0     0% 90.66%     7.31ms 12.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release
+         0     0% 90.66%     7.31ms 12.61%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphSharedPreparedSearchRef).release.func1
+         0     0% 90.66%     7.31ms 12.61%  sync.(*Once).Do (inline)
+         0     0% 90.66%     7.31ms 12.61%  sync.(*Once).doSlow
+         0     0% 90.66%     6.30ms 10.87%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).Close
+         0     0% 90.66%     6.30ms 10.87%  github.com/snissn/gomap/TreeDB/collections.(*columnHNSWSearchPackPreparedView).Close.func1
+    5.23ms  9.03% 99.69%     5.23ms  9.03%  runtime.unlock (partial-inline)
+         0     0% 99.69%     4.38ms  7.57%  runtime.systemstack
+         0     0% 99.69%     3.92ms  6.76%  runtime.gcBgMarkWorker
+         0     0% 99.69%     3.67ms  6.34%  runtime.forEachP (inline)
+         0     0% 99.69%     3.67ms  6.34%  runtime.forEachPInternal
+         0     0% 99.69%     3.67ms  6.34%  runtime.gcMarkDone
+         0     0% 99.69%     3.66ms  6.32%  runtime.gcMarkTermination
+         0     0% 99.69%     3.66ms  6.32%  runtime.gcMarkTermination.forEachP.func7

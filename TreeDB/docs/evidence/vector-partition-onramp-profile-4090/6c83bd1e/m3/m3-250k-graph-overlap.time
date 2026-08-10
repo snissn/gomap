@@ -1,0 +1,23 @@
+	Command being timed: "/mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/bin/treedb_vector_partition_bench -stage overlap,partition_index -source-checkout /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/source -dataset /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset -out /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/250k/graph-overlap-020-out -m3-persist-db /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/250k/graph-overlap-020-db -partitions 16 -overlap .2 -partition-assignment graph -partition-kahip-python /mnt/fast4tb/gomap-4024-kahip-3.25/bin/python -partition-kahip-script /mnt/fast4tb/gomap-4090-vector-onramp-profile-6c83bd1e/source/scripts/treedb_kahip_partition.py -partition-kahip-timeout 5m -partition-max-distance-work 50000000000 -router-max-vectors 300000 -router-max-scalar-work 50000000000 -m3-max-benchmark-visits 900000000 -max-vectors 250000 -max-fixture-bytes 4294967296 -top-k 10 -seed 4016 -base-sha b600e7437aa01372e930fc53a0f46f83cdef0e0a -head-sha 6c83bd1e1f8b0a0aab29bf0fe1cc846fdc944580 -format json"
+	User time (seconds): 849.26
+	System time (seconds): 19.95
+	Percent of CPU this job got: 103%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:57.28
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 2172696
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 58
+	Minor (reclaiming a frame) page faults: 2507563
+	Voluntary context switches: 524329
+	Involuntary context switches: 114751
+	Swaps: 0
+	File system inputs: 19904
+	File system outputs: 2309168
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
