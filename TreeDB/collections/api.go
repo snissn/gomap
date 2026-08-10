@@ -109,6 +109,7 @@ var (
 	errConcurrentSchemaModification            = errors.New("collections: concurrent schema modification")
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errCollectionIndexScanWorkCap              = errors.New("collections: compound index scan inspected-entry cap reached")
+	errCollectionIndexScanRetainedBytesCap     = errors.New("collections: compound index scan retained-ID byte cap reached")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
 	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
@@ -8278,6 +8279,7 @@ type bufferedRootRunsIterator struct {
 	maxInspected       int
 	inspected          int
 	workCapped         bool
+	onInspected        func(int)
 }
 
 type bufferedRootRunIteratorSource struct {
@@ -8303,6 +8305,10 @@ func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, star
 }
 
 func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int) iterator.UnsafeIterator {
+	return newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, start, end, includeDeleted, reverse, maxInspected, nil)
+}
+
+func newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int, onInspected func(int)) iterator.UnsafeIterator {
 	if maxInspected > 0 && len(runs) > maxInspected {
 		return &bufferedRootRunsIterator{firstErr: errCollectionIndexScanWorkCap, workCapped: true}
 	}
@@ -8336,7 +8342,7 @@ func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Tabl
 			lenHint:  lenHint,
 		})
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected)
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected, onInspected)
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices bool) iterator.UnsafeIterator {
@@ -8348,6 +8354,10 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources []buf
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int) iterator.UnsafeIterator {
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected, nil)
+}
+
+func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int, onInspected func(int)) iterator.UnsafeIterator {
 	// Source construction is physical work too: a direct bounded scan must not
 	// open an unbounded stack of overlay roots before the capped merge gets a
 	// chance to reject it. A source has an initially-positioned physical entry,
@@ -8370,6 +8380,7 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(source
 		start:              start,
 		end:                end,
 		maxInspected:       maxInspected,
+		onInspected:        onInspected,
 	}
 	if len(sources) <= len(it.priorityInline) {
 		it.priorities = it.priorityInline[:0]
@@ -8624,6 +8635,9 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 func (it *bufferedRootRunsIterator) inspect(count int) bool {
 	if it.maxInspected <= 0 || count <= it.maxInspected-it.inspected {
 		it.inspected += count
+		if it.onInspected != nil {
+			it.onInspected(count)
+		}
 		return true
 	}
 	it.workCapped = true
@@ -20262,6 +20276,31 @@ type CompoundIndexRangeOptions struct {
 	Upper  IndexRangeBound
 	Limit  int
 	Desc   bool
+	// StableDocumentIDTies makes a BSON v2 scan emit equal logical index keys in
+	// ascending document-ID order (or DocumentIDLess order when supplied). The
+	// default retains the historical physical order for direct callers. A result limit may
+	// return the ascending-ID prefix of a fully buffered group; a work-cap stop
+	// never publishes an incomplete group and reports truncation instead.
+	StableDocumentIDTies bool
+	// DocumentIDLess optionally supplies the ordering for IDs within a stable
+	// logical-index-key tie group. Nil uses the historical encoded-byte order.
+	// Callers whose document IDs have a higher-level collation may provide their
+	// own deterministic comparator without materializing the whole result set.
+	DocumentIDLess func(left, right []byte) bool
+	// MaxInspected optionally overrides the normal Limit*64 physical-entry
+	// budget. It is for planners that need enough work to complete a stable tie
+	// group even when their result page is smaller than that group.
+	MaxInspected int
+	// MaxRetainedIDBytes bounds IDs accumulated for the returned slice. Zero
+	// retains the historical direct-API behavior; a positive value returns a
+	// truncated prefix before retaining more owned ID payload.
+	MaxRetainedIDBytes int
+	// Inspected, when non-nil, receives the physical source work consumed by
+	// this scan, including source positioning and bounded source advances. It
+	// is reset before scanning. Planners can carry a single inspection budget
+	// across several canonical probes without treating each probe as entitled
+	// to a fresh work cap.
+	Inspected *int
 }
 
 const defaultIndexRangeResultCap = 16
@@ -20342,6 +20381,15 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if opts.Limit <= 0 {
 		return nil, false, errors.New("collections: compound index range limit must be positive")
 	}
+	if opts.MaxInspected < 0 {
+		return nil, false, errors.New("collections: compound index max inspected entries cannot be negative")
+	}
+	if opts.MaxRetainedIDBytes < 0 {
+		return nil, false, errors.New("collections: compound index retained-ID byte cap cannot be negative")
+	}
+	if opts.Inspected != nil {
+		*opts.Inspected = 0
+	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
 	}
@@ -20366,6 +20414,19 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if !ok {
 		return nil, false, nil
 	}
+	if opts.StableDocumentIDTies {
+		components, err := normalizeIndexComponents(idx)
+		if err != nil {
+			return nil, false, err
+		}
+		// BSON-v2 stores missing and null in distinct physical runs. A bounded
+		// stable tie buffer can normalize them only when the equality prefix
+		// fixes every component except one; otherwise later component values can
+		// separate equal logical keys non-adjacently.
+		if len(components)-len(opts.Prefix) > 1 {
+			return nil, false, errors.New("collections: stable document-ID ties require at most one unfixed compound component")
+		}
+	}
 	start, end, empty, err := compoundIndexRangeScanBounds(idx, opts)
 	if err != nil {
 		return nil, false, err
@@ -20374,11 +20435,28 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		return nil, false, nil
 	}
 	workCap := compoundIndexRangeInspectedCap(opts.Limit)
+	if opts.MaxInspected > 0 {
+		workCap = opts.MaxInspected
+	}
 	// Charge physical overlay sources before their dedupe/merge. When both
 	// live-buffer and persisted sources exist, split the cap conservatively so
 	// their combined physical work cannot exceed the documented bound.
 	bufferedBudget := workCap / 2
-	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, bufferedBudget)
+	if workCap > 0 && bufferedBudget == 0 {
+		// Zero is the legacy unlimited iterator sentinel. A caller-requested
+		// positive cap of one cannot safely divide between buffered and
+		// persisted overlays, so reject before opening either source.
+		return nil, true, nil
+	}
+	sourceInspected := 0
+	recordSourceInspection := func(count int) { sourceInspected += count }
+	if opts.Inspected != nil {
+		// Preserve source work on every fail-closed path too. In particular, a
+		// capped buffered or persisted overlay must still debit the planner's
+		// shared budget before it rejects the probe.
+		defer func() { *opts.Inspected = sourceInspected }()
+	}
+	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, bufferedBudget, recordSourceInspection)
 	if err != nil {
 		if errors.Is(err, errCollectionIndexScanWorkCap) {
 			// Do not materialize an unbounded live-buffer interval merely to
@@ -20404,9 +20482,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	var persistedIt iterator.UnsafeIterator
 	persistedBudget := workCap - bufferedBudget
 	if opts.Desc {
-		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
+		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget, recordSourceInspection)
 	} else {
-		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
+		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget, recordSourceInspection)
 	}
 	if err != nil {
 		if errors.Is(err, errCollectionIndexScanWorkCap) {
@@ -20418,21 +20496,39 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = persistedIt.Close() }()
 	}
 	ids := make([][]byte, 0)
-	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, 0, scanMergedCollectionIndexIDOptions{
-		CloneDocumentID:  true,
-		DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
+	retainedIDBytes := 0
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, workCap, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
+		StableDocumentIDTies: opts.StableDocumentIDTies,
+		DocumentIDLess:       opts.DocumentIDLess,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		// A caller-supplied retained-ID cap must bound the stable scanner's
+		// transient group and dedupe allocations as well as the result slice.
+		// Otherwise a cursor plan could allocate the default 64 MiB tie buffer
+		// before its own smaller admission cap observes the IDs.
+		MaxStableTieBytes: opts.MaxRetainedIDBytes,
 	}, func(id []byte) (bool, error) {
+		charge := len(id) + stableDocumentIDTieEntryOverhead
+		if charge < len(id) || (opts.MaxRetainedIDBytes > 0 && charge > opts.MaxRetainedIDBytes-retainedIDBytes) {
+			return false, errCollectionIndexScanRetainedBytesCap
+		}
 		ids = append(ids, id)
+		retainedIDBytes += charge
 		return true, nil
 	})
 	if err != nil {
-		if errors.Is(err, errCollectionIndexScanWorkCap) {
+		if errors.Is(err, errCollectionIndexScanWorkCap) || errors.Is(err, errCollectionIndexScanRetainedBytesCap) {
 			return ids, true, nil
 		}
 		return nil, false, err
 	}
 	if len(ids) == 0 {
-		return nil, false, nil
+		// A bounded stable group can hit its work or retained-byte cap before
+		// publishing its first ID. Preserve that signal: callers such as cursor
+		// admission must reject rather than mistake an incomplete scan for an
+		// empty result set.
+		return nil, truncated, nil
 	}
 	return ids, truncated, nil
 }
@@ -20577,7 +20673,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		// that satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0, nil)
 	}
 	if err != nil {
 		return false, false, err
@@ -20760,7 +20856,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 		// satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0, nil)
 	}
 	if err != nil {
 		return false, true, err
@@ -20879,7 +20975,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 // and may be reset by a concurrent flush as soon as domain.mu is released, so
 // callers must materialize an owned table before merging with the persisted
 // snapshot iterator.
-func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte, maxEntries int) (memtable.Table, error) {
+func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte, maxEntries int, onInspected func(int)) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -20894,7 +20990,7 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
-	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs, start, end, true, false, maxEntries)
+	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, start, end, true, false, maxEntries, onInspected)
 	defer func() { _ = it.Close() }()
 	inspected := 0
 	for it.Valid() {
@@ -21099,9 +21195,31 @@ func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.Unsaf
 }
 
 type scanMergedCollectionIndexIDOptions struct {
-	CloneDocumentID  bool
-	DedupeDocumentID bool
+	CloneDocumentID      bool
+	DedupeDocumentID     bool
+	StableDocumentIDTies bool
+	DocumentIDLess       func(left, right []byte) bool
+	// MaxStableTieBytes bounds all document-ID memory retained by stable mode:
+	// both the current logical-key group's cloned IDs and dedupe keys retained
+	// across completed groups. Zero selects the conservative production default.
+	// It is an internal seam so the public range API retains a fixed, bounded
+	// memory contract while tests can exercise the fail-closed path cheaply.
+	MaxStableTieBytes int
+	// LogicalIndexKey extracts the encoded logical index value from an entry.
+	// It is required only for StableDocumentIDTies.
+	LogicalIndexKey func([]byte) ([]byte, error)
 }
+
+const (
+	// maxStableDocumentIDTieBytes is deliberately independent of the result
+	// count/work cap: document IDs are variable-sized, so an entry-only cap
+	// would still permit an arbitrarily large temporary tie buffer.
+	maxStableDocumentIDTieBytes = 64 << 20
+	// Account for cloned byte slices and dedupe-map string keys as well as their
+	// payloads. The conservative fixed charge keeps retained stable-scan memory
+	// beneath the advertised byte ceiling without relying on runtime internals.
+	stableDocumentIDTieEntryOverhead = 32
+)
 
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, opts, fn)
@@ -21129,6 +21247,21 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		}
 		inspected += count
 		return true
+	}
+	if opts.StableDocumentIDTies {
+		if opts.LogicalIndexKey == nil {
+			return false, errors.New("collections: stable document-ID ties require a logical index key parser")
+		}
+		// Stable mode buffers one complete logical tie group before publishing it.
+		// Require an explicit cap so that buffer cannot become unbounded through a
+		// future internal caller (public compound scans always supply one).
+		if maxInspected == 0 {
+			return false, errors.New("collections: stable document-ID ties require a positive inspected-entry cap")
+		}
+		if opts.MaxStableTieBytes < 0 {
+			return false, errors.New("collections: stable document-ID ties cannot use a negative byte cap")
+		}
+		return scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt, valueType, maxResults, reverse, inspect, opts, fn)
 	}
 	if bufferedIt == nil && !opts.DedupeDocumentID {
 		emitted := 0
@@ -21272,6 +21405,192 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return false, err
 	}
 	return false, nil
+}
+
+// scanMergedCollectionIndexIDsStable preserves logical-index order in either
+// direction while normalizing each equal-key run to ascending document ID
+// order. It deliberately buffers only one run; callers never pay a
+// full-result sort.
+func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, reverse bool, inspect func(int) bool, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+	nextLiveKey := func() ([]byte, bool, bool, error) {
+		for {
+			bufferedKey, bufferedOK := collectionIndexIteratorKey(bufferedIt)
+			persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
+			if !bufferedOK && !persistedOK {
+				if err := collectionIndexIteratorError(bufferedIt); err != nil {
+					return nil, false, false, err
+				}
+				if err := collectionIndexIteratorError(persistedIt); err != nil {
+					return nil, false, false, err
+				}
+				return nil, false, false, nil
+			}
+			var key []byte
+			var deleted bool
+			switch {
+			case !bufferedOK:
+				if !inspect(1) {
+					return nil, false, true, collectionIndexIteratorError(persistedIt)
+				}
+				key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
+				persistedIt.Next()
+			case !persistedOK:
+				if !inspect(1) {
+					return nil, false, true, collectionIndexIteratorError(bufferedIt)
+				}
+				key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+				bufferedIt.Next()
+			default:
+				cmp := bytes.Compare(bufferedKey, persistedKey)
+				if (!reverse && cmp < 0) || (reverse && cmp > 0) {
+					if !inspect(1) {
+						return nil, false, true, collectionIndexIteratorError(bufferedIt)
+					}
+					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+					bufferedIt.Next()
+				} else if (!reverse && cmp > 0) || (reverse && cmp < 0) {
+					if !inspect(1) {
+						return nil, false, true, collectionIndexIteratorError(persistedIt)
+					}
+					key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
+					persistedIt.Next()
+				} else {
+					if !inspect(2) {
+						return nil, false, true, nil
+					}
+					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+					bufferedIt.Next()
+					persistedIt.Next()
+				}
+			}
+			if !deleted {
+				return key, true, false, nil
+			}
+		}
+	}
+
+	var seen map[string]struct{}
+	if opts.DedupeDocumentID {
+		seen = make(map[string]struct{})
+	}
+	emitted := 0
+	var groupKey []byte
+	groupIDs := make([][]byte, 0)
+	maxStableBytes := opts.MaxStableTieBytes
+	if maxStableBytes == 0 {
+		maxStableBytes = maxStableDocumentIDTieBytes
+	}
+	// seenBytes persists for the entire scan while groupBytes covers the
+	// currently buffered logical key (including its cloned logical-key prefix).
+	// They deliberately share one budget: a multikey scan can otherwise retain
+	// a map's worth of document IDs in addition to each bounded tie group.
+	seenBytes := 0
+	groupBytes := 0
+	canRetain := func(bytes int) bool {
+		return bytes >= 0 && bytes <= maxStableBytes-seenBytes-groupBytes
+	}
+	emitGroup := func() (bool, bool, error) {
+		if len(groupIDs) == 0 {
+			// A dedupe-only group still retained its logical-key prefix. Release
+			// that per-group charge before starting the next group; otherwise a
+			// sequence of duplicate-only keys incorrectly consumes the entire
+			// stable-tie budget.
+			groupBytes = 0
+			return true, false, nil
+		}
+		less := opts.DocumentIDLess
+		if less == nil {
+			less = func(left, right []byte) bool { return bytes.Compare(left, right) < 0 }
+		}
+		sort.Slice(groupIDs, func(i, j int) bool { return less(groupIDs[i], groupIDs[j]) })
+		remaining := len(groupIDs)
+		truncated := false
+		if maxResults > 0 && remaining > maxResults-emitted {
+			// The sorted prefix of a complete tie group is still deterministic.
+			// Work caps never enter this path: they return before a group can be
+			// completed, so they cannot expose an ambiguously incomplete group.
+			remaining = maxResults - emitted
+			truncated = true
+		}
+		for _, id := range groupIDs[:remaining] {
+			cont, err := fn(id)
+			if err != nil {
+				return false, false, err
+			}
+			emitted++
+			if !cont {
+				return false, false, nil
+			}
+		}
+		groupIDs = groupIDs[:0]
+		groupBytes = 0
+		return true, truncated, nil
+	}
+	for {
+		key, ok, capped, err := nextLiveKey()
+		if err != nil {
+			return false, err
+		}
+		if capped {
+			return true, nil
+		}
+		if !ok {
+			cont, truncated, err := emitGroup()
+			if err != nil || truncated || !cont {
+				return truncated, err
+			}
+			return false, nil
+		}
+		logicalKey, err := opts.LogicalIndexKey(key)
+		if err != nil {
+			return false, err
+		}
+		if groupKey != nil && !bytes.Equal(groupKey, logicalKey) {
+			cont, truncated, err := emitGroup()
+			if err != nil || truncated || !cont {
+				return truncated, err
+			}
+			groupKey = nil
+		}
+		if groupKey == nil {
+			keyBytes := len(logicalKey) + stableDocumentIDTieEntryOverhead
+			if keyBytes < len(logicalKey) || !canRetain(keyBytes) {
+				return true, nil
+			}
+			groupKey = bytes.Clone(logicalKey)
+			groupBytes += keyBytes
+		}
+		id, err := indexKeyDocumentID(valueType, key)
+		if err != nil {
+			return false, err
+		}
+		if opts.DedupeDocumentID {
+			// Check before string conversion: map keys own their string payload for
+			// the scan lifetime, and this also prevents an oversized ID from being
+			// copied solely to discover that it must be rejected.
+			entryBytes := len(id) + stableDocumentIDTieEntryOverhead
+			if entryBytes < len(id) || !canRetain(entryBytes) {
+				return true, nil
+			}
+			idKey := string(id)
+			if _, duplicate := seen[idKey]; duplicate {
+				continue
+			} else {
+				seen[idKey] = struct{}{}
+				seenBytes += entryBytes
+			}
+		}
+		// Never retain a partial stable group: callers would otherwise see an
+		// order that could change once the remaining equal-key IDs were sorted.
+		// This is checked before cloning so an oversized ID cannot transiently
+		// escape the group-memory bound.
+		entryBytes := len(id) + stableDocumentIDTieEntryOverhead
+		if entryBytes < len(id) || !canRetain(entryBytes) {
+			return true, nil
+		}
+		groupIDs = append(groupIDs, bytes.Clone(id))
+		groupBytes += entryBytes
+	}
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {
@@ -22045,6 +22364,10 @@ func collectionIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 }
 
 func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int) (iterator.UnsafeIterator, error) {
+	return collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, start, end, includeDeleted, maxInspected, nil)
+}
+
+func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int)) (iterator.UnsafeIterator, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -22058,7 +22381,7 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 			return nil, nil
 		}
 		if err == nil && it != nil && maxInspected > 0 {
-			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected), nil
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
 		}
 		return it, err
 	}
@@ -22094,7 +22417,7 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, false, false, maxInspected), nil
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
 }
 
 func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool) (iterator.UnsafeIterator, error) {
@@ -22102,6 +22425,10 @@ func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *c
 }
 
 func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int) (iterator.UnsafeIterator, error) {
+	return collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, start, end, includeDeleted, maxInspected, nil)
+}
+
+func collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int)) (iterator.UnsafeIterator, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -22115,7 +22442,7 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 			return nil, nil
 		}
 		if err == nil && it != nil && maxInspected > 0 {
-			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, true, maxInspected), nil
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, true, maxInspected, onInspected), nil
 		}
 		return it, err
 	}
@@ -22143,7 +22470,7 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, false, true, maxInspected), nil
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, false, true, maxInspected, onInspected), nil
 }
 
 func (c *collectionCatalog) copy() *collectionCatalog {

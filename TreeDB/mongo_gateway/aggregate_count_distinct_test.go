@@ -88,6 +88,26 @@ func TestMongoReadCommandsAggregateCountDistinct(t *testing.T) {
 	}
 }
 
+func TestExecuteAggregateStagesMultiFieldSortUsesStableIDTie(t *testing.T) {
+	doc := func(id string, a, b int32) wire.Document {
+		raw, err := bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "a", Value: a}, {Key: "b", Value: b}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	stages := []aggregateStage{{name: "$sort", plan: findPlan{sort: findSort{field: "a", terms: []findSortTerm{{field: "a"}, {field: "b", desc: true}}}}}}
+	got, err := executeAggregateStages([]wire.Document{doc("b", 1, 2), doc("a", 1, 2), doc("c", 1, 3)}, stages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := make([]bson.Raw, len(got))
+	for i := range got {
+		batch[i] = bson.Raw(got[i])
+	}
+	assertBatchIDs(t, batch, []string{"c", "a", "b"})
+}
+
 func TestStandaloneServerOfficialGoDriverAggregateCountDistinct(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{
 		Dir:     t.TempDir(),

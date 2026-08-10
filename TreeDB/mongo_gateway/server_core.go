@@ -89,6 +89,12 @@ type Server struct {
 	// clusterCollectionLookupHook is a test seam for proving routed command
 	// preflight fails before touching the local collection catalog.
 	clusterCollectionLookupHook func()
+	// compoundIndexPlanScanHook is a test seam for proving a non-streaming
+	// compound plan is walked exactly once by its eventual executor.
+	compoundIndexPlanScanHook func()
+	// compoundCursorBatchHook is a test seam for proving a cursor serializes
+	// deferred compound batch materialization before it advances its position.
+	compoundCursorBatchHook func()
 	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.
@@ -171,13 +177,24 @@ type collectionFirstWriteRegistry struct {
 }
 
 type serverCursor struct {
-	ns         string
-	owner      int64
-	principal  AuthUser
-	docs       []wire.Document
-	projection compiledProjection
-	pos        int
-	lastUsed   time.Time
+	ns        string
+	owner     int64
+	principal AuthUser
+	docs      []wire.Document
+	// compoundIDs is an ordered, bounded index result. Unlike docs it contains
+	// no decoded BSON: getMore fetches and projects only the requested batch.
+	compoundIDs        [][]byte
+	compoundCollection *collections.Collection
+	compoundPlan       *findPlan
+	// cursorMu guards compoundIDs, compoundPlan, materializedBytes, and pos.
+	// Every getMore reader/writer must hold it while observing cursor progress.
+	// compoundBatchMu serializes deferred BSON materialization for this cursor;
+	// it is never acquired while cursorMu is held.
+	compoundBatchMu   sync.Mutex
+	materializedBytes int
+	projection        compiledProjection
+	pos               int
+	lastUsed          time.Time
 }
 
 func NewServer() *Server {

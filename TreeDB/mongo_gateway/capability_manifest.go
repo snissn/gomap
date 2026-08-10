@@ -65,6 +65,31 @@ type MongoGatewayCapabilityManifest struct {
 	Summaries    []MongoGatewayCapabilitySummary    `json:"summaries"`
 }
 
+// mongoGatewayCompatibilityRow is a canonical, generated documentation row
+// for factual support surfaces that are more specific than the protocol
+// capability manifest's one-line feature entries.
+type mongoGatewayCompatibilityRow struct {
+	Surface  string
+	Status   string
+	Evidence string
+	Gap      string
+}
+
+// mongoGatewayBSONStorageCompatibilityRows is the source for the BSON and
+// storage matrix in COMPATIBILITY.md. Keep native BSON-v2 scalar/index support
+// distinct from bridge-only regex/code limitations.
+var mongoGatewayBSONStorageCompatibilityRows = []mongoGatewayCompatibilityRow{
+	{Surface: "_id as TreeDB primary key", Status: "supported", Evidence: "CRUD tests", Gap: "_id array rejected; exact Mongo key ordering is scoped to gateway encoding."},
+	{Surface: "Auto-generated _id", Status: "supported subset", Evidence: "insert tests", Gap: "Generated ObjectId is gateway-local."},
+	{Surface: "Native BSON collection storage", Status: "supported subset", Evidence: "TestMongoCompatibilityMatrix, BSON storage tests", Gap: "Preferred current gateway storage path."},
+	{Surface: "JSON / template-v1 bridge storage", Status: "supported subset", Evidence: "update/materializer tests", Gap: "Some BSON types are rejected before JSON bridge storage."},
+	{Surface: "BSON string, bool, int32/int64, double, null, ObjectId", Status: "supported", Evidence: "CRUD/find tests", Gap: "Ordered BSON scalar v2 indexing accepts supported scalar values without treedbValueType; legacy homogeneous indexes require it."},
+	{Surface: "Decimal128, date, timestamp in native BSON ordered-v2 indexes", Status: "supported subset", Evidence: "TestMongoCompoundPlanScalarSortMatchesBoundedComparator, TestMongoCompoundPlanDecimal128SortMatchesBoundedComparator, TestCompareRawValuesScalarOrderMatchesBSONV2Codec", Gap: "Compatible one-term BSON-v2 sort selection is supported standalone; legacy treedbValueType indexes remain limited to string, bool, int64, and double."},
+	{Surface: "Arrays and nested documents", Status: "supported subset", Evidence: "document validation and dotted predicate tests", Gap: "No multikey index compatibility claim."},
+	{Surface: "Binary and other non-JSON BSON types", Status: "supported subset in native BSON mode", Evidence: "TestMongoCompatibilityMatrix covers binary insert in BSON mode", Gap: "JSON/template bridge rejects unsupported BSON types."},
+	{Surface: "Regex and code", Status: "storage-format dependent", Evidence: "native BSON storage and bridge-rejection tests", Gap: "Native BSON may retain unindexed values; JSON/template bridge and regex/code query or index semantics remain unavailable."},
+}
+
 var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 	Schema:  MongoGatewayCapabilitySchema,
 	Version: MongoGatewayCapabilityVersion,
@@ -87,6 +112,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "crud.find-by-id-equality", Category: "crud", Feature: "find by _id equality", Status: MongoCapabilitySupported},
 		{ID: "query.indexed-equality-and-range-predicates", Category: "query", Feature: "indexed equality and range predicates", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.in-on-indexed-scalar-fields", Category: "query", Feature: "$in on indexed scalar fields", Status: MongoCapabilitySupportedSubset},
+		{ID: "query.compound-descending-bson-v2-planner", Category: "query", Feature: "bounded BSON v2 compound and descending index planning", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.top-level-or-expressions", Category: "query", Feature: "top-level $or expressions", Status: MongoCapabilitySupportedSubset},
 		{ID: "query.projection-sort-skip-and-limit", Category: "query", Feature: "projection, sort, skip, and limit", Status: MongoCapabilitySupportedSubset},
 		{ID: "cursor.getmore-and-killcursors", Category: "cursor", Feature: "getMore and killCursors", Status: MongoCapabilitySupported},
@@ -100,7 +126,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 		{ID: "metadata.listdatabases", Category: "metadata", Feature: "listDatabases", Status: MongoCapabilitySupportedSubset},
 		{ID: "metadata.create-collection", Category: "metadata", Feature: "create collection", Status: MongoCapabilitySupportedSubset},
 		{ID: "session.logical-session-handshake-and-endsessions", Category: "session", Feature: "logical session handshake and endSessions", Status: MongoCapabilitySupportedSubset},
-		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc; no planner selection)", Status: MongoCapabilitySupportedSubset},
+		{ID: "metadata.createindexes-listindexes-and-dropindexes", Category: "metadata", Feature: "createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc)", Status: MongoCapabilitySupportedSubset},
 		{ID: "document.native-bson-storage-mode", Category: "document", Feature: "native BSON storage mode", Status: MongoCapabilitySupportedSubset},
 		{ID: "query-gap.dotted-projection", Category: "query gap", Feature: "dotted projection", Status: MongoCapabilityRejected},
 		{ID: "update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify", Category: "update subset", Feature: "natural-order arbitrary-filter update, delete, and findAndModify", Status: MongoCapabilitySupportedSubset},
@@ -157,7 +183,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"read-command.distinct-top-level-field-with-filter",
 				"read-command.explain-bounded-read-plans",
 			},
-			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
+			Note: "Bounded standalone subsets only. Explain reports stable primary, secondary, compound_index_scan, bounded-scan, and adaptive_candidate_selection vocabulary for find, count, distinct, and aggregate pipelines whose planner prefix is match/sort/skip/limit; later match or sort stages reject rather than being misreported as find-plan work. Writes, routed reads, and unsupported verbosity reject.",
 		},
 		{
 			ID:    "administrative-diagnostics",
@@ -185,10 +211,11 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 			ID:    "scalar-indexes",
 			Label: "Scalar indexes",
 			CapabilityIDs: []string{
+				"query.compound-descending-bson-v2-planner",
 				"metadata.createindexes-listindexes-and-dropindexes",
 				"index.bson-ordered-v2-without-treedbvaluetype",
 			},
-			Note: "BSON collections support ordered BSON v2 indexes with one through four ascending or descending components; direct collection range scans do not imply planner selection. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Ordered BSON v2 compound and descending definitions reject multikey metadata before catalog mutation; sparse, partial, TTL, collation, and hidden options also reject before catalog mutation.",
+			Note: "Standalone find/count/distinct and initial aggregate match/sort prefixes can select ordered BSON v2 indexes with one through four ascending or descending components for canonical equality prefixes, bounded $in fanout, and one range suffix. A compatible one-term sort streams index order (or its complete reverse); multi-term sorts use the bounded in-memory Mongo comparator before skip/limit because missing and null can occupy distinct physical BSON-v2 runs. All other shapes use their existing bounded scan path, while a supplied missing, malformed, incompatible, or unsupported hint rejects before data reads. Every planned scan is capped by MaxFindScanDocuments and direct scalar work is capped at 64 physical entries per allocated result slot; materialized BSON is capped by MaxCursorRetainedBytes. Explicit treedbValueType remains the legacy homogeneous single-field ascending path. Ordered BSON v2 compound and descending definitions reject multikey metadata before catalog mutation; sparse, partial, TTL, collation, and hidden options also reject before catalog mutation.",
 		},
 		{
 			ID:            "authentication-authorization",

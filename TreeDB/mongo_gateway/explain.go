@@ -18,15 +18,33 @@ import (
 type findExecutionStats struct {
 	candidatesExamined     int64
 	candidatesMaterialized int64
+	materializedBytes      int64
 	documentsReturned      int64
 	stage                  string
 	indexName              string
+	selection              findPlannerSelection
 }
 
 func (p findPlan) recordWinner(stage, indexName string) {
 	if p.stats != nil {
 		p.stats.stage = stage
 		p.stats.indexName = indexName
+		p.stats.selection.stage = stage
+		p.stats.selection.indexName = indexName
+	}
+}
+
+func (p findPlan) recordCompoundWinner(candidate compoundIndexPlan) {
+	if p.stats == nil {
+		return
+	}
+	p.stats.stage = "compound_index_scan"
+	p.stats.indexName = candidate.idx.Name
+	p.stats.selection = findPlannerSelection{
+		stage: "compound_index_scan", indexName: candidate.idx.Name,
+		indexField: candidate.idx.Field, residualFilters: candidate.residualFilters,
+		sortSatisfied: candidate.sortSatisfied, equalityPrefix: candidate.equalityPrefix,
+		hasRange: candidate.hasRange, reverse: candidate.reverse,
 	}
 }
 
@@ -46,6 +64,12 @@ func (p findPlan) recordCandidates(n int) {
 func (p findPlan) recordMaterialized() {
 	if p.stats != nil {
 		p.stats.candidatesMaterialized++
+	}
+}
+
+func (p findPlan) recordMaterializedBytes(n int) {
+	if p.stats != nil && n > 0 {
+		p.stats.materializedBytes += int64(n)
 	}
 }
 
@@ -153,7 +177,7 @@ func (s *Server) explainFindResponse(ctx context.Context, command wire.Document,
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway explain is disabled in cluster mode until routed reads are supported")
 	}
 	if err := validateMongoReadCommandFields(command, "find", map[string]struct{}{
-		"find": {}, "filter": {}, "projection": {}, "sort": {}, "skip": {}, "limit": {}, "batchSize": {}, "singleBatch": {}, "readConcern": {},
+		"find": {}, "filter": {}, "projection": {}, "sort": {}, "skip": {}, "limit": {}, "batchSize": {}, "singleBatch": {}, "hint": {}, "readConcern": {},
 	}); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -232,7 +256,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}, verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		return int64(len(result.docs)), err
 	})
@@ -268,7 +292,7 @@ func (s *Server) explainDistinctResponse(ctx context.Context, command wire.Docum
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, findPlan{predicates: predicates, orBranches: branches}, verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		if err != nil {
 			return 0, err
@@ -313,6 +337,10 @@ func (s *Server) explainAggregateResponse(ctx context.Context, command wire.Docu
 	plan, consumed := findPlan{}, 0
 	if len(stages) > 0 && stages[0].name == "$match" {
 		plan = stages[0].plan
+		consumed++
+	}
+	if len(stages) > consumed && stages[consumed].name == "$sort" {
+		plan.sort = stages[consumed].plan.sort
 		consumed++
 	}
 	if len(stages) > consumed && stages[consumed].name == "$skip" && stages[consumed].amount <= math.MaxInt32 {
@@ -366,26 +394,45 @@ func (s *Server) explainCollectionRead(ctx context.Context, db, collection strin
 }
 
 func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, db, collection string, plan findPlan, verbosity string, execute func(findPlan) (int64, error)) (wire.Document, error) {
+	plan = finalizeFindPlan(plan)
+	if missing && plan.hint.present {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway find hint does not name an existing index")
+	}
+	if !missing {
+		if err := validateCompoundHint(col.MetaView(), plan); err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+	}
 	selection := findPlannerSelection{stage: "bounded_scan"}
 	if !missing {
 		selection = explainPlannerSelection(col, plan)
 	}
+	sortSatisfied := selection.sortSatisfied
 	winning := bson.D{{Key: "stage", Value: selection.stage}, {Key: "residualFilter", Value: findPlanHasResidualFilter(plan, selection)}}
 	if selection.indexName != "" {
 		winning = append(winning, bson.E{Key: "indexName", Value: selection.indexName})
 	}
-	if plan.sort.field != "" {
-		winning = append(winning, bson.E{Key: "inMemorySort", Value: true})
+	if selection.stage == "compound_index_scan" {
+		winning = append(winning,
+			bson.E{Key: "equalityPrefix", Value: int32(selection.equalityPrefix)},
+			bson.E{Key: "range", Value: selection.hasRange},
+			bson.E{Key: "reverse", Value: selection.reverse},
+		)
 	}
+	if plan.sort.field != "" {
+		winning = append(winning, bson.E{Key: "inMemorySort", Value: !sortSatisfied})
+	}
+	sortDescription := explainSort(plan, sortSatisfied)
 	planner := bson.D{
 		{Key: "namespace", Value: db + "." + collection},
 		{Key: "winningPlan", Value: winning},
 		{Key: "usableIndexes", Value: explainUsableIndexes(col, plan)},
 		{Key: "rejectedIndexes", Value: explainRejectedIndexes(col, plan)},
 		{Key: "scanBounds", Value: explainScanBounds(plan)},
-		{Key: "sort", Value: explainSort(plan)},
+		{Key: "sort", Value: sortDescription},
 		{Key: "maxScanDocuments", Value: int64(s.maxFindScanDocuments())},
 		{Key: "cursorWork", Value: "none"},
+		{Key: "hint", Value: bson.D{{Key: "present", Value: plan.hint.present}, {Key: "status", Value: explainHintStatus(plan)}}},
 	}
 	if selection.stage == "adaptive_candidate_selection" {
 		planner = append(planner, bson.E{Key: "candidatePlans", Value: explainCandidatePlans(col, plan)})
@@ -393,7 +440,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	response := bson.D{{Key: "queryPlanner", Value: planner}}
 	if verbosity == "executionStats" {
 		start := time.Now()
-		stats := &findExecutionStats{stage: selection.stage, indexName: selection.indexName}
+		stats := &findExecutionStats{stage: selection.stage, indexName: selection.indexName, selection: selection}
 		plan.stats = stats
 		if !missing {
 			if returned, execErr := execute(plan); execErr != nil {
@@ -406,6 +453,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 						{Key: "truncated", Value: reason == "scan_cap_exceeded"},
 						{Key: "rejectionReason", Value: reason},
 						{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
+						{Key: "candidateMaterializedBytes", Value: stats.materializedBytes},
 						{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 						{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 						{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
@@ -419,7 +467,10 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		// but its final winner is reported from that shared execution path.
 		winning[0].Value = stats.stage
 		if stats.stage != selection.stage || stats.indexName != selection.indexName {
-			actual := findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField}
+			actual := stats.selection
+			if actual.stage == "" {
+				actual = findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField}
+			}
 			for _, idx := range col.MetaView().Indexes {
 				if idx.Name == stats.indexName {
 					actual.indexField = idx.Field
@@ -430,10 +481,27 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			if stats.indexName != "" {
 				winning = append(winning, bson.E{Key: "indexName", Value: stats.indexName})
 			}
-			if plan.sort.field != "" {
-				winning = append(winning, bson.E{Key: "inMemorySort", Value: true})
+			if actual.stage == "compound_index_scan" {
+				winning = append(winning,
+					bson.E{Key: "equalityPrefix", Value: int32(actual.equalityPrefix)},
+					bson.E{Key: "range", Value: actual.hasRange},
+					bson.E{Key: "reverse", Value: actual.reverse},
+				)
 			}
-			planner[1].Value = winning
+			if plan.sort.field != "" {
+				winning = append(winning, bson.E{Key: "inMemorySort", Value: !actual.sortSatisfied})
+			}
+			for i := range planner {
+				switch planner[i].Key {
+				case "winningPlan":
+					planner[i].Value = winning
+				case "sort":
+					// The adaptive placeholder may not satisfy the requested order,
+					// while the executor's selected compound plan can. Keep the
+					// planner-wide sort descriptor consistent with inMemorySort.
+					planner[i].Value = explainSort(plan, actual.sortSatisfied)
+				}
+			}
 		}
 		if stats.stage != "adaptive_candidate_selection" {
 			planner = explainPlannerWithoutCandidatePlans(planner)
@@ -445,6 +513,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			// gateway-owned counter, not MongoDB's winner-plan-only metric.
 			{Key: "candidateDocumentsExamined", Value: stats.candidatesExamined},
 			{Key: "candidateDocumentsMaterialized", Value: stats.candidatesMaterialized},
+			{Key: "candidateMaterializedBytes", Value: stats.materializedBytes},
 			{Key: "cursorDocumentsMaterialized", Value: int64(0)},
 			{Key: "scanCap", Value: int64(s.maxFindScanDocuments())},
 			{Key: "executionTimeMillis", Value: time.Since(start).Milliseconds()},
@@ -452,6 +521,13 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	}
 	response = append(response, bson.E{Key: "ok", Value: 1.0})
 	return marshalDocument(response)
+}
+
+func explainHintStatus(plan findPlan) string {
+	if !plan.hint.present {
+		return "not_requested"
+	}
+	return "honored"
 }
 
 func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {
@@ -483,6 +559,9 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 	}
 	if selection.stage == "primary_lookup" {
 		return len(plan.predicates) != 1
+	}
+	if selection.stage == "compound_index_scan" {
+		return selection.residualFilters != 0
 	}
 	equalityPredicates := 0
 	for _, pred := range plan.predicates {
@@ -516,11 +595,22 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 		return bson.A{}
 	}
 	out := bson.A{}
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
+		}
 	}
 	for _, probe := range findIndexProbes(col.MetaView(), plan) {
 		out = append(out, bson.D{{Key: "stage", Value: probe.stage}, {Key: "indexName", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}})
+	}
+	// documentsForCompoundIndexPlan deliberately preserves a direct unhinted
+	// primary lookup as the winner. Do not present a compound plan that the
+	// executor will decline before walking it: queryPlanner candidates describe
+	// executable alternatives, not merely syntactically coverable indexes.
+	if !compoundPlanDeferredToPrimaryLookup(plan) && !compoundPlanDeferredToLegacyLookup(col.MetaView(), plan) {
+		for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+			out = append(out, bson.D{{Key: "stage", Value: "compound_index_scan"}, {Key: "indexName", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
+		}
 	}
 	return out
 }
@@ -547,7 +637,24 @@ func explainUsableIndexes(col *collections.Collection, plan findPlan) bson.A {
 		seen[probe.idx.Name] = struct{}{}
 		out = append(out, bson.D{{Key: "name", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}, {Key: "kind", Value: probe.stage}})
 	}
+	if !compoundPlanDeferredToPrimaryLookup(plan) && !compoundPlanDeferredToLegacyLookup(col.MetaView(), plan) {
+		for _, compound := range compoundIndexPlans(col.MetaView(), plan) {
+			if _, ok := seen[compound.idx.Name]; ok {
+				continue
+			}
+			seen[compound.idx.Name] = struct{}{}
+			out = append(out, bson.D{{Key: "name", Value: compound.idx.Name}, {Key: "field", Value: compound.idx.Field}, {Key: "kind", Value: "compound_index_scan"}, {Key: "equalityPrefix", Value: int32(compound.equalityPrefix)}, {Key: "range", Value: compound.hasRange}, {Key: "reverse", Value: compound.reverse}, {Key: "sortSatisfied", Value: compound.sortSatisfied}})
+		}
+	}
 	return out
+}
+
+func compoundPlanDeferredToPrimaryLookup(plan findPlan) bool {
+	if plan.hint.present {
+		return false
+	}
+	_, primary := primaryCandidatePredicate(plan.predicates)
+	return primary
 }
 
 func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
@@ -569,8 +676,11 @@ func explainRejectedIndexes(col *collections.Collection, plan findPlan) bson.A {
 	}
 	out := bson.A{}
 	for _, idx := range col.MetaView().Indexes {
+		if plan.hint.present && !findHintMatchesIndex(plan.hint, idx) {
+			continue
+		}
 		if _, ok := usableNames[idx.Name]; !ok {
-			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: "filter_not_covered"}})
+			out = append(out, bson.D{{Key: "name", Value: idx.Name}, {Key: "reason", Value: "filter_or_sort_not_covered"}})
 		}
 	}
 	return out
@@ -652,9 +762,13 @@ func explainPredicateOperator(op findPredicateOp) string {
 	}
 }
 
-func explainSort(plan findPlan) bson.D {
+func explainSort(plan findPlan, satisfied bool) bson.D {
 	if plan.sort.field == "" {
 		return bson.D{{Key: "satisfied", Value: true}}
 	}
-	return bson.D{{Key: "field", Value: plan.sort.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[plan.sort.desc]}, {Key: "satisfied", Value: false}}
+	terms := bson.A{}
+	for _, term := range findSortTerms(plan.sort) {
+		terms = append(terms, bson.D{{Key: "field", Value: term.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[term.desc]}})
+	}
+	return bson.D{{Key: "field", Value: plan.sort.field}, {Key: "direction", Value: map[bool]int{true: -1, false: 1}[plan.sort.desc]}, {Key: "terms", Value: terms}, {Key: "satisfied", Value: satisfied}}
 }

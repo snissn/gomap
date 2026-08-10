@@ -11,6 +11,8 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -79,6 +81,83 @@ func TestCompoundBSONIndexRejectsMultiKeyDefinitionBeforeCatalogMutation(t *test
 				t.Fatal("ordered BSON v2 multikey rejection published collection metadata")
 			}
 		})
+	}
+}
+
+func TestCompoundStableDocumentIDTiesRejectsMultipleUnfixedComponents(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "x_y", Components: []IndexComponent{{Field: "x", Direction: IndexDirectionAscending}, {Field: "y", Direction: IndexDirectionAscending}}, ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := func(id string, includeX bool, x any, y int32) []byte {
+		fields := bson.D{{Key: "_id", Value: id}}
+		if includeX {
+			fields = append(fields, bson.E{Key: "x", Value: x})
+		}
+		fields = append(fields, bson.E{Key: "y", Value: y})
+		raw, err := bson.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	// missing/0 and null/0 normalize to one logical tie, but the physical
+	// missing/1 run would separate them without this fail-closed contract.
+	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("middle"), []byte("a"), []byte("full-z"), []byte("full-a")}, [][]byte{document("z", false, nil, 0), document("middle", false, nil, 1), document("a", true, nil, 0), document("full-z", true, "full", 1), document("full-a", true, "full", 1)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, _, err := col.FindByCompoundIndexRange("x_y", CompoundIndexRangeOptions{StableDocumentIDTies: true, Limit: 4}); err == nil || !strings.Contains(err.Error(), "at most one unfixed") {
+		t.Fatalf("stable multi-unfixed scan err=%v want fail-closed rejection", err)
+	}
+	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("full")}
+	intRaw := bson.RawValue{Type: bson.TypeInt32, Value: []byte{1, 0, 0, 0}}
+	for _, desc := range []bool{false, true} {
+		ids, truncated, err := col.FindByCompoundIndexRange("x_y", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw, intRaw}, StableDocumentIDTies: true, Desc: desc, Limit: 2})
+		if err != nil || truncated || len(ids) != 2 || string(ids[0]) != "full-a" || string(ids[1]) != "full-z" {
+			t.Fatalf("full-prefix stable desc=%v ids=%q truncated=%v err=%v want [full-a full-z]", desc, ids, truncated, err)
+		}
+	}
+}
+
+func TestCompoundStableDocumentIDTiesNormalizeMissingAndNull(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "score", Components: []IndexComponent{{Field: "score", Direction: IndexDirectionAscending}}, ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := bson.Marshal(bson.D{{Key: "_id", Value: "z"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	null, err := bson.Marshal(bson.D{{Key: "_id", Value: "a"}, {Key: "score", Value: nil}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("a")}, [][]byte{missing, null}); err != nil {
+		t.Fatal(err)
+	}
+	for _, desc := range []bool{false, true} {
+		ids, truncated, err := col.FindByCompoundIndexRange("score", CompoundIndexRangeOptions{StableDocumentIDTies: true, Desc: desc, Limit: 2})
+		if err != nil || truncated || len(ids) != 2 || string(ids[0]) != "a" || string(ids[1]) != "z" {
+			t.Fatalf("stable missing/null desc=%v ids=%q truncated=%v err=%v want [a z]", desc, ids, truncated, err)
+		}
 	}
 }
 
@@ -346,6 +425,20 @@ func TestFindByCompoundIndexRangeHonorsDirectionsBoundsAndTieIDs(t *testing.T) {
 		t.Fatalf("reverse scan err=%v truncated=%v", err, truncated)
 	}
 	assertIDs(got, "a", "c", "e")
+	// Legacy direct descending scans retain physical reverse-ID order. Clients
+	// that need gateway-compatible ordering opt into atomic ascending-ID ties.
+	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Desc: true, StableDocumentIDTies: true, Limit: 4})
+	if err != nil || truncated {
+		t.Fatalf("stable reverse scan err=%v truncated=%v", err, truncated)
+	}
+	assertIDs(got, "a", "c", "b", "e")
+	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Desc: true, StableDocumentIDTies: true, Limit: 3})
+	if err != nil || !truncated {
+		t.Fatalf("stable reverse limited scan err=%v truncated=%v", err, truncated)
+	}
+	// The limit selects an ascending-ID prefix of the fully buffered tie at
+	// createdAt=3, so the page remains deterministic without a full scan sort.
+	assertIDs(got, "a", "c", "b")
 	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Lower: IndexRangeBound{Value: intRaw(2), Inclusive: true}, Upper: IndexRangeBound{Value: intRaw(3), Inclusive: true}, Limit: 3})
 	if err != nil || truncated {
 		t.Fatalf("range scan err=%v truncated=%v", err, truncated)
@@ -436,6 +529,7 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 	insert("a", 1)
 	insert("b", 3)
 	insert("c", 2)
+	insert("e", 3)
 	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
 		t.Fatalf("compact persisted insert overlays: %v", err)
 	}
@@ -448,11 +542,11 @@ func TestCompoundReverseScanPersistsOverlayTombstonesAcrossReopen(t *testing.T) 
 	stringRaw := bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString("acme")}
 	assertReverse := func(collection *Collection) {
 		t.Helper()
-		ids, truncated, err := collection.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Desc: true, Limit: 4})
+		ids, truncated, err := collection.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw}, Desc: true, StableDocumentIDTies: true, Limit: 4})
 		if err != nil || truncated {
 			t.Fatalf("reverse scan ids=%q truncated=%v err=%v", ids, truncated, err)
 		}
-		want := []string{"a", "b"}
+		want := []string{"a", "b", "e"}
 		if len(ids) != len(want) {
 			t.Fatalf("reverse ids=%q want %q", ids, want)
 		}
@@ -737,6 +831,304 @@ func TestScanMergedCompoundIndexIDsReverseInterleavesBufferedAndPersisted(t *tes
 	})
 	if err != nil || truncated || fmt.Sprint(got) != "[d c b a]" {
 		t.Fatalf("reverse merged ids=%v truncated=%v err=%v", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableReverseDoesNotEmitPartialTieAtWorkCap(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(3)
+	defer resetCollectionRunTable(table)
+	// Reverse physical order reaches c first, then the logical tie b,a. A cap
+	// at two entries must not publish b,a without proving that their tie ended.
+	setCollectionRunValue(table, key("a", "a"), nil)
+	setCollectionRunValue(table, key("a", "b"), nil)
+	setCollectionRunValue(table, key("b", "c"), nil)
+	table.Freeze()
+	it := table.NewReverseIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 4, true, 2, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(got) != "[c]" {
+		t.Fatalf("stable reverse cap ids=%q truncated=%v err=%v want [c],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableRejectsOversizedTieBufferBeforePublication(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(2)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, key("a", "long-document-id-a"), nil)
+	setCollectionRunValue(table, key("a", "long-document-id-b"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 2, false, 8, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+		// This tiny test seam proves the production fixed byte ceiling is
+		// checked before cloning/retaining an equal-key group.
+		MaxStableTieBytes: 8,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || len(got) != 0 {
+		t.Fatalf("stable tie byte cap ids=%q truncated=%v err=%v want [],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableTinyCapRejectsSecondTieIDWithoutPartialPublication(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	first := key("a", "a")
+	logical, err := BSONIndexKeyStableSortPrefixV2(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The logical key and exactly one ID fit. The second equal-key ID must
+	// stop the scan before the complete group can be published.
+	cap := len(logical) + stableDocumentIDTieEntryOverhead + len("a") + stableDocumentIDTieEntryOverhead
+	table := newCollectionRunTable(2)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, first, nil)
+	setCollectionRunValue(table, key("a", "b"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 2, false, 3, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		MaxStableTieBytes:    cap,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || len(got) != 0 {
+		t.Fatalf("stable tiny-cap ids=%q truncated=%v err=%v want [],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableResetsDedupeOnlyGroupBytes(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	first := key("a", "a")
+	// After publishing a, each b..z group contains only a duplicate ID. Their
+	// logical-key charges must be released so the later { group can retain and
+	// emit z. The old implementation accumulated the 25 duplicate-only keys
+	// and exceeded this cap before reaching the final live group.
+	const cap = 512
+	table := newCollectionRunTable(27)
+	defer resetCollectionRunTable(table)
+	setCollectionRunValue(table, first, nil)
+	for value := byte('b'); value <= 'z'; value++ {
+		setCollectionRunValue(table, key(string(value), "a"), nil)
+	}
+	setCollectionRunValue(table, key("{", "z"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 3, false, 27, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		DedupeDocumentID:     true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		MaxStableTieBytes:    cap,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || truncated || fmt.Sprint(got) != "[a z]" {
+		t.Fatalf("stable dedupe-only reset ids=%q truncated=%v err=%v want [a z],false,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableDedupeKeysShareTieByteBudgetAcrossGroups(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(3)
+	defer resetCollectionRunTable(table)
+	// Each entry consumes one retained dedupe key and one temporary group ID.
+	// With this cap, the first two completed groups may publish, but retaining
+	// the third ID's dedupe key leaves no room for its group clone. The scanner
+	// must stop before publishing that partial third group rather than allowing
+	// the seen map to grow outside the stable-memory contract.
+	setCollectionRunValue(table, key("a", "a"), nil)
+	setCollectionRunValue(table, key("b", "b"), nil)
+	setCollectionRunValue(table, key("c", "c"), nil)
+	table.Freeze()
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 3, false, 3, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		DedupeDocumentID:     true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+		MaxStableTieBytes:    150,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(got) != "[a b]" {
+		t.Fatalf("stable dedupe byte cap ids=%q truncated=%v err=%v want [a b],true,nil", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableRequiresPositiveWorkCap(t *testing.T) {
+	_, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, nil, IndexValueBSONOrderedV2, 1, false, 0, scanMergedCollectionIndexIDOptions{
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+	}, func([]byte) (bool, error) { return true, nil })
+	if err == nil || !strings.Contains(err.Error(), "positive inspected-entry cap") {
+		t.Fatalf("stable zero-cap err=%v want positive-cap rejection", err)
+	}
+}
+
+func TestBufferedIndexSourceInspectionCountsShadowedPhysicalEntries(t *testing.T) {
+	// Four overlay roots expose only two logical keys, but all eight physical
+	// source entries must consume a planner's shared inspection budget. This is
+	// the accounting signal used across canonical $in probes; counting only the
+	// final merge would incorrectly report two. The iterator also charges the
+	// bounded terminal advances needed to prove each source exhausted.
+	runs := make([]memtable.Table, 0, 4)
+	for range 4 {
+		table := newCollectionRunTable(2)
+		setCollectionRunValue(table, []byte("a"), nil)
+		setCollectionRunValue(table, []byte("b"), nil)
+		table.Freeze()
+		runs = append(runs, table)
+	}
+	defer func() {
+		for _, table := range runs {
+			resetCollectionRunTable(table)
+		}
+	}()
+	inspected := 0
+	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, nil, nil, true, false, 16, func(count int) { inspected += count })
+	defer func() { _ = it.Close() }()
+	logical := 0
+	for it.Valid() {
+		logical++
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if logical != 2 || inspected != 12 {
+		t.Fatalf("logical=%d inspected=%d want 2/12", logical, inspected)
+	}
+}
+
+func TestBufferedIndexSourceInspectionSharesBudgetAcrossCanonicalProbes(t *testing.T) {
+	// This models two canonical $in probes over the same four-root shadowed
+	// stack. The first probe exposes two logical keys but consumes twelve units
+	// of source work (four initial positions plus eight advances). With one
+	// shared budget of twenty, the second probe must therefore truncate after
+	// eight more units. The old outer-merge accounting observed only two units
+	// from the first probe and would incorrectly give the second probe eighteen.
+	newRuns := func() []memtable.Table {
+		runs := make([]memtable.Table, 0, 4)
+		for root := range 4 {
+			table := newCollectionRunTable(2)
+			if root == 0 {
+				table.SetEntrySteal([]byte("a"), nil, page.ValuePtr{}, node.FlagTombstone)
+			} else {
+				setCollectionRunValue(table, []byte("a"), nil)
+			}
+			setCollectionRunValue(table, []byte("b"), nil)
+			table.Freeze()
+			runs = append(runs, table)
+		}
+		return runs
+	}
+	scan := func(budget int) (inspected int, truncated bool) {
+		runs := newRuns()
+		defer func() {
+			for _, table := range runs {
+				resetCollectionRunTable(table)
+			}
+		}()
+		it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, nil, nil, true, false, budget, func(count int) { inspected += count })
+		defer func() { _ = it.Close() }()
+		for it.Valid() {
+			it.Next()
+		}
+		return inspected, errors.Is(it.Error(), errCollectionIndexScanWorkCap)
+	}
+
+	remaining := 20
+	first, firstTruncated := scan(remaining)
+	if firstTruncated || first != 12 {
+		t.Fatalf("first probe inspected/truncated=%d/%v want 12/false", first, firstTruncated)
+	}
+	remaining -= first
+	second, secondTruncated := scan(remaining)
+	if !secondTruncated || second != remaining {
+		t.Fatalf("second probe inspected/truncated=%d/%v want %d/true", second, secondTruncated, remaining)
 	}
 }
 

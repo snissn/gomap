@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -33,14 +34,28 @@ const (
 )
 
 type findPredicate struct {
-	field  string
-	op     findPredicateOp
-	values []bson.RawValue
+	field                   string
+	op                      findPredicateOp
+	values                  []bson.RawValue
+	compoundCanonicalValues []bson.RawValue
+	compoundCanonicalized   bool
 }
 
 type findSort struct {
 	field string
 	desc  bool
+	terms []findSortTerm
+}
+
+type findSortTerm struct {
+	field string
+	desc  bool
+}
+
+type findHint struct {
+	present    bool
+	name       string
+	components []collections.IndexComponent
 }
 
 type findPlan struct {
@@ -49,8 +64,102 @@ type findPlan struct {
 	sort       findSort
 	skip       int32
 	limit      int32
+	hint       findHint
 	projection compiledProjection
 	stats      *findExecutionStats
+}
+
+// cloneFindPlanForCursor detaches predicate BSON values from the wire command
+// buffer before a getMore may reuse that buffer on another request.
+func cloneFindPlanForCursor(plan findPlan) findPlan {
+	clonePredicates := func(in []findPredicate) []findPredicate {
+		out := make([]findPredicate, len(in))
+		for i := range in {
+			out[i] = in[i]
+			// Compound canonicalization is a request-local planning cache. It
+			// points at command-buffer BSON and is neither needed nor safe to
+			// retain in an ID cursor.
+			out[i].compoundCanonicalValues = nil
+			out[i].compoundCanonicalized = false
+			out[i].values = make([]bson.RawValue, len(in[i].values))
+			for j := range in[i].values {
+				out[i].values[j] = in[i].values[j]
+				out[i].values[j].Value = bytes.Clone(in[i].values[j].Value)
+			}
+		}
+		return out
+	}
+	out := plan
+	out.predicates = clonePredicates(plan.predicates)
+	out.orBranches = make([][]findPredicate, len(plan.orBranches))
+	for i := range plan.orBranches {
+		out.orBranches[i] = clonePredicates(plan.orBranches[i])
+	}
+	out.sort.terms = append([]findSortTerm(nil), plan.sort.terms...)
+	out.hint.components = append([]collections.IndexComponent(nil), plan.hint.components...)
+	return out
+}
+
+// findPlanCursorRetainedBytes counts all payloads retained by a cloned plan.
+// Raw BSON values are cloned per occurrence. Command strings are only copied
+// as headers, so aliases of the same backing bytes are charged once while
+// equal text backed by separate command allocations is charged separately.
+func findPlanCursorRetainedBytes(plan findPlan) int {
+	bytes := 0
+	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
+	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
+	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
+	// A cloned projection retains a Go map allocation and its groups, in
+	// addition to the field bytes charged below. Runtime map internals vary by
+	// Go release (including Swiss-map group layout), so cursor admission uses a
+	// stable conservative owned-memory model rather than unsafe.Sizeof(map),
+	// which measures only the map header. These figures intentionally exceed a
+	// one-group map and leave room for per-entry string/header bookkeeping.
+	const projectionMapBaseBytes = 256
+	const projectionMapEntryBytes = 64
+	if len(plan.projection.fields) != 0 {
+		bytes += projectionMapBaseBytes
+		bytes += len(plan.projection.fields) * projectionMapEntryBytes
+	}
+	type stringAllocation struct {
+		data *byte
+		len  int
+	}
+	seenStrings := make(map[stringAllocation]struct{})
+	addString := func(value string) {
+		allocation := stringAllocation{data: unsafe.StringData(value), len: len(value)}
+		if _, duplicate := seenStrings[allocation]; duplicate {
+			return
+		}
+		seenStrings[allocation] = struct{}{}
+		bytes += len(value)
+	}
+	add := func(predicates []findPredicate) {
+		bytes += len(predicates) * int(unsafe.Sizeof(findPredicate{}))
+		for _, predicate := range predicates {
+			bytes += len(predicate.values) * int(unsafe.Sizeof(bson.RawValue{}))
+			addString(predicate.field)
+			for _, value := range predicate.values {
+				bytes += len(value.Value)
+			}
+		}
+	}
+	add(plan.predicates)
+	for _, branch := range plan.orBranches {
+		add(branch)
+	}
+	for field := range plan.projection.fields {
+		addString(field)
+	}
+	addString(plan.sort.field)
+	for _, term := range plan.sort.terms {
+		addString(term.field)
+	}
+	addString(plan.hint.name)
+	for _, component := range plan.hint.components {
+		addString(component.Field)
+	}
+	return bytes
 }
 
 type findResultSet struct {
@@ -62,9 +171,14 @@ type findResultSet struct {
 // by explain queryPlanner and by executionStats before any document is opened.
 // It intentionally contains gateway vocabulary only, never storage topology.
 type findPlannerSelection struct {
-	stage      string
-	indexName  string
-	indexField string
+	stage           string
+	indexName       string
+	indexField      string
+	residualFilters int
+	sortSatisfied   bool
+	equalityPrefix  int
+	hasRange        bool
+	reverse         bool
 }
 
 type findIndexProbe struct {
@@ -76,7 +190,9 @@ type findIndexProbe struct {
 // indexed executor: each entry is a concrete equality or range probe that can
 // actually be issued for this index/value type combination.
 func findIndexProbes(meta collections.CollectionMeta, plan findPlan) []findIndexProbe {
-	if len(plan.orBranches) != 0 {
+	// A strict compound hint is an execution contract, not a preference: legacy
+	// scalar paths must neither compete with it nor leak into explain output.
+	if len(plan.orBranches) != 0 || plan.hint.present {
 		return nil
 	}
 	probes := make([]findIndexProbe, 0)
@@ -123,11 +239,20 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		return findPlannerSelection{stage: "primary_lookup"}
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			return findPlannerSelection{stage: "primary_lookup"}
+		}
+	}
+	compound, compoundOK := compoundIndexPlanFor(meta, plan)
+	if compoundOK && !compoundPlanDeferredToLegacyLookup(meta, plan) {
+		return findPlannerSelection{stage: "compound_index_scan", indexName: compound.idx.Name, indexField: compound.idx.Field, residualFilters: compound.residualFilters, sortSatisfied: compound.sortSatisfied, equalityPrefix: compound.equalityPrefix, hasRange: compound.hasRange, reverse: compound.reverse}
 	}
 	if probes := findIndexProbes(meta, plan); len(probes) != 0 {
 		return findPlannerSelection{stage: probes[0].stage, indexName: probes[0].idx.Name, indexField: probes[0].idx.Field}
+	}
+	if compoundOK {
+		return findPlannerSelection{stage: "compound_index_scan", indexName: compound.idx.Name, indexField: compound.idx.Field, residualFilters: compound.residualFilters, sortSatisfied: compound.sortSatisfied, equalityPrefix: compound.equalityPrefix, hasRange: compound.hasRange, reverse: compound.reverse}
 	}
 	return findPlannerSelection{stage: "bounded_scan"}
 }
@@ -145,6 +270,10 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	if err != nil {
 		return findPlan{}, err
 	}
+	hint, err := parseFindHint(command)
+	if err != nil {
+		return findPlan{}, err
+	}
 	projectionDoc, err := commandOptionalDocument(command, "projection")
 	if err != nil {
 		return findPlan{}, err
@@ -153,23 +282,77 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	if err != nil {
 		return findPlan{}, err
 	}
-	return findPlan{
+	return finalizeFindPlan(findPlan{
 		predicates: predicates,
 		orBranches: orBranches,
 		sort:       sortSpec,
 		skip:       skip,
 		limit:      limit,
+		hint:       hint,
 		projection: projection,
-	}, nil
+	}), nil
+}
+
+func parseFindHint(command wire.Document) (findHint, error) {
+	value := bson.Raw(command).Lookup("hint")
+	if value.IsZero() {
+		return findHint{}, nil
+	}
+	if name, ok := value.StringValueOK(); ok {
+		if strings.TrimSpace(name) == "" {
+			return findHint{}, errors.New("Mongo gateway find hint name must be non-empty")
+		}
+		return findHint{present: true, name: name}, nil
+	}
+	doc, ok := value.DocumentOK()
+	if !ok {
+		return findHint{}, errors.New("Mongo gateway find hint must be an index name or exact key pattern")
+	}
+	elements, err := doc.Elements()
+	if err != nil {
+		return findHint{}, err
+	}
+	if len(elements) == 0 || len(elements) > 4 {
+		return findHint{}, errors.New("Mongo gateway find hint key pattern must contain one through four fields")
+	}
+	components := make([]collections.IndexComponent, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
+	for _, element := range elements {
+		field, err := element.KeyErr()
+		if err != nil {
+			return findHint{}, err
+		}
+		if err := collections.ValidateIndexPath(field); err != nil {
+			return findHint{}, fmt.Errorf("Mongo gateway find hint field %q: %w", field, err)
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return findHint{}, fmt.Errorf("Mongo gateway find hint repeats field %q", field)
+		}
+		seen[field] = struct{}{}
+		direction := collections.IndexDirectionAscending
+		if !isAscendingIndexKey(element.Value()) {
+			desc, err := findSortDirectionValue(element.Value())
+			if err != nil || !desc {
+				return findHint{}, fmt.Errorf("Mongo gateway find hint direction for %q must be 1 or -1", field)
+			}
+			direction = collections.IndexDirectionDescending
+		}
+		components = append(components, collections.IndexComponent{Field: field, Direction: direction})
+	}
+	return findHint{present: true, components: components}, nil
 }
 
 func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findResultSet, error) {
+	plan = finalizeFindPlan(plan)
 	// Selection metadata is diagnostic-only. Avoid allocating probe descriptors
 	// on the ordinary find path; executionStats receives the same selector and
 	// may later refine it to the materialized winner.
 	if plan.stats != nil {
 		selection := selectFindPlannerSelection(col.MetaView(), plan)
 		plan.recordWinner(selection.stage, selection.indexName)
+	}
+	if err := validateCompoundHint(col.MetaView(), plan); err != nil {
+		return findResultSet{}, err
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
@@ -181,6 +364,40 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	// enforced while scanning candidates. Unsorted collection scans can stop
 	// early once skip/limit is satisfied because later records cannot affect the
 	// result set.
+	if docs, compound, ok, err := s.documentsForCompoundIndexPlan(col, materializer, plan); ok || err != nil {
+		if err != nil {
+			return findResultSet{}, err
+		}
+		filtered := make([]wire.Document, 0, len(docs))
+		for _, doc := range docs {
+			match, err := documentMatchesPlan(doc, plan)
+			if err != nil {
+				return findResultSet{}, err
+			}
+			if match {
+				filtered = append(filtered, doc)
+			}
+		}
+		if plan.sort.field != "" && !compound.sortSatisfied {
+			sort.SliceStable(filtered, func(i, j int) bool {
+				return compareDocumentsForFindSort(filtered[i], filtered[j], plan.sort) < 0
+			})
+		}
+		alreadyPaginated := compoundPlanPaginationSafe(compound, plan)
+		if plan.skip > 0 && !alreadyPaginated {
+			if int(plan.skip) >= len(filtered) {
+				filtered = nil
+			} else {
+				filtered = filtered[plan.skip:]
+			}
+		}
+		if plan.limit > 0 && !alreadyPaginated && int(plan.limit) < len(filtered) {
+			filtered = filtered[:plan.limit]
+		}
+		plan.recordCompoundWinner(compound)
+		plan.recordReturned(len(filtered))
+		return findResultSet{docs: filtered, projection: plan.projection}, nil
+	}
 	if docs, ok, err := s.findUnsortedScanDocuments(col, materializer, plan); ok || err != nil {
 		if err != nil {
 			return findResultSet{}, err
@@ -212,13 +429,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	docs = filtered
 
 	if plan.sort.field != "" {
-		sort.SliceStable(docs, func(i, j int) bool {
-			cmp := compareDocumentField(docs[i], docs[j], plan.sort.field)
-			if plan.sort.desc {
-				return cmp > 0
-			}
-			return cmp < 0
-		})
+		sort.SliceStable(docs, func(i, j int) bool { return compareDocumentsForFindSort(docs[i], docs[j], plan.sort) < 0 })
 	}
 
 	if plan.skip > 0 {
@@ -1128,7 +1339,7 @@ func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, 
 	if plan.limit <= 0 {
 		return 0, false
 	}
-	if plan.sort.field != "" && (plan.sort.field != idx.Field || plan.sort.desc) {
+	if plan.sort.field != "" && (len(findSortTerms(plan.sort)) != 1 || plan.sort.field != idx.Field || plan.sort.desc) {
 		return 0, false
 	}
 	for _, pred := range plan.predicates {
@@ -1735,6 +1946,10 @@ func parseFindSort(command wire.Document) (findSort, error) {
 	if err != nil || sortDoc == nil {
 		return findSort{}, err
 	}
+	return parseFindSortDocument(sortDoc)
+}
+
+func parseFindSortDocument(sortDoc wire.Document) (findSort, error) {
 	elements, err := bson.Raw(sortDoc).Elements()
 	if err != nil {
 		return findSort{}, err
@@ -1742,30 +1957,70 @@ func parseFindSort(command wire.Document) (findSort, error) {
 	if len(elements) == 0 {
 		return findSort{}, nil
 	}
-	if len(elements) != 1 {
-		return findSort{}, errors.New("Mongo gateway find sort currently supports one field")
+	if len(elements) > 4 {
+		return findSort{}, errors.New("Mongo gateway find sort supports at most four fields")
 	}
-	field, err := elements[0].KeyErr()
-	if err != nil {
-		return findSort{}, err
+	terms := make([]findSortTerm, 0, len(elements))
+	seen := make(map[string]struct{}, len(elements))
+	for _, element := range elements {
+		field, err := element.KeyErr()
+		if err != nil {
+			return findSort{}, err
+		}
+		if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
+			return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return findSort{}, fmt.Errorf("Mongo gateway find sort repeats field %q", field)
+		}
+		seen[field] = struct{}{}
+		desc, err := findSortDirectionValue(element.Value())
+		if err != nil {
+			return findSort{}, err
+		}
+		terms = append(terms, findSortTerm{field: field, desc: desc})
 	}
-	if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
-		return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
-	}
-	value := elements[0].Value()
+	return findSort{field: terms[0].field, desc: terms[0].desc, terms: terms}, nil
+}
+
+func findSortDirectionValue(value bson.RawValue) (bool, error) {
 	if isAscendingIndexKey(value) {
-		return findSort{field: field}, nil
+		return false, nil
 	}
 	if v, ok := value.Int32OK(); ok && v == -1 {
-		return findSort{field: field, desc: true}, nil
+		return true, nil
 	}
 	if v, ok := value.Int64OK(); ok && v == -1 {
-		return findSort{field: field, desc: true}, nil
+		return true, nil
 	}
 	if v, ok := value.DoubleOK(); ok && v == -1 {
-		return findSort{field: field, desc: true}, nil
+		return true, nil
 	}
-	return findSort{}, errors.New("Mongo gateway find sort direction must be 1 or -1")
+	return false, errors.New("Mongo gateway find sort direction must be 1 or -1")
+}
+
+func findSortTerms(sort findSort) []findSortTerm {
+	if len(sort.terms) != 0 {
+		return sort.terms
+	}
+	if sort.field == "" {
+		return nil
+	}
+	return []findSortTerm{{field: sort.field, desc: sort.desc}}
+}
+
+func compareDocumentsForFindSort(left, right wire.Document, sort findSort) int {
+	for _, term := range findSortTerms(sort) {
+		cmp := compareDocumentField(left, right, term.field)
+		if cmp == 0 {
+			continue
+		}
+		if term.desc {
+			return -cmp
+		}
+		return cmp
+	}
+	return compareDocumentField(left, right, "_id")
 }
 
 func parseFindPagination(command wire.Document) (int32, int32, error) {
@@ -2244,9 +2499,37 @@ func compareRawValues(left, right bson.RawValue) int {
 		return 0
 	case bson.TypeObjectID:
 		return bytes.Compare(left.Value, right.Value)
+	case bson.TypeDateTime:
+		leftMilliseconds, leftOK := left.DateTimeOK()
+		rightMilliseconds, rightOK := right.DateTimeOK()
+		if leftOK && rightOK {
+			return compareInt64(leftMilliseconds, rightMilliseconds)
+		}
+	case bson.TypeTimestamp:
+		leftTimestamp, leftOrdinal, leftOK := left.TimestampOK()
+		rightTimestamp, rightOrdinal, rightOK := right.TimestampOK()
+		if leftOK && rightOK {
+			if timestampCompare := compareUint32(leftTimestamp, rightTimestamp); timestampCompare != 0 {
+				return timestampCompare
+			}
+			return compareUint32(leftOrdinal, rightOrdinal)
+		}
 	default:
 		return bytes.Compare(left.Value, right.Value)
 	}
+	// Invalid raw values are not admissible index components, but preserve the
+	// existing deterministic fallback for defensive collection-scan sorting.
+	return bytes.Compare(left.Value, right.Value)
+}
+
+func compareUint32(left, right uint32) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
 }
 
 func compareRawNumbers(left, right bson.RawValue) int {
@@ -2271,7 +2554,7 @@ func compareRawNumbers(left, right bson.RawValue) int {
 
 func numberSortRank(value bson.RawValue, finite bool) int {
 	if finite {
-		return 1
+		return 2
 	}
 	if rank, ok := rawNumberNonFiniteRank(value); ok {
 		return rank
@@ -2285,11 +2568,11 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 		v, ok := value.DoubleOK()
 		if ok {
 			switch {
-			case math.IsInf(v, -1):
-				return 0, true
-			case math.IsInf(v, 1):
-				return 2, true
 			case math.IsNaN(v):
+				return 0, true
+			case math.IsInf(v, -1):
+				return 1, true
+			case math.IsInf(v, 1):
 				return 3, true
 			}
 		}
@@ -2297,13 +2580,13 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 		v, ok := value.Decimal128OK()
 		if ok {
 			if v.IsNaN() {
-				return 3, true
+				return 0, true
 			}
 			switch v.IsInf() {
 			case -1:
-				return 0, true
+				return 1, true
 			case 1:
-				return 2, true
+				return 3, true
 			}
 		}
 	}
@@ -2312,7 +2595,7 @@ func rawNumberNonFiniteRank(value bson.RawValue) (int, bool) {
 
 func rawValueIsNaN(value bson.RawValue) bool {
 	rank, ok := rawNumberNonFiniteRank(value)
-	return ok && rank == 3
+	return ok && rank == 0
 }
 
 func rawNumberRat(value bson.RawValue) (*big.Rat, bool) {
@@ -2354,8 +2637,8 @@ func rawNumberComparable(value bson.RawValue) bool {
 	if _, ok := rawNumberRat(value); ok {
 		return true
 	}
-	rank, ok := rawNumberNonFiniteRank(value)
-	return ok && rank != 3
+	_, ok := rawNumberNonFiniteRank(value)
+	return ok && !rawValueIsNaN(value)
 }
 
 func decimal128Rat(value bson.Decimal128) (*big.Rat, bool) {
@@ -2400,7 +2683,7 @@ func bsonTypeSortRank(t bson.Type) int {
 		return 0
 	case bson.TypeNull:
 		return 1
-	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble:
+	case bson.TypeInt32, bson.TypeInt64, bson.TypeDouble, bson.TypeDecimal128:
 		return 2
 	case bson.TypeString:
 		return 3
