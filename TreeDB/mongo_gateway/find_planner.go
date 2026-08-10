@@ -475,6 +475,11 @@ const (
 	findBatchOverheadBytes                = 5 // BSON document length plus trailing NUL.
 	findBatchResponseReserveBytes         = 4096
 	mongoQueryMaxDecimal128Normalizations = 1024
+	// Negative predicates are residual work. Bound both their choice lists and
+	// boolean branch fan-out so a scan cap cannot multiply an unbounded filter.
+	mongoQueryMaxNegativeChoices   = 256
+	mongoQueryMaxBooleanBranches   = 64
+	mongoQueryMaxBooleanPredicates = 256
 )
 
 func findBatchDocumentBytes(doc wire.Document, index int) int {
@@ -1684,7 +1689,43 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 		}
 		predicates = append(predicates, parsed...)
 	}
+	if err := validateFindPredicateWork(predicates, orBranches, norBranches); err != nil {
+		return nil, nil, nil, err
+	}
 	return predicates, orBranches, norBranches, nil
+}
+
+func validateFindPredicateWork(predicates []findPredicate, orBranches, norBranches [][]findPredicate) error {
+	if len(orBranches) > mongoQueryMaxBooleanBranches || len(norBranches) > mongoQueryMaxBooleanBranches {
+		return fmt.Errorf("Mongo gateway boolean query exceeds %d branches", mongoQueryMaxBooleanBranches)
+	}
+	total := len(predicates)
+	check := func(branches [][]findPredicate) error {
+		for _, branch := range branches {
+			total += len(branch)
+			for _, predicate := range branch {
+				if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
+					return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
+				}
+			}
+		}
+		return nil
+	}
+	for _, predicate := range predicates {
+		if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
+			return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
+		}
+	}
+	if err := check(orBranches); err != nil {
+		return err
+	}
+	if err := check(norBranches); err != nil {
+		return err
+	}
+	if total > mongoQueryMaxBooleanPredicates {
+		return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+	}
+	return nil
 }
 
 func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
@@ -1728,6 +1769,9 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 	if len(values) == 0 {
 		return nil, errors.New("Mongo gateway $and must contain at least one expression")
 	}
+	if len(values) > mongoQueryMaxBooleanPredicates {
+		return nil, fmt.Errorf("Mongo gateway $and exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+	}
 	var out []findPredicate
 	for i, value := range values {
 		doc, ok := value.DocumentOK()
@@ -1758,6 +1802,9 @@ func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredica
 	}
 	if len(values) == 0 {
 		return nil, fmt.Errorf("Mongo gateway %s must contain at least one expression", operator)
+	}
+	if len(values) > mongoQueryMaxBooleanBranches {
+		return nil, fmt.Errorf("Mongo gateway %s exceeds %d branches", operator, mongoQueryMaxBooleanBranches)
 	}
 	branches := make([][]findPredicate, 0, len(values))
 	for i, value := range values {

@@ -231,6 +231,57 @@ func TestMongoQuerySortAndProjectionPathsRejectMalformedOrOverDepth(t *testing.T
 	}
 }
 
+func TestMongoNegativeQueryWorkCapsRejectBeforeCursorOrMutation(t *testing.T) {
+	choices := make(bson.A, mongoQueryMaxNegativeChoices)
+	for i := range choices {
+		choices[i] = int32(i)
+	}
+	nearCap, err := bson.Marshal(bson.D{{Key: "score", Value: bson.D{{Key: "$nin", Value: choices}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(nearCap)); err != nil {
+		t.Fatalf("near-cap $nin rejected: %v", err)
+	}
+	choices = append(choices, int32(mongoQueryMaxNegativeChoices))
+	overCap := bson.D{{Key: "score", Value: bson.D{{Key: "$nin", Value: choices}}}}
+	raw, err := bson.Marshal(overCap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(raw)); err == nil {
+		t.Fatal("over-cap $nin unexpectedly accepted")
+	}
+	branches := make(bson.A, mongoQueryMaxBooleanBranches+1)
+	for i := range branches {
+		branches[i] = bson.D{{Key: "score", Value: int32(i)}}
+	}
+	raw, err = bson.Marshal(bson.D{{Key: "$nor", Value: branches}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(raw)); err == nil {
+		t.Fatal("over-cap $nor unexpectedly accepted")
+	}
+
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406628, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score", Value: int32(7)}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406629, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: overCap}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor for over-cap filter: %d", len(server.cursors))
+	}
+	write := serveCommand(t, server, 406630, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: overCap}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}},
+	}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, write, "BadValue")
+	check := serveCommand(t, server, 406631, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "x"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, check)
+	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 {
+		t.Fatal("over-cap filter write mutated document")
+	}
+}
+
 func TestMongoTopLevelNorCombinesWithSiblingPredicates(t *testing.T) {
 	filter, err := bson.Marshal(bson.D{{Key: "tenant", Value: "a"}, {Key: "$nor", Value: bson.A{
 		bson.D{{Key: "score", Value: int32(1)}},
@@ -296,6 +347,62 @@ func TestMongoTopLevelOrAndNorCoexist(t *testing.T) {
 			t.Fatalf("doc %v match=%v want %v", test.doc, got, test.want)
 		}
 	}
+}
+
+func TestMongoNegativePredicatesShareReadAndFilterWriteConsumers(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406620, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "missing"}, {Key: "state", Value: "missing"}},
+		bson.D{{Key: "_id", Value: "null"}, {Key: "score", Value: nil}, {Key: "state", Value: "null"}},
+		bson.D{{Key: "_id", Value: "live"}, {Key: "score", Value: int32(7)}, {Key: "state", Value: "live"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}},
+	}}, {Key: "$db", Value: "app"}}))
+	nonNull := bson.D{{Key: "score", Value: bson.D{{Key: "$ne", Value: nil}}}}
+	find := serveCommand(t, server, 406621, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: nonNull}, {Key: "$db", Value: "app"}})
+	assertOK(t, find)
+	if batch := cursorFirstBatch(t, find); len(batch) != 1 || batch[0].Lookup("_id").StringValue() != "live" {
+		t.Fatalf("non-null find batch=%v want live", batch)
+	}
+	count := serveCommand(t, server, 406622, bson.D{{Key: "count", Value: "events"}, {Key: "query", Value: nonNull}, {Key: "$db", Value: "app"}})
+	assertOK(t, count)
+	if n, ok := bson.Raw(count).Lookup("n").Int64OK(); !ok || n != 1 {
+		t.Fatalf("count n=%d ok=%v want 1", n, ok)
+	}
+	distinct := serveCommand(t, server, 406623, bson.D{{Key: "distinct", Value: "events"}, {Key: "key", Value: "state"}, {Key: "query", Value: nonNull}, {Key: "$db", Value: "app"}})
+	assertOK(t, distinct)
+	values, err := bson.Raw(distinct).Lookup("values").Array().Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 || values[0].StringValue() != "live" {
+		t.Fatalf("non-null distinct values=%v want [live]", values)
+	}
+	aggregate := serveCommand(t, server, 406624, bson.D{{Key: "aggregate", Value: "events"}, {Key: "pipeline", Value: bson.A{
+		bson.D{{Key: "$match", Value: nonNull}}, bson.D{{Key: "$count", Value: "n"}},
+	}}, {Key: "cursor", Value: bson.D{}}, {Key: "$db", Value: "app"}})
+	assertOK(t, aggregate)
+	if batch := cursorFirstBatch(t, aggregate); len(batch) != 1 || batch[0].Lookup("n").Int64() != 1 {
+		t.Fatalf("non-null aggregate batch=%v want count 1", batch)
+	}
+
+	update := serveCommand(t, server, 406625, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: nonNull}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "updated", Value: true}}}}},
+	}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, update)
+	assertInt32(t, update, "n", 1)
+	famQuery := bson.D{{Key: "$nor", Value: bson.A{
+		bson.D{{Key: "score", Value: bson.D{{Key: "$exists", Value: false}}}},
+		bson.D{{Key: "score", Value: nil}},
+	}}}
+	fam := serveCommand(t, server, 406626, bson.D{{Key: "findAndModify", Value: "events"}, {Key: "query", Value: famQuery}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}}}, {Key: "fields", Value: bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, fam)
+	if value := bson.Raw(fam).Lookup("value").Document(); value.Lookup("profile", "name").StringValue() != "Ada" || value.Lookup("_id").Type != 0 {
+		t.Fatalf("findAndModify dotted projection=%s want profile.name without _id", value)
+	}
+	deleteResponse := serveCommand(t, server, 406627, bson.D{{Key: "delete", Value: "events"}, {Key: "deletes", Value: bson.A{bson.D{
+		{Key: "q", Value: bson.D{{Key: "score", Value: bson.D{{Key: "$exists", Value: false}}}}}, {Key: "limit", Value: int32(1)},
+	}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleteResponse)
+	assertInt32(t, deleteResponse, "n", 1)
 }
 
 func TestMongoDottedSortIsStableAndReportsBoundedMaterialization(t *testing.T) {
