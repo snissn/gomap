@@ -8,6 +8,8 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // This uses the same RunCommand BSON envelopes issued by Compass' server-status
@@ -86,4 +88,87 @@ func TestStandaloneServerOfficialDriverCompassDiagnosticsSmoke(t *testing.T) {
 	if _, ok := total.Lookup("time").Int64OK(); !ok {
 		t.Fatalf("top app.users.total=%s", total)
 	}
+}
+
+func TestStandaloneServerOfficialDriverDiagnosticsCountsFindAndGetMoreOnce(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:                      t.TempDir(),
+		Profile:                  treedb.ProfileCommandWALDurable,
+		DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	coll := client.Database("app").Collection("users")
+	if _, err := coll.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: "u1"}},
+		bson.D{{Key: "_id", Value: "u2"}},
+		bson.D{{Key: "_id", Value: "u3"}},
+	}); err != nil {
+		t.Fatalf("seed users: %v", err)
+	}
+	beforeTop := diagnosticsDriverTop(t, client)
+	beforeCount := diagnosticsDriverTopCount(t, beforeTop, "app.users")
+	beforeStatus := diagnosticsDriverStatus(t, client)
+	beforeOpcounters, _ := beforeStatus.Lookup("opcounters").DocumentOK()
+	beforeQuery, _ := beforeOpcounters.Lookup("query").Int64OK()
+	beforeGetMore, _ := beforeOpcounters.Lookup("getmore").Int64OK()
+
+	cursor, err := coll.Find(ctx, bson.D{}, options.Find().SetBatchSize(1))
+	if err != nil {
+		t.Fatalf("driver find: %v", err)
+	}
+	var docs []bson.Raw
+	if err := cursor.All(ctx, &docs); err != nil {
+		t.Fatalf("driver cursor: %v", err)
+	}
+	if len(docs) != 3 {
+		t.Fatalf("driver docs=%d want 3", len(docs))
+	}
+
+	afterStatus := diagnosticsDriverStatus(t, client)
+	afterOpcounters, _ := afterStatus.Lookup("opcounters").DocumentOK()
+	afterQuery, _ := afterOpcounters.Lookup("query").Int64OK()
+	afterGetMore, _ := afterOpcounters.Lookup("getmore").Int64OK()
+	if afterQuery != beforeQuery+1 || afterGetMore != beforeGetMore+2 {
+		t.Fatalf("opcounters query/getmore=%d/%d want %d/%d: %s", afterQuery, afterGetMore, beforeQuery+1, beforeGetMore+2, afterOpcounters)
+	}
+	afterTop := diagnosticsDriverTop(t, client)
+	if got := diagnosticsDriverTopCount(t, afterTop, "app.users"); got != beforeCount+3 {
+		t.Fatalf("top app.users.total.count=%d want %d (find plus two getMore exactly once): %s", got, beforeCount+3, afterTop)
+	}
+}
+
+func diagnosticsDriverStatus(t *testing.T, client *mongo.Client) bson.Raw {
+	t.Helper()
+	var status bson.Raw
+	if err := client.Database("admin").RunCommand(context.Background(), bson.D{{Key: "serverStatus", Value: int32(1)}}).Decode(&status); err != nil {
+		t.Fatalf("driver serverStatus: %v", err)
+	}
+	return status
+}
+
+func diagnosticsDriverTop(t *testing.T, client *mongo.Client) bson.Raw {
+	t.Helper()
+	var top bson.Raw
+	if err := client.Database("admin").RunCommand(context.Background(), bson.D{{Key: "top", Value: int32(1)}}).Decode(&top); err != nil {
+		t.Fatalf("driver top: %v", err)
+	}
+	return top
+}
+
+func diagnosticsDriverTopCount(t *testing.T, top bson.Raw, namespace string) int64 {
+	t.Helper()
+	totals, ok := top.Lookup("totals").DocumentOK()
+	metric, metricOK := totals.Lookup(namespace).DocumentOK()
+	total, totalOK := metric.Lookup("total").DocumentOK()
+	count, countOK := total.Lookup("count").Int64OK()
+	if !ok || !metricOK || !totalOK || !countOK {
+		t.Fatalf("top namespace %s=%s", namespace, top)
+	}
+	return count
 }

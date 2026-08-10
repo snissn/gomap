@@ -193,7 +193,7 @@ var mongoGatewayCapabilityManifest = MongoGatewayCapabilityManifest{
 				"diagnostics.top",
 				"diagnostics.dbstats-and-collstats",
 			},
-			Note: "Standalone-only subset: serverStatus exposes standard numeric opcounters plus bounded gateway command metrics, connection/cursor counters, and a read-only command-WAL inventory when standalone-owned; top emits Mongo-shaped namespace total.time/count only. dbStats shares one MaxFindScanDocuments document-ID budget across all collections; collStats uses that cap for one collection. Physical/logical byte totals and unsupported fields are omitted rather than estimated. Routed mode rejects before local observation.",
+			Note: "Standalone-only subset: serverStatus exposes standard numeric opcounters plus bounded gateway command metrics, connection/cursor counters, and a read-only command-WAL inventory when standalone-owned; top emits Mongo-shaped namespace total.time/count only. dbStats shares one MaxFindScanDocuments physical-primary-entry budget across all collections (including tombstones and merged-run source work); collStats uses that cap for one collection. Physical/logical byte totals and unsupported fields are omitted rather than estimated. Routed mode rejects before local observation.",
 		},
 		{
 			ID:            "logical-sessions",

@@ -1,0 +1,13 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "serverstatus-normalized",
+  "capability_id": "diagnostics.serverstatus",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "normalize_response_envelope_order": true,
+  "ignore_fields": ["host", "version", "process", "pid", "uptime", "uptimeMillis", "uptimeEstimate", "localTime", "asserts", "connections", "extra_info", "freeMem", "globalLock", "locks", "logicalSessionRecordCache", "mem", "metrics", "network", "opcounters", "opcountersRepl", "storage", "tcmalloc", "wiredTiger", "ok"],
+  "command": {"serverStatus": {"$numberInt":"1"}}
+}

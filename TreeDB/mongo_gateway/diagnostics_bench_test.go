@@ -36,26 +36,43 @@ func BenchmarkDiagnosticsTop(b *testing.B) {
 }
 
 func BenchmarkDiagnosticsCollectionStats(b *testing.B) {
-	server := newMongoCompatibilityMatrixServer(b)
-	server.MaxFindScanDocuments = 8 // fixture has three IDs; no scan truncation.
 	for _, tc := range []struct {
-		name    string
-		command bson.D
-		field   string
-		want    int64
+		name string
+		cap  int
 	}{
-		{name: "dbStats", command: bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}, field: "objects", want: 3},
-		{name: "collStats", command: bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}, field: "count", want: 3},
+		{name: "small_fixture", cap: 8},
+		// The seeded fixture has three live primary IDs and one merged-source
+		// inspection. This near-cap witness therefore makes four charged work
+		// units explicit for both dbStats and collStats.
+		{name: "near_cap_four_physical_units", cap: 4},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			warmup := serveCommand(b, server, 1, tc.command)
-			if value, ok := warmup.Lookup(tc.field).Int64OK(); !ok || value != tc.want {
-				b.Fatalf("warmup %s=%s", tc.name, warmup)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_ = serveCommand(b, server, int32(i+2), tc.command)
+			for _, command := range []struct {
+				name  string
+				field string
+				value any
+			}{
+				{name: "dbStats", field: "objects", value: int32(1)},
+				{name: "collStats", field: "count", value: "users"},
+			} {
+				b.Run(command.name, func(b *testing.B) {
+					server := newMongoCompatibilityMatrixServer(b)
+					server.MaxFindScanDocuments = tc.cap
+					warmup := serveCommand(b, server, 1, bson.D{{Key: command.name, Value: command.value}, {Key: "$db", Value: "app"}})
+					if value, ok := warmup.Lookup(command.field).Int64OK(); !ok || value != 3 {
+						b.Fatalf("warmup %s=%s", command.name, warmup)
+					}
+					_, inspected, truncated, err := server.diagnosticCollectionCountWithin("app.users", tc.cap)
+					if err != nil || truncated || inspected != 4 {
+						b.Fatalf("physical work inspected=%d truncated=%v err=%v want 4/false/nil", inspected, truncated, err)
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						_ = serveCommand(b, server, int32(i+2), bson.D{{Key: command.name, Value: command.value}, {Key: "$db", Value: "app"}})
+					}
+					b.ReportMetric(float64(inspected), "physical_ids/op")
+				})
 			}
 		})
 	}

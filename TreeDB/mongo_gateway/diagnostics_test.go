@@ -1,11 +1,14 @@
 package mongogateway
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -108,6 +111,43 @@ func TestDiagnosticsRejectRoutedBeforeLocalObservation(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsRejectOPMsgFeaturesBeforeObservation(t *testing.T) {
+	commands := []bson.D{
+		{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}},
+		{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}},
+		{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}},
+		{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}},
+	}
+	for _, command := range commands {
+		name := command[0].Key
+		for _, tc := range []struct {
+			name  string
+			build func(wire.Document) ([]byte, error)
+		}{
+			{name: "moreToCome", build: func(doc wire.Document) ([]byte, error) {
+				return wire.AppendMsgMessage(nil, 6290, 0, wire.MsgFlagMoreToCome, doc)
+			}},
+			{name: "documentSequence", build: func(doc wire.Document) ([]byte, error) {
+				return wire.AppendMsgMessageWithSequences(nil, 6291, 0, 0, doc, []wire.DocumentSequence{{Identifier: "ignored", Documents: []wire.Document{mustDocument(t, bson.D{{Key: "x", Value: int32(1)}})}}})
+			}},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				request, err := tc.build(mustDocument(t, command))
+				if err != nil {
+					t.Fatal(err)
+				}
+				// No catalog is installed: reaching a diagnostic implementation would
+				// yield a catalog error instead of this wire-admission fence.
+				rw := &readWriter{r: bytes.NewReader(request)}
+				err = NewServer().ServeOne(rw)
+				if !errors.Is(err, wire.ErrUnsupported) || rw.w.Len() != 0 {
+					t.Fatalf("ServeOne err=%v responseBytes=%d want ErrUnsupported/0", err, rw.w.Len())
+				}
+			})
+		}
+	}
+}
+
 func TestDiagnosticsZeroValueServerInitializesNamespaceCounters(t *testing.T) {
 	server := &Server{}
 	server.noteDiagnosticCommand("insert", mustDocument(t, bson.D{{Key: "insert", Value: "users"}, {Key: "$db", Value: "app"}}), time.Millisecond, false)
@@ -155,6 +195,16 @@ func TestDBStatsSharesGlobalDocumentScanBudget(t *testing.T) {
 	server.MaxFindScanDocuments = 3
 	assertOK(t, serveCommand(t, server, 6270, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "e1"}}}}, {Key: "$db", Value: "app"}}))
 	assertCommandError(t, serveCommand(t, server, 6271, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}), "BadValue")
+}
+
+func TestDiagnosticsCountsChargePrimaryTombstones(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 6280, bson.D{{Key: "delete", Value: "users"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	server.MaxFindScanDocuments = 2
+	assertCommandError(t, serveCommand(t, server, 6281, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}), "BadValue")
+	assertOK(t, serveCommand(t, server, 6282, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "e1"}}}}, {Key: "$db", Value: "app"}}))
+	server.MaxFindScanDocuments = 3
+	assertCommandError(t, serveCommand(t, server, 6283, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}), "BadValue")
 }
 
 func TestDiagnosticsAuthorizationScopes(t *testing.T) {

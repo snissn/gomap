@@ -84,7 +84,11 @@ func diagnosticCommandNamespace(name string, command wire.Document) string {
 	if !ok || db == "" {
 		return ""
 	}
-	collection, ok := bson.Raw(command).Lookup(name).StringValueOK()
+	field := name
+	if name == "getMore" {
+		field = "collection"
+	}
+	collection, ok := bson.Raw(command).Lookup(field).StringValueOK()
 	if !ok || collection == "" {
 		return ""
 	}
@@ -218,7 +222,7 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 		if remainingIDs <= 0 {
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway diagnostics document count exceeds bounded scan limit")
 		}
-		count, truncated, err := s.diagnosticCollectionCountWithin(meta.Name, remainingIDs)
+		count, inspected, truncated, err := s.diagnosticCollectionCountWithin(meta.Name, remainingIDs)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
@@ -226,7 +230,7 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway diagnostics document count exceeds bounded scan limit")
 		}
 		objects += count
-		remainingIDs -= int(count)
+		remainingIDs -= inspected
 		indexes += int64(1 + len(meta.Indexes) + len(meta.VectorIndexes))
 	}
 	return marshalDocument(bson.D{{Key: "db", Value: db}, {Key: "collections", Value: int64(len(metas))}, {Key: "objects", Value: objects}, {Key: "indexes", Value: indexes}, {Key: "ok", Value: 1.0}})
@@ -380,7 +384,7 @@ func (s *Server) diagnosticMetas(db string, cursorOwner int64) ([]collections.Co
 }
 
 func (s *Server) diagnosticCollectionCount(name string) (int64, error) {
-	count, truncated, err := s.diagnosticCollectionCountWithin(name, s.maxFindScanDocuments())
+	count, _, truncated, err := s.diagnosticCollectionCountWithin(name, s.maxFindScanDocuments())
 	if err != nil {
 		return 0, err
 	}
@@ -390,15 +394,14 @@ func (s *Server) diagnosticCollectionCount(name string) (int64, error) {
 	return count, nil
 }
 
-func (s *Server) diagnosticCollectionCountWithin(name string, maxIDs int) (int64, bool, error) {
+func (s *Server) diagnosticCollectionCountWithin(name string, maxIDs int) (count int64, inspected int, truncated bool, err error) {
 	col, err := s.openCollectionCached(name)
 	if err != nil {
-		return 0, false, err
+		return 0, 0, false, err
 	}
-	var count int64
-	truncated, err := col.ScanDocumentIDsFunc(maxIDs, func([]byte) (bool, error) { count++; return true, nil })
+	inspected, truncated, err = col.ScanDocumentIDsPhysicalFunc(maxIDs, func([]byte) (bool, error) { count++; return true, nil })
 	if err != nil {
-		return 0, false, err
+		return 0, inspected, false, err
 	}
-	return count, truncated, nil
+	return count, inspected, truncated, nil
 }

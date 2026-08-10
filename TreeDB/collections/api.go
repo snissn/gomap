@@ -21802,6 +21802,68 @@ func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool
 	return truncated, nil
 }
 
+// ScanDocumentIDsPhysicalFunc is the diagnostics-only counterpart of
+// ScanDocumentIDsFunc. Its limit and returned inspected count charge every
+// physical primary-source entry (including tombstones and merged-run work),
+// while fn receives only live IDs. It therefore proves a complete live count
+// only when the physical primary walk is exhausted.
+func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, err error) {
+	if c == nil {
+		return 0, false, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, false, errCollectionDBNil
+	}
+	if maxEntries <= 0 {
+		return 0, false, errors.New("collections: max physical entries must be positive")
+	}
+	if fn == nil {
+		return 0, false, errors.New("collections: scan callback is nil")
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return 0, false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return 0, false, err
+	}
+	if catalog == nil {
+		return 0, false, errCollectionNotFound
+	}
+	it, err := collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, true, maxEntries, func(count int) { inspected += count })
+	if err != nil {
+		return inspected, false, err
+	}
+	if it == nil {
+		return inspected, false, nil
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		if !it.IsDeleted() {
+			next, err := fn(bytes.Clone(it.UnsafeKey()))
+			if err != nil {
+				return inspected, false, err
+			}
+			if !next {
+				return inspected, false, nil
+			}
+		}
+		it.Next()
+	}
+	if errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+		return inspected, true, nil
+	}
+	if err := it.Error(); err != nil {
+		return inspected, false, err
+	}
+	return inspected, false, nil
+}
+
 // ScanDocumentsFunc flushes buffered writes before acquiring a snapshot, then
 // calls fn for primary collection records until maxDocuments is reached, the
 // collection is exhausted, or fn returns false. The returned boolean is true

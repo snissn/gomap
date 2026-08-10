@@ -771,7 +771,7 @@ func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]b
 	return response, err
 }
 
-func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) (response []byte, retainRequestBody bool, err error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, false, err
@@ -780,8 +780,14 @@ func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header,
 	if err != nil {
 		return nil, false, err
 	}
+	started := time.Now()
+	diagnosticFailed := false
+	defer func() {
+		s.noteDiagnosticCommand(name, q.Query, time.Since(started), diagnosticFailed || err != nil)
+	}()
 
-	response, err := s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
+	response, err = s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
+	diagnosticFailed = err != nil || !commandResponseOK(response)
 	if err != nil {
 		return nil, name != "insert", err
 	}
@@ -794,7 +800,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	return response, err
 }
 
-func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) (response []byte, retainRequestBody bool, err error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, false, err
@@ -803,7 +809,12 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	if err != nil {
 		return nil, false, err
 	}
-	retainRequestBody := name != "insert"
+	started := time.Now()
+	diagnosticFailed := false
+	defer func() {
+		s.noteDiagnosticCommand(name, msg.Body, time.Since(started), diagnosticFailed || err != nil)
+	}()
+	retainRequestBody = name != "insert"
 
 	if commandRejectsReadOPMsgFeatures(name) {
 		// These read paths neither consume document sequences nor support
@@ -827,14 +838,15 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
 		responseID := s.nextID()
-		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
+		response, err = s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
 			return nil, retainRequestBody, err
 		}
 		return response, retainRequestBody, nil
 	}
 
-	response, err := s.commandResponse(ctx, name, msg.Body, msg.Sequences, cursorOwner)
+	response, err = s.commandResponse(ctx, name, msg.Body, msg.Sequences, cursorOwner)
+	diagnosticFailed = err != nil || !commandResponseOK(response)
 	if err != nil {
 		return nil, retainRequestBody, err
 	}
@@ -878,7 +890,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 
 func commandRejectsReadOPMsgFeatures(name string) bool {
 	switch name {
-	case "aggregate", "count", "distinct", "explain", "find":
+	case "aggregate", "count", "distinct", "explain", "find", "serverStatus", "dbStats", "collStats", "top":
 		return true
 	default:
 		return false
@@ -886,10 +898,6 @@ func commandRejectsReadOPMsgFeatures(name string) bool {
 }
 
 func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (response wire.Document, err error) {
-	started := time.Now()
-	defer func() {
-		s.noteDiagnosticCommand(name, command, time.Since(started), err != nil || !commandResponseOK(response))
-	}()
 	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
 		return commandError(13, "Unauthorized", "Authentication required")
 	}
