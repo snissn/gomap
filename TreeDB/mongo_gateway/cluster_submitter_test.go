@@ -3435,6 +3435,16 @@ func TestClusterSubmitterRejectsIndexDDLNoLocalMutation(t *testing.T) {
 	})
 	assertCommandError(t, createResponse, "BadValue")
 	assertErrmsgContains(t, createResponse, "does not support secondary or global unique index DDL")
+	compoundResponse := serveCommand(t, server, 325816, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "createdAt", Value: int32(-1)}}},
+			{Key: "name", Value: "tenant_1_createdAt_-1"},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, compoundResponse, "BadValue")
+	assertErrmsgContains(t, compoundResponse, "does not support secondary or global unique index DDL")
 	uniqueResponse := serveCommand(t, server, 325814, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{

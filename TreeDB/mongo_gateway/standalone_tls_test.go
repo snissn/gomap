@@ -616,6 +616,24 @@ func TestStandaloneTLSRejectsHostnameTrustAndMinimumVersionBeforeMongo(t *testin
 	}
 }
 
+func TestTransportMetricsRecordsMinimumCompletedHandshakeDuration(t *testing.T) {
+	metrics := &transportMetrics{}
+	metrics.recordHandshakeDuration(0)
+	if got := metrics.totalNS.Load(); got != 1 {
+		t.Fatalf("total handshake nanoseconds=%d want 1 for completed zero-duration seam", got)
+	}
+	if got := metrics.maxNS.Load(); got != 1 {
+		t.Fatalf("max handshake nanoseconds=%d want 1 for completed zero-duration seam", got)
+	}
+	metrics.recordHandshakeDuration(7 * time.Nanosecond)
+	if got := metrics.totalNS.Load(); got != 8 {
+		t.Fatalf("total handshake nanoseconds=%d want 8", got)
+	}
+	if got := metrics.maxNS.Load(); got != 7 {
+		t.Fatalf("max handshake nanoseconds=%d want 7", got)
+	}
+}
+
 func TestStandaloneTLSRejectsExpiredCertificateBeforeMongo(t *testing.T) {
 	certFile, keyFile, pool := writeTLSMaterial(t, true)
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), TLSCertFile: certFile, TLSKeyFile: keyFile})

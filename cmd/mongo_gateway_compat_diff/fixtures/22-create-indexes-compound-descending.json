@@ -1,0 +1,18 @@
+{
+  "schema": "treedb.mongo-gateway.compat-diff.fixture",
+  "version": 1,
+  "id": "create-indexes-compound-descending",
+  "capability_id": "metadata.createindexes-listindexes-and-dropindexes",
+  "expectation": "supported",
+  "database": "compat",
+  "collection": "records",
+  "smoke": false,
+  "seed": [{"_id": "user-1", "tenant": "acme", "createdAt": {"$numberInt": "7"}}],
+  "command": {
+    "createIndexes": "records",
+    "indexes": [{
+      "key": {"tenant": {"$numberInt": "1"}, "createdAt": {"$numberInt": "-1"}},
+      "name": "tenant_1_createdAt_-1"
+    }]
+  }
+}
