@@ -57,29 +57,65 @@ type vectorPartitionLocalAuxiliaryNavigationV1 struct {
 // branching-factor-eight tree gives every root a path from the entry while
 // bounding every auxiliary degree by nine.
 func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
-	if len(rows) == 0 {
+	nativeOffsets := make([]uint64, len(rows)+1)
+	var nativeNeighbors []uint32
+	for ordinal := range rows {
+		neighbors, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
+		if err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if uint64(len(neighbors)) > math.MaxUint64-nativeOffsets[ordinal] {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary native edge count")
+		}
+		nativeOffsets[ordinal+1] = nativeOffsets[ordinal] + uint64(len(neighbors))
+		nativeNeighbors = append(nativeNeighbors, neighbors...)
+	}
+	return buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(len(rows), entryOrdinal, nativeOffsets, nativeNeighbors)
+}
+
+func buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(rows, entryOrdinal int, nativeOffsets []uint64, nativeNeighbors []uint32) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
+	return buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(context.Background(), rows, entryOrdinal, nativeOffsets, nativeNeighbors)
+}
+
+func buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx context.Context, rows, entryOrdinal int, nativeOffsets []uint64, nativeNeighbors []uint32) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+	}
+	if rows == 0 {
 		if entryOrdinal != -1 {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary entry")
 		}
 		return vectorPartitionLocalAuxiliaryNavigationV1{Offsets: []uint64{0}}, nil
 	}
-	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
+	if entryOrdinal < 0 || entryOrdinal >= rows {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary entry")
 	}
-	seen := make([]bool, len(rows))
+	if len(nativeOffsets) != rows+1 || nativeOffsets[0] != 0 || nativeOffsets[rows] != uint64(len(nativeNeighbors)) {
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary native offsets")
+	}
+	seen := make([]bool, rows)
 	roots := make([]uint32, 0, 1)
 	visit := func(root int) error {
 		queue := []int{root}
 		seen[root] = true
 		for head := 0; head < len(queue); head++ {
-			ordinal := queue[head]
-			neighbors, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
-			if err != nil {
-				return err
+			if head&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 			}
+			ordinal := queue[head]
+			start, end := nativeOffsets[ordinal], nativeOffsets[ordinal+1]
+			if end < start || end > uint64(len(nativeNeighbors)) {
+				return errors.New("partition-local auxiliary native offsets")
+			}
+			neighbors := nativeNeighbors[start:end]
 			rowSeen := make(map[uint32]struct{}, len(neighbors))
 			for _, neighbor := range neighbors {
-				if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
+				if int(neighbor) >= rows || neighbor == uint32(ordinal) {
 					return errors.New("partition-local auxiliary native neighbor")
 				}
 				if _, duplicate := rowSeen[neighbor]; duplicate {
@@ -101,6 +137,11 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 		}
 		next := -1
 		for candidate := range seen {
+			if candidate&1023 == 0 {
+				if err := ctx.Err(); err != nil {
+					return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+				}
+			}
 			if !seen[candidate] {
 				next = candidate
 				break
@@ -114,24 +155,29 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 	if len(roots) > 1 && len(roots)-1 > (math.MaxInt/2) {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary edge count")
 	}
-	degrees := make([]uint8, len(rows))
+	degrees := make([]uint8, rows)
 	for child := 1; child < len(roots); child++ {
 		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
 		degrees[roots[parent]]++
 		degrees[roots[child]]++
 	}
-	offsets := make([]uint64, len(rows)+1)
+	offsets := make([]uint64, rows+1)
 	for ordinal, degree := range degrees {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+			}
+		}
 		if degree > vectorPartitionLocalNavigationBranchV1+1 {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary degree")
 		}
 		offsets[ordinal+1] = offsets[ordinal] + uint64(degree)
 	}
-	if offsets[len(rows)] != uint64(2*(len(roots)-1)) {
+	if offsets[rows] != uint64(2*(len(roots)-1)) {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, errors.New("partition-local auxiliary edge count")
 	}
-	neighbors := make([]uint32, offsets[len(rows)])
-	next := append([]uint64(nil), offsets[:len(rows)]...)
+	neighbors := make([]uint32, offsets[rows])
+	next := append([]uint64(nil), offsets[:rows]...)
 	for child := 1; child < len(roots); child++ {
 		parent := (child - 1) / vectorPartitionLocalNavigationBranchV1
 		left, right := roots[parent], roots[child]
@@ -145,6 +191,21 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 
 func validateVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAssetRow, entryOrdinal int, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) error {
 	expected, err := buildVectorPartitionLocalAuxiliaryNavigationV1(rows, entryOrdinal)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(auxiliary.Offsets, expected.Offsets) || !slices.Equal(auxiliary.Neighbors, expected.Neighbors) {
+		return errors.New("partition-local auxiliary navigation mismatch")
+	}
+	return nil
+}
+
+func validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(rows, entryOrdinal int, nativeOffsets []uint64, nativeNeighbors []uint32, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) error {
+	return validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(context.Background(), rows, entryOrdinal, nativeOffsets, nativeNeighbors, auxiliary)
+}
+
+func validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx context.Context, rows, entryOrdinal int, nativeOffsets []uint64, nativeNeighbors []uint32, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) error {
+	expected, err := buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx, rows, entryOrdinal, nativeOffsets, nativeNeighbors)
 	if err != nil {
 		return err
 	}

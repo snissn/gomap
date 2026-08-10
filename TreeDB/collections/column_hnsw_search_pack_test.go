@@ -53,6 +53,55 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
+	connected := testColumnHNSWSearchPackInput2312()
+	connected.MembershipDigest[0] = 1
+	connected.HasAuxiliaryNavigation = true
+	connected.AuxiliaryNavigation.Offsets = []uint64{0, 0, 0, 0}
+	connectedRaw, err := encodeColumnHNSWSearchPack(connected)
+	if err != nil || hnswPackU16(connectedRaw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
+		t.Fatalf("connected v3 encode err=%v version=%d", err, hnswPackU16(connectedRaw, columnHNSWSearchPackHeaderVersionOffset))
+	}
+	connectedPack, err := decodeColumnHNSWSearchPack(connectedRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: connected.BaseIdentity, ExpectedMembershipDigest: connected.MembershipDigest})
+	if err != nil || !connectedPack.Header.HasAuxiliaryNavigation || !reflect.DeepEqual(connectedPack.AuxiliaryNavigation.Offsets, []uint64{0, 0, 0, 0}) || len(connectedPack.AuxiliaryNavigation.Neighbors) != 0 {
+		t.Fatalf("connected v3 decode err=%v auxiliary=%+v", err, connectedPack.AuxiliaryNavigation)
+	}
+	input := testColumnHNSWSearchPackAuxiliaryInput4106()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatalf("encode v3: %v", err)
+	}
+	if version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); version != columnHNSWSearchPackVersionV3 {
+		t.Fatalf("version=%d want %d", version, columnHNSWSearchPackVersionV3)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		t.Fatalf("decode v3: %v", err)
+	}
+	if !pack.Header.HasAuxiliaryNavigation || !reflect.DeepEqual(pack.AuxiliaryNavigation, columnHNSWSearchPackLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		t.Fatalf("decoded auxiliary=%+v header=%+v", pack.AuxiliaryNavigation, pack.Header)
+	}
+	view, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	if !reflect.DeepEqual(view.AuxiliaryNavigation, columnHNSWSearchPackPreparedLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		_ = view.Close()
+		t.Fatalf("prepared auxiliary=%+v", view.AuxiliaryNavigation)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("close v3 view: %v", err)
+	}
+	for _, raw := range [][]byte{
+		testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAuxiliaryOffsets, 0, func(payload []byte) { binary.LittleEndian.PutUint64(payload[8:], 0) }),
+		testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAuxiliaryNeighbors, 0, func(payload []byte) { binary.LittleEndian.PutUint32(payload, 1) }),
+	} {
+		if _, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil {
+			t.Fatal("malformed v3 auxiliary pack was accepted")
+		}
+		if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(raw, mappedresource.SourceHeapCopy, input.BaseIdentity); err == nil {
+			t.Fatal("malformed v3 auxiliary prepared view was accepted")
+		}
+	}
+}
+
 func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 	raw := testColumnHNSWSearchPackRaw2312(t)
 	cases := []struct {
@@ -72,7 +121,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV2+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV3+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{
@@ -541,8 +590,12 @@ func TestColumnHNSWSearchPackPreparedValidationObservesContext2314(t *testing.T)
 }
 
 func TestColumnHNSWSearchPackPreparedViewMappedFile2314(t *testing.T) {
-	raw := testColumnHNSWSearchPackRaw2312(t)
-	base := testColumnHNSWSearchPackInput2312().BaseIdentity
+	input := testColumnHNSWSearchPackAuxiliaryInput4106()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatalf("encode v3: %v", err)
+	}
+	base := input.BaseIdentity
 	path := t.TempDir() + "/pack.tca"
 	fileRaw := append(make([]byte, int(columnHNSWSearchPackVectorSectionAlignment)), raw...)
 	if err := os.WriteFile(path, fileRaw, 0o600); err != nil {
@@ -1682,6 +1735,15 @@ func testColumnHNSWSearchPackInput2312() columnHNSWSearchPackBuildInput {
 		DocumentIDOffsets:       []uint64{0, 5, 10, 15},
 		DocumentIDBytes:         []byte("doc-adoc-bdoc-c"),
 	}
+}
+
+func testColumnHNSWSearchPackAuxiliaryInput4106() columnHNSWSearchPackBuildInput {
+	input := testColumnHNSWSearchPackInput2312()
+	input.MembershipDigest[0] = 1
+	input.AdjacencyLayers[0] = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 1, 2, 2}, Neighbors: []uint32{1, 0}}
+	input.HasAuxiliaryNavigation = true
+	input.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 1, 1, 2}, Neighbors: []uint32{2, 0}}
+	return input
 }
 
 func testColumnHNSWSearchPackRaw2312(tb testing.TB) []byte {
