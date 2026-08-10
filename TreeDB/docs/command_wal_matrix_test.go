@@ -151,6 +151,12 @@ func TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands(t *testing.T) {
 		"CommandCursorClose",
 		"CommandExplain",
 		"CommandStats",
+		"CommandVectorStatus",
+		"CommandVectorSearchStrict",
+		"CommandVectorSearchFast",
+		"CommandVectorPinSearchSnapshot",
+		"CommandVectorSearchPinned",
+		"CommandVectorClosePinnedSnapshot",
 	} {
 		entry := requireMatrixEntry(t, matrix, "nativewire", command)
 		if entry.Status != "read-only" || entry.Command != "none" {

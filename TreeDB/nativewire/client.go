@@ -27,6 +27,7 @@ type Client struct {
 	requestBody           []byte
 	writeBody             []byte
 	readBody              []byte
+	vectorSections        []iwire.Section
 }
 
 // NewClient returns a native-wire client that owns conn until Close.

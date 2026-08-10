@@ -76,6 +76,12 @@ const (
 	SectionTruncated              SectionID = 117
 	SectionUpdateFieldNames       SectionID = 121
 	SectionUpdateFieldValues      SectionID = 122
+	SectionVectorSearchRequest    SectionID = 123
+	SectionVectorFastOptions      SectionID = 124
+	SectionVectorPinOptions       SectionID = 125
+	SectionVectorSearchResponse   SectionID = 126
+	SectionVectorFastEvidence     SectionID = 127
+	SectionVectorStatus           SectionID = 128
 )
 
 type CommandID uint64
@@ -106,6 +112,13 @@ const (
 	CommandCursorClose CommandID = 55
 	CommandExplain     CommandID = 56
 	CommandStats       CommandID = 57
+
+	CommandVectorStatus              CommandID = 58
+	CommandVectorSearchStrict        CommandID = 59
+	CommandVectorSearchFast          CommandID = 60
+	CommandVectorPinSearchSnapshot   CommandID = 61
+	CommandVectorSearchPinned        CommandID = 62
+	CommandVectorClosePinnedSnapshot CommandID = 63
 )
 
 type DocumentFormat uint64

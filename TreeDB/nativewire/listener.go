@@ -137,6 +137,7 @@ func (e *localEndpoint) close() error {
 		close(e.done)
 	}
 	if e.server != nil {
+		_ = e.state.closeVectorPinned()
 		e.server.killCursorsForOwner(e.state.id)
 		e.server.unregisterLocalEndpoint(e)
 	}
