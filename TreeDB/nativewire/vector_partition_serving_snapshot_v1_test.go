@@ -3,7 +3,6 @@ package nativewire
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +19,7 @@ type vectorPartitionServingSnapshotFixtureV1 struct {
 	coordinator *VectorPartitionCoordinatorV1
 	authority   *LinearizableCatalogVectorPartitionLifecycleAuthorityV1
 	publisher   *VectorPartitionServingSnapshotPublisherV1
+	router      *testVectorPartitionCoordinatorRouterV1
 	sources     map[raftcluster.GroupID]*fakeVectorPartitionGenerationSourceV1
 }
 
@@ -60,6 +60,20 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		Source:     raftplacement.VectorPartitionLifecycleSourceIdentityV1{Generation: 11, Checksum: 22, SchemaHash: 33, RowCount: 2},
 		Generation: 7,
 	}
+	manifest := collections.VectorPartitionManifestV1{
+		Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection,
+		IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest,
+		IntegrityDigest: strings.Repeat("d", 64), SourceGeneration: identity.Source.Generation,
+		SourceChecksum: identity.Source.Checksum, SourceSchemaHash: identity.Source.SchemaHash,
+		SourceRowCount: identity.Source.RowCount, Generation: identity.Generation, RouterGeneration: identity.Generation,
+		PartitionCount: 2, ReadySetDigest: strings.Repeat("b", 64),
+		Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
+		Assets: []collections.VectorPartitionAssetV1{
+			{ID: "partition-0", Checksum: strings.Repeat("0", 64), PartitionID: 0, Bytes: 1},
+			{ID: "partition-1", Checksum: strings.Repeat("1", 64), PartitionID: 1, Bytes: 1},
+		},
+		RouterAsset: collections.VectorPartitionAssetV1{ID: "router", Checksum: strings.Repeat("2", 64), Bytes: 1},
+	}
 	lifecycle := harness.LifecycleCoordinator()
 	required := []raftcluster.GroupID{"group-a", "group-b"}
 	if _, err := lifecycle.BeginBuildV1(ctx, identity, required, 0, 1); err != nil {
@@ -68,7 +82,7 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 	}
 	for i, group := range required {
 		if _, err := lifecycle.RecordGroupReadyV1(ctx, identity, raftplacement.VectorPartitionLifecycleGroupReadyV1{
-			GroupID: group, AppliedIndex: uint64(9 + i), AssetSetDigest: fmt.Sprintf("%064x", 100+i),
+			GroupID: group, AppliedIndex: uint64(9 + i), AssetSetDigest: vectorPartitionM8GroupAssetSetDigestV1(string(group), manifest),
 		}); err != nil {
 			_ = harness.Close()
 			tb.Fatal(err)
@@ -89,15 +103,6 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		SourceSchemaHash: identity.Source.SchemaHash, SourceRowCount: identity.Source.RowCount,
 		PartitionGeneration: identity.Generation, PartitionCount: 2,
 		Partitions: []raftplacement.VectorPartitionGroupV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
-	}
-	manifest := collections.VectorPartitionManifestV1{
-		Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: ref.Collection,
-		IndexName: identity.Index.IndexName, IndexDefinitionDigest: identity.Index.IndexDefinitionDigest,
-		IntegrityDigest: strings.Repeat("d", 64), SourceGeneration: identity.Source.Generation,
-		SourceChecksum: identity.Source.Checksum, SourceSchemaHash: identity.Source.SchemaHash,
-		SourceRowCount: identity.Source.RowCount, Generation: identity.Generation, RouterGeneration: identity.Generation,
-		PartitionCount: 2, ReadySetDigest: strings.Repeat("b", 64),
-		Placements: []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}, {PartitionID: 1, GroupID: "group-b"}},
 	}
 	pinnedManifest := manifest
 	pinnedManifest.ReadySetDigest = active.ReadySetDigest
@@ -139,7 +144,7 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 	}
 	fixture := &vectorPartitionServingSnapshotFixtureV1{
 		harness: harness, lifecycle: lifecycle, identity: identity, coordinator: coordinator,
-		authority: authority, publisher: publisher, sources: sources,
+		authority: authority, publisher: publisher, router: router, sources: sources,
 	}
 	tb.Cleanup(func() {
 		_ = fixture.publisher.Close()
@@ -147,6 +152,14 @@ func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionS
 		_ = fixture.harness.Close()
 	})
 	return fixture
+}
+
+func TestVectorPartitionServingSnapshotPublicationRejectsAssetSetMismatchV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.router.status.Manifest.Assets[0].Checksum = strings.Repeat("8", 64)
+	if err := fixture.publisher.PublishV1(t.Context()); !errors.Is(err, ErrVectorPartitionShardSearchGenerationMismatch) {
+		t.Fatalf("asset-set mismatch publication error=%v", err)
+	}
 }
 
 func TestVectorPartitionServingSnapshotPublicationClosesMalformedLeaseV1(t *testing.T) {

@@ -112,6 +112,10 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		}
 		groups = append(groups, group)
 	}
+	assetGroups, assetErr := vectorPartitionM8ValidateAssetsV1(opts.Manifest, opts.AssetSetDigests)
+	if assetErr != nil {
+		return nil, fmt.Errorf("nativewire: production node asset binding: %w", assetErr)
+	}
 	if len(opts.GroupAppliedIndexes) != 0 && len(opts.GroupAppliedIndexes) != len(opts.Endpoints) {
 		return nil, errors.New("nativewire: production node shared applied-index binding is incomplete")
 	}
@@ -121,6 +125,14 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		}
 	}
 	sort.Strings(groups)
+	if len(assetGroups) != len(groups) {
+		return nil, errors.New("nativewire: production node asset ownership differs from endpoints")
+	}
+	for i := range groups {
+		if string(assetGroups[i]) != groups[i] {
+			return nil, errors.New("nativewire: production node asset ownership differs from endpoints")
+		}
+	}
 	local := make(map[raftcluster.GroupID]net.Listener, len(opts.LocalShards))
 	for _, shard := range opts.LocalShards {
 		group := raftcluster.GroupID(shard.GroupID)

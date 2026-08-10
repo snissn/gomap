@@ -180,11 +180,11 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		previous.retired = true
 	}
 	closePrevious := previous != nil && previous.refs == 0
+	p.startRefreshLoopV1()
 	p.mu.Unlock()
 	if closePrevious {
 		p.recordSnapshotCloseV1(previous.close())
 	}
-	p.startRefreshLoopV1()
 	p.wakeRefreshV1()
 	return nil
 }
@@ -323,9 +323,10 @@ func validateVectorPartitionServingSnapshotManifestV1(
 		!slices.Contains(authority.Record.RequiredGroups, localGroup) {
 		return ErrVectorPartitionShardSearchGenerationMismatch
 	}
+	expectedAssetSetDigest := vectorPartitionM8GroupAssetSetDigestV1(string(localGroup), routerManifest)
 	ready := false
 	for _, group := range authority.Record.ReadyGroups {
-		if group.GroupID == localGroup && group.AppliedIndex != 0 && isVectorPartitionShardSearchDigestV1(group.AssetSetDigest) {
+		if group.GroupID == localGroup && group.AppliedIndex != 0 && group.AssetSetDigest == expectedAssetSetDigest {
 			ready = true
 			break
 		}
@@ -481,6 +482,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) StatsV1() VectorPartitionSer
 }
 
 func (p *VectorPartitionServingSnapshotPublisherV1) startRefreshLoopV1() {
+	// PublishV1 holds p.mu here, so Close cannot reach Wait before Add.
 	p.startOnce.Do(func() {
 		p.wg.Add(1)
 		go p.refreshLoopV1()
