@@ -352,6 +352,86 @@ func TestVectorPartitionLocalNavigationOverlayReservesNativeEdgeAtM2V1(t *testin
 	}
 }
 
+func TestVectorPartitionLocalGraphDeltaAccountsSaturatedDisplacementV1(t *testing.T) {
+	const degreeLimit = 4
+	native := make([]columnVectorGraphAssetRow, 8)
+	for row := range native {
+		overlay, err := vectorPartitionLocalNavigationEdgesV1(row, len(native), degreeLimit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layer0 := make([]uint32, 0, degreeLimit)
+		for neighbor := range native {
+			if neighbor == row || slices.Contains(overlay, uint32(neighbor)) {
+				continue
+			}
+			layer0 = append(layer0, uint32(neighbor))
+			if len(layer0) == degreeLimit {
+				break
+			}
+		}
+		if len(layer0) != degreeLimit {
+			t.Fatalf("row=%d native fixture degree=%d", row, len(layer0))
+		}
+		// The layered suffix makes a mutation above layer 0 observable. Every
+		// native row is saturated, so the deterministic overlay must displace
+		// some of its builder-selected edges.
+		native[row].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(layer0, []uint32{1, 1, 1, uint32((row + 5) % len(native))})
+	}
+	final := cloneColumnVectorGraphAssetRows3999(native)
+	if err := addVectorPartitionLocalNavigationOverlayV1(final, degreeLimit); err != nil {
+		t.Fatal(err)
+	}
+	deltas, err := vectorPartitionLocalGraphDeltaV1(native, final, degreeLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != len(native) {
+		t.Fatalf("deltas=%d want=%d", len(deltas), len(native))
+	}
+	// Row 1 is an internal binary-tree node: parent 0 and children 3/4 occupy
+	// three slots, leaving only one native edge under the shared cap.
+	if got := deltas[1]; got.NativeDegree != 4 || got.FinalDegree != 4 || got.OverlayEdges != 3 || got.DisplacedNativeEdges != 3 {
+		t.Fatalf("row 1 delta=%+v want saturated internal displacement", got)
+	}
+	if deltas[0].DisplacedNativeEdges == 0 {
+		t.Fatalf("root delta=%+v want native displacement", deltas[0])
+	}
+	for row := range native {
+		_, nativeSuffix, nativeErr := vectorPartitionLayer0AdjacencySplitV1(native[row].Adjacency)
+		finalLayer0, finalSuffix, finalErr := vectorPartitionLayer0AdjacencySplitV1(final[row].Adjacency)
+		if nativeErr != nil || finalErr != nil || !vectorPartitionUint32SlicesEqualV1(nativeSuffix, finalSuffix) || len(finalLayer0) > degreeLimit {
+			t.Fatalf("row=%d suffix or degree changed native=%v final=%v degree=%d", row, nativeSuffix, finalSuffix, len(finalLayer0))
+		}
+	}
+}
+
+func TestVectorPartitionLocalGraphDeltaFailsClosedV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{{Adjacency: []uint32{1}}, {Adjacency: []uint32{0}}}
+	if _, err := vectorPartitionLocalGraphDeltaV1(rows[:1], rows, 4); err == nil {
+		t.Fatal("accepted mismatched graph rows")
+	}
+	corrupt := cloneColumnVectorGraphAssetRows3999(rows)
+	corrupt[0].Adjacency = []uint32{2}
+	if _, err := vectorPartitionLocalGraphDeltaV1(rows, corrupt, 4); err == nil {
+		t.Fatal("accepted out-of-range final neighbor")
+	}
+}
+
+func TestVectorPartitionLocalGraphVariantIdentityFailsClosedV1(t *testing.T) {
+	native, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil || native == overlay {
+		t.Fatalf("variant identities native=%q overlay=%q err=%v", native, overlay, err)
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1("unknown"); err == nil {
+		t.Fatal("accepted unknown graph variant")
+	}
+}
+
 func TestVectorPartitionLocalNavigationOverlayM1ValidatesEveryNativeEdgeV1(t *testing.T) {
 	rows := make([]columnVectorGraphAssetRow, 3)
 	// The first edge is eligible for retention. The later invalid edge must
