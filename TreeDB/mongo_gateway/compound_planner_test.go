@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -146,6 +147,104 @@ func TestMongoCompoundPlanEqualityPrefixRangeAndSort(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	}
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 406505, reverse)), []string{"a", "b", "c"})
+}
+
+func TestMongoCompoundPlanTemporalSortMatchesBoundedComparator(t *testing.T) {
+	cases := []struct {
+		name   string
+		values []any
+	}{
+		{name: "datetime", values: []any{bson.DateTime(255), bson.DateTime(256)}},
+		{name: "timestamp", values: []any{bson.Timestamp{T: 255, I: 1}, bson.Timestamp{T: 256, I: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newMongoCompatibilityMatrixServer(t)
+			indexed := "indexed_" + tc.name
+			scanned := "scanned_" + tc.name
+			assertOK(t, serveCommand(t, server, 406505, bson.D{{Key: "createIndexes", Value: indexed}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "value", Value: int32(1)}}}, {Key: "name", Value: "tenant_value"}}}}, {Key: "$db", Value: "app"}}))
+			docs := bson.A{
+				bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "value", Value: tc.values[0]}},
+				bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "value", Value: tc.values[1]}},
+			}
+			assertOK(t, serveCommand(t, server, 406506, bson.D{{Key: "insert", Value: indexed}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, server, 406507, bson.D{{Key: "insert", Value: scanned}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+
+			for _, direction := range []int32{1, -1} {
+				for _, skip := range []int32{0, 1} {
+					command := func(collection string) bson.D {
+						return bson.D{{Key: "find", Value: collection}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "value", Value: direction}}}, {Key: "skip", Value: skip}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+					}
+					indexedResponse := serveCommand(t, server, int32(406508+direction*10+skip), command(indexed))
+					scannedResponse := serveCommand(t, server, int32(406528+direction*10+skip), command(scanned))
+					indexedID := temporalSortBatchID(t, cursorFirstBatch(t, indexedResponse))
+					scannedID := temporalSortBatchID(t, cursorFirstBatch(t, scannedResponse))
+					if indexedID != scannedID {
+						t.Fatalf("direction=%d skip=%d indexed=%q scanned=%q", direction, skip, indexedID, scannedID)
+					}
+					want := "a"
+					if (direction < 0) != (skip > 0) {
+						want = "b"
+					}
+					if indexedID != want {
+						t.Fatalf("direction=%d skip=%d ID=%q want %q", direction, skip, indexedID, want)
+					}
+				}
+			}
+			explain := serveCommand(t, server, 406550, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: indexed}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "value", Value: int32(1)}}}, {Key: "$db", Value: "app"}}}, {Key: "verbosity", Value: "queryPlanner"}, {Key: "$db", Value: "app"}})
+			assertOK(t, explain)
+			winning := bson.Raw(explain).Lookup("queryPlanner", "winningPlan").Document()
+			if stage, ok := winning.Lookup("stage").StringValueOK(); !ok || stage != "compound_index_scan" {
+				t.Fatalf("temporal sort stage=%q ok=%v response=%s", stage, ok, explain)
+			}
+		})
+	}
+}
+
+func TestCompareRawValuesTemporalOrderMatchesBSONV2Codec(t *testing.T) {
+	cases := [][]bson.RawValue{
+		{mustRawValue(t, bson.DateTime(-1)), mustRawValue(t, bson.DateTime(0)), mustRawValue(t, bson.DateTime(255)), mustRawValue(t, bson.DateTime(256))},
+		{mustRawValue(t, bson.Timestamp{T: 1, I: 2}), mustRawValue(t, bson.Timestamp{T: 1, I: 3}), mustRawValue(t, bson.Timestamp{T: 2, I: 0})},
+	}
+	for _, values := range cases {
+		for left := range values {
+			for right := range values {
+				leftEncoded, err := collections.EncodeBSONIndexKeyComponentV2(values[left])
+				if err != nil {
+					t.Fatal(err)
+				}
+				rightEncoded, err := collections.EncodeBSONIndexKeyComponentV2(values[right])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := temporalOrderSign(compareRawValues(values[left], values[right])), temporalOrderSign(bytes.Compare(leftEncoded, rightEncoded)); got != want {
+					t.Fatalf("codec/comparator order got=%d want=%d left=%v right=%v", got, want, values[left], values[right])
+				}
+			}
+		}
+	}
+}
+
+func temporalSortBatchID(tb testing.TB, batch []bson.Raw) string {
+	tb.Helper()
+	if len(batch) != 1 {
+		tb.Fatalf("temporal sort batch length=%d, want 1", len(batch))
+	}
+	id, ok := batch[0].Lookup("_id").StringValueOK()
+	if !ok {
+		tb.Fatalf("temporal sort _id is not a string: %v", batch[0])
+	}
+	return id
+}
+
+func temporalOrderSign(value int) int {
+	if value < 0 {
+		return -1
+	}
+	if value > 0 {
+		return 1
+	}
+	return 0
 }
 
 func TestMongoCompoundPlanReverseTieUsesStableDocumentID(t *testing.T) {

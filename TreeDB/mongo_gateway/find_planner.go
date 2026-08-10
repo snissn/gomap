@@ -2470,9 +2470,37 @@ func compareRawValues(left, right bson.RawValue) int {
 		return 0
 	case bson.TypeObjectID:
 		return bytes.Compare(left.Value, right.Value)
+	case bson.TypeDateTime:
+		leftMilliseconds, leftOK := left.DateTimeOK()
+		rightMilliseconds, rightOK := right.DateTimeOK()
+		if leftOK && rightOK {
+			return compareInt64(leftMilliseconds, rightMilliseconds)
+		}
+	case bson.TypeTimestamp:
+		leftTimestamp, leftOrdinal, leftOK := left.TimestampOK()
+		rightTimestamp, rightOrdinal, rightOK := right.TimestampOK()
+		if leftOK && rightOK {
+			if timestampCompare := compareUint32(leftTimestamp, rightTimestamp); timestampCompare != 0 {
+				return timestampCompare
+			}
+			return compareUint32(leftOrdinal, rightOrdinal)
+		}
 	default:
 		return bytes.Compare(left.Value, right.Value)
 	}
+	// Invalid raw values are not admissible index components, but preserve the
+	// existing deterministic fallback for defensive collection-scan sorting.
+	return bytes.Compare(left.Value, right.Value)
+}
+
+func compareUint32(left, right uint32) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
 }
 
 func compareRawNumbers(left, right bson.RawValue) int {
