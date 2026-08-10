@@ -99,6 +99,9 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 // equal text backed by separate command allocations is charged separately.
 func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes := 0
+	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
+	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
+	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
 	type stringAllocation struct {
 		data *byte
 		len  int
@@ -113,7 +116,9 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 		bytes += len(value)
 	}
 	add := func(predicates []findPredicate) {
+		bytes += len(predicates) * int(unsafe.Sizeof(findPredicate{}))
 		for _, predicate := range predicates {
+			bytes += len(predicate.values) * int(unsafe.Sizeof(bson.RawValue{}))
 			addString(predicate.field)
 			for _, value := range predicate.values {
 				bytes += len(value.Value)

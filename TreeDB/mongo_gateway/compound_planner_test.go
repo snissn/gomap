@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -745,9 +746,68 @@ func TestFindPlanCursorRetainedBytesChargesClonedCommandStringsOnce(t *testing.T
 		},
 		projection: compiledProjection{fields: map[string]struct{}{"projection": {}, shared: {}}},
 	}
-	want := len([]byte{1, 2}) + len("predicate") + len("or-predicate") + 2*len(shared) + len("sort-term") + len("hint-name") + len("component") + len("projection")
+	want := len([]byte{1, 2}) + len("predicate") + len("or-predicate") + 2*len(shared) + len("sort-term") + len("hint-name") + len("component") + len("projection") +
+		(len(plan.predicates)+len(plan.orBranches[0]))*int(unsafe.Sizeof(findPredicate{})) + len(plan.orBranches)*int(unsafe.Sizeof([]findPredicate{})) + len(plan.sort.terms)*int(unsafe.Sizeof(findSortTerm{})) + len(plan.hint.components)*int(unsafe.Sizeof(collections.IndexComponent{})) + int(unsafe.Sizeof(bson.RawValue{}))
 	if got := findPlanCursorRetainedBytes(plan); got != want {
 		t.Fatalf("retained cursor-plan bytes=%d, want %d", got, want)
+	}
+}
+
+func TestCanonicalCompoundPrefixValuesBoundsRawDuplicateAllocationAndRejectsInvalid(t *testing.T) {
+	// Eligibility accepts a bounded number of *canonical* choices, not a
+	// bounded number of raw wire values.  Keep the transient allocation bounded
+	// too: a maliciously duplicate-heavy $in must not reserve its raw length.
+	duplicates := make([]bson.RawValue, 1024)
+	for i := range duplicates {
+		duplicates[i] = bson.RawValue{Type: bson.TypeInt32, Value: []byte{1, 0, 0, 0}}
+	}
+	got := canonicalCompoundPrefixValues(duplicates)
+	if len(got) != 1 {
+		t.Fatalf("canonical duplicate choices=%d, want 1", len(got))
+	}
+	if cap(got) > maxCompoundPlannerPrefixChoices+1 {
+		t.Fatalf("canonical duplicate capacity=%d, want <= %d", cap(got), maxCompoundPlannerPrefixChoices+1)
+	}
+
+	// A partially encodable $in cannot be treated as a residual-free exact
+	// prefix: that would silently omit the unsupported alternative.
+	invalid := bson.RawValue{Type: bson.TypeRegex, Value: []byte{'x', 0, 'i', 0}}
+	if _, err := collections.EncodeBSONIndexKeyComponentV2(invalid); err == nil {
+		t.Fatal("test requires an unsupported BSON-v2 component")
+	}
+	if values := canonicalCompoundPrefixValues(append(got, invalid)); values != nil {
+		t.Fatalf("mixed valid/invalid canonical choices=%v, want rejection", values)
+	}
+	idx := collections.IndexDefinition{
+		Name:      "tenant_created",
+		ValueType: collections.IndexValueBSONOrderedV2,
+		Components: []collections.IndexComponent{
+			{Field: "tenant", Direction: collections.IndexDirectionAscending},
+			{Field: "created", Direction: collections.IndexDirectionDescending},
+		},
+	}
+	plan := findPlan{predicates: []findPredicate{{field: "tenant", op: findPredicateIn, values: append(got, invalid)}}}
+	if _, ok := buildCompoundIndexPlan(idx, plan); ok {
+		t.Fatal("mixed valid/unsupported $in became a partial exact compound probe")
+	}
+}
+
+func TestMongoCompoundPlannerCursorChargesPredicateSliceStructure(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// Eight one-byte duplicate values leave the legacy payload-only accounting
+	// below this cap, while the cloned predicate slice/header makes the actual
+	// retained plan exceed it.  Cursor publication must therefore fail before
+	// any cursor is observable.
+	server.MaxCursorRetainedBytes = 300
+	assertOK(t, serveCommand(t, server, 40651130, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40651131, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	values := bson.A{"t", "t", "t", "t", "t", "t", "t", "t"}
+	resp := serveCommand(t, server, 40651132, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: values}}}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite retained predicate structure cap: %d", len(server.cursors))
 	}
 }
 
@@ -803,7 +863,7 @@ func TestMongoCompoundPlannerCursorRechecksPredicateAfterUpdate(t *testing.T) {
 
 func TestMongoCompoundPlannerCursorChargesFilteredDocumentAfterUpdate(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
-	server.MaxCursorRetainedBytes = 256
+	server.MaxCursorRetainedBytes = 1024
 	assertOK(t, serveCommand(t, server, 4065122, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}}}}, {Key: "$db", Value: "app"}}))
 	docs := bson.A{
 		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
@@ -813,7 +873,7 @@ func TestMongoCompoundPlannerCursorChargesFilteredDocumentAfterUpdate(t *testing
 	first := serveCommand(t, server, 4065124, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
 	assertBatchIDs(t, cursorFirstBatch(t, first), []string{"a"})
 	id := cursorIDFromResponse(t, first)
-	update := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "tenant", Value: "x"}, {Key: "payload", Value: strings.Repeat("p", 512)}}}}}}
+	update := bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "b"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "tenant", Value: "x"}, {Key: "payload", Value: strings.Repeat("p", 2048)}}}}}}
 	assertOK(t, serveCommand(t, server, 4065125, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{update}}, {Key: "$db", Value: "app"}}))
 	assertCommandError(t, serveCommand(t, server, 4065126, bson.D{{Key: "getMore", Value: id}, {Key: "collection", Value: "events"}, {Key: "$db", Value: "app"}}), "BadValue")
 	server.cursorMu.Lock()

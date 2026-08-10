@@ -165,11 +165,6 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			if len(eq.values) == 0 {
 				return compoundIndexPlan{}, false
 			}
-			for _, value := range eq.values {
-				if _, err := collections.EncodeBSONIndexKeyComponentV2(value); err != nil {
-					return compoundIndexPlan{}, false
-				}
-			}
 			values := canonicalCompoundPrefixValues(eq.values)
 			if len(values) == 0 || len(values) > maxCompoundPlannerPrefixChoices {
 				return compoundIndexPlan{}, false
@@ -265,18 +260,25 @@ func compoundPrefixCombinationCount(choices [][]bson.RawValue) int {
 // component before fanout eligibility is evaluated. In particular, numeric
 // equality shares an index key across integer widths.
 func canonicalCompoundPrefixValues(values []bson.RawValue) []bson.RawValue {
-	out := make([]bson.RawValue, 0, len(values))
-	seen := make(map[string]struct{}, len(values))
+	capacity := len(values)
+	if capacity > maxCompoundPlannerPrefixChoices+1 {
+		capacity = maxCompoundPlannerPrefixChoices + 1
+	}
+	out := make([]bson.RawValue, 0, capacity)
+	seen := make(map[string]struct{}, capacity)
 	for _, value := range values {
 		encoded, err := collections.EncodeBSONIndexKeyComponentV2(value)
 		if err != nil {
-			continue
+			return nil
 		}
 		if _, duplicate := seen[string(encoded)]; duplicate {
 			continue
 		}
 		seen[string(encoded)] = struct{}{}
 		out = append(out, value)
+		if len(out) > maxCompoundPlannerPrefixChoices {
+			return out
+		}
 	}
 	return out
 }
