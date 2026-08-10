@@ -97,6 +97,54 @@ func TestStandaloneServerOfficialGoDriverExplainReadPlans(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverNegativeDottedQueries(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx := context.Background()
+	coll := client.Database("app").Collection("events")
+	if _, err := coll.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: "missing"}, {Key: "state", Value: "missing"}},
+		bson.D{{Key: "_id", Value: "null"}, {Key: "score", Value: nil}, {Key: "state", Value: "null"}},
+		bson.D{{Key: "_id", Value: "live"}, {Key: "score", Value: int32(7)}, {Key: "state", Value: "live"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}, {Key: "age", Value: int32(37)}}}},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	nonNull := bson.D{{Key: "score", Value: bson.D{{Key: "$ne", Value: nil}}}}
+	cursor, err := coll.Find(ctx, nonNull, options.Find().SetProjection(bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}).SetSort(bson.D{{Key: "profile.name", Value: int32(1)}}))
+	if err != nil {
+		t.Fatalf("negative dotted find: %v", err)
+	}
+	var docs []bson.Raw
+	if err := cursor.All(ctx, &docs); err != nil || len(docs) != 1 || docs[0].Lookup("profile", "name").StringValue() != "Ada" || docs[0].Lookup("_id").Type != 0 {
+		t.Fatalf("negative dotted find docs=%v err=%v", docs, err)
+	}
+	if count, err := coll.CountDocuments(ctx, nonNull); err != nil || count != 1 {
+		t.Fatalf("negative count=%d err=%v", count, err)
+	}
+	values, err := coll.Distinct(ctx, "state", nonNull).Raw()
+	if err != nil {
+		t.Fatalf("negative distinct: %v", err)
+	}
+	valuesRaw, err := values.Values()
+	if err != nil || len(valuesRaw) != 1 || valuesRaw[0].StringValue() != "live" {
+		t.Fatalf("negative distinct values=%v err=%v", valuesRaw, err)
+	}
+	result, err := coll.UpdateOne(ctx, bson.D{{Key: "$nor", Value: bson.A{
+		bson.D{{Key: "score", Value: bson.D{{Key: "$exists", Value: false}}}}, bson.D{{Key: "score", Value: nil}},
+	}}}, bson.D{{Key: "$set", Value: bson.D{{Key: "updated", Value: true}}}})
+	if err != nil || result.MatchedCount != 1 || result.ModifiedCount != 1 {
+		t.Fatalf("negative update result=%+v err=%v", result, err)
+	}
+	var before bson.Raw
+	if err := coll.FindOneAndUpdate(ctx, nonNull, bson.D{{Key: "$set", Value: bson.D{{Key: "modified", Value: true}}}}, options.FindOneAndUpdate().SetProjection(bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}})).Decode(&before); err != nil || before.Lookup("profile", "name").StringValue() != "Ada" || before.Lookup("_id").Type != 0 {
+		t.Fatalf("negative findAndModify before=%s err=%v", before, err)
+	}
+}
+
 func TestStandaloneServerOfficialGoDriverCompoundPlanner(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {
