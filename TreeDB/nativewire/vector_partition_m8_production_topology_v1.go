@@ -266,6 +266,17 @@ func (p vectorPartitionM8TopologyPinnedGenerationV1) Manifest() VectorPartitionP
 }
 
 func vectorPartitionM8ValidateAssetsV1(m collections.VectorPartitionManifestV1, digests map[string]string) ([]raftcluster.GroupID, error) {
+	out, err := vectorPartitionValidateAssetBindingsV1(m, digests)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) < 2 {
+		return nil, errors.New("nativewire: M8 requires two owners")
+	}
+	return out, nil
+}
+
+func vectorPartitionValidateAssetBindingsV1(m collections.VectorPartitionManifestV1, digests map[string]string) ([]raftcluster.GroupID, error) {
 	if err := m.Validate(collections.DefaultVectorPartitionManifestLimits()); err != nil {
 		return nil, fmt.Errorf("nativewire: M8 manifest is not canonical ready state: %w", err)
 	}
@@ -291,9 +302,6 @@ func vectorPartitionM8ValidateAssetsV1(m collections.VectorPartitionManifestV1, 
 			return nil, fmt.Errorf("nativewire: M8 partition %d has no asset", p.PartitionID)
 		}
 		groupOwners[p.GroupID] = true
-	}
-	if len(groupOwners) < 2 {
-		return nil, errors.New("nativewire: M8 requires two owners")
 	}
 	out := make([]raftcluster.GroupID, 0, len(groupOwners))
 	for owner := range groupOwners {

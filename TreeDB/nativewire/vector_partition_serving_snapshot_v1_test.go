@@ -23,6 +23,34 @@ type vectorPartitionServingSnapshotFixtureV1 struct {
 	sources     map[raftcluster.GroupID]*fakeVectorPartitionGenerationSourceV1
 }
 
+func TestVectorPartitionProductionAssetBindingsAllowSingleOwnerV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{
+		Format: collections.VectorPartitionManifestFormatV1, State: "ready", Collection: "docs",
+		IndexName: "embedding", IndexDefinitionDigest: strings.Repeat("a", 64),
+		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRowCount: 1,
+		Generation: 4, RouterGeneration: 4, PartitionCount: 1,
+		Placements:  []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}},
+		Memberships: []collections.VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}},
+		Assets: []collections.VectorPartitionAssetV1{{
+			ID: "partition-0", Checksum: strings.Repeat("0", 64), PartitionID: 0, Bytes: 1,
+			Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: 1, FileID: 1, Length: 1},
+		}},
+		RouterAsset: collections.VectorPartitionAssetV1{
+			ID: "router", Checksum: strings.Repeat("2", 64), Bytes: 1,
+			Ref: collections.ColumnAssetRef{Kind: collections.ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 4, PartID: 2, FileID: 2, Length: 1},
+		},
+	}
+	manifest.Canonicalize()
+	digests := map[string]string{"group-a": vectorPartitionM8GroupAssetSetDigestV1("group-a", manifest)}
+	groups, err := vectorPartitionValidateAssetBindingsV1(manifest, digests)
+	if err != nil || len(groups) != 1 || groups[0] != "group-a" {
+		t.Fatalf("production asset bindings groups=%v err=%v", groups, err)
+	}
+	if _, err := vectorPartitionM8ValidateAssetsV1(manifest, digests); err == nil {
+		t.Fatal("M8 accepted a single owner")
+	}
+}
+
 func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionServingSnapshotFixtureV1 {
 	tb.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

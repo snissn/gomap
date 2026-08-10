@@ -112,7 +112,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		}
 		groups = append(groups, group)
 	}
-	assetGroups, assetErr := vectorPartitionM8ValidateAssetsV1(opts.Manifest, opts.AssetSetDigests)
+	assetGroups, assetErr := vectorPartitionValidateAssetBindingsV1(opts.Manifest, opts.AssetSetDigests)
 	if assetErr != nil {
 		return nil, fmt.Errorf("nativewire: production node asset binding: %w", assetErr)
 	}
