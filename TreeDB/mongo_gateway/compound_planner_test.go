@@ -262,6 +262,59 @@ func TestMongoCompoundNonStreamingPlansWalkIndexOnceAndReportExactWork(t *testin
 	}
 }
 
+func TestMongoCompoundMultiSortMissingNullFallsBackBeforeLimit(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40650550, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}, {Key: "y", Value: int32(1)}}}, {Key: "name", Value: "tenant_x_y"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40650557, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(-1)}, {Key: "y", Value: int32(-1)}}}, {Key: "name", Value: "tenant_x_y_desc"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40650551, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "z"}, {Key: "tenant", Value: "t"}, {Key: "y", Value: int32(100)}},
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "x", Value: nil}, {Key: "y", Value: int32(0)}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "x", Value: int32(1)}, {Key: "y", Value: int32(1)}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40650552, command)), []string{"a"})
+	explain := serveCommand(t, server, 40650553, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	winning := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if sorted, ok := winning.Lookup("inMemorySort").BooleanOK(); !ok || !sorted {
+		t.Fatalf("multi-sort inMemorySort=%v ok=%v want true: %s", sorted, ok, explain)
+	}
+	// The reverse physical encoding distinguishes missing from null too.  The
+	// gateway comparator ties those values before considering y, so pagination
+	// must take the in-memory path in either direction.
+	reverse := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "x", Value: int32(-1)}, {Key: "y", Value: int32(-1)}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40650558, reverse)), []string{"z"})
+	reverseExplain := serveCommand(t, server, 40650559, bson.D{{Key: "explain", Value: reverse}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, reverseExplain)
+	reverseWinning := bson.Raw(reverseExplain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if sorted, ok := reverseWinning.Lookup("inMemorySort").BooleanOK(); !ok || !sorted {
+		t.Fatalf("reverse multi-sort inMemorySort=%v ok=%v want true: %s", sorted, ok, reverseExplain)
+	}
+}
+
+func TestMongoCompoundHintedExplainExcludesPrimaryCandidate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40650554, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40650555, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}}}, {Key: "hint", Value: "tenant_score"}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 40650556, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "queryPlanner"}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	planner := bson.Raw(response).Lookup("queryPlanner").Document()
+	if stage, ok := planner.Lookup("winningPlan").Document().Lookup("stage").StringValueOK(); !ok || stage != "compound_index_scan" {
+		t.Fatalf("hinted winning stage=%q ok=%v want compound_index_scan: %s", stage, ok, response)
+	}
+	if candidatePlans := planner.Lookup("candidatePlans"); candidatePlans.Type != 0 {
+		candidates, err := candidatePlans.Array().Values()
+		if err != nil {
+			t.Fatalf("hinted candidatePlans: %v: %s", err, response)
+		}
+		for _, candidate := range candidates {
+			if stage, ok := candidate.Document().Lookup("stage").StringValueOK(); ok && stage == "primary_lookup" {
+				t.Fatalf("hinted explain retained primary candidate: %s", response)
+			}
+		}
+	}
+}
+
 func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065054, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))

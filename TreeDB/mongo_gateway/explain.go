@@ -594,8 +594,10 @@ func explainCandidatePlans(col *collections.Collection, plan findPlan) bson.A {
 		return bson.A{}
 	}
 	out := bson.A{}
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			out = append(out, bson.D{{Key: "stage", Value: "primary_lookup"}})
+		}
 	}
 	for _, probe := range findIndexProbes(col.MetaView(), plan) {
 		out = append(out, bson.D{{Key: "stage", Value: probe.stage}, {Key: "indexName", Value: probe.idx.Name}, {Key: "field", Value: probe.idx.Field}})

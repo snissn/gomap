@@ -167,8 +167,10 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
-	if _, ok := primaryCandidatePredicate(plan.predicates); ok {
-		return findPlannerSelection{stage: "primary_lookup"}
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			return findPlannerSelection{stage: "primary_lookup"}
+		}
 	}
 	if compound, ok := compoundIndexPlanFor(meta, plan); ok {
 		return findPlannerSelection{stage: "compound_index_scan", indexName: compound.idx.Name, indexField: compound.idx.Field, residualFilters: compound.residualFilters, sortSatisfied: compound.sortSatisfied, equalityPrefix: compound.equalityPrefix, hasRange: compound.hasRange, reverse: compound.reverse}
@@ -298,6 +300,11 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 			if match {
 				filtered = append(filtered, doc)
 			}
+		}
+		if plan.sort.field != "" && !compound.sortSatisfied {
+			sort.SliceStable(filtered, func(i, j int) bool {
+				return compareDocumentsForFindSort(filtered[i], filtered[j], plan.sort) < 0
+			})
 		}
 		alreadyPaginated := compound.residualFilters == 0 && compound.sortSatisfied
 		if plan.skip > 0 && !alreadyPaginated {

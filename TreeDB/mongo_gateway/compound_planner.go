@@ -204,6 +204,14 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 				return compoundIndexPlan{}, false
 			}
 		}
+		// BSON comparison treats missing and null as equal. In a multi-field
+		// sort, those physically distinct runs can interleave with the later
+		// components, so one bounded adjacent tie buffer cannot preserve the
+		// gateway comparator. Keep the compound candidate, but let the bounded
+		// executor apply its in-memory comparator before pagination.
+		if len(terms) > 1 {
+			candidate.sortSatisfied = false
+		}
 	}
 	candidate.residualFilters = len(plan.predicates) - len(used)
 	return candidate, true
@@ -409,7 +417,11 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	candidate := candidates[0]
 	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
-	if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 {
+	// Pagination can bound the index walk only when its physical order is the
+	// complete gateway order.  A fallback in-memory sort must see every
+	// bounded candidate before applying skip/limit; otherwise a later null or
+	// missing value may precede an early physical entry under Mongo ordering.
+	if candidate.residualFilters == 0 && candidate.sortSatisfied && plan.limit > 0 && len(prefixes) == 1 {
 		needed := int(plan.skip + plan.limit)
 		if needed > 0 && needed < maxDocuments {
 			maxDocuments = needed
@@ -450,7 +462,7 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			// already bounds all IDs execution can observe. The direct primitive
 			// marks the next entry as truncated; that is sufficient, not a scan
 			// cap failure, because later IDs cannot affect this result page.
-			if candidate.residualFilters == 0 && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
+			if candidate.residualFilters == 0 && candidate.sortSatisfied && plan.limit > 0 && len(prefixes) == 1 && len(found) == probeLimit {
 				for _, id := range found {
 					if _, duplicate := seenIDs[string(id)]; duplicate {
 						continue
