@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -1124,12 +1125,25 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	return s.searchWithOptionsV1(ctx, query, opts, nil)
 }
 
-// vectorPartitionSearchAttributionV1 reserves the offline-only shared body;
-// ordinary searches always pass nil.
-type vectorPartitionSearchAttributionV1 struct{}
+type VectorPartitionSearchAttributionV1 struct {
+	Schema                string   `json:"schema"`
+	FrontierAdmissions    uint64   `json:"frontier_admissions"`
+	VisitedRows           uint64   `json:"visited_rows"`
+	VisitedOrdinalsSHA256 string   `json:"visited_ordinals_sha256"`
+	TerminationReason     string   `json:"termination_reason"`
+	VisitedOrdinals       []uint32 `json:"-"`
+}
 
-func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, attribution *vectorPartitionSearchAttributionV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
-	_ = attribution
+func (s *VectorPartitionLocalSearcherV1) SearchWithAttributionV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, VectorPartitionSearchAttributionV1, error) {
+	var attribution VectorPartitionSearchAttributionV1
+	results, metrics, err := s.searchWithOptionsV1(ctx, query, opts, &attribution)
+	return results, metrics, attribution, err
+}
+
+func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, attribution *VectorPartitionSearchAttributionV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if attribution != nil {
+		*attribution = VectorPartitionSearchAttributionV1{Schema: "treedb_vector_partition_search_attribution_v1"}
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1171,7 +1185,20 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		if nativeTopK > s.prepared.Header.Rows {
 			nativeTopK = s.prepared.Header.Rows
 		}
-		results, stats, err := s.prepared.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
+		scratch := &columnVectorGraphNativeSearchScratch{}
+		nativeOpts := columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}
+		var trace columnHNSWSearchPackAttributionTrace
+		if attribution != nil {
+			nativeOpts.StatsMode = columnVectorGraphNativeSearchStatsModeWorkAccounting
+		}
+		var results []columnVectorGraphNativeSearchResult
+		var stats columnVectorGraphNativeSearchStats
+		var err error
+		if attribution != nil {
+			results, stats, err = s.prepared.searchCosineWithContextTrace(ctx, query, nativeOpts, scratch, &trace)
+		} else {
+			results, stats, err = s.prepared.searchCosineWithContext(ctx, query, nativeOpts, scratch)
+		}
 		if err != nil {
 			s.recordFailure()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1189,12 +1216,34 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
+		if attribution != nil {
+			h := sha256.New()
+			h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
+			var raw [4]byte
+			for ordinal, mark := range scratch.visitMarks {
+				if mark == scratch.visitEpoch {
+					attribution.VisitedOrdinals = append(attribution.VisitedOrdinals, uint32(ordinal))
+					binary.LittleEndian.PutUint32(raw[:], uint32(ordinal))
+					h.Write(raw[:])
+				}
+			}
+			attribution.VisitedRows = uint64(len(attribution.VisitedOrdinals))
+			attribution.FrontierAdmissions = stats.FrontierPushes
+			attribution.TerminationReason = trace.Termination
+			attribution.VisitedOrdinalsSHA256 = hex.EncodeToString(h.Sum(nil))
+			if attribution.VisitedRows == 0 || attribution.TerminationReason == "" {
+				return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution", ErrVectorPartitionSearchUnavailable)
+			}
+		}
 		s.mu.Lock()
 		s.searches++
 		s.candidates += metrics.Candidates
 		s.edges += metrics.Edges
 		s.mu.Unlock()
 		return out, metrics, nil
+	}
+	if attribution != nil {
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution requires prepared pack", ErrVectorPartitionSearchUnavailable)
 	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {
