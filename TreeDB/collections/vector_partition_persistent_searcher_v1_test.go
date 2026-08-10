@@ -160,9 +160,13 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	}
 }
 
-func TestCompareVectorPartitionLocalGraphPacksV1RejectsIdentityDrift(t *testing.T) {
+func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
-	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	rows := make([]columnGraphRebuildInputRowV2A, 8)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
 	defer d.Close()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
@@ -177,11 +181,14 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsIdentityDrift(t *testing.
 	m.IndexName = def.Name
 	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
 	m.Generation = 92
-	m.PartitionCount = 2
+	m.PartitionCount = 1
 	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
-	m.Memberships = []VectorPartitionMembershipV1{{0, 0}, {1, 1}}
+	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
 	m.Canonicalize()
-	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}, {Source: source, Generation: m.Generation, PartitionID: 1, Dimensions: def.Dimensions}}
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
 	native, nr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 981, in, VectorPartitionLocalGraphVariantNativeV1)
 	if err != nil {
 		t.Fatal(err)
@@ -205,8 +212,8 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsIdentityDrift(t *testing.
 	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, o); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); err != nil {
-		t.Fatal(err)
+	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("native pack accepted as overlay err=%v", err)
 	}
 }
 
