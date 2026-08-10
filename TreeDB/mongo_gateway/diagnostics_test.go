@@ -49,4 +49,5 @@ func TestDiagnosticsCommandsBoundedStandaloneShape(t *testing.T) {
 	if !ok || totals.Lookup("app.users").Type == 0 {
 		t.Fatalf("top totals missing app.users command aggregate: %s", top)
 	}
+	assertCommandError(t, serveCommand(t, server, 6105, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "scale", Value: int32(1)}, {Key: "$db", Value: "app"}}), "FailedToParse")
 }

@@ -98,6 +98,9 @@ func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoC
 }
 
 func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, error) {
+	if err := validateDiagnosticsCommand(command, "serverStatus"); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -134,6 +137,9 @@ func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, err
 }
 
 func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
+	if err := validateDiagnosticsCommand(command, "dbStats"); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -164,6 +170,9 @@ func (s *Server) dbStatsResponse(command wire.Document, cursorOwner int64) (wire
 }
 
 func (s *Server) collStatsResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
+	if err := validateDiagnosticsCommand(command, "collStats"); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -201,6 +210,9 @@ func (s *Server) collStatsResponse(command wire.Document, cursorOwner int64) (wi
 }
 
 func (s *Server) topResponse(command wire.Document) (wire.Document, error) {
+	if err := validateDiagnosticsCommand(command, "top"); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return doc, err
 	}
@@ -219,6 +231,23 @@ func (s *Server) topResponse(command wire.Document) (wire.Document, error) {
 		totals = append(totals, bson.E{Key: namespace, Value: bson.D{{Key: "count", Value: metric.Count}, {Key: "errors", Value: metric.Errors}, {Key: "latencyMicros", Value: metric.LatencyNanos / 1000}}})
 	}
 	return marshalDocument(bson.D{{Key: "totals", Value: totals}, {Key: "ok", Value: 1.0}})
+}
+
+func validateDiagnosticsCommand(command wire.Document, commandName string) error {
+	elements, err := bson.Raw(command).Elements()
+	if err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{commandName: {}, "$db": {}, "lsid": {}, "$clusterTime": {}, "comment": {}, "readConcern": {}}
+	for _, element := range elements {
+		if _, ok := allowed[element.Key()]; !ok {
+			return errors.New("unsupported Mongo gateway " + commandName + " option: " + element.Key())
+		}
+	}
+	if _, err := commandString(command, "$db"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Server) diagnosticMetas(db string, cursorOwner int64) ([]collections.CollectionMeta, error) {
