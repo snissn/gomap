@@ -3715,6 +3715,19 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	}
 	defer func() { _ = it.Close() }()
 
+	return listCollectionMetasBounded(it, prefix, maxCollections)
+}
+
+type collectionMetaIterator interface {
+	Valid() bool
+	Next()
+	UnsafeKey() []byte
+	ValueCopy([]byte) []byte
+	IsDeleted() bool
+	Error() error
+}
+
+func listCollectionMetasBounded(it collectionMetaIterator, prefix []byte, maxCollections int) ([]CollectionMeta, bool, error) {
 	var out []CollectionMeta
 	inspected := 0
 	for it.Valid() {
@@ -3738,9 +3751,7 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 	if err := it.Error(); err != nil {
 		return nil, false, err
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, false, nil
 }
 
