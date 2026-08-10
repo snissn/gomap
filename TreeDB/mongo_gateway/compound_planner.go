@@ -483,8 +483,6 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	if maxDocuments <= 0 {
 		return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index planner requires a positive work cap", errMongoFindScanCapExceeded)
 	}
-	ids := make([][]byte, 0, maxDocuments)
-	seenIDs := make(map[string]struct{})
 	// Every execution shape retains the candidate ID slice and cross-prefix
 	// dedupe map before it either materializes documents or opens a cursor.
 	// Bound that owned memory even for single-batch/count/distinct/aggregate
@@ -493,6 +491,12 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	if len(retainedIDCaps) != 0 {
 		retainedIDCap = retainedIDCaps[0]
 	}
+	initialIDCapacity := maxDocuments
+	if retainedIDCap > 0 {
+		initialIDCapacity = 0
+	}
+	ids := make([][]byte, 0, initialIDCapacity)
+	seenIDs := make(map[string]struct{})
 	retainedIDBytes := 0
 	retainID := func(id []byte) (bool, error) {
 		// The returned ID slice and cross-prefix dedupe key own separate

@@ -20442,6 +20442,12 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	// live-buffer and persisted sources exist, split the cap conservatively so
 	// their combined physical work cannot exceed the documented bound.
 	bufferedBudget := workCap / 2
+	if workCap > 0 && bufferedBudget == 0 {
+		// Zero is the legacy unlimited iterator sentinel. A caller-requested
+		// positive cap of one cannot safely divide between buffered and
+		// persisted overlays, so reject before opening either source.
+		return nil, true, nil
+	}
 	sourceInspected := 0
 	recordSourceInspection := func(count int) { sourceInspected += count }
 	if opts.Inspected != nil {
