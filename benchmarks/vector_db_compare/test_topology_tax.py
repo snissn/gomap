@@ -61,6 +61,8 @@ class TopologyTaxTest(unittest.TestCase):
             "endpoints": {key: topology["endpoints"][key] for key in sorted(topology["endpoints"])},
             "group_applied_indexes": {key: topology["group_applied_indexes"][key] for key in sorted(topology["group_applied_indexes"])},
         })
+        if "runtime_ownership" in node:
+            config["runtime_ownership"] = node["runtime_ownership"]
         return hashlib.sha256(json.dumps(config, separators=(",", ":")).encode()).hexdigest()
 
     def run_value(self, topology: str) -> dict:
@@ -99,6 +101,8 @@ class TopologyTaxTest(unittest.TestCase):
                     if node == 0:
                         node_value["public_listen"] = f"127.0.0.1:{20000 + topology_index * 100 + repetition}"
                     node_value["local_groups"] = [{"group_id": f"group-{group}", "listen": endpoints[f"group-{group}"]} for group in owned]
+                    if node_count == 4:
+                        node_value["runtime_ownership"] = {"cpu_set": str(node), "gomaxprocs": 1, "go_memory_limit_bytes": 1 << 30}
                     nodes.append(node_value)
                 topology_value = {
                     "schema_version": 1, "result_kind": "vector_partition_system_topology_v1", "assembly": "production_public_v1", "topology": topology,
@@ -124,6 +128,12 @@ class TopologyTaxTest(unittest.TestCase):
                     }
                     if "public_listen" in node_value:
                         ready["public_endpoint"] = node_value["public_listen"]
+                    if "runtime_ownership" in node_value:
+                        ready.update({
+                            "logical_cpus": 4, "gomaxprocs": 1, "go_memory_limit": 1 << 30,
+                            "effective_cpu_set": str(node_value["runtime_ownership"]["cpu_set"]),
+                            "runtime_ownership": node_value["runtime_ownership"],
+                        })
                     ready_path = run_root / Path(node_value["state_directory"]).name / "ready.json"
                     ready_path.parent.mkdir()
                     ready_path.write_text(json.dumps(ready), encoding="utf-8")

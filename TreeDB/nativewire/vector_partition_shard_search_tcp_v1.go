@@ -366,6 +366,10 @@ type VectorPartitionProcessRuntimeStatsV1 struct {
 	NumGC                       uint64 `json:"num_gc"`
 	PauseTotalNanos             uint64 `json:"pause_total_nanos"`
 	Goroutines                  uint64 `json:"goroutines"`
+	LogicalCPUs                 int    `json:"logical_cpus"`
+	GOMAXPROCS                  int    `json:"gomaxprocs"`
+	GoMemoryLimitBytes          int64  `json:"go_memory_limit_bytes"`
+	EffectiveCPUSet             string `json:"effective_cpu_set,omitempty"`
 }
 
 // VectorPartitionCatalogMetaLinearizableReadStatsV1 is the bounded catalog

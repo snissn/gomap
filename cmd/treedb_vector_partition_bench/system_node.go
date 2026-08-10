@@ -45,21 +45,28 @@ type vectorPartitionSystemLocalGroupV1 struct {
 	Listen  string `json:"listen"`
 }
 
+type vectorPartitionSystemRuntimeOwnershipV1 struct {
+	CPUSet             string `json:"cpu_set"`
+	GOMAXPROCS         int    `json:"gomaxprocs"`
+	GoMemoryLimitBytes int64  `json:"go_memory_limit_bytes"`
+}
+
 type vectorPartitionSystemNodeConfigV1 struct {
-	SchemaVersion       int                                 `json:"schema_version"`
-	ResultKind          string                              `json:"result_kind"`
-	Assembly            string                              `json:"assembly"`
-	Topology            string                              `json:"topology"`
-	NodeID              string                              `json:"node_id"`
-	DatasetDirectory    string                              `json:"dataset_directory"`
-	DatabaseDirectory   string                              `json:"database_directory"`
-	StateDirectory      string                              `json:"state_directory"`
-	PublicListen        string                              `json:"public_listen,omitempty"`
-	ReadyPath           string                              `json:"ready_path"`
-	ProfileDirectory    string                              `json:"profile_directory,omitempty"`
-	LocalGroups         []vectorPartitionSystemLocalGroupV1 `json:"local_groups"`
-	Endpoints           map[string]string                   `json:"endpoints"`
-	GroupAppliedIndexes map[string]uint64                   `json:"group_applied_indexes,omitempty"`
+	SchemaVersion       int                                      `json:"schema_version"`
+	ResultKind          string                                   `json:"result_kind"`
+	Assembly            string                                   `json:"assembly"`
+	Topology            string                                   `json:"topology"`
+	NodeID              string                                   `json:"node_id"`
+	DatasetDirectory    string                                   `json:"dataset_directory"`
+	DatabaseDirectory   string                                   `json:"database_directory"`
+	StateDirectory      string                                   `json:"state_directory"`
+	PublicListen        string                                   `json:"public_listen,omitempty"`
+	ReadyPath           string                                   `json:"ready_path"`
+	ProfileDirectory    string                                   `json:"profile_directory,omitempty"`
+	LocalGroups         []vectorPartitionSystemLocalGroupV1      `json:"local_groups"`
+	Endpoints           map[string]string                        `json:"endpoints"`
+	GroupAppliedIndexes map[string]uint64                        `json:"group_applied_indexes,omitempty"`
+	RuntimeOwnership    *vectorPartitionSystemRuntimeOwnershipV1 `json:"runtime_ownership,omitempty"`
 }
 
 type vectorPartitionSystemGroupReadyV1 struct {
@@ -71,29 +78,30 @@ type vectorPartitionSystemGroupReadyV1 struct {
 }
 
 type vectorPartitionSystemNodeReadyV1 struct {
-	SchemaVersion      int                                 `json:"schema_version"`
-	ResultKind         string                              `json:"result_kind"`
-	Assembly           string                              `json:"assembly"`
-	Topology           string                              `json:"topology"`
-	NodeID             string                              `json:"node_id"`
-	PID                int                                 `json:"pid"`
-	PublicEndpoint     string                              `json:"public_endpoint,omitempty"`
-	PublicRoute        string                              `json:"public_route"`
-	ProductionTopology bool                                `json:"production_topology"`
-	M8Loopback         bool                                `json:"m8_loopback"`
-	DatabaseDirectory  string                              `json:"database_directory"`
-	StateDirectory     string                              `json:"state_directory"`
-	SourceRevision     string                              `json:"source_revision"`
-	VCSModified        bool                                `json:"vcs_modified"`
-	ExecutableSHA256   string                              `json:"executable_sha256"`
-	NodeConfigSHA256   string                              `json:"node_config_sha256"`
-	LogicalCPUs        int                                 `json:"logical_cpus"`
-	GOMAXPROCS         int                                 `json:"gomaxprocs"`
-	GoMemoryLimit      int64                               `json:"go_memory_limit"`
-	EffectiveCPUSet    string                              `json:"effective_cpu_set,omitempty"`
-	ProfileDirectory   string                              `json:"profile_directory,omitempty"`
-	LifecycleState     string                              `json:"lifecycle_state"`
-	Groups             []vectorPartitionSystemGroupReadyV1 `json:"groups"`
+	SchemaVersion      int                                      `json:"schema_version"`
+	ResultKind         string                                   `json:"result_kind"`
+	Assembly           string                                   `json:"assembly"`
+	Topology           string                                   `json:"topology"`
+	NodeID             string                                   `json:"node_id"`
+	PID                int                                      `json:"pid"`
+	PublicEndpoint     string                                   `json:"public_endpoint,omitempty"`
+	PublicRoute        string                                   `json:"public_route"`
+	ProductionTopology bool                                     `json:"production_topology"`
+	M8Loopback         bool                                     `json:"m8_loopback"`
+	DatabaseDirectory  string                                   `json:"database_directory"`
+	StateDirectory     string                                   `json:"state_directory"`
+	SourceRevision     string                                   `json:"source_revision"`
+	VCSModified        bool                                     `json:"vcs_modified"`
+	ExecutableSHA256   string                                   `json:"executable_sha256"`
+	NodeConfigSHA256   string                                   `json:"node_config_sha256"`
+	LogicalCPUs        int                                      `json:"logical_cpus"`
+	GOMAXPROCS         int                                      `json:"gomaxprocs"`
+	GoMemoryLimit      int64                                    `json:"go_memory_limit"`
+	EffectiveCPUSet    string                                   `json:"effective_cpu_set,omitempty"`
+	RuntimeOwnership   *vectorPartitionSystemRuntimeOwnershipV1 `json:"runtime_ownership,omitempty"`
+	ProfileDirectory   string                                   `json:"profile_directory,omitempty"`
+	LifecycleState     string                                   `json:"lifecycle_state"`
+	Groups             []vectorPartitionSystemGroupReadyV1      `json:"groups"`
 }
 
 type vectorPartitionSystemTopologyEvidenceV1 struct {
@@ -111,14 +119,15 @@ type vectorPartitionSystemTopologyEvidenceV1 struct {
 }
 
 type vectorPartitionSystemTopologyNodeV1 struct {
-	NodeID            string                              `json:"node_id"`
-	NodeConfigSHA256  string                              `json:"node_config_sha256"`
-	DatabaseDirectory string                              `json:"database_directory"`
-	StateDirectory    string                              `json:"state_directory"`
-	ReadyPath         string                              `json:"ready_path"`
-	ProfileDirectory  string                              `json:"profile_directory,omitempty"`
-	PublicListen      string                              `json:"public_listen,omitempty"`
-	LocalGroups       []vectorPartitionSystemLocalGroupV1 `json:"local_groups"`
+	NodeID            string                                   `json:"node_id"`
+	NodeConfigSHA256  string                                   `json:"node_config_sha256"`
+	DatabaseDirectory string                                   `json:"database_directory"`
+	StateDirectory    string                                   `json:"state_directory"`
+	ReadyPath         string                                   `json:"ready_path"`
+	ProfileDirectory  string                                   `json:"profile_directory,omitempty"`
+	PublicListen      string                                   `json:"public_listen,omitempty"`
+	LocalGroups       []vectorPartitionSystemLocalGroupV1      `json:"local_groups"`
+	RuntimeOwnership  *vectorPartitionSystemRuntimeOwnershipV1 `json:"runtime_ownership,omitempty"`
 }
 
 type vectorPartitionSystemNodeV1 struct {
@@ -143,6 +152,9 @@ func runVectorPartitionSystemNodeV1(args []string, stdout io.Writer) (runErr err
 	}
 	config, err := loadVectorPartitionSystemNodeConfigV1(configPath)
 	if err != nil {
+		return err
+	}
+	if err := applyVectorPartitionSystemRuntimeOwnershipV1(config.RuntimeOwnership); err != nil {
 		return err
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -219,6 +231,13 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	if len(configs) != wantNodes {
 		return evidence, fmt.Errorf("system topology %q requires %d node configs", first.Topology, wantNodes)
 	}
+	owners := make([]*vectorPartitionSystemRuntimeOwnershipV1, 0, len(configs))
+	for _, config := range configs {
+		owners = append(owners, config.RuntimeOwnership)
+	}
+	if err := validateVectorPartitionSystemRuntimeOwnershipSetV1(first.Topology, owners); err != nil {
+		return evidence, err
+	}
 	nodes, databases, states := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	readyPaths, ownedGroups := map[string]bool{}, map[string]bool{}
 	var listeners []string
@@ -289,7 +308,7 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 		}
 		evidence.Nodes = append(evidence.Nodes, vectorPartitionSystemTopologyNodeV1{
 			NodeID: config.NodeID, NodeConfigSHA256: configSHA, DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory,
-			ReadyPath: config.ReadyPath, ProfileDirectory: config.ProfileDirectory, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups),
+			ReadyPath: config.ReadyPath, ProfileDirectory: config.ProfileDirectory, PublicListen: config.PublicListen, LocalGroups: slices.Clone(config.LocalGroups), RuntimeOwnership: cloneVectorPartitionSystemRuntimeOwnershipV1(config.RuntimeOwnership),
 		})
 	}
 	sort.Slice(evidence.Nodes, func(i, j int) bool { return evidence.Nodes[i].NodeID < evidence.Nodes[j].NodeID })
@@ -330,6 +349,13 @@ func loadVectorPartitionSystemTopologyEvidenceV1(path, endpoint string) (vectorP
 	}
 	if len(evidence.Nodes) != wantNodes || len(evidence.Endpoints) != 4 {
 		return evidence, errors.New("topology evidence node or group count is invalid")
+	}
+	owners := make([]*vectorPartitionSystemRuntimeOwnershipV1, 0, len(evidence.Nodes))
+	for _, node := range evidence.Nodes {
+		owners = append(owners, node.RuntimeOwnership)
+	}
+	if err := validateVectorPartitionSystemRuntimeOwnershipSetV1(evidence.Topology, owners); err != nil {
+		return evidence, err
 	}
 	wantDigest := evidence.TopologyIdentitySHA256
 	evidence.TopologyIdentitySHA256 = ""
@@ -379,6 +405,161 @@ func vectorPartitionSystemPathContainsV1(root, path string) bool {
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)))
 }
 
+func cloneVectorPartitionSystemRuntimeOwnershipV1(ownership *vectorPartitionSystemRuntimeOwnershipV1) *vectorPartitionSystemRuntimeOwnershipV1 {
+	if ownership == nil {
+		return nil
+	}
+	copy := *ownership
+	return &copy
+}
+
+func canonicalVectorPartitionSystemCPUSetV1(value string) (string, []int, error) {
+	const maxCPU = 1023
+	seen := make(map[int]bool)
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return "", nil, errors.New("runtime ownership CPU set is empty")
+		}
+		bounds := strings.Split(part, "-")
+		if len(bounds) > 2 {
+			return "", nil, fmt.Errorf("runtime ownership CPU range %q is invalid", part)
+		}
+		first, err := strconv.Atoi(strings.TrimSpace(bounds[0]))
+		if err != nil {
+			return "", nil, fmt.Errorf("runtime ownership CPU range %q is invalid", part)
+		}
+		last := first
+		if len(bounds) == 2 {
+			last, err = strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err != nil {
+				return "", nil, fmt.Errorf("runtime ownership CPU range %q is invalid", part)
+			}
+		}
+		if first < 0 || last < first || last > maxCPU {
+			return "", nil, fmt.Errorf("runtime ownership CPU range %q is out of range", part)
+		}
+		for cpu := first; cpu <= last; cpu++ {
+			if seen[cpu] {
+				return "", nil, fmt.Errorf("runtime ownership CPU %d is duplicated", cpu)
+			}
+			seen[cpu] = true
+		}
+	}
+	if len(seen) == 0 {
+		return "", nil, errors.New("runtime ownership CPU set is empty")
+	}
+	cpus := make([]int, 0, len(seen))
+	for cpu := range seen {
+		cpus = append(cpus, cpu)
+	}
+	sort.Ints(cpus)
+	var parts []string
+	for start := 0; start < len(cpus); {
+		end := start
+		for end+1 < len(cpus) && cpus[end+1] == cpus[end]+1 {
+			end++
+		}
+		if end == start {
+			parts = append(parts, strconv.Itoa(cpus[start]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", cpus[start], cpus[end]))
+		}
+		start = end + 1
+	}
+	return strings.Join(parts, ","), cpus, nil
+}
+
+func canonicalVectorPartitionSystemRuntimeOwnershipV1(ownership vectorPartitionSystemRuntimeOwnershipV1) (vectorPartitionSystemRuntimeOwnershipV1, []int, error) {
+	canonical, cpus, err := canonicalVectorPartitionSystemCPUSetV1(ownership.CPUSet)
+	if err != nil {
+		return ownership, nil, err
+	}
+	ownership.CPUSet = canonical
+	if ownership.GOMAXPROCS == 0 {
+		ownership.GOMAXPROCS = len(cpus)
+	}
+	if ownership.GOMAXPROCS < 1 || ownership.GOMAXPROCS > len(cpus) {
+		return ownership, nil, errors.New("runtime ownership GOMAXPROCS exceeds its CPU set")
+	}
+	if ownership.GoMemoryLimitBytes < 1 {
+		return ownership, nil, errors.New("runtime ownership Go memory limit is invalid")
+	}
+	return ownership, cpus, nil
+}
+
+func validateVectorPartitionSystemRuntimeOwnershipSetV1(topology string, owners []*vectorPartitionSystemRuntimeOwnershipV1) error {
+	if topology == "single_daemon_four_group" {
+		if len(owners) == 1 && owners[0] != nil {
+			_, _, err := canonicalVectorPartitionSystemRuntimeOwnershipV1(*owners[0])
+			return err
+		}
+		return nil
+	}
+	seen := make(map[int]bool)
+	for _, owner := range owners {
+		if owner == nil {
+			return errors.New("multi-daemon system topology requires explicit runtime ownership")
+		}
+		canonical, cpus, err := canonicalVectorPartitionSystemRuntimeOwnershipV1(*owner)
+		if err != nil {
+			return err
+		}
+		if canonical != *owner {
+			return errors.New("runtime ownership must use canonical CPU-set and Go limits")
+		}
+		for _, cpu := range cpus {
+			if seen[cpu] {
+				return fmt.Errorf("system topology runtime CPU %d is owned by multiple nodes", cpu)
+			}
+			seen[cpu] = true
+		}
+	}
+	return nil
+}
+
+func applyVectorPartitionSystemRuntimeOwnershipV1(ownership *vectorPartitionSystemRuntimeOwnershipV1) error {
+	if ownership == nil {
+		return nil
+	}
+	canonical, cpus, err := canonicalVectorPartitionSystemRuntimeOwnershipV1(*ownership)
+	if err != nil {
+		return err
+	}
+	if canonical != *ownership {
+		return errors.New("runtime ownership must be canonical before application")
+	}
+	if err := applyVectorPartitionSystemRuntimeOwnershipPlatformV1(cpus); err != nil {
+		return err
+	}
+	runtime.GOMAXPROCS(canonical.GOMAXPROCS)
+	debug.SetMemoryLimit(canonical.GoMemoryLimitBytes)
+	return verifyVectorPartitionSystemRuntimeOwnershipV1(&canonical)
+}
+
+func verifyVectorPartitionSystemRuntimeOwnershipV1(ownership *vectorPartitionSystemRuntimeOwnershipV1) error {
+	if ownership == nil {
+		return nil
+	}
+	actualCPUSet := vectorPartitionSystemEffectiveCPUSetV1()
+	canonicalCPUSet, _, err := canonicalVectorPartitionSystemCPUSetV1(actualCPUSet)
+	if err != nil {
+		return fmt.Errorf("runtime ownership is unsupported or unreadable: %w", err)
+	}
+	if canonicalCPUSet != ownership.CPUSet || runtime.GOMAXPROCS(0) != ownership.GOMAXPROCS || debug.SetMemoryLimit(-1) != ownership.GoMemoryLimitBytes {
+		return errors.New("effective runtime ownership does not match its declaration")
+	}
+	return nil
+}
+
+func vectorPartitionSystemRuntimeOwnershipMatchesStatsV1(ownership *vectorPartitionSystemRuntimeOwnershipV1, stats nativewire.VectorPartitionProcessRuntimeStatsV1) bool {
+	if ownership == nil {
+		return true
+	}
+	canonicalCPUSet, _, err := canonicalVectorPartitionSystemCPUSetV1(stats.EffectiveCPUSet)
+	return err == nil && canonicalCPUSet == ownership.CPUSet && stats.GOMAXPROCS == ownership.GOMAXPROCS && stats.GoMemoryLimitBytes == ownership.GoMemoryLimitBytes && stats.LogicalCPUs > 0
+}
+
 func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNodeConfigV1, error) {
 	var config vectorPartitionSystemNodeConfigV1
 	raw, err := readBoundedRegularFileV1(path, maxManifestBytes)
@@ -414,6 +595,15 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 	}
 	if config.Topology != "single_daemon_four_group" && len(config.GroupAppliedIndexes) != len(config.Endpoints) {
 		return config, errors.New("multi-daemon system node requires all shared applied indexes")
+	}
+	if config.RuntimeOwnership != nil {
+		canonical, _, err := canonicalVectorPartitionSystemRuntimeOwnershipV1(*config.RuntimeOwnership)
+		if err != nil {
+			return config, err
+		}
+		config.RuntimeOwnership = &canonical
+	} else if config.Topology != "single_daemon_four_group" {
+		return config, errors.New("multi-daemon system node requires explicit runtime ownership")
 	}
 	seen := map[string]bool{}
 	for _, group := range config.LocalGroups {
@@ -462,6 +652,9 @@ func loadVectorPartitionSystemNodeConfigV1(path string) (vectorPartitionSystemNo
 func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartitionSystemNodeConfigV1) (_ *vectorPartitionSystemNodeV1, err error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := verifyVectorPartitionSystemRuntimeOwnershipV1(config.RuntimeOwnership); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(config.StateDirectory, 0o755); err != nil {
 		return nil, err
@@ -561,7 +754,8 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory, SourceRevision: revision, VCSModified: modified,
 		ExecutableSHA256: executableSHA, NodeConfigSHA256: configSHA,
 		LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: runtime.GOMAXPROCS(0), GoMemoryLimit: debug.SetMemoryLimit(-1), EffectiveCPUSet: vectorPartitionSystemEffectiveCPUSetV1(), ProfileDirectory: config.ProfileDirectory,
-		LifecycleState: "active",
+		RuntimeOwnership: cloneVectorPartitionSystemRuntimeOwnershipV1(config.RuntimeOwnership),
+		LifecycleState:   "active",
 	}
 	for _, evidence := range node.production.GroupEvidenceV1() {
 		node.ready.Groups = append(node.ready.Groups, vectorPartitionSystemGroupReadyV1{GroupID: evidence.GroupID, Endpoint: config.Endpoints[evidence.GroupID], LeaderID: evidence.LeaderID, AppliedIndex: evidence.AppliedIndex, ProvesProductionConsensus: true})
@@ -570,16 +764,32 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 }
 
 func vectorPartitionSystemEffectiveCPUSetV1() string {
-	raw, err := os.ReadFile("/proc/self/status")
+	entries, err := os.ReadDir("/proc/self/task")
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if value, ok := strings.CutPrefix(line, "Cpus_allowed_list:"); ok {
-			return strings.TrimSpace(value)
+	var effective string
+	for _, entry := range entries {
+		raw, err := os.ReadFile(filepath.Join("/proc/self/task", entry.Name(), "status"))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return ""
 		}
+		current := ""
+		for _, line := range strings.Split(string(raw), "\n") {
+			if value, ok := strings.CutPrefix(line, "Cpus_allowed_list:"); ok {
+				current = strings.TrimSpace(value)
+				break
+			}
+		}
+		if current == "" || (effective != "" && current != effective) {
+			return ""
+		}
+		effective = current
 	}
-	return ""
+	return effective
 }
 
 func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProcessRuntimeStatsV1 {
@@ -588,6 +798,7 @@ func vectorPartitionSystemProcessRuntimeStatsV1() nativewire.VectorPartitionProc
 	stats := nativewire.VectorPartitionProcessRuntimeStatsV1{
 		SampleUnixNano: uint64(time.Now().UnixNano()), HeapAllocBytes: memory.HeapAlloc, HeapObjects: memory.HeapObjects,
 		TotalAllocBytes: memory.TotalAlloc, Mallocs: memory.Mallocs, Frees: memory.Frees, NumGC: uint64(memory.NumGC), PauseTotalNanos: memory.PauseTotalNs, Goroutines: uint64(runtime.NumGoroutine()),
+		LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: runtime.GOMAXPROCS(0), GoMemoryLimitBytes: debug.SetMemoryLimit(-1), EffectiveCPUSet: vectorPartitionSystemEffectiveCPUSetV1(),
 	}
 	stats.CPUTimeNanos, stats.RunQueueDelayNanos, stats.Timeslices, stats.VoluntaryContextSwitches, stats.NonvoluntaryContextSwitches = vectorPartitionSystemKernelRuntimeStatsV1()
 	if raw, err := os.ReadFile("/proc/self/status"); err == nil {

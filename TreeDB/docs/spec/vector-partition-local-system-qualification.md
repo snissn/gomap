@@ -43,7 +43,14 @@ launch: one owner per group, exactly one public listener, a shared endpoint and
 applied-index identity, and distinct node IDs, ports, state roots, ready files,
 and persistent database roots. A native or container set has four configs and
 one local group per config; the single-daemon set has one config with all four
-groups. Each multi-daemon config supplies the same positive
+groups. Every multi-daemon config also supplies `runtime_ownership` with a
+canonical, non-overlapping Linux CPU set, an exact compatible `gomaxprocs`, and
+a positive `go_memory_limit_bytes`; omitted `gomaxprocs` derives from the CPU
+count. Node startup applies those controls before opening persistent assets and
+fails explicitly on unsupported platforms or any effective mismatch. The ready
+artifact and live shard identity retain the observed CPU set and Go limits, and
+`system-bench` rechecks them around every measured cell. Single-daemon use may
+omit runtime ownership. Each multi-daemon config supplies the same positive
 `group_applied_indexes` map, and its local daemon proves that its production
 Raft applied index has reached the declared floor before readiness. Each ready
 artifact retains `node_config_sha256`; the checked topology evidence carries
