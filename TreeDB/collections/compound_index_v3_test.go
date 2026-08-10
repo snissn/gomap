@@ -11,6 +11,8 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -1043,6 +1045,90 @@ func TestScanMergedCompoundIndexIDsStableRequiresPositiveWorkCap(t *testing.T) {
 	}, func([]byte) (bool, error) { return true, nil })
 	if err == nil || !strings.Contains(err.Error(), "positive inspected-entry cap") {
 		t.Fatalf("stable zero-cap err=%v want positive-cap rejection", err)
+	}
+}
+
+func TestBufferedIndexSourceInspectionCountsShadowedPhysicalEntries(t *testing.T) {
+	// Four overlay roots expose only two logical keys, but all eight physical
+	// source entries must consume a planner's shared inspection budget. This is
+	// the accounting signal used across canonical $in probes; counting only the
+	// final merge would incorrectly report two. The iterator also charges the
+	// bounded terminal advances needed to prove each source exhausted.
+	runs := make([]memtable.Table, 0, 4)
+	for range 4 {
+		table := newCollectionRunTable(2)
+		setCollectionRunValue(table, []byte("a"), nil)
+		setCollectionRunValue(table, []byte("b"), nil)
+		table.Freeze()
+		runs = append(runs, table)
+	}
+	defer func() {
+		for _, table := range runs {
+			resetCollectionRunTable(table)
+		}
+	}()
+	inspected := 0
+	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, nil, nil, true, false, 16, func(count int) { inspected += count })
+	defer func() { _ = it.Close() }()
+	logical := 0
+	for it.Valid() {
+		logical++
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatal(err)
+	}
+	if logical != 2 || inspected != 12 {
+		t.Fatalf("logical=%d inspected=%d want 2/12", logical, inspected)
+	}
+}
+
+func TestBufferedIndexSourceInspectionSharesBudgetAcrossCanonicalProbes(t *testing.T) {
+	// This models two canonical $in probes over the same four-root shadowed
+	// stack. The first probe exposes two logical keys but consumes twelve units
+	// of source work (four initial positions plus eight advances). With one
+	// shared budget of twenty, the second probe must therefore truncate after
+	// eight more units. The old outer-merge accounting observed only two units
+	// from the first probe and would incorrectly give the second probe eighteen.
+	newRuns := func() []memtable.Table {
+		runs := make([]memtable.Table, 0, 4)
+		for root := range 4 {
+			table := newCollectionRunTable(2)
+			if root == 0 {
+				table.SetEntrySteal([]byte("a"), nil, page.ValuePtr{}, node.FlagTombstone)
+			} else {
+				setCollectionRunValue(table, []byte("a"), nil)
+			}
+			setCollectionRunValue(table, []byte("b"), nil)
+			table.Freeze()
+			runs = append(runs, table)
+		}
+		return runs
+	}
+	scan := func(budget int) (inspected int, truncated bool) {
+		runs := newRuns()
+		defer func() {
+			for _, table := range runs {
+				resetCollectionRunTable(table)
+			}
+		}()
+		it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, nil, nil, true, false, budget, func(count int) { inspected += count })
+		defer func() { _ = it.Close() }()
+		for it.Valid() {
+			it.Next()
+		}
+		return inspected, errors.Is(it.Error(), errCollectionIndexScanWorkCap)
+	}
+
+	remaining := 20
+	first, firstTruncated := scan(remaining)
+	if firstTruncated || first != 12 {
+		t.Fatalf("first probe inspected/truncated=%d/%v want 12/false", first, firstTruncated)
+	}
+	remaining -= first
+	second, secondTruncated := scan(remaining)
+	if !secondTruncated || second != remaining {
+		t.Fatalf("second probe inspected/truncated=%d/%v want %d/true", second, secondTruncated, remaining)
 	}
 }
 

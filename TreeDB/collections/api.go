@@ -8279,6 +8279,7 @@ type bufferedRootRunsIterator struct {
 	maxInspected       int
 	inspected          int
 	workCapped         bool
+	onInspected        func(int)
 }
 
 type bufferedRootRunIteratorSource struct {
@@ -8304,6 +8305,10 @@ func newBufferedRootRunsIteratorWithDeletedDirection(runs []memtable.Table, star
 }
 
 func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int) iterator.UnsafeIterator {
+	return newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, start, end, includeDeleted, reverse, maxInspected, nil)
+}
+
+func newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs []memtable.Table, start, end []byte, includeDeleted, reverse bool, maxInspected int, onInspected func(int)) iterator.UnsafeIterator {
 	if maxInspected > 0 && len(runs) > maxInspected {
 		return &bufferedRootRunsIterator{firstErr: errCollectionIndexScanWorkCap, workCapped: true}
 	}
@@ -8337,7 +8342,7 @@ func newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs []memtable.Tabl
 			lenHint:  lenHint,
 		})
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected)
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected, onInspected)
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeleted(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices bool) iterator.UnsafeIterator {
@@ -8349,6 +8354,10 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirection(sources []buf
 }
 
 func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int) iterator.UnsafeIterator {
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, stableUnsafeSlices, reverse, maxInspected, nil)
+}
+
+func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources []bufferedRootRunIteratorSource, start, end []byte, includeDeleted, stableUnsafeSlices, reverse bool, maxInspected int, onInspected func(int)) iterator.UnsafeIterator {
 	// Source construction is physical work too: a direct bounded scan must not
 	// open an unbounded stack of overlay roots before the capped merge gets a
 	// chance to reject it. A source has an initially-positioned physical entry,
@@ -8371,6 +8380,7 @@ func newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(source
 		start:              start,
 		end:                end,
 		maxInspected:       maxInspected,
+		onInspected:        onInspected,
 	}
 	if len(sources) <= len(it.priorityInline) {
 		it.priorities = it.priorityInline[:0]
@@ -8625,6 +8635,9 @@ func (it *bufferedRootRunsIterator) advanceCurrentItemDirect(item bufferedRootRu
 func (it *bufferedRootRunsIterator) inspect(count int) bool {
 	if it.maxInspected <= 0 || count <= it.maxInspected-it.inspected {
 		it.inspected += count
+		if it.onInspected != nil {
+			it.onInspected(count)
+		}
 		return true
 	}
 	it.workCapped = true
@@ -20282,10 +20295,11 @@ type CompoundIndexRangeOptions struct {
 	// retains the historical direct-API behavior; a positive value returns a
 	// truncated prefix before retaining more owned ID payload.
 	MaxRetainedIDBytes int
-	// Inspected, when non-nil, receives the number of physical index entries
-	// consumed by this scan. It is reset before scanning. Planners can carry a
-	// single inspection budget across several canonical probes without treating
-	// each probe as entitled to a fresh work cap.
+	// Inspected, when non-nil, receives the physical source work consumed by
+	// this scan, including source positioning and bounded source advances. It
+	// is reset before scanning. Planners can carry a single inspection budget
+	// across several canonical probes without treating each probe as entitled
+	// to a fresh work cap.
 	Inspected *int
 }
 
@@ -20428,7 +20442,15 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	// live-buffer and persisted sources exist, split the cap conservatively so
 	// their combined physical work cannot exceed the documented bound.
 	bufferedBudget := workCap / 2
-	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, bufferedBudget)
+	sourceInspected := 0
+	recordSourceInspection := func(count int) { sourceInspected += count }
+	if opts.Inspected != nil {
+		// Preserve source work on every fail-closed path too. In particular, a
+		// capped buffered or persisted overlay must still debit the planner's
+		// shared budget before it rejects the probe.
+		defer func() { *opts.Inspected = sourceInspected }()
+	}
+	bufferedTable, err := bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, bufferedBudget, recordSourceInspection)
 	if err != nil {
 		if errors.Is(err, errCollectionIndexScanWorkCap) {
 			// Do not materialize an unbounded live-buffer interval merely to
@@ -20454,9 +20476,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	var persistedIt iterator.UnsafeIterator
 	persistedBudget := workCap - bufferedBudget
 	if opts.Desc {
-		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
+		persistedIt, err = collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget, recordSourceInspection)
 	} else {
-		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCap(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget)
+		persistedIt, err = collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, collectionSecondaryRootName(catalog.meta.Name, idx.Name), start, end, true, persistedBudget, recordSourceInspection)
 	}
 	if err != nil {
 		if errors.Is(err, errCollectionIndexScanWorkCap) {
@@ -20480,11 +20502,6 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		// Otherwise a cursor plan could allocate the default 64 MiB tie buffer
 		// before its own smaller admission cap observes the IDs.
 		MaxStableTieBytes: opts.MaxRetainedIDBytes,
-		OnInspected: func(count int) {
-			if opts.Inspected != nil {
-				*opts.Inspected += count
-			}
-		},
 	}, func(id []byte) (bool, error) {
 		charge := len(id) + stableDocumentIDTieEntryOverhead
 		if charge < len(id) || (opts.MaxRetainedIDBytes > 0 && charge > opts.MaxRetainedIDBytes-retainedIDBytes) {
@@ -20650,7 +20667,7 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		// that satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0, nil)
 	}
 	if err != nil {
 		return false, false, err
@@ -20833,7 +20850,7 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 		// satisfy opts.Limit and still need to hide persisted index rows.
 		bufferedTable, err = bufferedIndexPrefixTableLocked(domain, catalog.meta.Name, indexName, false, exactPrefix, 0)
 	} else {
-		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0)
+		bufferedTable, err = bufferedIndexRangeTableLocked(domain, catalog.meta.Name, indexName, start, end, 0, nil)
 	}
 	if err != nil {
 		return false, true, err
@@ -20952,7 +20969,7 @@ func bufferedIndexPrefixTableLocked(domain *collectionWriteDomain, collectionNam
 // and may be reset by a concurrent flush as soon as domain.mu is released, so
 // callers must materialize an owned table before merging with the persisted
 // snapshot iterator.
-func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte, maxEntries int) (memtable.Table, error) {
+func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName, indexName string, start, end []byte, maxEntries int, onInspected func(int)) (memtable.Table, error) {
 	if domain == nil {
 		return nil, nil
 	}
@@ -20967,7 +20984,7 @@ func bufferedIndexRangeTableLocked(domain *collectionWriteDomain, collectionName
 		return nil, nil
 	}
 	table := newCollectionRunTable(0)
-	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCap(runs, start, end, true, false, maxEntries)
+	it := newBufferedRootRunsIteratorWithDeletedDirectionWorkCapAndInspect(runs, start, end, true, false, maxEntries, onInspected)
 	defer func() { _ = it.Close() }()
 	inspected := 0
 	for it.Valid() {
@@ -21185,10 +21202,6 @@ type scanMergedCollectionIndexIDOptions struct {
 	// LogicalIndexKey extracts the encoded logical index value from an entry.
 	// It is required only for StableDocumentIDTies.
 	LogicalIndexKey func([]byte) ([]byte, error)
-	// OnInspected observes every physical entry consumed by the final overlay
-	// merge. It is used by planner callers that share one work budget over
-	// several index probes.
-	OnInspected func(count int)
 }
 
 const (
@@ -21227,9 +21240,6 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 			return false
 		}
 		inspected += count
-		if opts.OnInspected != nil {
-			opts.OnInspected(count)
-		}
 		return true
 	}
 	if opts.StableDocumentIDTies {
@@ -22348,6 +22358,10 @@ func collectionIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 }
 
 func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int) (iterator.UnsafeIterator, error) {
+	return collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, start, end, includeDeleted, maxInspected, nil)
+}
+
+func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int)) (iterator.UnsafeIterator, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -22361,7 +22375,7 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 			return nil, nil
 		}
 		if err == nil && it != nil && maxInspected > 0 {
-			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected), nil
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
 		}
 		return it, err
 	}
@@ -22397,7 +22411,7 @@ func collectionIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalo
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, false, false, maxInspected), nil
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, false, false, maxInspected, onInspected), nil
 }
 
 func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool) (iterator.UnsafeIterator, error) {
@@ -22405,6 +22419,10 @@ func collectionReverseIteratorAtCatalogRoot(snap *backenddb.Snapshot, catalog *c
 }
 
 func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int) (iterator.UnsafeIterator, error) {
+	return collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, start, end, includeDeleted, maxInspected, nil)
+}
+
+func collectionReverseIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int)) (iterator.UnsafeIterator, error) {
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -22418,7 +22436,7 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 			return nil, nil
 		}
 		if err == nil && it != nil && maxInspected > 0 {
-			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, true, maxInspected), nil
+			return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect([]bufferedRootRunIteratorSource{{iter: it}}, start, end, includeDeleted, false, true, maxInspected, onInspected), nil
 		}
 		return it, err
 	}
@@ -22446,7 +22464,7 @@ func collectionReverseIteratorAtCatalogRootWithWorkCap(snap *backenddb.Snapshot,
 	if len(sources) == 0 {
 		return nil, nil
 	}
-	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCap(sources, start, end, includeDeleted, false, true, maxInspected), nil
+	return newBufferedRootRunIteratorSourcesIteratorWithDeletedDirectionWorkCapAndInspect(sources, start, end, includeDeleted, false, true, maxInspected, onInspected), nil
 }
 
 func (c *collectionCatalog) copy() *collectionCatalog {
