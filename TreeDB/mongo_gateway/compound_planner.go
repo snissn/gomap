@@ -411,6 +411,13 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 		}
 	}
 	ids, candidate, ok, err := s.compoundIndexPlanIDs(col, plan)
+	if err != nil && !plan.hint.present && len(findIndexProbes(col.MetaView(), plan)) != 0 && errors.Is(err, errMongoFindScanCapExceeded) {
+		// A sort-satisfying compound walk is preferred when it completes, but
+		// it is not entitled to turn a selective legacy alternative into an
+		// error. Hand the command back to the established adaptive legacy
+		// selector, which may materialize a smaller candidate set then sort it.
+		return nil, candidate, false, nil
+	}
 	if !ok || err != nil {
 		return nil, candidate, ok, err
 	}
