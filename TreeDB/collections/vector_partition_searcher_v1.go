@@ -1125,6 +1125,8 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 	return s.searchWithOptionsV1(ctx, query, opts, nil)
 }
 
+// VectorPartitionSearchAttributionV1 is offline evidence for one prepared
+// partition-local HNSW traversal.
 type VectorPartitionSearchAttributionV1 struct {
 	Schema                string   `json:"schema"`
 	FrontierAdmissions    uint64   `json:"frontier_admissions"`
@@ -1134,6 +1136,7 @@ type VectorPartitionSearchAttributionV1 struct {
 	VisitedOrdinals       []uint32 `json:"-"`
 }
 
+// SearchWithAttributionV1 runs the offline prepared-pack attribution path.
 func (s *VectorPartitionLocalSearcherV1) SearchWithAttributionV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, VectorPartitionSearchAttributionV1, error) {
 	var attribution VectorPartitionSearchAttributionV1
 	results, metrics, err := s.searchWithOptionsV1(ctx, query, opts, &attribution)

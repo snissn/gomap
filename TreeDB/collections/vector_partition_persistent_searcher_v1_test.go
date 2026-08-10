@@ -2,6 +2,8 @@ package collections
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -234,6 +236,40 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	if !found {
 		t.Fatalf("missing scored reciprocal displaced edge: %+v", comparison.Rows)
+	}
+	query := []float32{1, 1, 1}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 4}
+	ordinary, ordinaryMetrics, err := o.SearchWithOptionsV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributed, attributedMetrics, attribution, err := o.SearchWithAttributionV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ordinary, attributed) || ordinaryMetrics != attributedMetrics {
+		t.Fatalf("attribution parity ordinary=%+v/%+v attributed=%+v/%+v", ordinary, ordinaryMetrics, attributed, attributedMetrics)
+	}
+	if attribution.Schema != "treedb_vector_partition_search_attribution_v1" || attribution.VisitedRows == 0 || attribution.VisitedRows != uint64(len(attribution.VisitedOrdinals)) || attribution.FrontierAdmissions == 0 || len(attribution.VisitedOrdinalsSHA256) != 64 {
+		t.Fatalf("attribution=%+v", attribution)
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
+	var raw [4]byte
+	for i, x := range attribution.VisitedOrdinals {
+		if i > 0 && attribution.VisitedOrdinals[i-1] >= x {
+			t.Fatalf("visited=%v", attribution.VisitedOrdinals)
+		}
+		binary.LittleEndian.PutUint32(raw[:], x)
+		h.Write(raw[:])
+	}
+	if hex.EncodeToString(h.Sum(nil)) != attribution.VisitedOrdinalsSHA256 {
+		t.Fatalf("digest=%s", attribution.VisitedOrdinalsSHA256)
+	}
+	switch attribution.TerminationReason {
+	case "candidate_limit", "frontier_empty_retained_full", "frontier_empty_no_seed", "distance_bound":
+	default:
+		t.Fatalf("termination=%q", attribution.TerminationReason)
 	}
 	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("native pack accepted as overlay err=%v", err)
