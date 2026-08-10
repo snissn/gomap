@@ -74,7 +74,7 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 		t.Fatalf("expired proof err=%v want ErrReadBarrierNotSatisfied", err)
 	}
 	proofLease := p.proofLease
-	p.proofLease = time.Nanosecond
+	p.proofLease = 0
 	if _, err := p.LinearizableCatalogMetaReadProofV1(ctx); !errors.Is(err, ErrReadBarrierNotSatisfied) {
 		t.Fatalf("proof whose lease expires during capture err=%v want ErrReadBarrierNotSatisfied", err)
 	}
