@@ -160,6 +160,56 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	}
 }
 
+func TestCompareVectorPartitionLocalGraphPacksV1RejectsIdentityDrift(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State = "building"
+	m.Collection = col.name
+	m.IndexName = def.Name
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	m.Generation = 92
+	m.PartitionCount = 2
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	m.Memberships = []VectorPartitionMembershipV1{{0, 0}, {1, 1}}
+	m.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}, {Source: source, Generation: m.Generation, PartitionID: 1, Dimensions: def.Dimensions}}
+	native, nr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 981, in, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nr.Release()
+	overlay, or, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 982, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer or.Release()
+	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	o, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, overlay[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})

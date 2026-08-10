@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"unsafe"
 )
@@ -34,6 +35,101 @@ func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, er
 		return 0, err
 	}
 	return scorer.ScoreV1(vector)
+}
+
+type VectorPartitionLocalGraphEdgeEvidenceV1 struct {
+	NeighborOrdinal  uint32  `json:"neighbor_ordinal"`
+	NativePosition   int     `json:"native_position"`
+	DistanceRank     int     `json:"distance_rank"`
+	Distance         float64 `json:"distance"`
+	NativeReciprocal bool    `json:"native_reciprocal"`
+	FinalReciprocal  bool    `json:"final_reciprocal"`
+}
+type VectorPartitionLocalGraphRowEvidenceV1 struct {
+	Ordinal                                                               uint32                                    `json:"ordinal"`
+	TreeRole                                                              string                                    `json:"tree_role"`
+	NativeDegree, FinalDegree, OverlayEdges, OverlayDuplicates, Displaced int                                       `json:"native_degree,omitempty"`
+	NativeSaturated, FinalSaturated                                       bool                                      `json:"native_saturated"`
+	DisplacedEdges                                                        []VectorPartitionLocalGraphEdgeEvidenceV1 `json:"displaced_edges,omitempty"`
+}
+type VectorPartitionLocalGraphDistanceDistributionV1 struct {
+	Count                         uint64  `json:"count"`
+	Min, Mean, P50, P95, P99, Max float64 `json:"min,omitempty"`
+}
+type VectorPartitionLocalGraphComparisonV1 struct {
+	Native, Final                               VectorPartitionPackDiagnosticsV1                `json:"native"`
+	Rows                                        []VectorPartitionLocalGraphRowEvidenceV1        `json:"rows"`
+	NativeDistances, FinalDistances             VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_distances"`
+	NativeReciprocalEdges, FinalReciprocalEdges uint64                                          `json:"native_reciprocal_edges"`
+}
+
+// CompareVectorPartitionLocalGraphPacksV1 is an offline-only prepared-pack
+// comparison. It never decodes assets or participates in serving.
+func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocalSearcherV1) (VectorPartitionLocalGraphComparisonV1, error) {
+	nd, err := native.PackDiagnosticsV1()
+	if err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	fd, err := final.PackDiagnosticsV1()
+	if err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	if native == nil || final == nil {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	native.mu.Lock()
+	np := native.prepared
+	native.mu.Unlock()
+	final.mu.Lock()
+	fp := final.prepared
+	final.mu.Unlock()
+	if np == nil || fp == nil || np.Header.Rows != fp.Header.Rows || np.Header.Dimensions != fp.Header.Dimensions || np.Header.M != fp.Header.M || np.Header.EfConstruction != fp.Header.EfConstruction || np.Header.EfSearch != fp.Header.EfSearch || np.Header.EntryOrdinal != fp.Header.EntryOrdinal || np.Header.MaxLayer != fp.Header.MaxLayer || np.Header.BaseManifestGeneration != fp.Header.BaseManifestGeneration || np.Header.BaseManifestChecksum != fp.Header.BaseManifestChecksum || np.Header.BaseSchemaHash != fp.Header.BaseSchemaHash || np.Header.MembershipDigest != fp.Header.MembershipDigest || !slices.Equal(np.Levels, fp.Levels) || !slices.Equal(np.NormalizedVectors, fp.NormalizedVectors) || !slices.Equal(np.DocumentIDOffsets, fp.DocumentIDOffsets) || !bytes.Equal(np.DocumentIDBytes, fp.DocumentIDBytes) || !slices.Equal(np.RowRefGenerations, fp.RowRefGenerations) || !slices.Equal(np.RowRefPartIDs, fp.RowRefPartIDs) || !slices.Equal(np.RowRefRowIndexes, fp.RowRefRowIndexes) || !slices.Equal(np.RowRefAppliedLSNs, fp.RowRefAppliedLSNs) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	for layer := 1; layer < len(np.AdjacencyLayers); layer++ {
+		if !slices.Equal(np.AdjacencyLayers[layer].Offsets, fp.AdjacencyLayers[layer].Offsets) || !slices.Equal(np.AdjacencyLayers[layer].Neighbors, fp.AdjacencyLayers[layer].Neighbors) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	out := VectorPartitionLocalGraphComparisonV1{Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
+	limit := np.Header.M * 2
+	for i := 0; i < np.Header.Rows; i++ {
+		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
+		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
+		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
+		row := VectorPartitionLocalGraphRowEvidenceV1{Ordinal: uint32(i), TreeRole: "leaf", NativeDegree: len(nn), FinalDegree: len(fn), NativeSaturated: len(nn) >= limit, FinalSaturated: len(fn) >= limit}
+		if i == np.Header.EntryOrdinal {
+			row.TreeRole = "root"
+		} else if len(fn)-len(nn) > 1 {
+			row.TreeRole = "internal"
+		}
+		seen := map[uint32]bool{}
+		for _, x := range nn {
+			seen[x] = true
+		}
+		for _, x := range fn {
+			if !seen[x] {
+				row.OverlayEdges++
+			}
+		}
+		for pos, x := range nn {
+			found := false
+			for _, y := range fn {
+				if x == y {
+					found = true
+				}
+			}
+			if !found {
+				row.Displaced++
+				row.DisplacedEdges = append(row.DisplacedEdges, VectorPartitionLocalGraphEdgeEvidenceV1{NeighborOrdinal: x, NativePosition: pos})
+			}
+		}
+		out.Rows[i] = row
+	}
+	return out, nil
 }
 
 // CanonicalVectorPartitionCosineScorerV1 retains one normalized query so a
