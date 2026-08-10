@@ -546,3 +546,11 @@ func TestVectorPartitionProductionTopologyRejectsNonOwnerEndpointV1(t *testing.T
 		t.Fatal("invalid production topology succeeded")
 	}
 }
+
+func TestVectorPartitionProductionNodeUsesActiveReadySetDigestV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{ReadySetDigest: strings.Repeat("a", 64)}
+	want := strings.Repeat("b", 64)
+	if got := vectorPartitionProductionNodePinnedManifestV1(manifest, want).ReadySetDigest; got != want {
+		t.Fatalf("pinned ready-set digest = %q, want %q", got, want)
+	}
+}

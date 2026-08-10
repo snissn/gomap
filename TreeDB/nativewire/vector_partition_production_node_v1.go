@@ -251,14 +251,15 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 	if _, err = lifecycle.PrepareV1(ctx, identity); err != nil {
 		return nil, err
 	}
-	if _, err = lifecycle.ActivateV1(ctx, identity); err != nil {
+	active, err := lifecycle.ActivateV1(ctx, identity)
+	if err != nil {
 		return nil, err
 	}
 	replicated, err := NewLinearizableCatalogVectorPartitionLifecycleAuthorityV1(node.meta.LeaderAuthority(), node.meta.LeaderFence())
 	if err != nil {
 		return nil, err
 	}
-	pinnedManifest := vectorPartitionProductionNodePinnedManifestV1(opts.Manifest)
+	pinnedManifest := vectorPartitionProductionNodePinnedManifestV1(opts.Manifest, active.ReadySetDigest)
 	shards := make([]VectorPartitionProductionShardV1, 0, len(local))
 	generationSources := make(map[raftcluster.GroupID]VectorPartitionGenerationSourceV1, len(local))
 	for group, listener := range local {
@@ -383,11 +384,11 @@ func (n *VectorPartitionProductionNodeV1) Close() error {
 	return errors.Join(errs...)
 }
 
-func vectorPartitionProductionNodePinnedManifestV1(manifest collections.VectorPartitionManifestV1) VectorPartitionPinnedManifestV1 {
+func vectorPartitionProductionNodePinnedManifestV1(manifest collections.VectorPartitionManifestV1, readySetDigest string) VectorPartitionPinnedManifestV1 {
 	return VectorPartitionPinnedManifestV1{
 		State: manifest.State, Collection: manifest.Collection, IndexName: manifest.IndexName, IndexDefinitionDigest: manifest.IndexDefinitionDigest, IntegrityDigest: manifest.IntegrityDigest,
 		SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRowCount: manifest.SourceRowCount,
-		Generation: manifest.Generation, RouterGeneration: manifest.RouterGeneration, ReadySetDigest: manifest.ReadySetDigest, PartitionCount: manifest.PartitionCount,
+		Generation: manifest.Generation, RouterGeneration: manifest.RouterGeneration, ReadySetDigest: readySetDigest, PartitionCount: manifest.PartitionCount,
 		Placements: slices.Clone(manifest.Placements),
 	}
 }
