@@ -80,6 +80,8 @@ def _node_config_identity(value: dict[str, Any], node: dict[str, Any]) -> str:
         "endpoints": {key: value["endpoints"][key] for key in sorted(value["endpoints"])},
         "group_applied_indexes": {key: value["group_applied_indexes"][key] for key in sorted(value["group_applied_indexes"])},
     })
+    if "runtime_ownership" in node:
+        config["runtime_ownership"] = node["runtime_ownership"]
     return _go_json_sha256(config)
 
 
@@ -99,7 +101,7 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
     for node in nodes:
         _require(isinstance(node, dict), "system-bench topology node is invalid")
         required = {"node_id", "node_config_sha256", "database_directory", "state_directory", "ready_path", "local_groups"}
-        optional = {"public_listen", "profile_directory"}
+        optional = {"public_listen", "profile_directory", "runtime_ownership"}
         _require(required <= set(node) <= required | optional, "system-bench topology node structure is invalid")
         _require(isinstance(node.get("node_id"), str) and node["node_id"] and _is_sha256(node.get("node_config_sha256")), "system-bench topology node identity is invalid")
         _require(all(isinstance(node.get(key), str) and node[key] for key in ("database_directory", "state_directory", "ready_path")), "system-bench topology persistent roots are invalid")
@@ -118,6 +120,15 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
             canonical_node["public_listen"] = node["public_listen"]
             public_nodes += 1
         canonical_node["local_groups"] = [{"group_id": group["group_id"], "listen": group["listen"]} for group in groups]
+        if "runtime_ownership" in node:
+            ownership = node["runtime_ownership"]
+            _require(
+                isinstance(ownership, dict) and set(ownership) == {"cpu_set", "gomaxprocs", "go_memory_limit_bytes"} and
+                isinstance(ownership["cpu_set"], str) and ownership["cpu_set"] and
+                _uint(ownership["gomaxprocs"], positive=True) and _uint(ownership["go_memory_limit_bytes"], positive=True),
+                "system-bench topology runtime ownership is invalid",
+            )
+            canonical_node["runtime_ownership"] = ownership
         canonical_nodes.append(canonical_node)
         database_roots.append(str(Path(node["database_directory"]).resolve()))
         node_ids.append(node["node_id"])
@@ -142,12 +153,13 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
         "schema_version", "result_kind", "assembly", "topology", "node_id", "pid", "public_route", "production_topology", "m8_loopback",
         "database_directory", "state_directory", "source_revision", "vcs_modified", "executable_sha256", "node_config_sha256", "lifecycle_state", "groups",
     }
-    runtime = {"logical_cpus", "gomaxprocs", "go_memory_limit", "effective_cpu_set"}
+    runtime_stats = {"logical_cpus", "gomaxprocs", "go_memory_limit", "effective_cpu_set"}
+    runtime = runtime_stats | {"runtime_ownership"}
     if "public_listen" in node:
         required.add("public_endpoint")
     if "profile_directory" in node:
         required.add("profile_directory")
-    _require(set(ready) in (required, required | runtime), "system-bench readiness structure is invalid")
+    _require(set(ready) in (required, required | runtime_stats, required | runtime), "system-bench readiness structure is invalid")
     _require(
         ready.get("schema_version") == 1 and ready.get("result_kind") == "vector_partition_system_node_ready_v1" and
         ready.get("assembly") == "production_public_v1" and ready.get("topology") == topology_value["topology"] and
@@ -170,8 +182,22 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
     )
     _require(_listener_matches(ready.get("public_endpoint", ""), node.get("public_listen", "")), "system-bench readiness public endpoint is invalid")
     _require(ready.get("profile_directory", "") == node.get("profile_directory", ""), "system-bench readiness profile directory is invalid")
-    if runtime <= set(ready):
-        _require(_uint(ready["logical_cpus"], positive=True) and _uint(ready["gomaxprocs"], positive=True) and isinstance(ready["go_memory_limit"], int) and ready["go_memory_limit"] > 0 and isinstance(ready["effective_cpu_set"], str), "system-bench readiness runtime budget is invalid")
+    if "runtime_ownership" in node:
+        ownership = node["runtime_ownership"]
+        _require(
+            runtime <= set(ready) and ready["runtime_ownership"] == ownership and
+            _uint(ready["logical_cpus"], positive=True) and ready["gomaxprocs"] == ownership["gomaxprocs"] and
+            ready["go_memory_limit"] == ownership["go_memory_limit_bytes"] and ready["effective_cpu_set"] == ownership["cpu_set"],
+            "system-bench readiness runtime budget is invalid",
+        )
+    else:
+        _require("runtime_ownership" not in ready, "system-bench readiness has undeclared runtime ownership")
+        if runtime_stats <= set(ready):
+            _require(
+                _uint(ready["logical_cpus"], positive=True) and _uint(ready["gomaxprocs"], positive=True) and
+                isinstance(ready["go_memory_limit"], int) and ready["go_memory_limit"] > 0 and isinstance(ready["effective_cpu_set"], str),
+                "system-bench readiness runtime budget is invalid",
+            )
     groups = ready.get("groups")
     _require(isinstance(groups, list) and len(groups) == len(node["local_groups"]), "system-bench readiness group set is invalid")
     for group, configured in zip(groups, node["local_groups"], strict=True):
