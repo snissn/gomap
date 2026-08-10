@@ -92,6 +92,26 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 	return out
 }
 
+// findPlanCursorRetainedBytes is the BSON payload retained by a cloned plan.
+// It intentionally counts every cloned predicate occurrence: cloneFindPlanForCursor
+// owns each raw value independently so aliases in the request buffer are not
+// retained by a resumable cursor.
+func findPlanCursorRetainedBytes(plan findPlan) int {
+	bytes := 0
+	add := func(predicates []findPredicate) {
+		for _, predicate := range predicates {
+			for _, value := range predicate.values {
+				bytes += len(value.Value)
+			}
+		}
+	}
+	add(plan.predicates)
+	for _, branch := range plan.orBranches {
+		add(branch)
+	}
+	return bytes
+}
+
 type findResultSet struct {
 	docs       []wire.Document
 	projection compiledProjection

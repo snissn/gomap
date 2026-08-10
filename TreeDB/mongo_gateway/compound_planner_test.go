@@ -390,6 +390,21 @@ func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublicatio
 	}
 }
 
+func TestMongoCompoundPlannerCursorChargesRetainedPredicatePayload(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxCursorRetainedBytes = 96
+	value := string(make([]byte, 96))
+	assertOK(t, serveCommand(t, server, 40651121, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40651122, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: value}, {Key: "created", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	resp := serveCommand(t, server, 40651123, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: value}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite retained predicate cap: %d", len(server.cursors))
+	}
+}
+
 func TestMongoCompoundPlannerCursorCumulativeGetMoreCap(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	server.MaxCursorRetainedBytes = 1000
@@ -627,6 +642,23 @@ func TestMongoCompoundHintExplainExcludesAllLegacyProbes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMongoCompoundPlanDeduplicatesInChoicesBeforeFanoutLimit(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40652670, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40652671, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	values := make(bson.A, 65)
+	for i := range values {
+		if i%2 == 0 {
+			values[i] = int32(1)
+		} else {
+			values[i] = int64(1)
+		}
+	}
+	response := serveCommand(t, server, 40652672, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: values}}}}}, {Key: "hint", Value: "tenant_score"}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a"})
 }
 
 func TestMongoCompoundPlanInPrefixUsesSharedRemainingBudget(t *testing.T) {

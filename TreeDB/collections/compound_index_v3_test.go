@@ -82,6 +82,42 @@ func TestCompoundBSONIndexRejectsMultiKeyDefinitionBeforeCatalogMutation(t *test
 	}
 }
 
+func TestCompoundStableDocumentIDTiesRejectsMultipleUnfixedComponents(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mgr := NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}, Indexes: []IndexDefinition{{Name: "x_y", Components: []IndexComponent{{Field: "x", Direction: IndexDirectionAscending}, {Field: "y", Direction: IndexDirectionAscending}}, ValueType: IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := func(id string, includeX bool, x any, y int32) []byte {
+		fields := bson.D{{Key: "_id", Value: id}}
+		if includeX {
+			fields = append(fields, bson.E{Key: "x", Value: x})
+		}
+		fields = append(fields, bson.E{Key: "y", Value: y})
+		raw, err := bson.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	// missing/0 and null/0 normalize to one logical tie, but the physical
+	// missing/1 run would separate them without this fail-closed contract.
+	if _, err := col.InsertBatch([][]byte{[]byte("z"), []byte("middle"), []byte("a")}, [][]byte{document("z", false, nil, 0), document("middle", false, nil, 1), document("a", true, nil, 0)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, _, err := col.FindByCompoundIndexRange("x_y", CompoundIndexRangeOptions{StableDocumentIDTies: true, Limit: 4}); err == nil || !strings.Contains(err.Error(), "at most one unfixed") {
+		t.Fatalf("stable multi-unfixed scan err=%v want fail-closed rejection", err)
+	}
+}
+
 func TestCompoundBSONIndexComponentsRejectArraysBeforeMutation(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

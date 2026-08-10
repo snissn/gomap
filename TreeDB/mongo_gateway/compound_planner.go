@@ -170,10 +170,11 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 					return compoundIndexPlan{}, false
 				}
 			}
-			if len(eq.values) > maxCompoundPlannerPrefixChoices {
+			values := canonicalCompoundPrefixValues(eq.values)
+			if len(values) == 0 || len(values) > maxCompoundPlannerPrefixChoices {
 				return compoundIndexPlan{}, false
 			}
-			candidate.prefixChoices = append(candidate.prefixChoices, append([]bson.RawValue(nil), eq.values...))
+			candidate.prefixChoices = append(candidate.prefixChoices, values)
 			if compoundPrefixCombinationCount(candidate.prefixChoices) > maxCompoundPlannerPrefixChoices {
 				return compoundIndexPlan{}, false
 			}
@@ -260,6 +261,26 @@ func compoundPrefixCombinationCount(choices [][]bson.RawValue) int {
 	return count
 }
 
+// canonicalCompoundPrefixValues deduplicates by the actual BSON-v2 probe
+// component before fanout eligibility is evaluated. In particular, numeric
+// equality shares an index key across integer widths.
+func canonicalCompoundPrefixValues(values []bson.RawValue) []bson.RawValue {
+	out := make([]bson.RawValue, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		encoded, err := collections.EncodeBSONIndexKeyComponentV2(value)
+		if err != nil {
+			continue
+		}
+		if _, duplicate := seen[string(encoded)]; duplicate {
+			continue
+		}
+		seen[string(encoded)] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func compoundPrefixes(choices [][]bson.RawValue) [][]bson.RawValue {
 	if len(choices) == 0 {
 		return [][]bson.RawValue{{}}
@@ -271,21 +292,7 @@ func compoundPrefixes(choices [][]bson.RawValue) [][]bson.RawValue {
 			out = append(out, append([]bson.RawValue(nil), prefix...))
 			return
 		}
-		seen := make(map[string]struct{}, len(choices[at]))
-		for _, value := range choices[at] {
-			// BSON-v2 canonicalizes numeric equality (for example int32(1) and
-			// int64(1)). Deduplicate by the actual probe component rather than
-			// raw BSON type/payload so equivalent $in choices do not consume the
-			// global candidate budget twice.
-			encoded, err := collections.EncodeBSONIndexKeyComponentV2(value)
-			if err != nil {
-				continue // buildCompoundIndexPlan already validated every value.
-			}
-			key := string(encoded)
-			if _, duplicate := seen[key]; duplicate {
-				continue
-			}
-			seen[key] = struct{}{}
+		for _, value := range canonicalCompoundPrefixValues(choices[at]) {
 			visit(at+1, append(prefix, value))
 		}
 	}

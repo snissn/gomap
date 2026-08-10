@@ -20377,6 +20377,19 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if !ok {
 		return nil, false, nil
 	}
+	if opts.StableDocumentIDTies {
+		components, err := normalizeIndexComponents(idx)
+		if err != nil {
+			return nil, false, err
+		}
+		// BSON-v2 stores missing and null in distinct physical runs. A bounded
+		// stable tie buffer can normalize them only when the equality prefix
+		// fixes every component except one; otherwise later component values can
+		// separate equal logical keys non-adjacently.
+		if len(opts.Prefix) >= len(components) || len(components)-len(opts.Prefix) > 1 {
+			return nil, false, errors.New("collections: stable document-ID ties require at most one unfixed compound component")
+		}
+	}
 	start, end, empty, err := compoundIndexRangeScanBounds(idx, opts)
 	if err != nil {
 		return nil, false, err
