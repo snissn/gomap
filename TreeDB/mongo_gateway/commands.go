@@ -943,7 +943,12 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	// only when every predicate is encoded by the index and its order satisfies
 	// the requested sort; all other shapes use the conservative executor below.
 	if !singleBatch && compoundIDCursorEligible(col.MetaView(), plan) {
-		if ids, compound, ok, err := s.compoundIndexPlanIDs(col, plan); ok || err != nil {
+		cursorIDBudget := s.maxCursorRetainedBytes() - findPlanCursorRetainedBytes(plan)
+		if cursorIDBudget <= 0 {
+			doc, err := commandError(commandCodeBadValue, "BadValue", fmt.Errorf("%w: Mongo gateway compound cursor plan exceeds retained-byte cap", errMongoFindScanCapExceeded).Error())
+			return findResponsePayload{document: doc}, err
+		}
+		if ids, compound, ok, err := s.compoundIndexPlanIDs(col, plan, cursorIDBudget); ok || err != nil {
 			if err != nil {
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err

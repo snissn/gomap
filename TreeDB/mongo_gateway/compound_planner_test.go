@@ -494,6 +494,21 @@ func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) 
 	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"number"})
 }
 
+func TestMongoCompoundPlanStableTieUsesGlobalWorkBudgetBeforeLimit(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 65
+	assertOK(t, serveCommand(t, server, 40650563, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	docs := make(bson.A, 65)
+	for i := range docs {
+		docs[i] = bson.D{{Key: "_id", Value: fmt.Sprintf("id-%03d", 64-i)}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(1)}}
+	}
+	assertOK(t, serveCommand(t, server, 40650564, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "limit", Value: int32(1)}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 40650565, command)
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"id-000"})
+}
+
 func TestMongoCompoundPlanMultiValuePrefixDoesNotConsumeResultLimitAsProbeBudget(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065057, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))
@@ -549,6 +564,29 @@ func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublicatio
 	defer server.cursorMu.Unlock()
 	if len(server.cursors) != 0 {
 		t.Fatalf("published cursor despite materialization cap: %d", len(server.cursors))
+	}
+}
+
+func TestMongoCompoundPlannerCursorCapsRetainedIDsBeforePublication(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// This admits the cloned command plan and one small result, but not the
+	// independently owned ID slice plus cross-prefix dedupe key for two long
+	// candidates. The admission failure must occur during the index walk, before
+	// openCompoundIDCursor can publish any cursor.
+	server.MaxCursorRetainedBytes = 200
+	assertOK(t, serveCommand(t, server, 40651101, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	longA := strings.Repeat("a", 40)
+	longB := strings.Repeat("b", 40)
+	assertOK(t, serveCommand(t, server, 40651102, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: longA}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: longB}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}},
+	}}, {Key: "$db", Value: "app"}}))
+	resp := serveCommand(t, server, 40651103, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "hint", Value: "tenant_created"}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite retained-ID admission cap: %d", len(server.cursors))
 	}
 }
 

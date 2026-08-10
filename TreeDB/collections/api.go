@@ -109,6 +109,7 @@ var (
 	errConcurrentSchemaModification            = errors.New("collections: concurrent schema modification")
 	errCollectionRootOverlaysRequireCompaction = errors.New("collections: collection root overlays require compaction before writes")
 	errCollectionIndexScanWorkCap              = errors.New("collections: compound index scan inspected-entry cap reached")
+	errCollectionIndexScanRetainedBytesCap     = errors.New("collections: compound index scan retained-ID byte cap reached")
 	errUpdateBatchHasSecondaryUniqueIndex      = errors.New("collections: update batch has secondary unique index")
 	errUpdateBatchChangesSecondaryUniqueIndex  = errors.New("collections: update batch changes secondary unique index")
 	errIndexedFlushLostOwnership               = errors.New("collections: async indexed publish lost ownership of in-flight flush units")
@@ -20273,6 +20274,14 @@ type CompoundIndexRangeOptions struct {
 	// Callers whose document IDs have a higher-level collation may provide their
 	// own deterministic comparator without materializing the whole result set.
 	DocumentIDLess func(left, right []byte) bool
+	// MaxInspected optionally overrides the normal Limit*64 physical-entry
+	// budget. It is for planners that need enough work to complete a stable tie
+	// group even when their result page is smaller than that group.
+	MaxInspected int
+	// MaxRetainedIDBytes bounds IDs accumulated for the returned slice. Zero
+	// retains the historical direct-API behavior; a positive value returns a
+	// truncated prefix before retaining more owned ID payload.
+	MaxRetainedIDBytes int
 }
 
 const defaultIndexRangeResultCap = 16
@@ -20353,6 +20362,12 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	if opts.Limit <= 0 {
 		return nil, false, errors.New("collections: compound index range limit must be positive")
 	}
+	if opts.MaxInspected < 0 {
+		return nil, false, errors.New("collections: compound index max inspected entries cannot be negative")
+	}
+	if opts.MaxRetainedIDBytes < 0 {
+		return nil, false, errors.New("collections: compound index retained-ID byte cap cannot be negative")
+	}
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, false, err
 	}
@@ -20398,6 +20413,9 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		return nil, false, nil
 	}
 	workCap := compoundIndexRangeInspectedCap(opts.Limit)
+	if opts.MaxInspected > 0 {
+		workCap = opts.MaxInspected
+	}
 	// Charge physical overlay sources before their dedupe/merge. When both
 	// live-buffer and persisted sources exist, split the cap conservatively so
 	// their combined physical work cannot exceed the documented bound.
@@ -20442,24 +20460,39 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 		defer func() { _ = persistedIt.Close() }()
 	}
 	ids := make([][]byte, 0)
+	retainedIDBytes := 0
 	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, workCap, scanMergedCollectionIndexIDOptions{
 		CloneDocumentID:      true,
 		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
 		StableDocumentIDTies: opts.StableDocumentIDTies,
 		DocumentIDLess:       opts.DocumentIDLess,
 		LogicalIndexKey:      BSONIndexKeyStableSortPrefixV2,
+		// A caller-supplied retained-ID cap must bound the stable scanner's
+		// transient group and dedupe allocations as well as the result slice.
+		// Otherwise a cursor plan could allocate the default 64 MiB tie buffer
+		// before its own smaller admission cap observes the IDs.
+		MaxStableTieBytes: opts.MaxRetainedIDBytes,
 	}, func(id []byte) (bool, error) {
+		charge := len(id) + stableDocumentIDTieEntryOverhead
+		if charge < len(id) || (opts.MaxRetainedIDBytes > 0 && charge > opts.MaxRetainedIDBytes-retainedIDBytes) {
+			return false, errCollectionIndexScanRetainedBytesCap
+		}
 		ids = append(ids, id)
+		retainedIDBytes += charge
 		return true, nil
 	})
 	if err != nil {
-		if errors.Is(err, errCollectionIndexScanWorkCap) {
+		if errors.Is(err, errCollectionIndexScanWorkCap) || errors.Is(err, errCollectionIndexScanRetainedBytesCap) {
 			return ids, true, nil
 		}
 		return nil, false, err
 	}
 	if len(ids) == 0 {
-		return nil, false, nil
+		// A bounded stable group can hit its work or retained-byte cap before
+		// publishing its first ID. Preserve that signal: callers such as cursor
+		// admission must reject rather than mistake an incomplete scan for an
+		// empty result set.
+		return nil, truncated, nil
 	}
 	return ids, truncated, nil
 }

@@ -438,7 +438,7 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 // compoundIndexPlanIDs performs the bounded ordered index walk without
 // decoding documents. Cursor execution retains these small primary keys and
 // materializes BSON only as each batch is requested.
-func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan) ([][]byte, compoundIndexPlan, bool, error) {
+func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan, retainedIDCaps ...int) ([][]byte, compoundIndexPlan, bool, error) {
 	if s.compoundIndexPlanScanHook != nil {
 		s.compoundIndexPlanScanHook()
 	}
@@ -454,6 +454,11 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	candidate := candidates[0]
 	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
+	// Keep the physical inspection ceiling tied to the global planner budget,
+	// not a subsequently reduced result page. Stable BSON-v2 ties must inspect
+	// the entire first logical group before emitting its deterministic _id
+	// prefix, even for limit:1.
+	maxInspected := compoundPlannerInspectedCap(maxDocuments)
 	paginationBudgetCoversResult := false
 	// Pagination can bound the index walk only when its physical order is the
 	// complete gateway order. With no requested sort, pagination is likewise
@@ -477,6 +482,33 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	}
 	ids := make([][]byte, 0, maxDocuments)
 	seenIDs := make(map[string]struct{})
+	retainedIDCap := 0
+	if len(retainedIDCaps) != 0 {
+		retainedIDCap = retainedIDCaps[0]
+	}
+	retainedIDBytes := 0
+	retainID := func(id []byte) (bool, error) {
+		// The returned ID slice and cross-prefix dedupe key own separate
+		// payloads. Charge both plus conservative slice/map bookkeeping before
+		// converting to string or retaining either one.
+		const retainedIDOverhead = 64
+		maxInt := int(^uint(0) >> 1)
+		if len(id) > (maxInt-retainedIDOverhead)/2 {
+			return false, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
+		}
+		charge := len(id)*2 + retainedIDOverhead
+		if retainedIDCap > 0 && charge > retainedIDCap-retainedIDBytes {
+			return false, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
+		}
+		idKey := string(id)
+		if _, duplicate := seenIDs[idKey]; duplicate {
+			return false, nil
+		}
+		seenIDs[idKey] = struct{}{}
+		retainedIDBytes += charge
+		ids = append(ids, id)
+		return true, nil
+	}
 	remainingCandidates := maxDocuments
 	for _, prefix := range prefixes {
 		// Every prefix shares one candidate budget. Once it is exhausted, a
@@ -488,8 +520,24 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		if probeLimit == 0 {
 			probeLimit = 1
 		}
+		directRetainedCap := 0
+		if retainedIDCap > 0 {
+			remainingRetained := retainedIDCap - retainedIDBytes
+			if remainingRetained <= 0 {
+				return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
+			}
+			// The direct primitive owns the ID payload while this planner retains
+			// a second string copy for cross-prefix dedupe, so reserve no more
+			// than half of the remaining cursor budget for one probe result.
+			directRetainedCap = remainingRetained / 2
+			if directRetainedCap == 0 {
+				return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound cursor IDs exceed retained-byte cap", errMongoFindScanCapExceeded)
+			}
+		}
 		found, truncated, err := col.FindByCompoundIndexRange(candidate.idx.Name, collections.CompoundIndexRangeOptions{
 			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: probeLimit, Desc: candidate.reverse,
+			MaxInspected:       maxInspected,
+			MaxRetainedIDBytes: directRetainedCap,
 			// Mongo's compatible sort contract uses _id as the deterministic tie
 			// breaker. BSON-v2 keeps missing and null physically distinct, while
 			// Mongo compares them as equal, so stable grouping is required in both
@@ -510,38 +558,45 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 			// cap failure, because later IDs cannot affect this result page.
 			if paginationBudgetCoversResult && len(found) == probeLimit {
 				for _, id := range found {
-					if _, duplicate := seenIDs[string(id)]; duplicate {
-						continue
+					added, err := retainID(id)
+					if err != nil {
+						return nil, candidate, true, err
 					}
-					seenIDs[string(id)] = struct{}{}
-					ids = append(ids, id)
-					plan.recordCandidate()
+					if added {
+						plan.recordCandidate()
+					}
 				}
 				continue
 			}
 			// The direct primitive has already examined and returned these
 			// candidates. Account for the observable work even though the global
 			// cap rejects the command before any primary document is loaded.
-			for _, id := range found {
-				if _, duplicate := seenIDs[string(id)]; duplicate {
-					continue
-				}
-				seenIDs[string(id)] = struct{}{}
+			for range found {
 				plan.recordCandidate()
 			}
 			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index candidate scan exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 		}
 		for _, id := range found {
 			remainingCandidates--
-			if _, duplicate := seenIDs[string(id)]; duplicate {
-				continue
+			added, err := retainID(id)
+			if err != nil {
+				return nil, candidate, true, err
 			}
-			seenIDs[string(id)] = struct{}{}
-			ids = append(ids, id)
-			plan.recordCandidate()
+			if added {
+				plan.recordCandidate()
+			}
 		}
 	}
 	return ids, candidate, true, nil
+}
+
+func compoundPlannerInspectedCap(maxDocuments int) int {
+	const perResult = 64
+	maxInt := int(^uint(0) >> 1)
+	if maxDocuments > maxInt/perResult {
+		return maxInt
+	}
+	return maxDocuments * perResult
 }
 
 // compoundIDCursorEligible is intentionally metadata-only: command dispatch
