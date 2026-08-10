@@ -948,7 +948,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 				return findResponsePayload{document: doc}, err
 			}
-			if compound.residualFilters == 0 && (plan.sort.field == "" || compound.sortSatisfied) && len(compound.prefixChoices) == 1 {
+			if compound.residualFilters == 0 && (plan.sort.field == "" || compound.sortSatisfied) && compoundPrefixCombinationCount(compound.prefixChoices) == 1 {
 				if plan.skip > 0 {
 					if int(plan.skip) >= len(ids) {
 						ids = nil

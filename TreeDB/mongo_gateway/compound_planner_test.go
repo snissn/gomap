@@ -103,7 +103,7 @@ func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}},
 		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(3)}},
 	}}, {Key: "$db", Value: "app"}}))
-	find := serveCommand(t, server, 406508, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "skip", Value: int64(1)}, {Key: "limit", Value: int64(2)}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
+	find := serveCommand(t, server, 406508, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "$and", Value: bson.A{bson.D{{Key: "tenant", Value: "t"}}, bson.D{{Key: "created", Value: bson.D{{Key: "$gte", Value: int32(1)}}}}}}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "skip", Value: int64(1)}, {Key: "limit", Value: int64(2)}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}})
 	assertBatchIDs(t, cursorFirstBatch(t, find), []string{"b"})
 	cursorID := cursorIDFromResponse(t, find)
 	if cursorID == 0 {
