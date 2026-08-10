@@ -102,13 +102,17 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
 	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
 	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
-	// A cloned projection retains both its map header/buckets and one string
-	// header per field. The runtime does not expose bucket sizing, so include a
-	// conservative per-entry allowance in addition to the field bytes below.
-	const projectionMapEntryOverhead = int(unsafe.Sizeof(string(""))) + 16
+	// A cloned projection retains a Go map allocation and its groups, in
+	// addition to the field bytes charged below. Runtime map internals vary by
+	// Go release (including Swiss-map group layout), so cursor admission uses a
+	// stable conservative owned-memory model rather than unsafe.Sizeof(map),
+	// which measures only the map header. These figures intentionally exceed a
+	// one-group map and leave room for per-entry string/header bookkeeping.
+	const projectionMapBaseBytes = 256
+	const projectionMapEntryBytes = 64
 	if len(plan.projection.fields) != 0 {
-		bytes += int(unsafe.Sizeof(plan.projection.fields))
-		bytes += len(plan.projection.fields) * projectionMapEntryOverhead
+		bytes += projectionMapBaseBytes
+		bytes += len(plan.projection.fields) * projectionMapEntryBytes
 	}
 	type stringAllocation struct {
 		data *byte

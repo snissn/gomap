@@ -747,6 +747,23 @@ func TestMongoCompoundPlannerCursorChargesProjectionMapStructure(t *testing.T) {
 	}
 }
 
+func TestMongoCompoundPlannerCursorChargesOneFieldProjectionMapBase(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// The old unsafe.Sizeof(map)+per-entry estimate admitted this shape. A
+	// single projection field still owns a complete runtime map group, so the
+	// conservative fixed map charge must reject before cursor publication.
+	server.MaxCursorRetainedBytes = 200
+	assertOK(t, serveCommand(t, server, 406511264, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406511265, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	resp := serveCommand(t, server, 406511266, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "projection", Value: bson.D{{Key: "p", Value: int32(1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite one-field projection-map cap: %d", len(server.cursors))
+	}
+}
+
 func TestFindPlanCursorRetainedBytesChargesClonedCommandStringsOnce(t *testing.T) {
 	// cloneFindPlanForCursor retains string headers from every command shape;
 	// aliases must not consume the cap twice, while separately allocated equal
@@ -767,7 +784,7 @@ func TestFindPlanCursorRetainedBytesChargesClonedCommandStringsOnce(t *testing.T
 		projection: compiledProjection{fields: map[string]struct{}{"projection": {}, shared: {}}},
 	}
 	want := len([]byte{1, 2}) + len("predicate") + len("or-predicate") + 2*len(shared) + len("sort-term") + len("hint-name") + len("component") + len("projection") +
-		(len(plan.predicates)+len(plan.orBranches[0]))*int(unsafe.Sizeof(findPredicate{})) + len(plan.orBranches)*int(unsafe.Sizeof([]findPredicate{})) + len(plan.sort.terms)*int(unsafe.Sizeof(findSortTerm{})) + len(plan.hint.components)*int(unsafe.Sizeof(collections.IndexComponent{})) + int(unsafe.Sizeof(bson.RawValue{})) + int(unsafe.Sizeof(plan.projection.fields)) + len(plan.projection.fields)*(int(unsafe.Sizeof(string("")))+16)
+		(len(plan.predicates)+len(plan.orBranches[0]))*int(unsafe.Sizeof(findPredicate{})) + len(plan.orBranches)*int(unsafe.Sizeof([]findPredicate{})) + len(plan.sort.terms)*int(unsafe.Sizeof(findSortTerm{})) + len(plan.hint.components)*int(unsafe.Sizeof(collections.IndexComponent{})) + int(unsafe.Sizeof(bson.RawValue{})) + 256 + len(plan.projection.fields)*64
 	if got := findPlanCursorRetainedBytes(plan); got != want {
 		t.Fatalf("retained cursor-plan bytes=%d, want %d", got, want)
 	}
