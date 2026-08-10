@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import sys
 
+sys.dont_write_bytecode = True
 
 OLD = Path(__file__).resolve().parents[2] / "vector-partition-runtime-ownership-4091/tools/run_runtime_ownership.py"
 SPEC = importlib.util.spec_from_file_location("runtime_ownership_runner", OLD)
