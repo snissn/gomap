@@ -12,14 +12,39 @@ import (
 // batches.  Setup is outside the timer; the reported allocations cover only
 // planned cursor execution and BSON batch materialization.
 func BenchmarkMongoCompoundPlannerCursor(b *testing.B) {
+	for _, variant := range []string{"compound_stream", "bounded_scan_sort", "single_field"} {
+		b.Run(variant, func(b *testing.B) { benchmarkMongoCompoundPlannerVariant(b, variant) })
+	}
+}
+
+func benchmarkMongoCompoundPlannerVariant(b *testing.B, variant string) {
 	server := newMongoCompatibilityMatrixServer(b)
-	assertOK(b, serveCommand(b, server, 406590, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(-1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+	if variant != "bounded_scan_sort" {
+		key := bson.D{{Key: "tenant", Value: int32(1)}}
+		name := "tenant_1"
+		index := bson.D{{Key: "key", Value: key}, {Key: "name", Value: name}, {Key: "treedbValueType", Value: "string"}}
+		if variant == "compound_stream" {
+			index = bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(-1)}}}, {Key: "name", Value: "tenant_score"}}
+		}
+		assertOK(b, serveCommand(b, server, 406590, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{index}}, {Key: "$db", Value: "app"}}))
+	}
 	docs := make(bson.A, 0, 128)
 	for i := 0; i < cap(docs); i++ {
 		docs = append(docs, bson.D{{Key: "_id", Value: fmt.Sprintf("%03d", i)}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(i)}, {Key: "payload", Value: "benchmark"}})
 	}
 	assertOK(b, serveCommand(b, server, 406591, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
 	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}, {Key: "skip", Value: int64(16)}, {Key: "limit", Value: int64(32)}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}}
+	// Preflight asserts the identical visible result before timing. Explain is
+	// intentionally available to callers for candidate/materialization counters;
+	// the benchmark itself measures the same query/cursor protocol in each mode.
+	preflight := serveCommand(b, server, 406599, command)
+	if got := len(cursorFirstBatch(b, preflight)); got != 8 {
+		b.Fatalf("%s first batch=%d want 8", variant, got)
+	}
+	for cursorID := cursorIDFromResponse(b, preflight); cursorID != 0; {
+		next := serveCommand(b, server, 406598, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}})
+		cursorID = cursorIDFromResponse(b, next)
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

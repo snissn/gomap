@@ -6,31 +6,32 @@ cursor stream. It is not a MongoDB-comparison or production-throughput claim.
 ## Provenance
 
 - Base: `3eea650b65261267b412560955bc6f4c19f7ef18`
-- Source capture: `e6c01a05b8d738ae1eddb4ff9920e7b3596c58af`
+- Source capture: `5aaab7aae666a7fa8a2e7bad5aa72f5c876cb471`
 - Host: Apple M3, darwin/arm64, Go test default `GOMAXPROCS=8`
-- Command: `GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' -bench BenchmarkMongoCompoundPlannerCursor -benchtime=25x -count=3 -benchmem`
+- Command: `GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' -bench BenchmarkMongoCompoundPlannerCursor -benchtime=25x -count=10 -benchmem`
 
-The benchmark builds 128 BSON documents and a `{tenant:1,score:-1}` index
-outside its timer. Each timed operation is a `tenant=t` compound scan ordered
-by `score:-1`, with `skip=16`, `limit=32`, `batchSize=8`, and drains every
-`getMore`. It therefore measures bounded planning plus cursor batch decoding,
-not index creation or seed insertion.
+Each variant builds the same 128 BSON documents outside its timer and runs the
+same `tenant=t`, `score:-1`, `skip=16`, `limit=32`, `batchSize=8` command,
+draining every `getMore`. Preflight asserts the first 8-result batch and drains
+the full 32-result cursor before timing. The variants are compound V2 stream,
+no-secondary-index bounded scan plus sort, and a legacy `tenant:1` single-field
+alternative plus sort. Index creation and seed insertion are excluded.
 
-| sample | ns/op | ops/sec | B/op | allocs/op |
+| variant | p50 ns/op | p95/p99 ns/op | p50 ops/sec | B/op range | allocs/op range |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 156,803 | 6,378 | 320,664 | 972 |
-| 2 | 142,637 | 7,011 | 320,568 | 971 |
-| 3 | 125,640 | 7,959 | 320,463 | 971 |
+| compound stream | 123,822 | 149,503 / 149,503 | 8,076 | 319,547–319,868 | 970–972 |
+| bounded scan + sort | 549,886 | 622,377 / 622,377 | 1,818 | 438,514–440,025 | 17,856–17,859 |
+| single-field + sort | 542,249 | 560,682 / 560,682 | 1,844 | 474,232–474,850 | 18,263–18,266 |
 
-With only three samples this table does **not** claim p50/p95/p99. The harness
-is retained so a controlled runner can collect a sufficient sample distribution
-and an equivalent bounded scan-plus-sort and single-field comparator before any
-performance decision.
+Percentiles use the 10 observed per-variant samples: p50 is the midpoint of
+the fifth and sixth sorted samples; p95/p99 use the conservative nearest-rank
+maximum at this sample size. These are local microbenchmark observations, not
+release SLOs.
 
-An operation-heavy profile capture used `-benchtime=10000x` at the same source:
-`75,430 ns/op`, `319,744 B/op`, `977 allocs/op`; CPU SHA-256
-`560c75dd9648949fafce859131504095ff9509318dc61704765d6bb41f7c36df`,
-heap SHA-256 `7657086de8a46e188b1cea885073a063793dbf5018e685bccfc710f5cb37b8c3`.
+An operation-heavy compound-stream profile capture used `-benchtime=10000x` at
+the committed-content source: `76,949 ns/op`, `319,746 B/op`, `977 allocs/op`;
+CPU SHA-256 `e58b325931e54a2aa827691692529b955f2e7994f21b6cc69a30ac8030d9219a`,
+heap SHA-256 `fab817b29f9522c18fe1736818748f95cc85c426f836ac30b9eb485d6d720a33`.
 The profile is a local `/tmp` diagnostic artifact, not repository content; its
 top includes scheduler/runtime activity, so it is diagnostic only.
 
