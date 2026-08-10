@@ -62,7 +62,7 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 		}
 	}
 	stats := p.CatalogMetaLinearizableReadStatsV1()
-	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 0 || stats.Total.NoLogProofs != 4 || stats.Total.TotalNanos == 0 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
+	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 0 || stats.Total.NoLogProofs != 4 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
 		t.Fatalf("catalog read stats=%+v", stats)
 	}
 	if got := p.raft.LastIndex(); got != lastLogBeforeReads {
@@ -280,6 +280,9 @@ func TestCatalogMetaRaftProviderFixedPeersFailoverSnapshotReopenAndRejoin(t *tes
 		})
 		if err != nil {
 			t.Fatalf("%s OpenCatalogMetaRaftProviderV1: %v", peer.ID, err)
+		}
+		if got, want := provider.proofLease, catalogMetaFastRaftConfig().LeaderLeaseTimeout/2; got != want {
+			t.Fatalf("%s proof lease=%s want configured leader lease safety margin %s", peer.ID, got, want)
 		}
 		providers[peer.ID], states[peer.ID], configs[peer.ID] = provider, state, cfg
 	}

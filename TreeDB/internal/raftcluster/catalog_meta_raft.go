@@ -285,7 +285,7 @@ func OpenCatalogMetaRaftProviderV1(opts CatalogMetaRaftProviderOptionsV1) (*Cata
 		snapshots:    stores.snapshots,
 		owned:        stores.owned,
 		applyTimeout: timeout,
-		proofLease:   min(conf.LeaderLeaseTimeout/2, 50*time.Millisecond),
+		proofLease:   conf.LeaderLeaseTimeout / 2,
 	}, nil
 }
 
