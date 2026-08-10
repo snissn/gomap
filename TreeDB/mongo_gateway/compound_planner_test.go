@@ -564,7 +564,7 @@ func TestMongoCompoundPlanMaterializationBytesAreCapped(t *testing.T) {
 	assertCommandError(t, resp, "BadValue")
 }
 
-func TestMongoCompoundPlanSatisfiesMultiFieldSortWithPagination(t *testing.T) {
+func TestMongoCompoundPlanMultiFieldSortFallsBackBeforePagination(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406531, bson.D{
 		{Key: "createIndexes", Value: "events"},
@@ -589,8 +589,12 @@ func TestMongoCompoundPlanSatisfiesMultiFieldSortWithPagination(t *testing.T) {
 	explain := serveCommand(t, server, 406534, bson.D{{Key: "explain", Value: command}, {Key: "$db", Value: "app"}})
 	assertOK(t, explain)
 	sortInfo := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("sort").Document()
-	if satisfied, ok := sortInfo.Lookup("satisfied").BooleanOK(); !ok || !satisfied {
-		t.Fatalf("sort satisfied=%v ok=%v want true: %s", satisfied, ok, explain)
+	if satisfied, ok := sortInfo.Lookup("satisfied").BooleanOK(); !ok || satisfied {
+		t.Fatalf("sort satisfied=%v ok=%v want false: %s", satisfied, ok, explain)
+	}
+	winning := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if inMemory, ok := winning.Lookup("inMemorySort").BooleanOK(); !ok || !inMemory {
+		t.Fatalf("winning inMemorySort=%v ok=%v want true: %s", inMemory, ok, explain)
 	}
 }
 
