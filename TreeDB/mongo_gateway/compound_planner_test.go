@@ -1190,3 +1190,34 @@ func TestMongoCompoundPlanServesCountAndDistinct(t *testing.T) {
 		t.Fatalf("distinct values=%v err=%v want two: %s", values, err, distinct)
 	}
 }
+
+func TestMongoUnhintedCompoundDoesNotPreemptSelectiveLegacyCandidate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 2
+	assertOK(t, serveCommand(t, server, 406570, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "kind", Value: int32(1)}}}, {Key: "name", Value: "kind_1"}, {Key: "treedbValueType", Value: "string"}},
+	}}, {Key: "$db", Value: "app"}}))
+	docs := bson.A{}
+	for i := 0; i < 4; i++ {
+		kind := "common"
+		if i == 3 {
+			kind = "rare"
+		}
+		docs = append(docs, bson.D{{Key: "_id", Value: fmt.Sprintf("%d", i)}, {Key: "tenant", Value: "common"}, {Key: "score", Value: int32(i)}, {Key: "kind", Value: kind}})
+	}
+	assertOK(t, serveCommand(t, server, 406571, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "common"}, {Key: "kind", Value: "rare"}}}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 406572, command)
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"3"})
+	explain := serveCommand(t, server, 406573, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	winning := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if got := winning.Lookup("indexName").StringValue(); got != "kind_1" {
+		t.Fatalf("winner index=%q want kind_1: %s", got, explain)
+	}
+	if got := winning.Lookup("stage").StringValue(); got != "secondary_equality_lookup" {
+		t.Fatalf("winner stage=%q want secondary_equality_lookup: %s", got, explain)
+	}
+}

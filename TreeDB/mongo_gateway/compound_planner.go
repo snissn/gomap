@@ -389,6 +389,9 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 			return nil, compoundIndexPlan{}, false, nil
 		}
+		if len(findIndexProbes(col.MetaView(), plan)) != 0 {
+			return nil, compoundIndexPlan{}, false, nil
+		}
 	}
 	ids, candidate, ok, err := s.compoundIndexPlanIDs(col, plan)
 	if !ok || err != nil {
