@@ -208,6 +208,60 @@ func TestMongoCompoundPlanInCanonicalNumericPrefixesShareCandidateBudget(t *test
 	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b"})
 }
 
+func TestMongoCompoundNonStreamingPlansWalkIndexOnceAndReportExactWork(t *testing.T) {
+	tests := []struct {
+		name         string
+		filter       bson.D
+		documents    bson.A
+		wantExamined int64
+	}{
+		{
+			name:   "residual",
+			filter: bson.D{{Key: "tenant", Value: "t"}, {Key: "active", Value: true}},
+			documents: bson.A{
+				bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(1)}, {Key: "active", Value: true}},
+				bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(2)}, {Key: "active", Value: false}},
+				bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "t"}, {Key: "score", Value: int32(3)}, {Key: "active", Value: true}},
+			},
+			wantExamined: 3,
+		},
+		{
+			name:   "multi_in",
+			filter: bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: bson.A{"a", "b"}}}}},
+			documents: bson.A{
+				bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(1)}},
+				bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "b"}, {Key: "score", Value: int32(2)}},
+			},
+			wantExamined: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newMongoCompatibilityMatrixServer(t)
+			server.MaxFindScanDocuments = int(tc.wantExamined)
+			assertOK(t, serveCommand(t, server, 40650540, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(1)}}}, {Key: "name", Value: "tenant_score"}}}}, {Key: "$db", Value: "app"}}))
+			assertOK(t, serveCommand(t, server, 40650541, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: tc.documents}, {Key: "$db", Value: "app"}}))
+			walks := 0
+			server.compoundIndexPlanScanHook = func() { walks++ }
+			command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: tc.filter}, {Key: "batchSize", Value: int32(1)}, {Key: "$db", Value: "app"}}
+			assertOK(t, serveCommand(t, server, 40650542, command))
+			if walks != 1 {
+				t.Fatalf("non-streaming %s index walks=%d want 1", tc.name, walks)
+			}
+			walks = 0
+			explain := serveCommand(t, server, 40650543, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+			assertOK(t, explain)
+			if walks != 1 {
+				t.Fatalf("executionStats %s index walks=%d want 1", tc.name, walks)
+			}
+			stats := bson.Raw(explain).Lookup("executionStats").Document()
+			if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != tc.wantExamined {
+				t.Fatalf("executionStats %s examined=%d ok=%v want %d: %s", tc.name, got, ok, tc.wantExamined, explain)
+			}
+		})
+	}
+}
+
 func TestMongoCompoundPlanOneSidedRangeRemainsResidualBeforeLimit(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 4065054, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "x", Value: int32(1)}}}, {Key: "name", Value: "tenant_x"}}}}, {Key: "$db", Value: "app"}}))

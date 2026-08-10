@@ -89,6 +89,9 @@ type Server struct {
 	// clusterCollectionLookupHook is a test seam for proving routed command
 	// preflight fails before touching the local collection catalog.
 	clusterCollectionLookupHook func()
+	// compoundIndexPlanScanHook is a test seam for proving a non-streaming
+	// compound plan is walked exactly once by its eventual executor.
+	compoundIndexPlanScanHook func()
 	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
 	// keys to one gateway process epoch. NewServer initializes a random nonce
 	// so sequence-based keys are not reused after restart.

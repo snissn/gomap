@@ -942,7 +942,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 	// The V2 compound path retains primary keys, not BSON documents. It is used
 	// only when every predicate is encoded by the index and its order satisfies
 	// the requested sort; all other shapes use the conservative executor below.
-	if !singleBatch {
+	if !singleBatch && compoundIDCursorEligible(col.MetaView(), plan) {
 		if ids, compound, ok, err := s.compoundIndexPlanIDs(col, plan); ok || err != nil {
 			if err != nil {
 				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())

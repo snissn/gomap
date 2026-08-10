@@ -394,6 +394,9 @@ func (s *Server) documentsForCompoundIndexPlan(col *collections.Collection, mate
 // decoding documents. Cursor execution retains these small primary keys and
 // materializes BSON only as each batch is requested.
 func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan) ([][]byte, compoundIndexPlan, bool, error) {
+	if s.compoundIndexPlanScanHook != nil {
+		s.compoundIndexPlanScanHook()
+	}
 	if !plan.hint.present {
 		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
 			return nil, compoundIndexPlan{}, false, nil
@@ -471,6 +474,22 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 		}
 	}
 	return ids, candidate, true, nil
+}
+
+// compoundIDCursorEligible is intentionally metadata-only: command dispatch
+// must not walk an index merely to discover that a residual or multi-prefix
+// plan needs the ordinary executor. The executor then performs its one bounded
+// walk and owns the corresponding executionStats counters.
+func compoundIDCursorEligible(meta collections.CollectionMeta, plan findPlan) bool {
+	if !plan.hint.present {
+		if _, ok := primaryCandidatePredicate(plan.predicates); ok {
+			return false
+		}
+	}
+	candidate, ok := compoundIndexPlanFor(meta, plan)
+	return ok && candidate.residualFilters == 0 &&
+		(plan.sort.field == "" || candidate.sortSatisfied) &&
+		compoundPrefixCombinationCount(candidate.prefixChoices) == 1
 }
 
 func compoundRangeIsExactlyTypeBracketed(lower, upper collections.IndexRangeBound) bool {
