@@ -19,7 +19,7 @@ no-secondary-index bounded scan plus sort, and a legacy `tenant:1` single-field
 alternative plus sort. Index creation and seed insertion are excluded.
 
 | variant | p50 ns/op | p95/p99 ns/op | p50 ops/sec | B/op range | allocs/op range |
-| --- | ---: | ---: | ---: | ---: |
+| --- | ---: | ---: | ---: | ---: | ---: |
 | compound stream | 68,649 | 82,768 / 82,768 | 14,567 | 59,072–59,542 | 795–796 |
 | bounded scan + sort | 485,810 | 509,502 / 509,502 | 2,058 | 438,588–439,774 | 17,856–17,858 |
 | single-field + sort | 608,648 | 640,978 / 640,978 | 1,643 | 474,046–475,044 | 18,263–18,266 |

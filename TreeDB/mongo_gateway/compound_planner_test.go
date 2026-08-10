@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -34,29 +35,33 @@ func benchmarkMongoCompoundPlannerVariant(b *testing.B, variant string) {
 	}
 	assertOK(b, serveCommand(b, server, 406591, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
 	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}, {Key: "skip", Value: int64(16)}, {Key: "limit", Value: int64(32)}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}}
+	drain := func(response wire.Document, requestID int32) {
+		assertOK(b, response)
+		batches := append([]bson.Raw(nil), cursorFirstBatch(b, response)...)
+		for cursorID := cursorIDFromResponse(b, response); cursorID != 0; {
+			next := serveCommand(b, server, requestID, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}})
+			assertOK(b, next)
+			batches = append(batches, cursorNextBatch(b, next)...)
+			cursorID = cursorIDFromResponse(b, next)
+		}
+		if len(batches) != 32 {
+			b.Fatalf("%s result count=%d want 32", variant, len(batches))
+		}
+		for i, doc := range batches {
+			want := fmt.Sprintf("%03d", 111-i)
+			if got, ok := doc.Lookup("_id").StringValueOK(); !ok || got != want {
+				b.Fatalf("%s result[%d]._id=%q ok=%v want %q", variant, i, got, ok, want)
+			}
+		}
+	}
 	// Preflight asserts the identical visible result before timing. Explain is
 	// intentionally available to callers for candidate/materialization counters;
 	// the benchmark itself measures the same query/cursor protocol in each mode.
-	preflight := serveCommand(b, server, 406599, command)
-	if got := len(cursorFirstBatch(b, preflight)); got != 8 {
-		b.Fatalf("%s first batch=%d want 8", variant, got)
-	}
-	for cursorID := cursorIDFromResponse(b, preflight); cursorID != 0; {
-		next := serveCommand(b, server, 406598, bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}})
-		cursorID = cursorIDFromResponse(b, next)
-	}
+	drain(serveCommand(b, server, 406599, command), 406598)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		response := serveCommand(b, server, int32(406600+i), command)
-		if got := len(cursorFirstBatch(b, response)); got != 8 {
-			b.Fatalf("first batch=%d want 8", got)
-		}
-		cursorID := cursorIDFromResponse(b, response)
-		for cursorID != 0 {
-			next := serveCommand(b, server, int32(506600+i), bson.D{{Key: "getMore", Value: cursorID}, {Key: "collection", Value: "events"}, {Key: "batchSize", Value: int32(8)}, {Key: "$db", Value: "app"}})
-			cursorID = cursorIDFromResponse(b, next)
-		}
+		drain(serveCommand(b, server, int32(406600+i), command), int32(506600+i))
 	}
 }
 
