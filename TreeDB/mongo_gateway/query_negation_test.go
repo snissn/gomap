@@ -1,6 +1,8 @@
 package mongogateway
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -47,6 +49,58 @@ func TestMongoNegativeAndExistsPredicatesRespectMissingNullAndDottedValues(t *te
 				t.Fatalf("match=%v want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMongoDottedProjectionRebuildsParentsAndFailsClosedOnArrays(t *testing.T) {
+	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}, {Key: "age", Value: int32(37)}}}, {Key: "state", Value: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		projection bson.D
+		want       bson.D
+	}{
+		{"include nested", bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+		{"exclude nested", bson.D{{Key: "profile.age", Value: int32(0)}}, bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projection, err := bson.Marshal(test.projection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := bson.Marshal(test.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := projectDocument(wire.Document(doc), wire.Document(projection))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("projected=%s want %s", got, want)
+			}
+		})
+	}
+	arrayDoc, err := bson.Marshal(bson.D{{Key: "profile", Value: bson.A{bson.D{{Key: "name", Value: "Ada"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := bson.Marshal(bson.D{{Key: "profile.name", Value: int32(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projectDocument(wire.Document(arrayDoc), wire.Document(projection)); err == nil {
+		t.Fatal("array traversal unexpectedly accepted")
+	}
+	deep := strings.Repeat("a.", mongoMutationMaxPathDepth) + "a"
+	deepProjection, err := bson.Marshal(bson.D{{Key: deep, Value: int32(1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compileProjection(wire.Document(deepProjection)); err == nil {
+		t.Fatal("over-depth projection unexpectedly accepted")
 	}
 }
 

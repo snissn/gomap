@@ -2178,6 +2178,9 @@ func compileProjection(projection wire.Document) (compiledProjection, error) {
 	if err != nil {
 		return compiledProjection{}, err
 	}
+	if _, err := projectionTree(fields); err != nil {
+		return compiledProjection{}, err
+	}
 	return compiledProjection{
 		present:     true,
 		mode:        mode,
@@ -2214,6 +2217,101 @@ func projectDocumentWithProjection(doc wire.Document, projection compiledProject
 }
 
 func projectDocumentWithEffectiveProjection(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
+	tree, err := projectionTree(projection.fields)
+	if err != nil {
+		return nil, err
+	}
+	if mode == projectionInclude {
+		out, _, err := projectIncludedDocument(bson.Raw(doc), tree, projection.includeID)
+		return wire.Document(out), err
+	}
+	return projectExcludedDocument(bson.Raw(doc), tree, projection.includeID)
+}
+
+// Projection intentionally supports only document traversal. A dotted path
+// that would enter an array rejects instead of borrowing Mongo's positional or
+// multikey projection semantics.
+type projectionNode struct {
+	terminal bool
+	children map[string]*projectionNode
+}
+
+func projectionTree(fields map[string]struct{}) (*projectionNode, error) {
+	root := &projectionNode{children: make(map[string]*projectionNode)}
+	for field := range fields {
+		parts := strings.Split(field, ".")
+		if len(parts) > mongoMutationMaxPathDepth {
+			return nil, fmt.Errorf("Mongo gateway projection path exceeds %d components", mongoMutationMaxPathDepth)
+		}
+		node := root
+		for _, part := range parts {
+			if part == "" || strings.HasPrefix(part, "$") {
+				return nil, fmt.Errorf("Mongo gateway projection has invalid path %q", field)
+			}
+			if node.terminal {
+				return nil, fmt.Errorf("Mongo gateway projection paths overlap at %q", field)
+			}
+			if node.children[part] == nil {
+				node.children[part] = &projectionNode{children: make(map[string]*projectionNode)}
+			}
+			node = node.children[part]
+		}
+		if node.terminal || len(node.children) != 0 {
+			return nil, fmt.Errorf("Mongo gateway projection paths overlap at %q", field)
+		}
+		node.terminal = true
+	}
+	return root, nil
+}
+
+func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID bool) ([]byte, bool, error) {
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		if key == "_id" {
+			if includeID {
+				out = appendRawValueElement(out, key, elem.Value())
+			}
+			continue
+		}
+		child := node.children[key]
+		if child == nil {
+			continue
+		}
+		if child.terminal {
+			out = appendRawValueElement(out, key, elem.Value())
+			continue
+		}
+		nested, ok := elem.Value().DocumentOK()
+		if !ok {
+			if _, array := elem.Value().ArrayOK(); array {
+				return nil, false, fmt.Errorf("Mongo gateway dotted projection does not traverse arrays")
+			}
+			continue
+		}
+		projected, present, err := projectIncludedDocument(nested, child, true)
+		if err != nil {
+			return nil, false, err
+		}
+		if present {
+			out = appendRawValueElement(out, key, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: projected})
+		}
+	}
+	out, err = bsoncore.AppendDocumentEnd(out, idx)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, len(out) > 5, nil
+}
+
+func projectExcludedDocument(doc bson.Raw, node *projectionNode, includeID bool) (wire.Document, error) {
 	elements, err := bson.Raw(doc).Elements()
 	if err != nil {
 		return nil, err
@@ -2224,16 +2322,30 @@ func projectDocumentWithEffectiveProjection(doc wire.Document, projection compil
 		if err != nil {
 			return nil, err
 		}
-		if key == "_id" && !projection.includeID {
+		if key == "_id" && !includeID {
 			continue
 		}
-		_, selected := projection.fields[key]
-		if mode == projectionInclude && (selected || key == "_id") {
+		child := node.children[key]
+		if child == nil {
 			out = appendRawValueElement(out, key, elem.Value())
+			continue
 		}
-		if mode == projectionExclude && !selected {
+		if child.terminal {
+			continue
+		}
+		nested, ok := elem.Value().DocumentOK()
+		if !ok {
+			if _, array := elem.Value().ArrayOK(); array {
+				return nil, fmt.Errorf("Mongo gateway dotted projection does not traverse arrays")
+			}
 			out = appendRawValueElement(out, key, elem.Value())
+			continue
 		}
+		projected, err := projectExcludedDocument(nested, child, true)
+		if err != nil {
+			return nil, err
+		}
+		out = appendRawValueElement(out, key, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: projected})
 	}
 	out, err = bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
@@ -2280,8 +2392,8 @@ func parseProjection(projection wire.Document) (projectionMode, map[string]struc
 			idSpecified = true
 			continue
 		}
-		if strings.Contains(key, ".") {
-			return projectionNone, nil, true, false, errors.New("Mongo gateway projection currently supports top-level fields only")
+		if key == "" || strings.HasPrefix(key, "$") {
+			return projectionNone, nil, true, false, fmt.Errorf("Mongo gateway projection has invalid path %q", key)
 		}
 		nextMode := projectionExclude
 		if include {
