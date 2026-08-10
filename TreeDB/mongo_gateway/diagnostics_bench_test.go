@@ -34,3 +34,29 @@ func BenchmarkDiagnosticsTop(b *testing.B) {
 		_ = serveCommand(b, server, int32(i+2), command)
 	}
 }
+
+func BenchmarkDiagnosticsCollectionStats(b *testing.B) {
+	server := newMongoCompatibilityMatrixServer(b)
+	server.MaxFindScanDocuments = 8 // fixture has three IDs; no scan truncation.
+	for _, tc := range []struct {
+		name    string
+		command bson.D
+		field   string
+		want    int64
+	}{
+		{name: "dbStats", command: bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}, field: "objects", want: 3},
+		{name: "collStats", command: bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}, field: "count", want: 3},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			warmup := serveCommand(b, server, 1, tc.command)
+			if value, ok := warmup.Lookup(tc.field).Int64OK(); !ok || value != tc.want {
+				b.Fatalf("warmup %s=%s", tc.name, warmup)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = serveCommand(b, server, int32(i+2), tc.command)
+			}
+		})
+	}
+}
