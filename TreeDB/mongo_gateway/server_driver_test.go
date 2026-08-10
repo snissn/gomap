@@ -97,6 +97,39 @@ func TestStandaloneServerOfficialGoDriverExplainReadPlans(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerOfficialGoDriverCompoundPlanner(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	if err != nil {
+		t.Fatalf("open standalone: %v", err)
+	}
+	client, cancel, ln, serveErr := startStandaloneMongoClientForTest(t, standalone)
+	defer stopStandaloneMongoClientForTest(t, client, cancel, ln, serveErr, standalone)
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelCtx()
+	coll := client.Database("app").Collection("events")
+	if _, err := coll.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(-1)}}}); err != nil {
+		t.Fatalf("create compound index: %v", err)
+	}
+	if _, err := coll.InsertMany(ctx, []any{
+		bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "other"}, {Key: "score", Value: int32(3)}},
+	}); err != nil {
+		t.Fatalf("seed compound planner: %v", err)
+	}
+	cursor, err := coll.Find(ctx, bson.D{{Key: "tenant", Value: "acme"}}, options.Find().SetHint("tenant_1_score_-1").SetSort(bson.D{{Key: "score", Value: int32(-1)}}).SetBatchSize(1))
+	if err != nil {
+		t.Fatalf("driver compound hinted find: %v", err)
+	}
+	var docs []bson.M
+	if err := cursor.All(ctx, &docs); err != nil {
+		t.Fatalf("driver compound hinted cursor: %v", err)
+	}
+	if len(docs) != 2 || docs[0]["_id"] != "b" || docs[1]["_id"] != "a" {
+		t.Fatalf("driver compound docs=%v want b,a", docs)
+	}
+}
+
 func TestStandaloneServerOfficialGoDriverBoundedMultiWrites(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 	if err != nil {
