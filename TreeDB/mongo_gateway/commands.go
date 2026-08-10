@@ -4039,7 +4039,7 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 		retained += len(id)
 	}
 	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, projection: projection, lastUsed: time.Now()}
-	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize)
+	batch, consumed, materialized, err := s.compoundCursorBatch(cursor, 0, batchSize, 0)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -4070,7 +4070,7 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 	return cursorID, batch, nil
 }
 
-func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs int) (bson.A, int, int, error) {
+func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs, committedMaterialized int) (bson.A, int, int, error) {
 	if cursor.compoundCollection == nil {
 		return nil, 0, 0, errors.New("mongo gateway compound cursor has no collection")
 	}
@@ -4094,7 +4094,7 @@ func (s *Server) compoundCursorBatch(cursor *serverCursor, start, maxDocs int) (
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		if len(doc) > s.maxCursorRetainedBytes()-cursor.materializedBytes {
+		if len(doc) > s.maxCursorRetainedBytes()-committedMaterialized-materializedBytes {
 			return nil, 0, 0, fmt.Errorf("%w: Mongo gateway compound cursor materialization exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
 		}
 		projected, err := projectDocumentWithProjection(doc, cursor.projection)
@@ -4139,12 +4139,13 @@ func (s *Server) getMore(cursorID int64, ns string, owner int64, batchSize int, 
 		}
 		startPos := cursor.pos
 		if cursor.compoundCollection != nil {
+			committedMaterialized := cursor.materializedBytes
 			effectiveBatchSize := batchSize
 			if !explicitBatchSize {
 				effectiveBatchSize = defaultBatchSize
 			}
 			s.cursorMu.Unlock()
-			batch, consumed, materialized, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize)
+			batch, consumed, materialized, err := s.compoundCursorBatch(cursor, startPos, effectiveBatchSize, committedMaterialized)
 			if err != nil {
 				s.cursorMu.Lock()
 				if current := s.cursors[cursorID]; current == cursor && current.pos == startPos {
