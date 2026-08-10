@@ -20262,6 +20262,12 @@ type CompoundIndexRangeOptions struct {
 	Upper  IndexRangeBound
 	Limit  int
 	Desc   bool
+	// StableDocumentIDTies makes a descending BSON v2 scan emit equal logical
+	// index keys in ascending document-ID order. The default retains the
+	// historical physical reverse order for direct callers. A stable group is
+	// emitted atomically: if its complete IDs do not fit the result/work bound,
+	// the scan returns truncated without emitting a partial group.
+	StableDocumentIDTies bool
 }
 
 const defaultIndexRangeResultCap = 16
@@ -20419,8 +20425,10 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	}
 	ids := make([][]byte, 0)
 	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, persistedIt, idx.ValueType, opts.Limit, opts.Desc, 0, scanMergedCollectionIndexIDOptions{
-		CloneDocumentID:  true,
-		DedupeDocumentID: shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
+		CloneDocumentID:      true,
+		DedupeDocumentID:     shouldDedupeIndexDocumentIDs(idx, catalog.meta.Options),
+		StableDocumentIDTies: opts.Desc && opts.StableDocumentIDTies,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
 	}, func(id []byte) (bool, error) {
 		ids = append(ids, id)
 		return true, nil
@@ -21099,8 +21107,12 @@ func scanMergedCollectionIndexIDsBorrowed(bufferedIt, persistedIt iterator.Unsaf
 }
 
 type scanMergedCollectionIndexIDOptions struct {
-	CloneDocumentID  bool
-	DedupeDocumentID bool
+	CloneDocumentID      bool
+	DedupeDocumentID     bool
+	StableDocumentIDTies bool
+	// LogicalIndexKey extracts the encoded logical index value from an entry.
+	// It is required only for StableDocumentIDTies.
+	LogicalIndexKey func([]byte) ([]byte, error)
 }
 
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
@@ -21129,6 +21141,15 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		}
 		inspected += count
 		return true
+	}
+	if opts.StableDocumentIDTies {
+		if !reverse {
+			return false, errors.New("collections: stable document-ID ties require a descending scan")
+		}
+		if opts.LogicalIndexKey == nil {
+			return false, errors.New("collections: stable document-ID ties require a logical index key parser")
+		}
+		return scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt, valueType, maxResults, inspect, opts, fn)
 	}
 	if bufferedIt == nil && !opts.DedupeDocumentID {
 		emitted := 0
@@ -21272,6 +21293,141 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return false, err
 	}
 	return false, nil
+}
+
+// scanMergedCollectionIndexIDsStableReverse preserves reverse logical-index
+// order while normalizing each equal-key run to ascending document ID order.
+// It deliberately buffers only one run; callers never pay a full-result sort.
+func scanMergedCollectionIndexIDsStableReverse(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, inspect func(int) bool, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
+	nextLiveKey := func() ([]byte, bool, bool, error) {
+		for {
+			bufferedKey, bufferedOK := collectionIndexIteratorKey(bufferedIt)
+			persistedKey, persistedOK := collectionIndexIteratorKey(persistedIt)
+			if !bufferedOK && !persistedOK {
+				if err := collectionIndexIteratorError(bufferedIt); err != nil {
+					return nil, false, false, err
+				}
+				if err := collectionIndexIteratorError(persistedIt); err != nil {
+					return nil, false, false, err
+				}
+				return nil, false, false, nil
+			}
+			var key []byte
+			var deleted bool
+			switch {
+			case !bufferedOK:
+				if !inspect(1) {
+					return nil, false, true, collectionIndexIteratorError(persistedIt)
+				}
+				key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
+				persistedIt.Next()
+			case !persistedOK:
+				if !inspect(1) {
+					return nil, false, true, collectionIndexIteratorError(bufferedIt)
+				}
+				key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+				bufferedIt.Next()
+			default:
+				cmp := bytes.Compare(bufferedKey, persistedKey)
+				if cmp > 0 { // reverse merge: physically greater key first.
+					if !inspect(1) {
+						return nil, false, true, collectionIndexIteratorError(bufferedIt)
+					}
+					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+					bufferedIt.Next()
+				} else if cmp < 0 {
+					if !inspect(1) {
+						return nil, false, true, collectionIndexIteratorError(persistedIt)
+					}
+					key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
+					persistedIt.Next()
+				} else {
+					if !inspect(2) {
+						return nil, false, true, nil
+					}
+					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
+					bufferedIt.Next()
+					persistedIt.Next()
+				}
+			}
+			if !deleted {
+				return key, true, false, nil
+			}
+		}
+	}
+
+	var seen map[string]struct{}
+	if opts.DedupeDocumentID {
+		seen = make(map[string]struct{})
+	}
+	emitted := 0
+	var groupKey []byte
+	groupIDs := make([][]byte, 0)
+	emitGroup := func() (bool, bool, error) {
+		if len(groupIDs) == 0 {
+			return true, false, nil
+		}
+		// A limit may not cut a tie group: that would make a stable order depend
+		// on storage traversal rather than the promised document-ID tiebreaker.
+		if maxResults > 0 && len(groupIDs) > maxResults-emitted {
+			return false, true, nil
+		}
+		sort.Slice(groupIDs, func(i, j int) bool { return bytes.Compare(groupIDs[i], groupIDs[j]) < 0 })
+		for _, id := range groupIDs {
+			cont, err := fn(id)
+			if err != nil {
+				return false, false, err
+			}
+			emitted++
+			if !cont {
+				return false, false, nil
+			}
+		}
+		groupIDs = groupIDs[:0]
+		return true, false, nil
+	}
+	for {
+		key, ok, capped, err := nextLiveKey()
+		if err != nil {
+			return false, err
+		}
+		if capped {
+			return true, nil
+		}
+		if !ok {
+			cont, truncated, err := emitGroup()
+			if err != nil || truncated || !cont {
+				return truncated, err
+			}
+			return false, nil
+		}
+		logicalKey, err := opts.LogicalIndexKey(key)
+		if err != nil {
+			return false, err
+		}
+		if groupKey != nil && !bytes.Equal(groupKey, logicalKey) {
+			cont, truncated, err := emitGroup()
+			if err != nil || truncated || !cont {
+				return truncated, err
+			}
+			groupKey = nil
+		}
+		if groupKey == nil {
+			groupKey = bytes.Clone(logicalKey)
+		}
+		id, err := indexKeyDocumentID(valueType, key)
+		if err != nil {
+			return false, err
+		}
+		if opts.DedupeDocumentID {
+			idKey := string(id)
+			if _, duplicate := seen[idKey]; duplicate {
+				continue
+			}
+			seen[idKey] = struct{}{}
+		}
+		groupIDs = append(groupIDs, bytes.Clone(id))
+	}
 }
 
 func collectMergedCollectionIndexIDs(bufferedIt, persistedIt iterator.UnsafeIterator, prefix []byte, maxResults int) ([][]byte, bool, error) {

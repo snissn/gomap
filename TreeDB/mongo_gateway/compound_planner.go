@@ -395,6 +395,9 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	for _, prefix := range prefixes {
 		found, truncated, err := col.FindByCompoundIndexRange(candidate.idx.Name, collections.CompoundIndexRangeOptions{
 			Prefix: prefix, Lower: candidate.lower, Upper: candidate.upper, Limit: perPrefixLimit, Desc: candidate.reverse,
+			// Mongo's compatible sort contract uses _id as the deterministic tie
+			// breaker even when the physical secondary key is traversed backwards.
+			StableDocumentIDTies: candidate.reverse,
 		})
 		if err != nil {
 			return nil, candidate, true, err

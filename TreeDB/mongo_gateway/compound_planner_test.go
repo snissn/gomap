@@ -120,6 +120,27 @@ func TestMongoCompoundPlanEqualityPrefixRangeAndSort(t *testing.T) {
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 406505, reverse)), []string{"a", "b", "c"})
 }
 
+func TestMongoCompoundPlanReverseTieUsesStableDocumentID(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 4065051, bson.D{
+		{Key: "createIndexes", Value: "events"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "score", Value: int32(-1)}}}, {Key: "name", Value: "tenant_score_desc"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(t, serveCommand(t, server, 4065052, bson.D{
+		{Key: "insert", Value: "events"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "b"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(1)}},
+			bson.D{{Key: "_id", Value: "c"}, {Key: "tenant", Value: "acme"}, {Key: "score", Value: int32(2)}},
+		}}, {Key: "$db", Value: "app"},
+	}))
+	// score:1 is the complete reverse of the descending index. Equal scores
+	// still use the gateway's stable ascending _id tiebreaker.
+	response := serveCommand(t, server, 4065053, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}}, {Key: "sort", Value: bson.D{{Key: "score", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"a", "b", "c"})
+}
+
 func TestMongoCompoundPlannerCursorStreamsIDsAcrossGetMore(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	assertOK(t, serveCommand(t, server, 406506, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))

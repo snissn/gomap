@@ -346,6 +346,19 @@ func TestFindByCompoundIndexRangeHonorsDirectionsBoundsAndTieIDs(t *testing.T) {
 		t.Fatalf("reverse scan err=%v truncated=%v", err, truncated)
 	}
 	assertIDs(got, "a", "c", "e")
+	// Legacy direct descending scans retain physical reverse-ID order. Clients
+	// that need gateway-compatible ordering opt into atomic ascending-ID ties.
+	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Desc: true, StableDocumentIDTies: true, Limit: 4})
+	if err != nil || truncated {
+		t.Fatalf("stable reverse scan err=%v truncated=%v", err, truncated)
+	}
+	assertIDs(got, "a", "c", "b", "e")
+	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Desc: true, StableDocumentIDTies: true, Limit: 3})
+	if err != nil || !truncated {
+		t.Fatalf("stable reverse limited scan err=%v truncated=%v", err, truncated)
+	}
+	// The two-ID tie at createdAt=3 cannot be partially emitted after a,c.
+	assertIDs(got, "a", "c")
 	got, truncated, err = col.FindByCompoundIndexRange("tenant_created", CompoundIndexRangeOptions{Prefix: []bson.RawValue{stringRaw("acme")}, Lower: IndexRangeBound{Value: intRaw(2), Inclusive: true}, Upper: IndexRangeBound{Value: intRaw(3), Inclusive: true}, Limit: 3})
 	if err != nil || truncated {
 		t.Fatalf("range scan err=%v truncated=%v", err, truncated)
@@ -737,6 +750,43 @@ func TestScanMergedCompoundIndexIDsReverseInterleavesBufferedAndPersisted(t *tes
 	})
 	if err != nil || truncated || fmt.Sprint(got) != "[d c b a]" {
 		t.Fatalf("reverse merged ids=%v truncated=%v err=%v", got, truncated, err)
+	}
+}
+
+func TestScanMergedCompoundIndexIDsStableReverseDoesNotEmitPartialTieAtWorkCap(t *testing.T) {
+	key := func(value, id string) []byte {
+		t.Helper()
+		component, err := encodeBSONIndexKeyComponentV2(bson.RawValue{Type: bson.TypeString, Value: bsoncoreAppendString(value)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := bsonIndexEntryKeyV2(component, []byte(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	table := newCollectionRunTable(3)
+	defer resetCollectionRunTable(table)
+	// Reverse physical order reaches b,a (one logical tie) before c. A cap at
+	// two entries must not publish b,a without proving that their tie ended.
+	setCollectionRunValue(table, key("a", "a"), nil)
+	setCollectionRunValue(table, key("a", "b"), nil)
+	setCollectionRunValue(table, key("b", "c"), nil)
+	table.Freeze()
+	it := table.NewReverseIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	var got []string
+	truncated, err := scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(nil, it, IndexValueBSONOrderedV2, 4, true, 2, scanMergedCollectionIndexIDOptions{
+		CloneDocumentID:      true,
+		StableDocumentIDTies: true,
+		LogicalIndexKey:      bsonIndexKeyValuePrefixV2,
+	}, func(id []byte) (bool, error) {
+		got = append(got, string(id))
+		return true, nil
+	})
+	if err != nil || !truncated || fmt.Sprint(got) != "[c]" {
+		t.Fatalf("stable reverse cap ids=%q truncated=%v err=%v want [c],true,nil", got, truncated, err)
 	}
 }
 

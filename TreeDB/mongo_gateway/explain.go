@@ -22,12 +22,29 @@ type findExecutionStats struct {
 	documentsReturned      int64
 	stage                  string
 	indexName              string
+	selection              findPlannerSelection
 }
 
 func (p findPlan) recordWinner(stage, indexName string) {
 	if p.stats != nil {
 		p.stats.stage = stage
 		p.stats.indexName = indexName
+		p.stats.selection.stage = stage
+		p.stats.selection.indexName = indexName
+	}
+}
+
+func (p findPlan) recordCompoundWinner(candidate compoundIndexPlan) {
+	if p.stats == nil {
+		return
+	}
+	p.stats.stage = "compound_index_scan"
+	p.stats.indexName = candidate.idx.Name
+	p.stats.selection = findPlannerSelection{
+		stage: "compound_index_scan", indexName: candidate.idx.Name,
+		indexField: candidate.idx.Field, residualFilters: candidate.residualFilters,
+		sortSatisfied: candidate.sortSatisfied, equalityPrefix: candidate.equalityPrefix,
+		hasRange: candidate.hasRange, reverse: candidate.reverse,
 	}
 }
 
@@ -414,6 +431,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		{Key: "sort", Value: sortDescription},
 		{Key: "maxScanDocuments", Value: int64(s.maxFindScanDocuments())},
 		{Key: "cursorWork", Value: "none"},
+		{Key: "hint", Value: bson.D{{Key: "present", Value: plan.hint.present}, {Key: "status", Value: explainHintStatus(plan)}}},
 	}
 	if selection.stage == "adaptive_candidate_selection" {
 		planner = append(planner, bson.E{Key: "candidatePlans", Value: explainCandidatePlans(col, plan)})
@@ -421,7 +439,7 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	response := bson.D{{Key: "queryPlanner", Value: planner}}
 	if verbosity == "executionStats" {
 		start := time.Now()
-		stats := &findExecutionStats{stage: selection.stage, indexName: selection.indexName}
+		stats := &findExecutionStats{stage: selection.stage, indexName: selection.indexName, selection: selection}
 		plan.stats = stats
 		if !missing {
 			if returned, execErr := execute(plan); execErr != nil {
@@ -448,7 +466,10 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 		// but its final winner is reported from that shared execution path.
 		winning[0].Value = stats.stage
 		if stats.stage != selection.stage || stats.indexName != selection.indexName {
-			actual := findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField}
+			actual := stats.selection
+			if actual.stage == "" {
+				actual = findPlannerSelection{stage: stats.stage, indexName: stats.indexName, indexField: selection.indexField}
+			}
 			for _, idx := range col.MetaView().Indexes {
 				if idx.Name == stats.indexName {
 					actual.indexField = idx.Field
@@ -459,8 +480,15 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			if stats.indexName != "" {
 				winning = append(winning, bson.E{Key: "indexName", Value: stats.indexName})
 			}
+			if actual.stage == "compound_index_scan" {
+				winning = append(winning,
+					bson.E{Key: "equalityPrefix", Value: int32(actual.equalityPrefix)},
+					bson.E{Key: "range", Value: actual.hasRange},
+					bson.E{Key: "reverse", Value: actual.reverse},
+				)
+			}
 			if plan.sort.field != "" {
-				winning = append(winning, bson.E{Key: "inMemorySort", Value: stats.stage != "compound_index_scan"})
+				winning = append(winning, bson.E{Key: "inMemorySort", Value: !actual.sortSatisfied})
 			}
 			planner[1].Value = winning
 		}
@@ -482,6 +510,13 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 	}
 	response = append(response, bson.E{Key: "ok", Value: 1.0})
 	return marshalDocument(response)
+}
+
+func explainHintStatus(plan findPlan) string {
+	if !plan.hint.present {
+		return "not_requested"
+	}
+	return "honored"
 }
 
 func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {

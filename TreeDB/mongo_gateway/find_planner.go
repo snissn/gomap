@@ -283,7 +283,7 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 		if plan.limit > 0 && int(plan.limit) < len(filtered) {
 			filtered = filtered[:plan.limit]
 		}
-		plan.recordWinner("compound_index_scan", compound.idx.Name)
+		plan.recordCompoundWinner(compound)
 		plan.recordReturned(len(filtered))
 		return findResultSet{docs: filtered, projection: plan.projection}, nil
 	}
