@@ -3706,7 +3706,7 @@ func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]Collec
 		return nil, false, nil
 	}
 	prefix := []byte(systemCollectionMetaPrefix)
-	it, err := snap.IteratorAtRoot(state.SystemRootPageID, prefix, prefixEnd(prefix))
+	it, err := snap.IteratorAtRootWithOptions(state.SystemRootPageID, prefix, prefixEnd(prefix), backenddb.IteratorOptions{IncludeTombstones: true})
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, false, nil
 	}
