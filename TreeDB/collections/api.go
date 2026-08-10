@@ -3736,6 +3736,10 @@ func listCollectionMetasBounded(it collectionMetaIterator, prefix []byte, maxCol
 			break
 		}
 		if maxCollections > 0 && inspected >= maxCollections {
+			if err := it.Error(); err != nil {
+				return nil, false, err
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 			return out, true, nil
 		}
 		inspected++

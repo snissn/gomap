@@ -1181,6 +1181,7 @@ type collectionMetaIteratorTestEntry struct {
 type collectionMetaIteratorTestFake struct {
 	entries []collectionMetaIteratorTestEntry
 	idx     int
+	err     error
 }
 
 func (it *collectionMetaIteratorTestFake) Valid() bool { return it.idx < len(it.entries) }
@@ -1192,7 +1193,7 @@ func (it *collectionMetaIteratorTestFake) ValueCopy(dst []byte) []byte {
 	return append(dst, it.entries[it.idx].value...)
 }
 func (it *collectionMetaIteratorTestFake) IsDeleted() bool { return it.entries[it.idx].deleted }
-func (it *collectionMetaIteratorTestFake) Error() error    { return nil }
+func (it *collectionMetaIteratorTestFake) Error() error    { return it.err }
 
 func TestListCollectionMetasBoundedChargesTombstones(t *testing.T) {
 	prefix := []byte(systemCollectionMetaPrefix)
@@ -1229,6 +1230,10 @@ func TestListCollectionMetasBoundedChargesTombstones(t *testing.T) {
 				}
 			}
 		})
+	}
+	_, truncated, err := listCollectionMetasBounded(&collectionMetaIteratorTestFake{entries: entries, err: errors.New("cut-point failure")}, prefix, 2)
+	if err == nil || truncated {
+		t.Fatalf("cut-point iterator error truncated=%t err=%v", truncated, err)
 	}
 }
 

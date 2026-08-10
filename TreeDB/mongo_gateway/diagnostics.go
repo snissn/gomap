@@ -128,11 +128,9 @@ func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, err
 	}
 	uptime, commands, _, droppedCommands, droppedNamespaces := s.diagnosticsSnapshot()
 	var currentConns int64
-	if s != nil {
-		s.connMu.Lock()
-		currentConns = int64(len(s.conns))
-		s.connMu.Unlock()
-	}
+	s.connMu.Lock()
+	currentConns = int64(len(s.conns))
+	s.connMu.Unlock()
 	commandDoc := make(bson.D, 0, len(commands))
 	opcounters := bson.D{
 		{Key: "insert", Value: int64(0)},
@@ -167,7 +165,7 @@ func (s *Server) serverStatusResponse(command wire.Document) (wire.Document, err
 		{Key: "opcounters", Value: opcounters},
 		{Key: "metrics", Value: bson.D{{Key: "treedb", Value: bson.D{{Key: "commands", Value: commandDoc}, {Key: "droppedCommandMetrics", Value: droppedCommands}, {Key: "droppedNamespaceMetrics", Value: droppedNamespaces}}}}},
 	}
-	if s != nil && s.diagnosticCommandWALEnabled != nil {
+	if s.diagnosticCommandWALEnabled != nil {
 		response = append(response, bson.E{Key: "storage", Value: bson.D{{Key: "treedb", Value: bson.D{{Key: "commandWAL", Value: s.diagnosticCommandWALEnabled()}}}}})
 	}
 	response = append(response, bson.E{Key: "ok", Value: 1.0})
