@@ -1,0 +1,9 @@
+{
+  "schema":"treedb.mongo-gateway.compat-diff.fixture","version":1,
+  "id":"compound-hinted-find","capability_id":"query.compound-descending-bson-v2-planner","expectation":"supported",
+  "database":"compat","collection":"records","smoke":false,
+  "normalize_cursor_namespace":true,"normalize_cursor_envelope_order":true,
+  "setup":[{"createIndexes":"records","indexes":[{"key":{"tenant":{"$numberInt":"1"},"score":{"$numberInt":"-1"}},"name":"tenant_1_score_-1"}]}],
+  "seed":[{"_id":"a","tenant":"acme","score":{"$numberInt":"1"}},{"_id":"b","tenant":"acme","score":{"$numberInt":"2"}},{"_id":"c","tenant":"other","score":{"$numberInt":"3"}}],
+  "command":{"find":"records","filter":{"tenant":"acme"},"hint":"tenant_1_score_-1","sort":{"score":{"$numberInt":"-1"}},"batchSize":{"$numberInt":"1"}}
+}

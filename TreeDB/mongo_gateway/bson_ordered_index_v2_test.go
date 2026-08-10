@@ -117,7 +117,7 @@ func TestServerExactIDBSONSetMaintainsNonLeadingCompoundComponent(t *testing.T) 
 	}), 0)
 }
 
-func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *testing.T) {
+func TestServerFindPlansCompoundAndExplicitDescendingIndexes(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -144,36 +144,34 @@ func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *tes
 		{Key: "$db", Value: "app"},
 	}))
 
-	// #4063 deliberately does not add compound/descending planner support. The
-	// legacy single-field path must therefore decline these definitions and let
-	// find evaluate its normal collection-scan fallback rather than erroring.
+	// #4065 owns planner selection for the direct BSON-v2 compound primitive.
+	// The compound index's declared descending suffix defines the no-sort scan
+	// order; callers that need a particular order must request sort explicitly.
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40642, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "tenant", Value: "acme"}}},
 		{Key: "$db", Value: "app"},
-	})), []string{"u1", "u2"})
+	})), []string{"u2", "u1"})
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40643, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "createdAt", Value: int32(2)}}},
 		{Key: "$db", Value: "app"},
 	})), []string{"u2"})
-	// This shape would otherwise enter pureIndexedRangeLimitPlan before the
-	// general candidate planner, so it must receive the same fallback.
+	// Explicit descending BSON-v2 indexes must use the compound primitive,
+	// rather than the legacy ascending single-field range API.
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40644, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "createdAt", Value: bson.D{{Key: "$gte", Value: int32(2)}}}}},
 		{Key: "limit", Value: int32(1)},
 		{Key: "$db", Value: "app"},
-	})), []string{"u2"})
+	})), []string{"u3"})
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 40645, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "tenant", Value: bson.D{{Key: "$gte", Value: "acme"}}}}},
 		{Key: "limit", Value: int32(1)},
 		{Key: "$db", Value: "app"},
-	})), []string{"u1"})
-	// Explain shares the executor's probe eligibility. It must describe the
-	// same bounded-scan fallback rather than advertising a #4065-only index
-	// path for either ordered-v2 definition.
+	})), []string{"u2"})
+	// Explain shares the executor's compound eligibility.
 	for _, tc := range []struct {
 		requestID int32
 		filter    bson.D
@@ -187,8 +185,8 @@ func TestServerFindFallsBackToScanForCompoundAndExplicitDescendingIndexes(t *tes
 		})
 		assertOK(t, resp)
 		stage, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("winningPlan").Document().Lookup("stage").StringValueOK()
-		if !ok || stage != "bounded_scan" {
-			t.Fatalf("explain stage=%q ok=%v want bounded_scan: %s", stage, ok, resp)
+		if !ok || stage != "compound_index_scan" {
+			t.Fatalf("explain stage=%q ok=%v want compound_index_scan: %s", stage, ok, resp)
 		}
 	}
 }

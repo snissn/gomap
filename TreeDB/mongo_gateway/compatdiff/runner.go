@@ -33,23 +33,26 @@ const (
 // representation is canonical Extended JSON; the runner decodes it to BSON Raw
 // before execution so type and field-order evidence is retained.
 type Fixture struct {
-	Schema                         string      `json:"schema"`
-	Version                        int         `json:"version"`
-	ID                             string      `json:"id"`
-	CapabilityID                   string      `json:"capability_id"`
-	Expectation                    Expectation `json:"expectation"`
-	ExpectedErrorCode              int32       `json:"expected_error_code,omitempty"`
-	Database                       string      `json:"database"`
-	Collection                     string      `json:"collection"`
-	Smoke                          bool        `json:"smoke"`
-	Seed                           []bson.Raw  `json:"seed,omitempty"`
-	Command                        bson.Raw    `json:"command"`
-	IgnoreFields                   []string    `json:"ignore_fields,omitempty"`
-	IgnoreStateFields              []string    `json:"ignore_state_fields,omitempty"`
-	NormalizeFields                []string    `json:"normalize_fields,omitempty"`
-	NormalizeResponseEnvelopeOrder bool        `json:"normalize_response_envelope_order,omitempty"`
-	NormalizeCursorEnvelopeOrder   bool        `json:"normalize_cursor_envelope_order,omitempty"`
-	NormalizeCursorNamespace       bool        `json:"normalize_cursor_namespace,omitempty"`
+	Schema            string      `json:"schema"`
+	Version           int         `json:"version"`
+	ID                string      `json:"id"`
+	CapabilityID      string      `json:"capability_id"`
+	Expectation       Expectation `json:"expectation"`
+	ExpectedErrorCode int32       `json:"expected_error_code,omitempty"`
+	Database          string      `json:"database"`
+	Collection        string      `json:"collection"`
+	Smoke             bool        `json:"smoke"`
+	Seed              []bson.Raw  `json:"seed,omitempty"`
+	// Setup is a bounded, ordered pre-command sequence (normally createIndexes)
+	// run independently against both targets before the baseline snapshot.
+	Setup                          []bson.Raw `json:"setup,omitempty"`
+	Command                        bson.Raw   `json:"command"`
+	IgnoreFields                   []string   `json:"ignore_fields,omitempty"`
+	IgnoreStateFields              []string   `json:"ignore_state_fields,omitempty"`
+	NormalizeFields                []string   `json:"normalize_fields,omitempty"`
+	NormalizeResponseEnvelopeOrder bool       `json:"normalize_response_envelope_order,omitempty"`
+	NormalizeCursorEnvelopeOrder   bool       `json:"normalize_cursor_envelope_order,omitempty"`
+	NormalizeCursorNamespace       bool       `json:"normalize_cursor_namespace,omitempty"`
 }
 
 func (f Fixture) Validate() error {

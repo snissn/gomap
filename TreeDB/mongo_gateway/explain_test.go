@@ -453,16 +453,26 @@ func TestMongoExplainReadCommandAdapters(t *testing.T) {
 	}
 }
 
-func TestMongoExplainAggregateRejectsUnrepresentablePipelineSort(t *testing.T) {
+func TestMongoExplainAggregateRepresentsInitialPipelineSort(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	resp := serveCommand(t, server, 107, bson.D{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{bson.D{{Key: "$sort", Value: bson.D{{Key: "name", Value: int32(1)}}}}}}, {Key: "cursor", Value: bson.D{}}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, resp, "BadValue")
-	planner, ok := bson.Raw(resp).Lookup("queryPlanner").DocumentOK()
-	if !ok {
-		t.Fatalf("rejected aggregate must retain planner context: %s", resp)
+	assertOK(t, resp)
+	sortInfo, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("sort").DocumentOK()
+	if !ok || sortInfo.Lookup("field").StringValue() != "name" {
+		t.Fatalf("initial aggregate sort missing from explain: %s", resp)
 	}
-	if reason, ok := planner.Lookup("rejectionReason").StringValueOK(); !ok || reason != "unsupported_aggregate_pipeline" {
-		t.Fatalf("rejection reason=%q ok=%v", reason, ok)
+}
+
+func TestMongoExplainAggregateRejectsNonInitialPipelineSort(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	resp := serveCommand(t, server, 108, bson.D{{Key: "explain", Value: bson.D{{Key: "aggregate", Value: "users"}, {Key: "pipeline", Value: bson.A{
+		bson.D{{Key: "$match", Value: bson.D{{Key: "city", Value: "hnl"}}}},
+		bson.D{{Key: "$project", Value: bson.D{{Key: "city", Value: int32(1)}}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "city", Value: int32(1)}}}},
+	}}, {Key: "cursor", Value: bson.D{}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	if got, ok := bson.Raw(resp).Lookup("queryPlanner").Document().Lookup("rejectionReason").StringValueOK(); !ok || got != "unsupported_aggregate_pipeline" {
+		t.Fatalf("reason=%q ok=%v response=%s", got, ok, resp)
 	}
 }
 
@@ -487,6 +497,31 @@ func TestMongoExplainAdaptiveMultiIndexPlanDoesNotClaimAnUnexecutedWinner(t *tes
 	}
 	if !executedPlanner.Lookup("candidatePlans").IsZero() {
 		t.Fatalf("candidatePlans must be omitted once execution resolves the adaptive winner: %s", executed)
+	}
+}
+
+func TestMongoExplainAdaptiveCompoundWinnerRefreshesSortSatisfaction(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 1061, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}, {Key: "age", Value: int32(1)}}}, {Key: "name", Value: "city_age"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}, {Key: "name", Value: int32(1)}}}, {Key: "name", Value: "city_name"}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "explain", Value: bson.D{
+		{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}}},
+		{Key: "sort", Value: bson.D{{Key: "age", Value: int32(1)}}},
+	}}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 1062, command)
+	assertOK(t, response)
+	planner := bson.Raw(response).Lookup("queryPlanner").Document()
+	winning := planner.Lookup("winningPlan").Document()
+	if got := winning.Lookup("stage").StringValue(); got != "compound_index_scan" {
+		t.Fatalf("winning stage=%q want compound_index_scan: %s", got, response)
+	}
+	if inMemory, ok := winning.Lookup("inMemorySort").BooleanOK(); !ok || inMemory {
+		t.Fatalf("winning inMemorySort=%v ok=%v want false: %s", inMemory, ok, response)
+	}
+	if satisfied, ok := planner.Lookup("sort").Document().Lookup("satisfied").BooleanOK(); !ok || !satisfied {
+		t.Fatalf("planner sort satisfied=%v ok=%v want true: %s", satisfied, ok, response)
 	}
 }
 

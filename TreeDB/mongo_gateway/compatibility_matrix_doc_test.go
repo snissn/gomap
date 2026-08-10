@@ -15,6 +15,8 @@ const (
 	compatibilityMatrixDocPath = "COMPATIBILITY.md"
 	compatibilityMatrixBegin   = "<!-- mongo-compatibility-matrix:begin -->"
 	compatibilityMatrixEnd     = "<!-- mongo-compatibility-matrix:end -->"
+	bsonStorageMatrixBegin     = "<!-- mongo-bson-storage-matrix:begin -->"
+	bsonStorageMatrixEnd       = "<!-- mongo-bson-storage-matrix:end -->"
 	capabilitySummaryDocPath   = "README.md"
 	capabilitySummaryBegin     = "<!-- mongo-capability-summary:begin -->"
 	capabilitySummaryEnd       = "<!-- mongo-capability-summary:end -->"
@@ -33,7 +35,11 @@ func TestMongoCompatibilityMatrixDocumentationUpToDate(t *testing.T) {
 		{
 			path: compatibilityMatrixDocPath,
 			replace: func(doc string) (string, error) {
-				return replaceGeneratedCompatibilityMatrix(doc, manifest)
+				doc, err := replaceGeneratedCompatibilityMatrix(doc, manifest)
+				if err != nil {
+					return "", err
+				}
+				return replaceGeneratedBSONStorageMatrix(doc)
 			},
 		},
 		{
@@ -73,6 +79,12 @@ func TestMongoCompatibilityMatrixDocumentationUpToDate(t *testing.T) {
 func replaceGeneratedCompatibilityMatrix(doc string, manifest MongoGatewayCapabilityManifest) (string, error) {
 	return replaceGeneratedCapabilityBlock(doc, compatibilityMatrixBegin, compatibilityMatrixEnd, func(newline string) (string, error) {
 		return generatedCompatibilityMatrix(manifest, newline), nil
+	})
+}
+
+func replaceGeneratedBSONStorageMatrix(doc string) (string, error) {
+	return replaceGeneratedCapabilityBlock(doc, bsonStorageMatrixBegin, bsonStorageMatrixEnd, func(newline string) (string, error) {
+		return generatedBSONStorageMatrix(newline), nil
 	})
 }
 
@@ -167,6 +179,26 @@ func generatedCompatibilityMatrix(manifest MongoGatewayCapabilityManifest, newli
 			newline)
 	}
 	b.WriteString(compatibilityMatrixEnd)
+	return b.String()
+}
+
+func generatedBSONStorageMatrix(newline string) string {
+	var b strings.Builder
+	b.WriteString(bsonStorageMatrixBegin)
+	b.WriteString(newline)
+	b.WriteString("| Surface | Status | Harness / evidence | Current gap |")
+	b.WriteString(newline)
+	b.WriteString("|---|---|---|---|")
+	b.WriteString(newline)
+	for _, row := range mongoGatewayBSONStorageCompatibilityRows {
+		fmt.Fprintf(&b, "| %s | `%s` | %s | %s |%s",
+			markdownTableCell(row.Surface),
+			markdownTableCell(row.Status),
+			markdownTableCell(row.Evidence),
+			markdownTableCell(row.Gap),
+			newline)
+	}
+	b.WriteString(bsonStorageMatrixEnd)
 	return b.String()
 }
 
