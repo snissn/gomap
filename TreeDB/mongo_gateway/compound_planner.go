@@ -471,7 +471,23 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 	if len(candidates) == 0 {
 		return nil, compoundIndexPlan{}, false, nil
 	}
-	candidate := candidates[0]
+	// A strict hint names the required index. Unhinted plans, by contrast, are
+	// advertised as adaptive candidates: a broad leading-prefix candidate may
+	// exhaust its bounded walk while a later fully usable candidate is selective.
+	// Try each concrete candidate rather than reporting a syntactic alternative
+	// which execution never considers. Non-cap failures remain fail-closed.
+	var lastCapErr error
+	for _, candidate := range candidates {
+		ids, selected, ok, err := s.compoundIndexPlanIDsForCandidate(col, plan, candidate, retainedIDCaps...)
+		if err == nil || !ok || plan.hint.present || !errors.Is(err, errMongoFindScanCapExceeded) {
+			return ids, selected, ok, err
+		}
+		lastCapErr = err
+	}
+	return nil, candidates[0], true, lastCapErr
+}
+
+func (s *Server) compoundIndexPlanIDsForCandidate(col *collections.Collection, plan findPlan, candidate compoundIndexPlan, retainedIDCaps ...int) ([][]byte, compoundIndexPlan, bool, error) {
 	prefixes := compoundPrefixes(candidate.prefixChoices)
 	maxDocuments := s.maxFindScanDocuments()
 	// Keep the physical inspection ceiling tied to the global planner budget,

@@ -102,6 +102,14 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
 	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
 	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
+	// A cloned projection retains both its map header/buckets and one string
+	// header per field. The runtime does not expose bucket sizing, so include a
+	// conservative per-entry allowance in addition to the field bytes below.
+	const projectionMapEntryOverhead = int(unsafe.Sizeof(string(""))) + 16
+	if len(plan.projection.fields) != 0 {
+		bytes += int(unsafe.Sizeof(plan.projection.fields))
+		bytes += len(plan.projection.fields) * projectionMapEntryOverhead
+	}
 	type stringAllocation struct {
 		data *byte
 		len  int

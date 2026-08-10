@@ -727,6 +727,26 @@ func TestMongoCompoundPlannerCursorChargesRetainedProjectionFields(t *testing.T)
 	}
 }
 
+func TestMongoCompoundPlannerCursorChargesProjectionMapStructure(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	// Short field names keep the payload below this cap; the cloned projection
+	// map's buckets and string headers must still prevent cursor publication.
+	server.MaxCursorRetainedBytes = 160
+	assertOK(t, serveCommand(t, server, 406511261, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406511262, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "a"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}}}}, {Key: "$db", Value: "app"}}))
+	projection := bson.D{}
+	for i := 0; i < 16; i++ {
+		projection = append(projection, bson.E{Key: fmt.Sprintf("p%02d", i), Value: int32(1)})
+	}
+	resp := serveCommand(t, server, 406511263, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}}, {Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}}, {Key: "projection", Value: projection}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, resp, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor despite retained projection-map cap: %d", len(server.cursors))
+	}
+}
+
 func TestFindPlanCursorRetainedBytesChargesClonedCommandStringsOnce(t *testing.T) {
 	// cloneFindPlanForCursor retains string headers from every command shape;
 	// aliases must not consume the cap twice, while separately allocated equal
@@ -747,7 +767,7 @@ func TestFindPlanCursorRetainedBytesChargesClonedCommandStringsOnce(t *testing.T
 		projection: compiledProjection{fields: map[string]struct{}{"projection": {}, shared: {}}},
 	}
 	want := len([]byte{1, 2}) + len("predicate") + len("or-predicate") + 2*len(shared) + len("sort-term") + len("hint-name") + len("component") + len("projection") +
-		(len(plan.predicates)+len(plan.orBranches[0]))*int(unsafe.Sizeof(findPredicate{})) + len(plan.orBranches)*int(unsafe.Sizeof([]findPredicate{})) + len(plan.sort.terms)*int(unsafe.Sizeof(findSortTerm{})) + len(plan.hint.components)*int(unsafe.Sizeof(collections.IndexComponent{})) + int(unsafe.Sizeof(bson.RawValue{}))
+		(len(plan.predicates)+len(plan.orBranches[0]))*int(unsafe.Sizeof(findPredicate{})) + len(plan.orBranches)*int(unsafe.Sizeof([]findPredicate{})) + len(plan.sort.terms)*int(unsafe.Sizeof(findSortTerm{})) + len(plan.hint.components)*int(unsafe.Sizeof(collections.IndexComponent{})) + int(unsafe.Sizeof(bson.RawValue{})) + int(unsafe.Sizeof(plan.projection.fields)) + len(plan.projection.fields)*(int(unsafe.Sizeof(string("")))+16)
 	if got := findPlanCursorRetainedBytes(plan); got != want {
 		t.Fatalf("retained cursor-plan bytes=%d, want %d", got, want)
 	}
@@ -1279,5 +1299,30 @@ func TestMongoUnhintedCompoundDoesNotPreemptSelectiveLegacyCandidate(t *testing.
 	}
 	if got := winning.Lookup("stage").StringValue(); got != "secondary_equality_lookup" {
 		t.Fatalf("winner stage=%q want secondary_equality_lookup: %s", got, explain)
+	}
+}
+
+func TestMongoUnhintedCompoundTriesLaterSelectiveCompoundCandidate(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	server.MaxFindScanDocuments = 2
+	assertOK(t, serveCommand(t, server, 406574, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "a", Value: int32(1)}, {Key: "b", Value: int32(1)}, {Key: "c", Value: int32(1)}}}, {Key: "name", Value: "a_b_c"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "d", Value: int32(1)}, {Key: "e", Value: int32(1)}}}, {Key: "name", Value: "d_e"}},
+	}}, {Key: "$db", Value: "app"}}))
+	docs := bson.A{
+		bson.D{{Key: "_id", Value: "0"}, {Key: "a", Value: "same"}, {Key: "b", Value: "same"}, {Key: "c", Value: "same"}, {Key: "d", Value: "other"}, {Key: "e", Value: "other"}},
+		bson.D{{Key: "_id", Value: "1"}, {Key: "a", Value: "same"}, {Key: "b", Value: "same"}, {Key: "c", Value: "same"}, {Key: "d", Value: "other"}, {Key: "e", Value: "other"}},
+		bson.D{{Key: "_id", Value: "2"}, {Key: "a", Value: "same"}, {Key: "b", Value: "same"}, {Key: "c", Value: "same"}, {Key: "d", Value: "wanted"}, {Key: "e", Value: "wanted"}},
+	}
+	assertOK(t, serveCommand(t, server, 406575, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "a", Value: "same"}, {Key: "b", Value: "same"}, {Key: "c", Value: "same"}, {Key: "d", Value: "wanted"}, {Key: "e", Value: "wanted"}}}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 406576, command)
+	assertOK(t, response)
+	assertBatchIDs(t, cursorFirstBatch(t, response), []string{"2"})
+	explain := serveCommand(t, server, 406577, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	winning := bson.Raw(explain).Lookup("queryPlanner").Document().Lookup("winningPlan").Document()
+	if got := winning.Lookup("indexName").StringValue(); got != "d_e" {
+		t.Fatalf("winner index=%q want d_e: %s", got, explain)
 	}
 }
