@@ -775,6 +775,78 @@ func TestM8ProductionMultiGroupAssetsCheckedIn10kCISmokeV1(t *testing.T) {
 	}
 }
 
+func TestRetainedLocalHNSWVariantHarnessV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	vectors := make([][]float64, 16)
+	for i := range vectors {
+		vectors[i] = []float64{float64(i + 1), float64(i%3 + 1), 1}
+	}
+	source, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDir := source.dir
+	source.owned = false
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sourceDir)
+	source, err = openM8ProductionExistingAssetSetV1(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	native, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantNativeV1, 9981)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := native.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	overlay, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantOverlayCurrentV1, 9982)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := overlay.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if len(native.searchers) != len(source.manifest.Assets) || len(overlay.searchers) != len(source.manifest.Assets) {
+		t.Fatalf("variant partition coverage native=%d overlay=%d retained=%d", len(native.searchers), len(overlay.searchers), len(source.manifest.Assets))
+	}
+	for p, retained := range source.manifest.Assets {
+		if overlay.searchers[p].Status().SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || retained.PartitionID != uint32(p) {
+			t.Fatalf("overlay partition=%d retained=%+v", p, retained)
+		}
+		if overlay.packAssets[p].Checksum != retained.Checksum || overlay.packAssets[p].Bytes != retained.Bytes || overlay.packAssets[p].MembershipDigest != retained.MembershipDigest {
+			t.Fatalf("overlay rematerialization drift partition=%d got=%+v want=%+v", p, overlay.packAssets[p], retained)
+		}
+	}
+	query := []float32{1, 1, 1}
+	route, err := source.router.SearchWithContextV1(t.Context(), query, collections.VectorPartitionRouterSearchOptionsV1{Mode: "approximate", CandidateBudget: 4, PartitionProbes: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, picked := range route.Partitions {
+		p := picked.PartitionID
+		nr, _, err := native.searchers[p].SearchExactWithOptionsV1(t.Context(), query, collections.VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		or, _, err := overlay.searchers[p].SearchExactWithOptionsV1(t.Context(), query, collections.VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 16})
+		if err != nil || len(nr) != len(or) || len(nr) != 1 || nr[0] != or[0] {
+			t.Fatalf("fixed route partition=%d native=%+v overlay=%+v err=%v", p, nr, or, err)
+		}
+	}
+}
+
 func TestM8ExactPartitionUnionRejectsDuplicateOrMissingPlacementsV1(t *testing.T) {
 	assets := &m8ProductionMultiGroupAssetsV1{}
 	assets.manifest.PartitionCount = 2
