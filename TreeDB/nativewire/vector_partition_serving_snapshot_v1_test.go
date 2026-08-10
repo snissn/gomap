@@ -443,6 +443,62 @@ func TestVectorPartitionServingSnapshotFastRejectsStaleAndCanceledV1(t *testing.
 	}
 }
 
+func TestVectorPartitionServingSnapshotWatermarkWaitAndPinExpiryAreBoundedV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	fixture.publisher.opts.MaxWatermarkWait = 20 * time.Millisecond
+	fixture.publisher.opts.MaxRetainedSnapshots = 1
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.publisher.AcquireFastV1(context.Background(), time.Minute, 99); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("unreachable watermark error=%v", err)
+	}
+	pinned, err := fixture.publisher.AcquirePinnedV1(t.Context(), time.Minute, 0, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pinned.lockPinnedProofV1(); err != nil {
+		t.Fatal(err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			pinned.useMu.RUnlock()
+		}
+	}()
+	if err := fixture.publisher.PublishStateV1(t.Context(), 12, strings.Repeat("f", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if wait := time.Until(pinned.expires); wait > 0 {
+		time.Sleep(wait + time.Millisecond)
+	}
+	if stats := fixture.publisher.StatsV1(); stats.CurrentPinnedSessions != 1 || stats.RetainedSnapshots != 1 || stats.CurrentPins != 1 {
+		t.Fatalf("expiry released an in-use pinned snapshot: %+v", stats)
+	}
+	pinned.useMu.RUnlock()
+	locked = false
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stats := fixture.publisher.StatsV1()
+		if stats.CurrentPinnedSessions == 0 && stats.RetainedSnapshots == 0 && stats.CurrentPins == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expired unclosed pin was retained: %+v", stats)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := fixture.publisher.PublishStateV1(t.Context(), 13, strings.Repeat("f", 64)); err != nil {
+		t.Fatalf("publication after automatic pin expiry: %v", err)
+	}
+	if err := pinned.ValidatePinnedV1(); !errors.Is(err, ErrVectorPartitionShardSearchAssetsUnavailable) {
+		t.Fatalf("expired pinned session error=%v", err)
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionAuthorizationOverlayFiltersAndFailsClosedV1(t *testing.T) {
 	digestA, digestB := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	overlay, err := newVectorPartitionAuthorizationOverlayV1(digestA, []string{"revoked"}, 64)

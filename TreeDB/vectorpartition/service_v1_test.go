@@ -39,6 +39,23 @@ func (s *serviceBackendSnapshotV1) SearchVectorPartitionV1(ctx context.Context, 
 	return s.backend.search(ctx, request)
 }
 func (s *serviceBackendSnapshotV1) Close() error { s.closed = true; return nil }
+
+type blockingServiceSearchSnapshotBackendV1 struct {
+	started chan struct{}
+	release chan struct{}
+	closed  chan struct{}
+}
+
+func (b *blockingServiceSearchSnapshotBackendV1) SearchVectorPartitionV1(_ context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+	close(b.started)
+	<-b.release
+	return SearchResponseV1{Generation: request.Generation, Neighbors: []NeighborV1{{ID: "a", Score: .9}}}, nil
+}
+
+func (b *blockingServiceSearchSnapshotBackendV1) Close() error {
+	close(b.closed)
+	return nil
+}
 func (b *serviceBackendV1) RegisterVectorPartitionV1(_ context.Context, r GenerationRegistrationV1) (GenerationStatusV1, error) {
 	s := GenerationStatusV1{Generation: r.GenerationIDV1, State: GenerationBuildingV1}
 	b.states[r.GenerationIDV1] = s
@@ -179,6 +196,37 @@ func TestServiceV1FastSearchAppliesRequestDeadlineBeforeBackendV1(t *testing.T) 
 	request.Deadline = time.Now().Add(20 * time.Millisecond)
 	if _, _, err := service.SearchFast(context.Background(), request, FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 1}); !hasCodeV1(err, ErrorDeadlineExceededV1) {
 		t.Fatalf("fast deadline error=%v", err)
+	}
+}
+
+func TestServiceSearchSnapshotCloseWaitsForSearchV1(t *testing.T) {
+	id := GenerationIDV1{Index: "embedding", Generation: 7}
+	backend := &blockingServiceSearchSnapshotBackendV1{started: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+	snapshot := &serviceSearchSnapshotV1{backend: backend, evidence: FastSearchEvidenceV1{Generation: id}}
+	searchDone := make(chan error, 1)
+	go func() {
+		_, err := snapshot.Search(t.Context(), validSearchRequestV1(id))
+		searchDone <- err
+	}()
+	<-backend.started
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- snapshot.Close() }()
+	select {
+	case <-backend.closed:
+		t.Fatal("Close released the backend during an in-flight search")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(backend.release)
+	if err := <-searchDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-backend.closed:
+	default:
+		t.Fatal("Close did not release the backend after search completion")
 	}
 }
 

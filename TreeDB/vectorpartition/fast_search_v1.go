@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -44,7 +43,8 @@ type SearchSnapshotBackendV1 interface {
 type serviceSearchSnapshotV1 struct {
 	backend   SearchSnapshotBackendV1
 	evidence  FastSearchEvidenceV1
-	closed    atomic.Bool
+	mu        sync.RWMutex
+	closed    bool
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -110,11 +110,16 @@ func (s *ServiceV1) pinSearchSnapshotV1(ctx context.Context, options PinSearchSn
 }
 
 func (s *serviceSearchSnapshotV1) Search(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
-	if s == nil || s.backend == nil || s.closed.Load() {
+	if s == nil {
 		return SearchResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New("pinned search snapshot is closed")}
 	}
 	if err := validateSearchRequestV1(ctx, request); err != nil {
 		return SearchResponseV1{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.backend == nil || s.closed {
+		return SearchResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New("pinned search snapshot is closed")}
 	}
 	if request.Generation != s.evidence.Generation {
 		return SearchResponseV1{}, &ErrorV1{Code: ErrorGenerationMismatchV1, Err: errors.New("request generation differs from pinned snapshot")}
@@ -135,7 +140,9 @@ func (s *serviceSearchSnapshotV1) Close() error {
 		return nil
 	}
 	s.closeOnce.Do(func() {
-		s.closed.Store(true)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closed = true
 		if s.backend != nil {
 			s.closeErr = s.backend.Close()
 		}

@@ -425,10 +425,11 @@ func (p *vectorPartitionPinnedTopologySearchV1) searchV1(ctx context.Context, re
 	if p == nil || p.topology == nil || p.lease == nil {
 		return VectorPartitionCoordinatorResponseV1{}, ErrVectorPartitionCoordinatorUnavailable
 	}
-	proof, err := p.lease.validatePinnedProofV1()
+	proof, err := p.lease.lockPinnedProofV1()
 	if err != nil {
 		return VectorPartitionCoordinatorResponseV1{}, err
 	}
+	defer p.lease.useMu.RUnlock()
 	response, _, err := p.topology.searchSnapshotV1(ctx, request, p.lease, proof, false)
 	return response, err
 }
