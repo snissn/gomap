@@ -34,9 +34,11 @@ const (
 )
 
 type findPredicate struct {
-	field  string
-	op     findPredicateOp
-	values []bson.RawValue
+	field                   string
+	op                      findPredicateOp
+	values                  []bson.RawValue
+	compoundCanonicalValues []bson.RawValue
+	compoundCanonicalized   bool
 }
 
 type findSort struct {
@@ -74,6 +76,11 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 		out := make([]findPredicate, len(in))
 		for i := range in {
 			out[i] = in[i]
+			// Compound canonicalization is a request-local planning cache. It
+			// points at command-buffer BSON and is neither needed nor safe to
+			// retain in an ID cursor.
+			out[i].compoundCanonicalValues = nil
+			out[i].compoundCanonicalized = false
 			out[i].values = make([]bson.RawValue, len(in[i].values))
 			for j := range in[i].values {
 				out[i].values[j] = in[i].values[j]
@@ -275,6 +282,10 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 	if err != nil {
 		return findPlan{}, err
 	}
+	// BSON-v2 $in canonicalization may encode each raw value. Cache it once
+	// per parsed predicate so candidate ranking, explain, and execution do not
+	// repeat unbounded raw-input work for every compatible index.
+	cacheCompoundCanonicalValues(predicates)
 	return findPlan{
 		predicates: predicates,
 		orBranches: orBranches,

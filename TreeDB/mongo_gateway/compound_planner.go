@@ -191,7 +191,7 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			if len(eq.values) == 0 {
 				return compoundIndexPlan{}, false
 			}
-			values := canonicalCompoundPrefixValues(eq.values)
+			values := compoundPredicatePrefixValues(eq)
 			if len(values) == 0 || len(values) > maxCompoundPlannerPrefixChoices {
 				return compoundIndexPlan{}, false
 			}
@@ -309,6 +309,30 @@ func canonicalCompoundPrefixValues(values []bson.RawValue) []bson.RawValue {
 	return out
 }
 
+// cacheCompoundCanonicalValues performs the potentially raw-input-sized BSON
+// encoding pass once while parsing a request. It deliberately retains only a
+// small (at most 65) representative slice; duplicate-heavy $in remains
+// supported without multiplying work by the number of usable indexes.
+func cacheCompoundCanonicalValues(predicates []findPredicate) {
+	for i := range predicates {
+		if predicates[i].op != findPredicateIn {
+			continue
+		}
+		predicates[i].compoundCanonicalValues = canonicalCompoundPrefixValues(predicates[i].values)
+		predicates[i].compoundCanonicalized = true
+	}
+}
+
+func compoundPredicatePrefixValues(predicate findPredicate) []bson.RawValue {
+	if predicate.compoundCanonicalized {
+		return predicate.compoundCanonicalValues
+	}
+	// Package-local callers and focused planner tests may construct a plan
+	// directly instead of parsing a wire command. Preserve that API shape
+	// without weakening production's request-local cache contract.
+	return canonicalCompoundPrefixValues(predicate.values)
+}
+
 func compoundPrefixes(choices [][]bson.RawValue) [][]bson.RawValue {
 	if len(choices) == 0 {
 		return [][]bson.RawValue{{}}
@@ -320,7 +344,7 @@ func compoundPrefixes(choices [][]bson.RawValue) [][]bson.RawValue {
 			out = append(out, append([]bson.RawValue(nil), prefix...))
 			return
 		}
-		for _, value := range canonicalCompoundPrefixValues(choices[at]) {
+		for _, value := range choices[at] {
 			visit(at+1, append(prefix, value))
 		}
 	}

@@ -829,6 +829,46 @@ func TestCanonicalCompoundPrefixValuesBoundsRawDuplicateAllocationAndRejectsInva
 	}
 }
 
+func TestParseFindPlanCachesCanonicalInValuesOncePerPredicate(t *testing.T) {
+	values := make(bson.A, 1024)
+	for i := range values {
+		// Distinct BSON wire numeric spellings intentionally canonicalize to one
+		// BSON-v2 equality component.
+		if i%2 == 0 {
+			values[i] = int32(1)
+		} else {
+			values[i] = int64(1)
+		}
+	}
+	filterBytes, err := bson.Marshal(bson.D{{Key: "tenant", Value: bson.D{{Key: "$in", Value: values}}}})
+	if err != nil {
+		t.Fatalf("marshal filter: %v", err)
+	}
+	commandBytes, err := bson.Marshal(bson.D{{Key: "find", Value: "events"}})
+	if err != nil {
+		t.Fatalf("marshal command: %v", err)
+	}
+	plan, err := parseFindPlan(wire.Document(commandBytes), wire.Document(filterBytes))
+	if err != nil {
+		t.Fatalf("parse find plan: %v", err)
+	}
+	if len(plan.predicates) != 1 || !plan.predicates[0].compoundCanonicalized {
+		t.Fatalf("parsed predicate was not canonicalized once: %#v", plan.predicates)
+	}
+	if got := plan.predicates[0].compoundCanonicalValues; len(got) != 1 || cap(got) > maxCompoundPlannerPrefixChoices+1 {
+		t.Fatalf("cached canonical values len/cap=%d/%d want 1/bounded", len(got), cap(got))
+	}
+	idx := collections.IndexDefinition{Name: "tenant_a", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "tenant", Direction: collections.IndexDirectionAscending}, {Field: "a", Direction: collections.IndexDirectionAscending}}}
+	first, ok := buildCompoundIndexPlan(idx, plan)
+	if !ok || len(first.prefixChoices) != 1 || len(first.prefixChoices[0]) != 1 {
+		t.Fatalf("first cached plan=%#v ok=%v", first, ok)
+	}
+	second, ok := buildCompoundIndexPlan(idx, plan)
+	if !ok || len(second.prefixChoices) != 1 || len(second.prefixChoices[0]) != 1 {
+		t.Fatalf("second cached plan=%#v ok=%v", second, ok)
+	}
+}
+
 func TestMongoCompoundPlannerCursorChargesPredicateSliceStructure(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	// Eight one-byte duplicate values leave the legacy payload-only accounting
