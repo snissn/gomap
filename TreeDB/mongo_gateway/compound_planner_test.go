@@ -553,6 +553,15 @@ func TestMongoCompoundPlanNoSortLimitRequiresGlobalPageBudget(t *testing.T) {
 	// global cap covers the entire skip+limit page. It must not turn a cap hit
 	// into a successful empty result.
 	assertCommandError(t, serveCommand(t, newServer(t, 2), 40652643, query(2, 1)), "BadValue")
+	capExplain := serveCommand(t, newServer(t, 2), 406526430, bson.D{{Key: "explain", Value: query(2, 1)}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, capExplain, "BadValue")
+	capStats := bson.Raw(capExplain).Lookup("executionStats").Document()
+	if got, ok := capStats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 2 {
+		t.Fatalf("cap rejection examined=%d ok=%v want 2: %s", got, ok, capExplain)
+	}
+	if got, ok := capStats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got != 0 {
+		t.Fatalf("cap rejection materialized=%d ok=%v want 0: %s", got, ok, capExplain)
+	}
 	assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, newServer(t, 3), 40652644, query(2, 1))), []string{"c"})
 
 	// The wire values are individually valid int32s, but their page sum must

@@ -512,6 +512,16 @@ func (s *Server) compoundIndexPlanIDs(col *collections.Collection, plan findPlan
 				}
 				continue
 			}
+			// The direct primitive has already examined and returned these
+			// candidates. Account for the observable work even though the global
+			// cap rejects the command before any primary document is loaded.
+			for _, id := range found {
+				if _, duplicate := seenIDs[string(id)]; duplicate {
+					continue
+				}
+				seenIDs[string(id)] = struct{}{}
+				plan.recordCandidate()
+			}
 			return nil, candidate, true, fmt.Errorf("%w: Mongo gateway compound index candidate scan exceeded %d documents", errMongoFindScanCapExceeded, maxDocuments)
 		}
 		for _, id := range found {
