@@ -109,7 +109,7 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		result.Neighbors[i] = public.NeighborV1{ID: n.ID, Score: n.Score}
 	}
 	result.Timing.PublicAdapter += time.Since(adapterStarted)
-	result.Timing.Total = time.Since(started)
+	result.Timing.Total = max(time.Since(started), result.Timing.PublicAdapter+result.Timing.CoordinatorTotal)
 	return result, nil
 }
 
