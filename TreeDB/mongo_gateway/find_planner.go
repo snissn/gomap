@@ -395,6 +395,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 			}
 		}
 		if plan.sort.field != "" && !compound.sortSatisfied {
+			if err := validateFindSortDocuments(filtered, plan.sort); err != nil {
+				return findResultSet{}, err
+			}
 			sort.SliceStable(filtered, func(i, j int) bool {
 				return compareDocumentsForFindSort(filtered[i], filtered[j], plan.sort) < 0
 			})
@@ -445,6 +448,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	docs = filtered
 
 	if plan.sort.field != "" {
+		if err := validateFindSortDocuments(docs, plan.sort); err != nil {
+			return findResultSet{}, err
+		}
 		sort.SliceStable(docs, func(i, j int) bool { return compareDocumentsForFindSort(docs[i], docs[j], plan.sort) < 0 })
 	}
 
@@ -1890,6 +1896,9 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 
 func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	for _, pred := range predicates {
+		if predicateRejectsArrayTraversal(pred) && documentPathContainsArray(doc, pred.field) {
+			return false, fmt.Errorf("Mongo gateway %s predicate does not support array path %q", findPredicateName(pred), pred.field)
+		}
 		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
 		if err != nil {
 			return false, err
@@ -1916,6 +1925,66 @@ func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPre
 		}
 	}
 	return true, nil
+}
+
+func predicateRejectsArrayTraversal(pred findPredicate) bool {
+	return pred.negate || pred.op == findPredicateNE || pred.op == findPredicateNIN || pred.op == findPredicateExists
+}
+
+func findPredicateName(pred findPredicate) string {
+	if pred.negate {
+		return "$not"
+	}
+	switch pred.op {
+	case findPredicateNE:
+		return "$ne"
+	case findPredicateNIN:
+		return "$nin"
+	case findPredicateExists:
+		return "$exists"
+	default:
+		return "query"
+	}
+}
+
+// documentPathContainsArray is deliberately a structural check, not the
+// matcher’s historical fan-out lookup. #4066 does not claim multikey/array
+// semantics, so any array encountered at or below a requested path rejects.
+func documentPathContainsArray(doc wire.Document, field string) bool {
+	parts := strings.Split(field, ".")
+	current := bson.Raw(doc)
+	for i, part := range parts {
+		value := current.Lookup(part)
+		if value.IsZero() {
+			return false
+		}
+		if _, array := value.ArrayOK(); array {
+			return true
+		}
+		if i == len(parts)-1 {
+			return false
+		}
+		next, ok := value.DocumentOK()
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	return false
+}
+
+func validateFindSortDocuments(docs []wire.Document, sortSpec findSort) error {
+	for _, term := range findSortTerms(sortSpec) {
+		if !strings.Contains(term.field, ".") {
+			continue
+		}
+		for _, doc := range docs {
+			if documentPathContainsArray(doc, term.field) {
+				return fmt.Errorf("Mongo gateway dotted sort does not support array path %q", term.field)
+			}
+		}
+	}
+	return nil
 }
 
 func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {

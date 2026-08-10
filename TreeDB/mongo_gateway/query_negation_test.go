@@ -116,6 +116,42 @@ func TestMongoDottedProjectionArrayFailureDoesNotPublishCursor(t *testing.T) {
 	}
 }
 
+func TestMongoNegativeArrayPathsRejectBeforeResponseOrMutation(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406606, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "first"}, {Key: "tags", Value: "safe"}},
+		bson.D{{Key: "_id", Value: "x"}, {Key: "tags", Value: bson.A{"a"}}, {Key: "profile", Value: bson.A{bson.D{{Key: "name", Value: "Ada"}}}}},
+	}}, {Key: "$db", Value: "app"}}))
+	for _, filter := range []bson.D{
+		bson.D{{Key: "tags", Value: bson.D{{Key: "$ne", Value: "a"}}}},
+		bson.D{{Key: "tags", Value: bson.D{{Key: "$nin", Value: bson.A{"a"}}}}},
+		bson.D{{Key: "tags", Value: bson.D{{Key: "$exists", Value: true}}}},
+		bson.D{{Key: "tags", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gt", Value: "a"}}}}}},
+	} {
+		response := serveCommand(t, server, 406607, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "$db", Value: "app"}})
+		assertCommandError(t, response, "BadValue")
+	}
+	for _, filter := range []bson.D{
+		{{Key: "$or", Value: bson.A{bson.D{{Key: "tags", Value: bson.D{{Key: "$ne", Value: "a"}}}}}}},
+		{{Key: "$nor", Value: bson.A{bson.D{{Key: "tags", Value: bson.D{{Key: "$nin", Value: bson.A{"a"}}}}}}}},
+	} {
+		assertCommandError(t, serveCommand(t, server, 406607, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "$db", Value: "app"}}), "BadValue")
+	}
+	sortResponse := serveCommand(t, server, 406608, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{}}, {Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, sortResponse, "BadValue")
+	writeFilter := bson.D{{Key: "tags", Value: bson.D{{Key: "$ne", Value: "a"}}}}
+	updateSpec := bson.D{{Key: "q", Value: writeFilter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}}, {Key: "multi", Value: false}}
+	write := serveCommand(t, server, 406609, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{updateSpec}}, {Key: "$db", Value: "app"}})
+	assertIndexedWriteError(t, write, 0)
+	multiSpec := bson.D{{Key: "q", Value: writeFilter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "allMutated", Value: true}}}}}, {Key: "multi", Value: true}}
+	assertIndexedWriteError(t, serveCommand(t, server, 406611, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{multiSpec}}, {Key: "$db", Value: "app"}}), 0)
+	check := serveCommand(t, server, 406610, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "first"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, check)
+	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 || bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("allMutated").Type != 0 {
+		t.Fatal("array-rejected filter write mutated document")
+	}
+}
+
 func TestMongoNegativePredicateRejectsMalformedOperands(t *testing.T) {
 	for _, filter := range []bson.D{
 		{{Key: "a", Value: bson.D{{Key: "$exists", Value: int32(1)}}}},

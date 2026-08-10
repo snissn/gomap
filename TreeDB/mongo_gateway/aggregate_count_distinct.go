@@ -474,6 +474,9 @@ func executeAggregateStages(docs []wire.Document, stages []aggregateStage) ([]wi
 			}
 			docs = projected
 		case "$sort":
+			if err := validateFindSortDocuments(docs, stage.plan.sort); err != nil {
+				return nil, err
+			}
 			sort.SliceStable(docs, func(i, j int) bool {
 				return compareDocumentsForFindSort(docs[i], docs[j], stage.plan.sort) < 0
 			})
