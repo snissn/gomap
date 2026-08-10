@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type localHNSWQuerySplitV1 struct {
@@ -19,10 +20,21 @@ type localHNSWQuerySplitV1 struct {
 	Ordinals            []int  `json:"ordinals"`
 }
 
+const localHNSWQuerySplitSelectionV1 = "sha256(4105-local-hnsw-calibration-v1:<query-ordinal>)[0] < 205"
+const localHNSWQuerySplitMaxBytesV1 = 1 << 20
+
 func loadLocalHNSWQuerySplitV1(path string) (localHNSWQuerySplitV1, string, error) {
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return localHNSWQuerySplitV1{}, "", err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, localHNSWQuerySplitMaxBytesV1+1))
+	if err != nil {
+		return localHNSWQuerySplitV1{}, "", err
+	}
+	if len(raw) > localHNSWQuerySplitMaxBytesV1 {
+		return localHNSWQuerySplitV1{}, "", errors.New("query split exceeds cap")
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
@@ -36,12 +48,27 @@ func loadLocalHNSWQuerySplitV1(path string) (localHNSWQuerySplitV1, string, erro
 	sum := sha256.Sum256(raw)
 	return split, hex.EncodeToString(sum[:]), nil
 }
+
 func localHNSWCalibrationOrdinalV1(ordinal int) bool {
 	sum := sha256.Sum256([]byte("4105-local-hnsw-calibration-v1:" + strconv.Itoa(ordinal)))
 	return sum[0] < 205
 }
+
 func validateLocalHNSWQuerySplitPairV1(calibration, holdout localHNSWQuerySplitV1, fixture fixtureManifest, trustedTruth string) error {
-	if calibration.Schema != "vector_partition_4105_query_split_v1" || holdout.Schema != calibration.Schema || calibration.DatasetChecksum != fixture.Checksum || holdout.DatasetChecksum != fixture.Checksum || calibration.TruthArtifactSHA256 != trustedTruth || holdout.TruthArtifactSHA256 != trustedTruth {
+	if fixture.Queries <= 0 || len(trustedTruth) != 64 || strings.ToLower(trustedTruth) != trustedTruth {
+		return errors.New("query split trusted truth")
+	}
+	if _, err := hex.DecodeString(trustedTruth); err != nil {
+		return errors.New("query split trusted truth")
+	}
+	if calibration.Schema != "vector_partition_4105_query_split_v1" ||
+		holdout.Schema != calibration.Schema ||
+		calibration.Selection != localHNSWQuerySplitSelectionV1 ||
+		holdout.Selection != localHNSWQuerySplitSelectionV1 ||
+		calibration.DatasetChecksum != fixture.Checksum ||
+		holdout.DatasetChecksum != fixture.Checksum ||
+		calibration.TruthArtifactSHA256 != trustedTruth ||
+		holdout.TruthArtifactSHA256 != trustedTruth {
 		return errors.New("query split identity")
 	}
 	seen := make([]bool, fixture.Queries)
