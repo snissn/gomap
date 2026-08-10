@@ -500,6 +500,31 @@ func TestMongoExplainAdaptiveMultiIndexPlanDoesNotClaimAnUnexecutedWinner(t *tes
 	}
 }
 
+func TestMongoExplainAdaptiveCompoundWinnerRefreshesSortSatisfaction(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 1061, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}, {Key: "age", Value: int32(1)}}}, {Key: "name", Value: "city_age"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}, {Key: "name", Value: int32(1)}}}, {Key: "name", Value: "city_name"}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "explain", Value: bson.D{
+		{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "city", Value: "hnl"}}},
+		{Key: "sort", Value: bson.D{{Key: "age", Value: int32(1)}}},
+	}}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}}
+	response := serveCommand(t, server, 1062, command)
+	assertOK(t, response)
+	planner := bson.Raw(response).Lookup("queryPlanner").Document()
+	winning := planner.Lookup("winningPlan").Document()
+	if got := winning.Lookup("stage").StringValue(); got != "compound_index_scan" {
+		t.Fatalf("winning stage=%q want compound_index_scan: %s", got, response)
+	}
+	if inMemory, ok := winning.Lookup("inMemorySort").BooleanOK(); !ok || inMemory {
+		t.Fatalf("winning inMemorySort=%v ok=%v want false: %s", inMemory, ok, response)
+	}
+	if satisfied, ok := planner.Lookup("sort").Document().Lookup("satisfied").BooleanOK(); !ok || !satisfied {
+		t.Fatalf("planner sort satisfied=%v ok=%v want true: %s", satisfied, ok, response)
+	}
+}
+
 func TestMongoExplainClusterRejectsBeforeLocalCollectionObservation(t *testing.T) {
 	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
 	lookups := 0

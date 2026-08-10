@@ -490,7 +490,17 @@ func (s *Server) explainPlannedRead(col *collections.Collection, missing bool, d
 			if plan.sort.field != "" {
 				winning = append(winning, bson.E{Key: "inMemorySort", Value: !actual.sortSatisfied})
 			}
-			planner[1].Value = winning
+			for i := range planner {
+				switch planner[i].Key {
+				case "winningPlan":
+					planner[i].Value = winning
+				case "sort":
+					// The adaptive placeholder may not satisfy the requested order,
+					// while the executor's selected compound plan can. Keep the
+					// planner-wide sort descriptor consistent with inMemorySort.
+					planner[i].Value = explainSort(plan, actual.sortSatisfied)
+				}
+			}
 		}
 		if stats.stage != "adaptive_candidate_selection" {
 			planner = explainPlannerWithoutCandidatePlans(planner)
