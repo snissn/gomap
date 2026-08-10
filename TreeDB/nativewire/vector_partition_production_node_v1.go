@@ -88,6 +88,7 @@ func (s vectorPartitionProductionNodeGenerationSourceV1) PinVectorPartitionGener
 		return nil, ErrVectorPartitionShardSearchGenerationMismatch
 	}
 	manifest := pinned.Manifest()
+	manifest.IntegrityDigest = s.manifest.IntegrityDigest
 	manifest.Placements = slices.Clone(s.manifest.Placements)
 	return vectorPartitionProductionNodePinnedGenerationV1{VectorPartitionPinnedGenerationV1: pinned, manifest: manifest}, nil
 }
