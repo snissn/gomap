@@ -116,10 +116,10 @@ func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocal
 	if np == nil || fp == nil || np.validateLive() != nil || fp.validateLive() != nil {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if np == nil || fp == nil || np.Header.Rows != fp.Header.Rows || np.Header.Dimensions != fp.Header.Dimensions || np.Header.M != fp.Header.M || np.Header.EfConstruction != fp.Header.EfConstruction || np.Header.EfSearch != fp.Header.EfSearch || np.Header.EntryOrdinal != fp.Header.EntryOrdinal || np.Header.MaxLayer != fp.Header.MaxLayer || np.Header.BaseManifestGeneration != fp.Header.BaseManifestGeneration || np.Header.BaseManifestChecksum != fp.Header.BaseManifestChecksum || np.Header.BaseSchemaHash != fp.Header.BaseSchemaHash || np.Header.MembershipDigest != fp.Header.MembershipDigest || !slices.Equal(np.Levels, fp.Levels) || !slices.Equal(np.NormalizedVectors, fp.NormalizedVectors) || !slices.Equal(np.DocumentIDOffsets, fp.DocumentIDOffsets) || !bytes.Equal(np.DocumentIDBytes, fp.DocumentIDBytes) || !slices.Equal(np.RowRefGenerations, fp.RowRefGenerations) || !slices.Equal(np.RowRefPartIDs, fp.RowRefPartIDs) || !slices.Equal(np.RowRefRowIndexes, fp.RowRefRowIndexes) || !slices.Equal(np.RowRefAppliedLSNs, fp.RowRefAppliedLSNs) {
+	if np.Header.Rows != fp.Header.Rows || np.Header.Dimensions != fp.Header.Dimensions || np.Header.M != fp.Header.M || np.Header.EfConstruction != fp.Header.EfConstruction || np.Header.EfSearch != fp.Header.EfSearch || np.Header.EntryOrdinal != fp.Header.EntryOrdinal || np.Header.MaxLayer != fp.Header.MaxLayer || np.Header.BaseManifestGeneration != fp.Header.BaseManifestGeneration || np.Header.BaseManifestChecksum != fp.Header.BaseManifestChecksum || np.Header.BaseSchemaHash != fp.Header.BaseSchemaHash || np.Header.MembershipDigest != vectorPartitionLocalGraphVariantMembershipDigestV1(fp.Header.MembershipDigest, VectorPartitionLocalGraphVariantNativeV1) || !slices.Equal(np.Levels, fp.Levels) || !slices.Equal(np.NormalizedVectors, fp.NormalizedVectors) || !slices.Equal(np.DocumentIDOffsets, fp.DocumentIDOffsets) || !bytes.Equal(np.DocumentIDBytes, fp.DocumentIDBytes) || !slices.Equal(np.RowRefGenerations, fp.RowRefGenerations) || !slices.Equal(np.RowRefPartIDs, fp.RowRefPartIDs) || !slices.Equal(np.RowRefRowIndexes, fp.RowRefRowIndexes) || !slices.Equal(np.RowRefAppliedLSNs, fp.RowRefAppliedLSNs) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
+	if len(np.AdjacencyLayers) == 0 || len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
 		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	if !validVectorPartitionLocalGraphL0V1(np.Header.Rows, np.AdjacencyLayers[0]) || !validVectorPartitionLocalGraphL0V1(fp.Header.Rows, fp.AdjacencyLayers[0]) {
@@ -1239,6 +1239,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			attribution.TerminationReason = trace.Termination
 			attribution.VisitedOrdinalsSHA256 = hex.EncodeToString(h.Sum(nil))
 			if attribution.VisitedRows == 0 || attribution.TerminationReason == "" {
+				s.recordFailure()
 				return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution", ErrVectorPartitionSearchUnavailable)
 			}
 		}
@@ -1250,6 +1251,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		return out, metrics, nil
 	}
 	if attribution != nil {
+		s.recordFailure()
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution requires prepared pack", ErrVectorPartitionSearchUnavailable)
 	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)

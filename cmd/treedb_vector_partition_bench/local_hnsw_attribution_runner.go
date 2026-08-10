@@ -157,12 +157,21 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 		}
 	}
 	baseSHA, headSHA, err = provenanceWithExplicitV1(baseSHA, headSHA)
-	if err != nil || baseSHA != localHNSWAttributionSourceLockV1 {
+	if err != nil {
+		return fmt.Errorf("local HNSW attribution provenance: %w", err)
+	}
+	if baseSHA != localHNSWAttributionSourceLockV1 {
 		return errors.New("local HNSW attribution source lock")
 	}
 	sourceCheckout, err = localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA)
-	if err != nil || m8GitDirtyInV1(sourceCheckout) {
+	if err != nil {
+		return err
+	}
+	if m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("local HNSW attribution requires clean exact-head checkout")
+	}
+	if filepath.Ext(out) != ".json" {
+		return errors.New("local HNSW attribution report must use a .json path")
 	}
 	for _, directory := range []string{tempRoot, profiles} {
 		info, statErr := os.Lstat(directory)
@@ -184,9 +193,6 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
 			return errors.New("local HNSW attribution output already exists")
 		}
-	}
-	if filepath.Ext(out) != ".json" {
-		return errors.New("local HNSW attribution report must use a .json path")
 	}
 	historicalParts := strings.Split(historicalCSV, ",")
 	if len(historicalParts) != 3 {
@@ -286,12 +292,15 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 		return err
 	}
 	if _, err := localHNSWAttributionInputsV1(inputConfig); err != nil {
-		return errors.New("local HNSW attribution inputs changed during execution")
+		return fmt.Errorf("local HNSW attribution inputs changed during execution: %w", err)
 	}
 	if digest, hashErr := localHNSWAttributionRegularFileSHA256V1(datasetManifest, maxManifestBytes); hashErr != nil || digest != localHNSWAttributionFixtureManifestSHA256V1 {
 		return errors.New("local HNSW attribution dataset changed during execution")
 	}
-	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil || m8GitDirtyInV1(sourceCheckout) {
+	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil {
+		return fmt.Errorf("local HNSW attribution source changed during execution: %w", err)
+	}
+	if m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("local HNSW attribution source changed during execution")
 	}
 	if digest, hashErr := m8BenchmarkExecutableSHA256V1(executable); hashErr != nil || digest != executableSHA {
@@ -325,11 +334,14 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 
 func localHNSWAttributionSourceCheckoutV1(path, base, head string) (string, error) {
 	checkout, err := m8SourceCheckoutV1(path, head)
-	if err != nil || !validLowerSHA(base) {
+	if err != nil {
+		return "", fmt.Errorf("local HNSW attribution source checkout: %w", err)
+	}
+	if !validLowerSHA(base) {
 		return "", errors.New("invalid local HNSW attribution source checkout")
 	}
 	if err := exec.Command("git", "-C", checkout, "merge-base", "--is-ancestor", base, head).Run(); err != nil {
-		return "", errors.New("local HNSW attribution base is not an ancestor of head")
+		return "", fmt.Errorf("local HNSW attribution base is not an ancestor of head: %w", err)
 	}
 	return checkout, nil
 }

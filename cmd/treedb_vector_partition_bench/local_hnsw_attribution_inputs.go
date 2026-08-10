@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -44,43 +45,56 @@ func localHNSWAttributionInputsV1(cfg localHNSWAttributionInputConfigV1) (localH
 		}
 	}
 	info, err := os.Lstat(cfg.RetainedDB)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+	if err != nil {
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("invalid retained local HNSW database: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return localHNSWAttributionInputBundleV1{}, errors.New("invalid retained local HNSW database")
 	}
 	if err := localHNSWAttributionMatchFileSHA256V1(cfg.CalibrationSplit, localHNSWQuerySplitMaxBytesV1, cfg.CalibrationSplitSHA256); err != nil {
-		return localHNSWAttributionInputBundleV1{}, err
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW calibration split: %w", err)
 	}
 	calibration, calibrationSHA, err := loadLocalHNSWQuerySplitV1(cfg.CalibrationSplit)
-	if err != nil || calibrationSHA != cfg.CalibrationSplitSHA256 {
+	if err != nil {
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW calibration split: %w", err)
+	}
+	if calibrationSHA != cfg.CalibrationSplitSHA256 {
 		return localHNSWAttributionInputBundleV1{}, errors.New("invalid local HNSW calibration split")
 	}
 	if err := localHNSWAttributionMatchFileSHA256V1(cfg.HoldoutSplit, localHNSWQuerySplitMaxBytesV1, cfg.HoldoutSplitSHA256); err != nil {
-		return localHNSWAttributionInputBundleV1{}, err
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW holdout split: %w", err)
 	}
 	holdout, holdoutSHA, err := loadLocalHNSWQuerySplitV1(cfg.HoldoutSplit)
-	if err != nil || holdoutSHA != cfg.HoldoutSplitSHA256 {
+	if err != nil {
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW holdout split: %w", err)
+	}
+	if holdoutSHA != cfg.HoldoutSplitSHA256 {
 		return localHNSWAttributionInputBundleV1{}, errors.New("invalid local HNSW holdout split")
 	}
 	if err := validateLocalHNSWQuerySplitPairV1(calibration, holdout, cfg.Fixture, cfg.TruthArtifactSHA256); err != nil {
 		return localHNSWAttributionInputBundleV1{}, err
 	}
 	if err := localHNSWAttributionMatchFileSHA256V1(cfg.Descriptor, m3VariantDescriptorMaxBytesV1, cfg.DescriptorSHA256); err != nil {
-		return localHNSWAttributionInputBundleV1{}, err
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW descriptor: %w", err)
 	}
 	if err := localHNSWAttributionMatchFileSHA256V1(cfg.TruthArtifact, m8ProfileArtifactMaxBytesV1, cfg.TruthArtifactSHA256); err != nil {
-		return localHNSWAttributionInputBundleV1{}, err
+		return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW truth artifact: %w", err)
 	}
 	for i, path := range cfg.HistoricalSearchReports {
 		if err := localHNSWAttributionMatchFileSHA256V1(path, m8ProfileArtifactMaxBytesV1, cfg.HistoricalReportSHA256[i]); err != nil {
-			return localHNSWAttributionInputBundleV1{}, err
+			return localHNSWAttributionInputBundleV1{}, fmt.Errorf("local HNSW historical report %d: %w", i, err)
 		}
 	}
 	return localHNSWAttributionInputBundleV1{Config: cfg, Calibration: calibration, Holdout: holdout}, nil
 }
 
 func localHNSWAttributionMatchFileSHA256V1(path string, maxBytes int64, want string) error {
-	if got, err := localHNSWAttributionRegularFileSHA256V1(path, maxBytes); err != nil || got != want {
-		return errors.New("invalid local HNSW attribution input file")
+	got, err := localHNSWAttributionRegularFileSHA256V1(path, maxBytes)
+	if err != nil {
+		return fmt.Errorf("invalid local HNSW attribution input file %q: %w", path, err)
+	}
+	if got != want {
+		return fmt.Errorf("invalid local HNSW attribution input file %q: sha256 mismatch", path)
 	}
 	return nil
 }

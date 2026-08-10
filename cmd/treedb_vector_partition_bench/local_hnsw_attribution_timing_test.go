@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -39,10 +40,13 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 	}
 	defer overlay.Close()
 	var ordinals []int
-	for ordinal := 0; len(ordinals) < 2; ordinal++ {
+	for ordinal := 0; len(ordinals) < 2 && ordinal < 1024; ordinal++ {
 		if localHNSWCalibrationOrdinalV1(ordinal) {
 			ordinals = append(ordinals, ordinal)
 		}
+	}
+	if len(ordinals) != 2 {
+		t.Fatalf("calibration ordinals=%v", ordinals)
 	}
 	cases := []localHNSWAttributionTimingCaseV1{{Ordinal: ordinals[0], Query: []float32{1, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}, {Ordinal: ordinals[1], Query: []float32{2, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}}
 	for i := range cases {
@@ -66,7 +70,7 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 			t.Fatalf("cell=%+v", cell)
 		}
 		key := cell.Variant + string(rune('0'+cell.Probes))
-		if old, ok := seen[key]; ok && !equalStringSlicesV1(old, cell.ResultSHA256) {
+		if old, ok := seen[key]; ok && !slices.Equal(old, cell.ResultSHA256) {
 			t.Fatalf("unstable result digest %q: %v != %v", key, old, cell.ResultSHA256)
 		}
 		seen[key] = cell.ResultSHA256
@@ -82,8 +86,11 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 		t.Fatal("expected malformed route rejection")
 	}
 	bad = append([]localHNSWAttributionTimingCaseV1(nil), cases...)
-	for localHNSWCalibrationOrdinalV1(bad[0].Ordinal) {
+	for attempts := 0; attempts < 256 && localHNSWCalibrationOrdinalV1(bad[0].Ordinal); attempts++ {
 		bad[0].Ordinal++
+	}
+	if localHNSWCalibrationOrdinalV1(bad[0].Ordinal) {
+		t.Fatal("could not find non-calibration ordinal")
 	}
 	if err := localHNSWAttributionTimingCasesV1(bad, len(source.manifest.Assets)); err == nil {
 		t.Fatal("expected non-calibration ordinal rejection")
@@ -91,16 +98,4 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 	if err := localHNSWAttributionTimingCasesV1(nil, len(source.manifest.Assets)); err == nil {
 		t.Fatal("expected empty timing cases rejection")
 	}
-}
-
-func equalStringSlicesV1(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

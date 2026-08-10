@@ -795,17 +795,29 @@ func TestRetainedLocalHNSWVariantHarnessV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	native, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantNativeV1, 9981)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer native.Close()
+	t.Cleanup(func() {
+		if err := native.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	overlay, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantOverlayCurrentV1, 9982)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer overlay.Close()
+	t.Cleanup(func() {
+		if err := overlay.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if len(native.searchers) != len(source.manifest.Assets) || len(overlay.searchers) != len(source.manifest.Assets) {
 		t.Fatalf("variant partition coverage native=%d overlay=%d retained=%d", len(native.searchers), len(overlay.searchers), len(source.manifest.Assets))
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -59,7 +60,7 @@ func TestLocalHNSWAttributionGraphEvidenceV1(t *testing.T) {
 		}
 	}
 	checksum := overlay.packAssets[0].Checksum
-	overlay.packAssets[0].Checksum = "drift"
+	overlay.packAssets[0].Checksum = strings.Repeat("0", 64)
 	if _, _, err := localHNSWAttributionGraphEvidenceV1(source, native, overlay); err == nil {
 		t.Fatal("overlay identity drift accepted")
 	}

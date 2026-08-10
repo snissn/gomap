@@ -139,6 +139,12 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
 	}
+	nativeManifest := manifest
+	nativeManifest.Assets = assets
+	nativeManifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(nativeManifest, nil); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("native offline pack publication err=%v", err)
+	}
 	wrongPartition := assets[0]
 	wrongPartition.PartitionID = 1
 	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongPartition); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {

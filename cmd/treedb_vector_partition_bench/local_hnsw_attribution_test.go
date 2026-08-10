@@ -36,6 +36,7 @@ func TestValidateLocalHNSWQuerySplitPairV1(t *testing.T) {
 			return x
 		}(), h},
 		{"missing coverage", c, func() localHNSWQuerySplitV1 { x := h; x.Ordinals = x.Ordinals[:len(x.Ordinals)-1]; return x }()},
+		{"untrusted truth", func() localHNSWQuerySplitV1 { x := c; x.TruthArtifactSHA256 = strings.Repeat("b", 64); return x }(), h},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := validateLocalHNSWQuerySplitPairV1(tc.c, tc.h, f, trustedTruth); err == nil {

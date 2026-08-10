@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 )
 
 const localHNSWAttributionCalibrationSummarySchemaV1 = "treedb_local_hnsw_attribution_calibration_summary_v1"
@@ -103,8 +104,8 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 	if err := localHNSWAttributionCalibrationVariantAddV1(&summary.Overlay, evidence.Overlay, evidence.GlobalTruth, summary.QueryCount, evidence.Partitions, false); err != nil {
 		return err
 	}
-	p2Changed := !localHNSWAttributionQueryResultsEqualV1(evidence.Native.LowResults, evidence.Overlay.LowResults)
-	allChanged := !localHNSWAttributionQueryResultsEqualV1(evidence.Native.HighResults, evidence.Overlay.HighResults)
+	p2Changed := !slices.Equal(evidence.Native.LowResults, evidence.Overlay.LowResults)
+	allChanged := !slices.Equal(evidence.Native.HighResults, evidence.Overlay.HighResults)
 	if p2Changed && summary.ChangedP2TopK == math.MaxUint64 || allChanged && summary.ChangedAllTopK == math.MaxUint64 {
 		return errors.New("local HNSW calibration change overflow")
 	}
@@ -192,6 +193,7 @@ func localHNSWAttributionRecallAddV1(out *localHNSWAttributionRecallAggregateV1,
 	if math.IsInf(out.Mean+value, 0) {
 		return errors.New("local HNSW recall aggregate overflow")
 	}
+	// Mean holds the running sum until localHNSWAttributionCalibrationSummaryFinishV1 divides once.
 	out.Mean += value
 	return nil
 }
@@ -212,18 +214,6 @@ func localHNSWAttributionCalibrationSummaryFinishV1(summary *localHNSWAttributio
 
 func localHNSWAttributionFiniteRecallV1(value float64) bool {
 	return value >= 0 && value <= 1 && !math.IsNaN(value) && !math.IsInf(value, 0)
-}
-
-func localHNSWAttributionQueryResultsEqualV1(a, b []localHNSWAttributionQueryResultV1) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func localHNSWAttributionQueryBitsRecallV1(want, got []localHNSWAttributionQueryResultV1) float64 {

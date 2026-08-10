@@ -98,7 +98,7 @@ func validateLocalHNSWAttributionHistoricalReportV1(report vectorPartitionSystem
 			continue
 		}
 		if destination.Probes != 0 || cell.Status != "valid" || cell.Error != "" || cell.Metrics.Queries != 1000 || cell.Metrics.CompletedQueries != 1000 || cell.Metrics.ResultCount != 10000 || cell.Metrics.Errors != 0 || cell.Metrics.Timeouts != 0 || math.IsNaN(cell.Metrics.RecallAt10) || math.Abs(cell.Metrics.RecallAt10-recall) > 1e-12 || math.IsNaN(cell.Metrics.QPS) || math.IsInf(cell.Metrics.QPS, 0) || cell.Metrics.QPS <= 0 || cell.Metrics.P50Nanos == 0 || cell.Metrics.P50Nanos > cell.Metrics.P95Nanos || cell.Metrics.P95Nanos > cell.Metrics.P99Nanos || cell.Counters["candidates"] == 0 || cell.Counters["edges"] == 0 {
-			return probe2, probe16, errors.New("invalid local HNSW historical cell")
+			return probe2, probe16, fmt.Errorf("invalid local HNSW historical cell: probes=%d status=%q queries=%d completed=%d recall=%g qps=%g", cell.Budget["probes"], cell.Status, cell.Metrics.Queries, cell.Metrics.CompletedQueries, cell.Metrics.RecallAt10, cell.Metrics.QPS)
 		}
 		*destination = localHNSWAttributionHistoricalCellV1{Probes: cell.Budget["probes"], Metrics: cell.Metrics, Candidates: cell.Counters["candidates"], Edges: cell.Counters["edges"]}
 	}

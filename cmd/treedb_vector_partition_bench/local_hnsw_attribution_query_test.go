@@ -62,4 +62,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 			t.Fatalf("partition=%+v", row)
 		}
 	}
+	if _, err := localHNSWAttributionQueryEvidenceV1Build(t.Context(), source, native, overlay, 0, []float32{1, 1}, global); err == nil {
+		t.Fatal("malformed query accepted")
+	}
 }

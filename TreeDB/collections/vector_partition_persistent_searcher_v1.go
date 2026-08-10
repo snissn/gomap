@@ -62,6 +62,19 @@ func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGrap
 	}
 }
 
+func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]byte, variant VectorPartitionLocalGraphVariantV1) [sha256.Size]byte {
+	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
+		return membership
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_local_graph_variant_v1/"))
+	h.Write([]byte(variant))
+	h.Write(membership[:])
+	var out [sha256.Size]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
 // vectorPartitionLocalGraphDeltaRowV1 is the deterministic, construction-time
 // accounting needed to compare the native local graph with the current
 // partition-only navigation overlay. It intentionally describes the existing
@@ -840,7 +853,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if err != nil {
 			return nil, nil, err
 		}
-		pack.MembershipDigest = membershipDigest
+		// Native A/B packs domain-bind their variant into the existing membership
+		// identity. Production publication and serving recompute the canonical
+		// membership digest and therefore fail closed on a native offline pack.
+		pack.MembershipDigest = vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant)
 		raw, err := encodeColumnHNSWSearchPack(pack)
 		if err != nil {
 			return nil, nil, err
@@ -1078,7 +1094,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap)
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
@@ -1146,7 +1162,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
-		asset, members, home, overlap,
+		asset, members, home, overlap, false,
 	)
 	if err != nil {
 		return nil, err
@@ -1195,7 +1211,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
-		asset, members, home, overlap,
+		asset, members, home, overlap, false,
 	)
 	if err != nil {
 		return nil, err
@@ -1218,6 +1234,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	members []vectorPartitionMembershipSourceV1,
 	home int,
 	overlap int,
+	allowOfflineNative bool,
 ) (*VectorPartitionLocalSearcherV1, error) {
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
@@ -1242,7 +1259,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		}
 		return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 	}
-	if recomputedMembershipDigest != expectedMembershipDigest {
+	if recomputedMembershipDigest != expectedMembershipDigest && (!allowOfflineNative || vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) != expectedMembershipDigest) {
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace

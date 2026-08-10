@@ -241,7 +241,11 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 	}()
 	h.db, err = backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: readOnly, DisableBackgroundPrune: true})
 	if err != nil {
-		return nil, fmt.Errorf("open retained M8 assets read-only: %w", err)
+		mode := "read-only"
+		if !readOnly {
+			mode = "read-write"
+		}
+		return nil, fmt.Errorf("open retained M8 assets %s: %w", mode, err)
 	}
 	manager := collections.NewCollectionManager(h.db)
 	collectionName, nameErr := m8ExistingCollectionNameV1(manager)
@@ -322,8 +326,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	}
 	owned.owned = true
 	if owned.manifest.IntegrityDigest != source.manifest.IntegrityDigest || owned.manifest.SourceChecksum != source.manifest.SourceChecksum || owned.manifest.Generation != source.manifest.Generation {
-		_ = owned.Close()
-		return nil, errors.New("reflink clone retained manifest identity mismatch")
+		return nil, errors.Join(errors.New("reflink clone retained manifest identity mismatch"), owned.Close())
 	}
 	inputs := make([]collections.VectorPartitionSearchAssetV1, source.manifest.PartitionCount)
 	sourceID := collections.VectorPartitionSourceIdentityV1{Generation: source.manifest.SourceGeneration, Checksum: source.manifest.SourceChecksum, SchemaHash: source.manifest.SourceSchemaHash, RowCount: source.manifest.SourceRowCount}
@@ -335,23 +338,24 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 		}
 	}
 	if dimensions == 0 {
-		_ = owned.Close()
-		return nil, errors.New("retained index definition missing")
+		return nil, errors.Join(errors.New("retained index definition missing"), owned.Close())
 	}
 	for p := range inputs {
 		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: dimensions}
 	}
 	assets, resources, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
 	if err != nil {
-		_ = owned.Close()
-		return nil, err
+		return nil, errors.Join(err, owned.Close())
 	}
 	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets))}
 	defer func() {
 		if err != nil {
-			_ = h.Close()
+			err = errors.Join(err, h.Close())
 		}
 	}()
+	if len(assets) != len(inputs) {
+		return nil, errors.New("retained variant asset count mismatch")
+	}
 	for p, asset := range assets {
 		if asset.PartitionID != uint32(p) {
 			return nil, errors.New("retained variant partition ordering mismatch")

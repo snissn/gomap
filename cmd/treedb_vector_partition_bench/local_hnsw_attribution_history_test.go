@@ -32,6 +32,13 @@ func TestLocalHNSWAttributionHistoricalBaselineV1(t *testing.T) {
 		}
 		return write(name, raw), digest(raw)
 	}
+	marshal := func(value vectorPartitionSystemBenchResultV1) []byte {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
 	cfg := localHNSWAttributionInputConfigV1{Fixture: fixtureManifest{Checksum: report.DatasetChecksum}, TruthArtifactSHA256: report.TruthArtifactSHA256}
 	for i := range cfg.HistoricalSearchReports {
 		report.TopologyIdentitySHA256 = localHNSWAttributionHistoricalTopologySHA256V1[i]
@@ -48,39 +55,39 @@ func TestLocalHNSWAttributionHistoricalBaselineV1(t *testing.T) {
 		{"identity", func() []byte {
 			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
 			x.TopK = 9
-			raw, _ := json.Marshal(x)
-			return raw
+			return marshal(x)
+		}},
+		{"truth", func() []byte {
+			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
+			x.TruthArtifactSHA256 = strings.Repeat("c", 64)
+			return marshal(x)
 		}},
 		{"missing cell", func() []byte {
 			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
 			x.Cells = x.Cells[:1]
-			raw, _ := json.Marshal(x)
-			return raw
+			return marshal(x)
 		}},
 		{"duplicate cell", func() []byte {
 			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
 			x.Cells = append(x.Cells, x.Cells[0])
-			raw, _ := json.Marshal(x)
-			return raw
+			return marshal(x)
 		}},
 		{"recall", func() []byte {
 			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
 			x.Cells[0].Metrics.RecallAt10 = 1
-			raw, _ := json.Marshal(x)
-			return raw
+			return marshal(x)
 		}},
 		{"incomplete metrics", func() []byte {
 			x := cloneLocalHNSWAttributionHistoryReportV1(t, report)
 			x.Cells[0].Metrics.CompletedQueries = 999
-			raw, _ := json.Marshal(x)
-			return raw
+			return marshal(x)
 		}},
 		{"unknown JSON", func() []byte {
-			raw, _ := json.Marshal(cloneLocalHNSWAttributionHistoryReportV1(t, report))
+			raw := marshal(cloneLocalHNSWAttributionHistoryReportV1(t, report))
 			return append(raw[:len(raw)-1], []byte(`,"unknown":true}`)...)
 		}},
 		{"trailing JSON", func() []byte {
-			raw, _ := json.Marshal(cloneLocalHNSWAttributionHistoryReportV1(t, report))
+			raw := marshal(cloneLocalHNSWAttributionHistoryReportV1(t, report))
 			return append(raw, []byte(` {}`)...)
 		}},
 	} {

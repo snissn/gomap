@@ -128,7 +128,10 @@ func localHNSWAttributionTimingCellV1Run(ctx context.Context, harness *localHNSW
 			return cell, err
 		}
 		elapsed := uint64(time.Since(queryStarted))
-		if elapsed == 0 || math.MaxUint64-cell.Candidates < candidates || math.MaxUint64-cell.Edges < edges {
+		if elapsed == 0 {
+			elapsed = 1
+		}
+		if math.MaxUint64-cell.Candidates < candidates || math.MaxUint64-cell.Edges < edges {
 			return cell, errors.New("invalid local HNSW timing measurement")
 		}
 		durations, digests = append(durations, elapsed), append(digests, localHNSWAttributionTimingResultsSHA256V1(results))
@@ -136,9 +139,12 @@ func localHNSWAttributionTimingCellV1Run(ctx context.Context, harness *localHNSW
 		cell.Edges += edges
 	}
 	elapsed := uint64(time.Since(started))
+	if elapsed == 0 {
+		elapsed = 1
+	}
 	cpuAfter, cpuAfterOK := vectorPartitionBenchmarkCPUNanos()
 	runtime.ReadMemStats(&after)
-	if elapsed == 0 || !cpuOK != !cpuAfterOK || cpuOK && cpuAfter < cpuBefore || after.TotalAlloc < before.TotalAlloc {
+	if cpuOK != cpuAfterOK || cpuOK && cpuAfter < cpuBefore || after.TotalAlloc < before.TotalAlloc {
 		return cell, errors.New("invalid local HNSW timing resources")
 	}
 	cell.Repetition, cell.Variant, cell.Probes, cell.QueryCount = repetition, variant, probes, len(cases)

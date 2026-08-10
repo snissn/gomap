@@ -67,6 +67,7 @@ func TestLocalHNSWAttributionInputsV1(t *testing.T) {
 		mutate func(*localHNSWAttributionInputConfigV1)
 	}{
 		{"wrong digest", func(c *localHNSWAttributionInputConfigV1) { c.HistoricalReportSHA256[0] = strings.Repeat("b", 64) }},
+		{"retained DB file", func(c *localHNSWAttributionInputConfigV1) { c.RetainedDB = descriptor }},
 		{"nonregular", func(c *localHNSWAttributionInputConfigV1) { c.TruthArtifact = db }},
 		{"oversize", func(c *localHNSWAttributionInputConfigV1) {
 			c.Descriptor = write("oversized", strings.Repeat("x", m3VariantDescriptorMaxBytesV1+1))
@@ -82,6 +83,15 @@ func TestLocalHNSWAttributionInputsV1(t *testing.T) {
 			}
 		})
 	}
+	dbLink := filepath.Join(dir, "db-link")
+	if err := os.Symlink(db, dbLink); err != nil {
+		t.Fatal(err)
+	}
+	cfg.RetainedDB = dbLink
+	if _, err := localHNSWAttributionInputsV1(cfg); err == nil {
+		t.Fatal("retained DB symlink accepted")
+	}
+	cfg.RetainedDB = db
 	symlink := filepath.Join(dir, "descriptor-link")
 	if err := os.Symlink(descriptor, symlink); err != nil {
 		t.Fatal(err)
