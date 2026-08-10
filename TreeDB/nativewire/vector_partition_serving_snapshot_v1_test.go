@@ -229,6 +229,43 @@ func TestVectorPartitionServingSnapshotInvalidationWinsPublicationRaceV1(t *test
 	}
 }
 
+func TestVectorPartitionServingSnapshotProofRefreshIsMonotonicV1(t *testing.T) {
+	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
+	if err := fixture.publisher.PublishV1(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.publisher.cancel()
+	fixture.publisher.wg.Wait()
+
+	fixture.publisher.mu.Lock()
+	snapshot := fixture.publisher.current
+	older := snapshot.proof
+	fixture.publisher.mu.Unlock()
+	placement := fixture.coordinator.placement
+	newer, err := fixture.authority.captureVectorPartitionServingAuthorityV1(
+		t.Context(), placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
+		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newer.read.ValidThroughUnixNano <= older.read.ValidThroughUnixNano {
+		t.Fatalf("new proof deadline=%d old=%d", newer.read.ValidThroughUnixNano, older.read.ValidThroughUnixNano)
+	}
+	if err := fixture.publisher.installProofV1(snapshot, newer, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.publisher.installProofV1(snapshot, older, nil); err != nil {
+		t.Fatal(err)
+	}
+	fixture.publisher.mu.Lock()
+	got := fixture.publisher.current.proof.read.ValidThroughUnixNano
+	fixture.publisher.mu.Unlock()
+	if got != newer.read.ValidThroughUnixNano {
+		t.Fatalf("installed proof deadline=%d want=%d", got, newer.read.ValidThroughUnixNano)
+	}
+}
+
 func TestVectorPartitionServingSnapshotPublicationPinsAndDrainsV1(t *testing.T) {
 	fixture := newVectorPartitionServingSnapshotFixtureV1(t)
 	injected := errors.New("injected partition open failure")

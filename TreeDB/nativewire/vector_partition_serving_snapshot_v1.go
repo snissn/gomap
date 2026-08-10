@@ -432,14 +432,25 @@ func (p *VectorPartitionServingSnapshotPublisherV1) RefreshProofV1(ctx context.C
 		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
 		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
 	)
+	return p.installProofV1(snapshot, fresh, err)
+}
+
+func (p *VectorPartitionServingSnapshotPublisherV1) installProofV1(snapshot *vectorPartitionServingSnapshotV1, fresh vectorPartitionServingAuthorityProofV1, captureErr error) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err != nil || p.closed || p.current != snapshot || !sameVectorPartitionServingAuthorityProofV1(snapshot.proof, fresh) {
+	if captureErr != nil || p.closed || p.current != snapshot || !sameVectorPartitionServingAuthorityProofV1(snapshot.proof, fresh) {
 		p.stats.ProofRefreshFailures++
-		if err != nil {
-			return err
+		if captureErr != nil {
+			return captureErr
 		}
 		return ErrVectorPartitionShardSearchGenerationMismatch
+	}
+	if fresh.read.ValidThroughUnixNano <= snapshot.proof.read.ValidThroughUnixNano {
+		return nil
+	}
+	if err := p.opts.Authority.validateVectorPartitionServingAuthorityV1(fresh); err != nil {
+		p.stats.ProofRefreshFailures++
+		return err
 	}
 	snapshot.proof = fresh
 	p.stats.ProofRefreshes++
