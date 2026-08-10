@@ -28,6 +28,30 @@ func TestDocsVectorPartitionRaftM0Contract(t *testing.T) {
 	}
 }
 
+func TestDocsVectorPartitionServingSnapshotNoLogAuthorityContract(t *testing.T) {
+	root, _ := repoRoots(t)
+	for path, needles := range map[string][]string{
+		filepath.Join(root, "docs", "spec", "vector-partition-raft-v1.md"): {
+			"immutable serving snapshot", "appends no `LogBarrier` entry", "short process-local monotonic",
+			"existing pins drain", "no quorum call", "#4096", "#4098",
+		},
+		filepath.Join(root, "docs", "spec", "raftcluster.md"): {
+			"LinearizableCatalogMetaReadProofV1", "committed entry from that term",
+			"do not append `LogBarrier` entries", "caller-trusted cross-process capability",
+		},
+	} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, needle := range needles {
+			if !strings.Contains(string(b), needle) {
+				t.Fatalf("%s missing %q", path, needle)
+			}
+		}
+	}
+}
+
 func TestDocsVectorPartitionV1CorrectnessAndApproximationContract(t *testing.T) {
 	root, _ := repoRoots(t)
 	b, err := os.ReadFile(filepath.Join(root, "docs", "spec", "vector-partition-v1-contract.md"))

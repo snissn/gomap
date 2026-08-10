@@ -376,7 +376,13 @@ func (p *HashicorpRaftProvider) waitHashicorpReadIndexCurrentTermCommit(ctx cont
 	if p == nil || p.raft == nil {
 		return 0, 0, ErrInvalidHashicorpRaftProvider
 	}
-	timeout := p.applyTimeout
+	return waitHashicorpCurrentTermCommitV1(ctx, p.raft, p.logStore, p.applyTimeout, p.requireHashicorpReadIndexLeader)
+}
+
+func waitHashicorpCurrentTermCommitV1(ctx context.Context, r *hraft.Raft, logStore hraft.LogStore, timeout time.Duration, requireLeader func() error) (uint64, uint64, error) {
+	if r == nil || logStore == nil || requireLeader == nil {
+		return 0, 0, ErrInvalidHashicorpRaftProvider
+	}
 	if timeout <= 0 {
 		timeout = hashicorpRaftDefaultApplyTimeout
 	}
@@ -386,12 +392,12 @@ func (p *HashicorpRaftProvider) waitHashicorpReadIndexCurrentTermCommit(ctx cont
 	pollTimer := time.NewTimer(delay)
 	defer pollTimer.Stop()
 	for {
-		if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		if err := requireLeader(); err != nil {
 			return 0, 0, err
 		}
-		term := p.raft.CurrentTerm()
-		commitIndex := p.raft.CommitIndex()
-		ok, err := p.readIndexCommitIndexHasCurrentTerm(commitIndex, term)
+		term := r.CurrentTerm()
+		commitIndex := r.CommitIndex()
+		ok, err := raftLogIndexHasTermV1(logStore, commitIndex, term)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -419,14 +425,18 @@ func (p *HashicorpRaftProvider) readIndexCommitIndexHasCurrentTerm(commitIndex, 
 	if p == nil {
 		return false, ErrInvalidHashicorpRaftProvider
 	}
+	return raftLogIndexHasTermV1(p.logStore, commitIndex, term)
+}
+
+func raftLogIndexHasTermV1(logStore hraft.LogStore, commitIndex, term uint64) (bool, error) {
 	if commitIndex == 0 || term == 0 {
 		return false, nil
 	}
-	if p.logStore == nil {
+	if logStore == nil {
 		return false, fmt.Errorf("%w: hashicorp raft log store is not configured", ErrReadBarrierNotSatisfied)
 	}
 	var entry hraft.Log
-	if err := p.logStore.GetLog(commitIndex, &entry); err != nil {
+	if err := logStore.GetLog(commitIndex, &entry); err != nil {
 		return false, errors.Join(
 			ErrReadBarrierNotSatisfied,
 			fmt.Errorf("unable to inspect committed raft log %d for read-index term gate: %w", commitIndex, err),

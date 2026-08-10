@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -136,6 +137,30 @@ func TestCatalogMetaLifecycleAtomicCutoverInvalidationCleanupAndStatus(t *testin
 	}
 	if err := catalogMetaLifecycleValidateSearchV1(authority, newIdentity, active.ReadySetDigest); err != nil {
 		t.Fatalf("active search: %v", err)
+	}
+	snapshot, err := authority.VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+		context.Background(), applied, newIdentity.Index.Collection, newIdentity.Index.IndexName,
+		newIdentity.Generation, newIdentity.Index.IndexDefinitionDigest, newIdentity.Source.Generation,
+		newIdentity.Source.Checksum, newIdentity.Source.SchemaHash, newIdentity.Source.RowCount,
+	)
+	if err != nil || snapshot.Catalog.AppliedIndex != applied || snapshot.Identity != newIdentity || snapshot.Record.ReadySetDigest != active.ReadySetDigest {
+		t.Fatalf("serving authority snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := authority.ValidateVectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(context.Background(), applied, snapshot); err != nil {
+		t.Fatalf("validate serving authority snapshot: %v", err)
+	}
+	changed := snapshot
+	changed.Record.ReadyGroups = slices.Clone(snapshot.Record.ReadyGroups)
+	changed.Record.ReadyGroups[0].AppliedIndex++
+	if err := authority.ValidateVectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(context.Background(), applied, changed); !errors.Is(err, ErrVectorPartitionLifecycleIdentity) {
+		t.Fatalf("changed serving authority snapshot err=%v", err)
+	}
+	if _, err := authority.VectorPartitionServingAuthoritySnapshotAtAppliedIndexV1(
+		context.Background(), applied-1, newIdentity.Index.Collection, newIdentity.Index.IndexName,
+		newIdentity.Generation, newIdentity.Index.IndexDefinitionDigest, newIdentity.Source.Generation,
+		newIdentity.Source.Checksum, newIdentity.Source.SchemaHash, newIdentity.Source.RowCount,
+	); !errors.Is(err, ErrCatalogMetaUnavailable) {
+		t.Fatalf("mixed-index snapshot err=%v want ErrCatalogMetaUnavailable", err)
 	}
 	if _, err := authority.ValidateVectorPartitionGenerationSearchAtAppliedIndexV1(
 		context.Background(), applied+1, newIdentity.Index.Collection, newIdentity.Index.IndexName,

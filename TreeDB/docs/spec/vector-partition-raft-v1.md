@@ -268,13 +268,30 @@ placement, then M7 validates that router against catalog authority before any
 router search or shard dispatch. A missing, stale, corrupt, or locally
 unprepared exact generation fails closed.
 
-Every replicated lifecycle validation first performs a fresh quorum-verified
-meta-Raft leader read and waits for the local catalog FSM through that fence.
+Catalog proof refresh uses a quorum-verified, current-term meta-Raft read that
+waits for the committed Raft prefix and exact local catalog applied identity.
+It appends no `LogBarrier` entry. The proof names its leader, term, commit and
+applied floors, catalog command index, and a short process-local monotonic
+lease. A follower, expired lease, changed term, insufficient applied progress,
+or changed catalog identity fails closed.
+
+Activation-side code may publish one immutable serving snapshot only after it
+has captured the exact catalog/lifecycle authority, pinned the matching router
+and every local generation, opened every local partition, and recaptured the
+same authority. The snapshot binds the lifecycle, catalog, topology,
+ready-set, manifest, router, authorization-overlay, and source-watermark
+identities. Publication swaps one complete snapshot; replacement or
+invalidation prevents new pins while existing pins drain. Snapshot acquisition
+only validates the retained local proof and exact applied identity: it performs
+no quorum call, catalog-log append, manifest reconstruction, generation open,
+or partition open. #4096 owns strict request propagation and #4098 owns the
+explicit relaxed and pinned-session public shapes.
+
 The concrete replica-local catalog authority intentionally does not implement
-the serving interface; only the linearizable adapter can do so. A follower
-without routed meta-leader proof, or a local catalog view behind the returned
-catalog command index, fails closed rather than serving its cached active
-generation.
+the serving interface; only the linearizable adapter can capture or refresh a
+proof. A follower without routed meta-leader proof, or a local catalog view
+that differs from the proof's exact catalog command index, fails closed rather
+than serving its cached active generation.
 
 `VectorPartitionLifecycleCoordinatorV1` provides the bounded meta-Raft
 workflow: begin (with exact source/catalog/mutation identity), caller-owned

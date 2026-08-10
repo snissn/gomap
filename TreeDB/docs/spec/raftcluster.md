@@ -191,6 +191,18 @@ loss, target mismatch, missing applied progress, or missing log evidence. This
 does not add leader transfer handling, lease reads, follower reads, or
 production routing.
 
+The catalog-meta provider has the corresponding internal no-log authority
+proof for immutable vector serving. `LinearizableCatalogMetaReadProofV1`
+performs `VerifyLeader`, anchors the lease at that successful verification,
+binds it to one leader term, requires a
+committed entry from that term, waits for the local Raft and catalog applied
+floors, and returns a bounded process-local monotonic lease. Repeated proof
+reads do not append `LogBarrier` entries. Local lease validation rechecks
+leader, term, Raft applied progress, and the exact catalog applied identity;
+expiry or any mismatch fails closed. This lease is not a serializable or
+caller-trusted cross-process capability; authenticated propagation remains the
+serving layer's responsibility.
+
 `raftharness.ReadIndexProvider` is the in-process test adapter for this
 contract. It derives read-index proofs from an injected committed-entry log so
 tests can exercise nativewire read-index/read-barrier composition, but that
