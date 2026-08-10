@@ -690,6 +690,18 @@ func TestColumnHNSWPreparedTraversalScorePlaneSeam2585(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack searchCosine exact: %v", err)
 	}
+	var tracedScratch columnVectorGraphNativeSearchScratch
+	trace := columnHNSWSearchPackAttributionTrace{Termination: "stale"}
+	tracedResults, _, err := pack.searchCosineWithContextTrace(t.Context(), query, nativeOpts, &tracedScratch, &trace)
+	if err != nil {
+		t.Fatalf("traced pack search: %v", err)
+	}
+	assertColumnHNSWPreparedTraversalResultsMatch2585(t, tracedResults, packResults)
+	switch trace.Termination {
+	case "candidate_limit", "frontier_empty_retained_full", "frontier_empty_no_seed", "distance_bound":
+	default:
+		t.Fatalf("trace termination=%q", trace.Termination)
+	}
 	var exactScratch columnVectorGraphNativeSearchScratch
 	exactPlane := &columnHNSWPreparedExactFP32ScorePlane{}
 	exactResults, exactStats, err := pack.searchCosinePreparedScorePlane(query, columnHNSWPreparedTraversalOptions{TopK: 3, EfSearch: len(rows), StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &exactScratch, exactPlane)

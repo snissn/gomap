@@ -26,8 +26,16 @@ func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts co
 // searchCosineWithContext keeps the existing searchCosine API available to
 // callers without a context while making every potentially long traversal
 // phase interruptible for deadline-bound router and partition searches.
+type columnHNSWSearchPackAttributionTrace struct{ Termination string }
+
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+	return v.searchCosineWithContextTrace(ctx, query, opts, scratch, nil)
+}
+func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch, trace *columnHNSWSearchPackAttributionTrace) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	var stats columnVectorGraphNativeSearchStats
+	if trace != nil {
+		trace.Termination = ""
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -162,6 +170,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	traversalSteps := 0
+	termination := ""
 	for {
 		if traversalSteps&63 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -170,11 +179,13 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 		}
 		traversalSteps++
 		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
+			termination = "candidate_limit"
 			break
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
 			if len(scratch.top) >= efSearch {
+				termination = "frontier_empty_retained_full"
 				break
 			}
 			seed, seedOK, err := columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
@@ -182,6 +193,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 				return nil, stats, err
 			}
 			if !seedOK {
+				termination = "frontier_empty_no_seed"
 				break
 			}
 			nextSeed = seed + 1
@@ -192,6 +204,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 			continue
 		}
 		if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
+			termination = "distance_bound"
 			break
 		}
 		adjacency, err := v.adjacencyLayerForOrdinal(candidate.ordinal, 0, &stats)
@@ -233,6 +246,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.C
 				return nil, stats, err
 			}
 		}
+	}
+	if trace != nil {
+		trace.Termination = termination
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, stats, err
