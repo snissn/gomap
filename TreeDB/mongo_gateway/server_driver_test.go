@@ -128,6 +128,32 @@ func TestStandaloneServerOfficialGoDriverCompoundPlanner(t *testing.T) {
 	if len(docs) != 2 || docs[0]["_id"] != "b" || docs[1]["_id"] != "a" {
 		t.Fatalf("driver compound docs=%v want b,a", docs)
 	}
+	// These commands deliberately reuse the same supported match/sort shape;
+	// they are driver-level coverage of planner fallback/reuse, not a claim that
+	// MongoDB exposes the same physical plan for count/distinct/aggregate.
+	// Count/distinct/aggregate currently reject driver-generated maxTimeMS, so
+	// use an explicitly unbounded test context for these supported commands.
+	queryCtx := context.Background()
+	count, err := coll.CountDocuments(queryCtx, bson.D{{Key: "tenant", Value: "acme"}})
+	if err != nil || count != 2 {
+		t.Fatalf("driver compound count=%d err=%v want 2", count, err)
+	}
+	values, err := coll.Distinct(queryCtx, "score", bson.D{{Key: "tenant", Value: "acme"}}).Raw()
+	distinctValues, valuesErr := values.Values()
+	if err != nil || valuesErr != nil || len(distinctValues) != 2 {
+		t.Fatalf("driver compound distinct=%v err=%v valuesErr=%v", values, err, valuesErr)
+	}
+	agg, err := coll.Aggregate(queryCtx, mongo.Pipeline{
+		bson.D{{Key: "$match", Value: bson.D{{Key: "tenant", Value: "acme"}}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "score", Value: int32(-1)}}}},
+	})
+	if err != nil {
+		t.Fatalf("driver compound aggregate: %v", err)
+	}
+	var aggregateDocs []bson.M
+	if err := agg.All(queryCtx, &aggregateDocs); err != nil || len(aggregateDocs) != 2 || aggregateDocs[0]["_id"] != "b" {
+		t.Fatalf("driver compound aggregate docs=%v err=%v", aggregateDocs, err)
+	}
 }
 
 func TestStandaloneServerOfficialGoDriverBoundedMultiWrites(t *testing.T) {
