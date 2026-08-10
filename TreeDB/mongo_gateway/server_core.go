@@ -160,6 +160,9 @@ type Server struct {
 	authFailures               atomic.Uint64
 	authorizationAllowed       atomic.Uint64
 	authorizationDenied        atomic.Uint64
+	diagnosticsStartedAt       time.Time
+	diagnosticsMu              sync.Mutex
+	diagnosticsCommands        map[string]mongoCommandDiagnostic
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool
@@ -207,6 +210,8 @@ func NewServer() *Server {
 		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
 		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
 		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
+		diagnosticsStartedAt:     time.Now(),
+		diagnosticsCommands:      make(map[string]mongoCommandDiagnostic),
 	}
 	s.nextResponseID.Store(0)
 	return s
@@ -872,7 +877,9 @@ func commandRejectsReadOPMsgFeatures(name string) bool {
 	}
 }
 
-func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (response wire.Document, err error) {
+	started := time.Now()
+	defer func() { s.noteDiagnosticCommand(name, time.Since(started), err != nil || !commandResponseOK(response)) }()
 	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
 		return commandError(13, "Unauthorized", "Authentication required")
 	}
@@ -897,13 +904,14 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 // unavailable until it is also added to the executable authorization matrix.
 var mongoGatewaySupportedCommands = map[string]struct{}{
 	"aggregate": {}, "buildInfo": {}, "connectionStatus": {}, "count": {},
+	"collStats": {}, "dbStats": {},
 	"create": {}, "createIndexes": {}, "createUser": {}, "delete": {},
 	"distinct": {}, "dropIndexes": {}, "dropUser": {}, "endSessions": {}, "explain": {},
 	"find": {}, "findAndModify": {}, "getMore": {}, "hello": {},
 	"hostInfo": {}, "insert": {}, "isMaster": {}, "ismaster": {},
 	"killCursors": {}, "listCollections": {}, "listDatabases": {}, "listIndexes": {},
 	"ping": {}, "saslContinue": {}, "saslStart": {}, "update": {}, "updateUser": {},
-	"usersInfo": {},
+	"usersInfo": {}, "serverStatus": {}, "top": {},
 }
 
 func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
@@ -917,6 +925,14 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
 		return marshalDocument(s.connectionStatusResponse(cursorOwner))
+	case "serverStatus":
+		return s.serverStatusResponse(command)
+	case "dbStats":
+		return s.dbStatsResponse(command, cursorOwner)
+	case "collStats":
+		return s.collStatsResponse(command, cursorOwner)
+	case "top":
+		return s.topResponse(command)
 	case "saslStart":
 		return s.saslStartResponse(command, cursorOwner)
 	case "saslContinue":
