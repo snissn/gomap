@@ -38,7 +38,13 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer overlay.Close()
-	cases := []localHNSWAttributionTimingCaseV1{{Ordinal: 1, Query: []float32{1, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}, {Ordinal: 2, Query: []float32{2, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}}
+	var ordinals []int
+	for ordinal := 0; len(ordinals) < 2; ordinal++ {
+		if localHNSWCalibrationOrdinalV1(ordinal) {
+			ordinals = append(ordinals, ordinal)
+		}
+	}
+	cases := []localHNSWAttributionTimingCaseV1{{Ordinal: ordinals[0], Query: []float32{1, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}, {Ordinal: ordinals[1], Query: []float32{2, 1, 1}, LowRoute: []uint32{0, 1}, HighRoute: []uint32{0, 1, 2, 3}}}
 	for i := range cases {
 		cases[i].QueryFP32SHA256 = localHNSWAttributionQueryFP32SHA256V1(cases[i].Query)
 	}
@@ -74,6 +80,16 @@ func TestLocalHNSWAttributionTimingV1(t *testing.T) {
 	bad[0].HighRoute = []uint32{0, 0, 1, 2}
 	if _, err := localHNSWAttributionTimingV1(t.Context(), source, native, overlay, bad); err == nil {
 		t.Fatal("expected malformed route rejection")
+	}
+	bad = append([]localHNSWAttributionTimingCaseV1(nil), cases...)
+	for localHNSWCalibrationOrdinalV1(bad[0].Ordinal) {
+		bad[0].Ordinal++
+	}
+	if err := localHNSWAttributionTimingCasesV1(bad, len(source.manifest.Assets)); err == nil {
+		t.Fatal("expected non-calibration ordinal rejection")
+	}
+	if err := localHNSWAttributionTimingCasesV1(nil, len(source.manifest.Assets)); err == nil {
+		t.Fatal("expected empty timing cases rejection")
 	}
 }
 

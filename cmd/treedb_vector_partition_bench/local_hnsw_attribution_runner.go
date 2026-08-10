@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -159,7 +160,7 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	if err != nil || baseSHA != localHNSWAttributionSourceLockV1 {
 		return errors.New("local HNSW attribution source lock")
 	}
-	sourceCheckout, err = m8SourceCheckoutV1(sourceCheckout, headSHA)
+	sourceCheckout, err = localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA)
 	if err != nil || m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("local HNSW attribution requires clean exact-head checkout")
 	}
@@ -290,7 +291,7 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	if digest, hashErr := localHNSWAttributionRegularFileSHA256V1(datasetManifest, maxManifestBytes); hashErr != nil || digest != localHNSWAttributionFixtureManifestSHA256V1 {
 		return errors.New("local HNSW attribution dataset changed during execution")
 	}
-	if _, err := m8SourceCheckoutV1(sourceCheckout, headSHA); err != nil || m8GitDirtyInV1(sourceCheckout) {
+	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil || m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("local HNSW attribution source changed during execution")
 	}
 	if digest, hashErr := m8BenchmarkExecutableSHA256V1(executable); hashErr != nil || digest != executableSHA {
@@ -320,6 +321,17 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	}
 	_, err = fmt.Fprintf(stdout, "report=%s graph=%s graph_sha256=%s queries=%s queries_sha256=%s native_p2=%.6f overlay_p2=%.6f native_all=%.6f overlay_all=%.6f\n", out, graphPath, graphArtifact.SHA256, queryPath, queryArtifact.SHA256, summary.Native.P2EndToEnd.Mean, summary.Overlay.P2EndToEnd.Mean, summary.Native.AllGlobal.Mean, summary.Overlay.AllGlobal.Mean)
 	return err
+}
+
+func localHNSWAttributionSourceCheckoutV1(path, base, head string) (string, error) {
+	checkout, err := m8SourceCheckoutV1(path, head)
+	if err != nil || !validLowerSHA(base) {
+		return "", errors.New("invalid local HNSW attribution source checkout")
+	}
+	if err := exec.Command("git", "-C", checkout, "merge-base", "--is-ancestor", base, head).Run(); err != nil {
+		return "", errors.New("local HNSW attribution base is not an ancestor of head")
+	}
+	return checkout, nil
 }
 
 func localHNSWAttributionFixtureV1(fixture fixtureManifest) bool {

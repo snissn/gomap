@@ -85,9 +85,12 @@ type localHNSWAttributionTimingOrderV1 struct {
 }
 
 func localHNSWAttributionTimingCasesV1(cases []localHNSWAttributionTimingCaseV1, partitions int) error {
+	if len(cases) == 0 || partitions < 1 {
+		return errors.New("invalid local HNSW timing query cases")
+	}
 	seen := make(map[int]bool, len(cases))
 	for _, c := range cases {
-		if c.Ordinal < 0 || seen[c.Ordinal] || len(c.Query) == 0 || c.QueryFP32SHA256 != localHNSWAttributionQueryFP32SHA256V1(c.Query) || !localHNSWAttributionRoutePermutationV1(c.HighRoute, partitions) || len(c.LowRoute) != min(2, partitions) || !localHNSWAttributionRoutePrefixV1(c.LowRoute, c.HighRoute) {
+		if c.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(c.Ordinal) || seen[c.Ordinal] || len(c.Query) == 0 || c.QueryFP32SHA256 != localHNSWAttributionQueryFP32SHA256V1(c.Query) || !localHNSWAttributionRoutePermutationV1(c.HighRoute, partitions) || len(c.LowRoute) != min(2, partitions) || !localHNSWAttributionRoutePrefixV1(c.LowRoute, c.HighRoute) {
 			return errors.New("invalid local HNSW timing query case")
 		}
 		seen[c.Ordinal] = true

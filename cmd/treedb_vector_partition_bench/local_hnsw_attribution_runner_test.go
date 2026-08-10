@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -18,5 +19,35 @@ func TestLocalHNSWAttributionRunnerV1(t *testing.T) {
 	facts := localHNSWAttributionDecisionFactsV1Build(graph, summary)
 	if !facts.NativeDisconnected || !facts.OverlayConnected || !facts.MutationChangedTraversal || !facts.MutationChangedP2TopK || facts.NativeMinusOverlayP2Recall <= 0 || facts.NativeMinusOverlayAllRecall <= 0 || !facts.NativeP2TargetMet || !facts.NativeAllTargetMet || !facts.RoutingTargetMet {
 		t.Fatalf("facts=%+v", facts)
+	}
+}
+
+func TestLocalHNSWAttributionSourceCheckoutV1(t *testing.T) {
+	source, base := testM8QualificationGitCheckoutV1(t, t.TempDir())
+	if got, err := localHNSWAttributionSourceCheckoutV1(source, base, base); err != nil || got != source {
+		t.Fatalf("source checkout=%q err=%v", got, err)
+	}
+	if output, err := exec.Command("git", "-C", source, "commit", "--allow-empty", "-qm", "descendant").CombinedOutput(); err != nil {
+		t.Fatalf("advance source: %v: %s", err, output)
+	}
+	headRaw, err := exec.Command("git", "-C", source, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	if _, err := localHNSWAttributionSourceCheckoutV1(source, base, head); err != nil {
+		t.Fatalf("descendant source checkout: %v", err)
+	}
+	unrelatedSource, _ := testM8QualificationGitCheckoutV1(t, t.TempDir())
+	if output, err := exec.Command("git", "-C", unrelatedSource, "commit", "--allow-empty", "-qm", "unrelated").CombinedOutput(); err != nil {
+		t.Fatalf("advance unrelated source: %v: %s", err, output)
+	}
+	unrelatedRaw, err := exec.Command("git", "-C", unrelatedSource, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := strings.TrimSpace(string(unrelatedRaw))
+	if _, err := localHNSWAttributionSourceCheckoutV1(source, unrelated, head); err == nil {
+		t.Fatal("accepted unrelated source-lock base")
 	}
 }
