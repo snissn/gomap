@@ -69,19 +69,21 @@ func benchmarkMongoCompoundPlannerVariant(b *testing.B, variant string) {
 	if returned := metric("nReturned"); returned != 32 {
 		b.Fatalf("%s executionStats.nReturned=%d want 32: %s", variant, returned, explain)
 	}
-	b.ReportMetric(float64(metric("candidateDocumentsExamined")), "candidates_examined/op")
-	b.ReportMetric(float64(metric("candidateDocumentsMaterialized")), "documents_materialized/op")
+	candidatesExamined := metric("candidateDocumentsExamined")
+	documentsMaterialized := metric("candidateDocumentsMaterialized")
 	materializedBytes, ok := stats.Lookup("candidateMaterializedBytes").Int64OK()
 	if !ok || materializedBytes < 0 {
 		b.Fatalf("%s executionStats.candidateMaterializedBytes=%d ok=%v want non-negative: %s", variant, materializedBytes, ok, explain)
 	}
-	b.ReportMetric(float64(materializedBytes), "materialized_bytes/op")
 	drain(serveCommand(b, server, 406599, command), 406598)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		drain(serveCommand(b, server, int32(406600+i), command), int32(506600+i))
 	}
+	b.ReportMetric(float64(candidatesExamined), "candidates_examined/op")
+	b.ReportMetric(float64(documentsMaterialized), "documents_materialized/op")
+	b.ReportMetric(float64(materializedBytes), "materialized_bytes/op")
 }
 
 // TestMongoCompoundPlanEqualityPrefixRangeAndSort is the first #4065 contract
