@@ -46,7 +46,7 @@ func TestLocalHNSWRepairConstructionCurveV1(t *testing.T) {
 	}
 	for i, point := range points {
 		variant, err := localHNSWRepairConstructionCurveVariantV1(point.EfConstruction)
-		if err != nil || point.EfConstruction != localHNSWRepairConstructionCurvePointsV1[i] || point.Build.Variant != string(variant) || point.Build.PackBytes == 0 || point.Graph.CombinedReachableRows != point.Graph.Rows || point.Quality.EFSearch != 128 || point.Quality.QueryCount != 1 || point.PackMembershipSHA256 == "" || point.PackChecksumsSHA256 == "" || point.DefinitionDigest == "" {
+		if err != nil || point.M != 16 || point.EfConstruction != localHNSWRepairConstructionCurvePointsV1[i] || point.Build.Variant != string(variant) || point.Build.PackBytes == 0 || point.Graph.CombinedReachableRows != point.Graph.Rows || point.Quality.EFSearch != 128 || point.Quality.QueryCount != 1 || point.PackMembershipSHA256 == "" || point.PackChecksumsSHA256 == "" || point.DefinitionDigest == "" {
 			t.Fatalf("point[%d]=%+v variant=%s err=%v", i, point, variant, err)
 		}
 	}
