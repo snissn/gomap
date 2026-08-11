@@ -1020,7 +1020,7 @@ func dialVectorPartitionOperationsV1(ctx context.Context, endpoint string) (*vec
 		return nil, err
 	}
 	measured := &vectorPartitionSystemMeasuredConnV1{Conn: conn}
-	client := nativewire.NewClient(measured)
+	client := nativewire.NewClientWithMaxFrameSize(measured, vectorPartitionSystemWireMaxBytesV1)
 	if err := client.Hello(ctx); err != nil {
 		_ = client.Close()
 		return nil, err

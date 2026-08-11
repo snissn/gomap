@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -173,6 +174,18 @@ func TestNewServerAcceptsPublicFrameLimit(t *testing.T) {
 	server := NewServer(ServerOptions{MaxFrameSize: 2 << 20})
 	if got := server.limits.MaxFrameSize; got != 2<<20 {
 		t.Fatalf("MaxFrameSize=%d want %d", got, 2<<20)
+	}
+}
+
+func TestServerRejectsOversizedResponseFrameBeforeWrite(t *testing.T) {
+	server := NewServer(ServerOptions{MaxFrameSize: uint64(iwire.FrameHeaderLenV1) + 1})
+	var output bytes.Buffer
+	err := server.writeSimpleFrameBuffered(&output, &connState{}, iwire.Header{Type: iwire.FrameResponse}, []byte{1, 2})
+	if got := codeOf(err); got != iwire.ErrResourceExhausted {
+		t.Fatalf("write error=%v code=%d want %d", err, got, iwire.ErrResourceExhausted)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("wrote %d bytes before rejecting oversized frame", output.Len())
 	}
 }
 

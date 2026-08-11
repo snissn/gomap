@@ -35,6 +35,15 @@ func NewClient(conn net.Conn) *Client {
 	return &Client{conn: conn, limits: iwire.DefaultLimits()}
 }
 
+// NewClientWithMaxFrameSize returns a native-wire client with an explicit frame bound.
+func NewClientWithMaxFrameSize(conn net.Conn, maxFrameSize uint64) *Client {
+	client := NewClient(conn)
+	if maxFrameSize != 0 {
+		client.limits.MaxFrameSize = maxFrameSize
+	}
+	return client
+}
+
 // Close closes the underlying client connection.
 func (c *Client) Close() error {
 	if c == nil {

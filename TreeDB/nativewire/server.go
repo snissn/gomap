@@ -964,6 +964,9 @@ func wireErrorMessage(code iwire.ErrorCode, err error) string {
 }
 
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
+	if err := s.validateFrameSize(body); err != nil {
+		return err
+	}
 	if s.connectionIdleTimeout > 0 {
 		if conn, ok := w.(net.Conn); ok {
 			if err := conn.SetWriteDeadline(time.Now().Add(s.connectionIdleTimeout)); err != nil {
@@ -981,6 +984,9 @@ func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte)
 }
 
 func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	if err := s.validateFrameSize(body); err != nil {
+		return err
+	}
 	if s.connectionIdleTimeout > 0 {
 		if conn, ok := w.(net.Conn); ok {
 			if err := conn.SetWriteDeadline(time.Now().Add(s.connectionIdleTimeout)); err != nil {
@@ -999,6 +1005,14 @@ func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header 
 	}
 	s.counters.incFramesOut()
 	s.counters.addBytesOut(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
+	return nil
+}
+
+func (s *Server) validateFrameSize(body []byte) error {
+	frameSize := uint64(iwire.FrameHeaderLenV1) + uint64(len(body))
+	if frameSize > s.limits.MaxFrameSize {
+		return protocolError(iwire.ErrResourceExhausted, "frame length %d exceeds limit %d", frameSize, s.limits.MaxFrameSize)
+	}
 	return nil
 }
 
