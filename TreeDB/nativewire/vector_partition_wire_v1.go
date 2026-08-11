@@ -163,12 +163,14 @@ func (c *Client) vectorCommandLockedV1(ctx context.Context, command iwire.Comman
 }
 
 func validateVectorPartitionFastEvidenceV1(evidence public.FastSearchEvidenceV1, generation public.GenerationIDV1, options public.FastSearchOptionsV1) error {
-	if evidence.Generation.Index == "" || evidence.Generation.Generation == 0 ||
-		(generation.Index != "" && evidence.Generation != generation) ||
-		evidence.IndexedThrough < options.MinIndexedThrough || evidence.PublishedAt.IsZero() ||
-		evidence.IndexAge < 0 || evidence.IndexAge > options.MaxIndexAge ||
-		evidence.TopologyDigest == "" || evidence.AuthorizationOverlayDigest == "" {
-		return protocolError(iwire.ErrMalformedFrame, "vector fast evidence does not match request")
+	if evidence.Generation.Index == "" || evidence.Generation.Generation == 0 || evidence.PublishedAt.IsZero() || evidence.IndexAge < 0 || evidence.TopologyDigest == "" || evidence.AuthorizationOverlayDigest == "" {
+		return protocolError(iwire.ErrMalformedFrame, "vector fast evidence is incomplete")
+	}
+	if generation.Index != "" && evidence.Generation != generation {
+		return protocolError(iwire.ErrCatalogChanged, "vector fast evidence generation changed")
+	}
+	if evidence.IndexedThrough < options.MinIndexedThrough || evidence.IndexAge > options.MaxIndexAge {
+		return protocolError(iwire.ErrConsistencyUnavailable, "vector fast evidence is stale")
 	}
 	return nil
 }
@@ -188,6 +190,10 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, deadline))
 		defer cancel()
+	}
+	if state != nil && cmd.Header.ID != iwire.CommandVectorStatus {
+		state.mu.Lock()
+		defer state.mu.Unlock()
 	}
 	switch cmd.Header.ID {
 	case iwire.CommandVectorStatus:
@@ -209,7 +215,7 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 			query = state.vectorQuery[:0]
 		}
 		request, err := decodeVectorPartitionSearchRequestIntoV1(raw, s.limits, query)
-		if state != nil {
+		if state != nil && request.Query != nil {
 			state.vectorQuery = request.Query[:0]
 		}
 		if err != nil {
@@ -266,13 +272,18 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 		if err != nil {
 			return nil, vectorPartitionServerErrorV1(err)
 		}
+		response, err := appendVectorPartitionFastEvidenceSectionV1(dst, pinned.Evidence())
+		if err != nil {
+			_ = pinned.Close()
+			return nil, err
+		}
 		state.vectorPinned = pinned
-		return appendVectorPartitionFastEvidenceSectionV1(dst, pinned.Evidence())
+		return response, nil
 	case iwire.CommandVectorClosePinnedSnapshot:
 		if state == nil {
 			return nil, protocolError(iwire.ErrInvalidCommand, "connection state is unavailable")
 		}
-		return dst, vectorPartitionServerErrorV1(state.closeVectorPinned())
+		return dst, vectorPartitionServerErrorV1(state.closeVectorPinnedLocked())
 	default:
 		return nil, protocolError(iwire.ErrUnsupportedFeature, "unsupported vector command")
 	}
@@ -297,9 +308,14 @@ func vectorPartitionServerErrorV1(err error) error {
 		case public.ErrorDeadlineExceededV1:
 			code = iwire.ErrTimeout
 		}
+		if code == iwire.ErrInternal {
+			logDebug("vector operation failed: %v", err)
+			return protocolError(code, "vector operation failed")
+		}
 		return protocolError(code, "%s", err)
 	}
-	return err
+	logDebug("vector operation failed: %v", err)
+	return protocolError(iwire.ErrInternal, "vector operation failed")
 }
 
 func vectorPartitionClientErrorV1(err error) error {
@@ -318,8 +334,10 @@ func vectorPartitionClientErrorV1(err error) error {
 	}
 	code, cause := public.ErrorFailedV1, error(errors.New(wire.Message))
 	switch wire.Code {
-	case iwire.ErrInvalidCommand, iwire.ErrMalformedFrame, iwire.ErrResourceExhausted:
+	case iwire.ErrInvalidCommand, iwire.ErrMalformedFrame:
 		code = public.ErrorInvalidRequestV1
+	case iwire.ErrResourceExhausted:
+		code = public.ErrorUnavailableV1
 	case iwire.ErrCatalogChanged:
 		code = public.ErrorGenerationMismatchV1
 	case iwire.ErrConsistencyUnavailable:
@@ -361,7 +379,7 @@ func appendVectorPartitionCommandBodyV1(dst []byte, command iwire.CommandID, req
 }
 
 func appendVectorPartitionSearchRequestSectionV1(dst []byte, request public.SearchRequestV1, limits iwire.Limits) ([]byte, error) {
-	if len(request.Query) > limits.MaxByteVectorItems || len(request.Query) > maxInt/4 || request.TopK < 0 || request.Probes < 0 || request.EfSearch < 0 || request.Limits.MergeEntries < 0 || request.Metric != public.MetricCosineV1 || request.Consistency != public.ConsistencyGenerationSnapshotV1 {
+	if request.Version != 1 || len(request.Query) == 0 || len(request.Query) > limits.MaxByteVectorItems || len(request.Query) > maxInt/4 || request.TopK < 0 || request.Probes < 0 || request.EfSearch < 0 || request.Limits.MergeEntries < 0 || request.Metric != public.MetricCosineV1 || request.Consistency != public.ConsistencyGenerationSnapshotV1 {
 		return nil, protocolError(iwire.ErrInvalidCommand, "vector search request cannot be encoded")
 	}
 	deadline := uint64(0)
@@ -401,13 +419,17 @@ func decodeVectorPartitionSearchRequestIntoV1(src []byte, limits iwire.Limits, q
 	version := r.u64()
 	if version > math.MaxUint32 && r.err == nil {
 		r.err = protocolError(iwire.ErrInvalidCommand, "vector request version overflows uint32")
+	} else if version != 1 && r.err == nil {
+		r.err = protocolError(iwire.ErrUnsupportedVersion, "unsupported vector request version")
 	} else {
 		request.Version = uint32(version)
 	}
 	request.Generation.Index = r.string()
 	request.Generation.Generation = r.u64()
 	queryCount := r.int()
-	if r.err == nil && (queryCount <= 0 || queryCount > limits.MaxByteVectorItems || queryCount > (len(src)-r.off)/4) {
+	if r.err == nil && queryCount <= 0 {
+		r.err = protocolError(iwire.ErrInvalidCommand, "non-empty vector query is required")
+	} else if r.err == nil && (queryCount > limits.MaxByteVectorItems || queryCount > (len(src)-r.off)/4) {
 		r.err = protocolError(iwire.ErrResourceExhausted, "vector query dimension exceeds bound")
 	}
 	if r.err == nil {
@@ -460,6 +482,9 @@ func appendVectorPartitionFastOptionsSectionV1(dst []byte, options public.FastSe
 func decodeVectorPartitionFastOptionsV1(src []byte) (public.FastSearchOptionsV1, error) {
 	r := vectorPartitionWireReaderV1{src: src}
 	options := public.FastSearchOptionsV1{MaxIndexAge: r.duration(), MinIndexedThrough: r.u64()}
+	if r.err == nil && options.MaxIndexAge <= 0 {
+		r.err = protocolError(iwire.ErrInvalidCommand, "positive vector max index age is required")
+	}
 	return options, r.done()
 }
 
@@ -480,6 +505,9 @@ func appendVectorPartitionPinOptionsSectionV1(dst []byte, options public.PinSear
 func decodeVectorPartitionPinOptionsV1(src []byte) (public.PinSearchSnapshotOptionsV1, error) {
 	r := vectorPartitionWireReaderV1{src: src}
 	options := public.PinSearchSnapshotOptionsV1{FastSearchOptionsV1: public.FastSearchOptionsV1{MaxIndexAge: r.duration(), MinIndexedThrough: r.u64()}, MaxSessionAge: r.duration()}
+	if r.err == nil && (options.MaxIndexAge <= 0 || options.MaxSessionAge <= 0) {
+		r.err = protocolError(iwire.ErrInvalidCommand, "positive vector snapshot ages are required")
+	}
 	return options, r.done()
 }
 
@@ -524,7 +552,7 @@ func decodeVectorPartitionSearchResponseV1(src []byte, limits iwire.Limits) (pub
 	response := public.SearchResponseV1{}
 	response.Generation.Index, response.Generation.Generation = r.string(), r.u64()
 	count := r.int()
-	if r.err == nil && (count < 0 || count > limits.MaxByteVectorItems) {
+	if r.err == nil && (count < 0 || count > limits.MaxByteVectorItems || count > (len(src)-r.off)/5) {
 		r.err = protocolError(iwire.ErrResourceExhausted, "vector neighbor count exceeds bound")
 	}
 	if r.err == nil {
@@ -533,7 +561,7 @@ func decodeVectorPartitionSearchResponseV1(src []byte, limits iwire.Limits) (pub
 			response.Neighbors[i] = public.NeighborV1{ID: r.string(), Score: r.float32()}
 		}
 	}
-	counters := make([]uint64, 16)
+	var counters [16]uint64
 	for i := range counters {
 		counters[i] = r.u64()
 	}
@@ -541,7 +569,7 @@ func decodeVectorPartitionSearchResponseV1(src []byte, limits iwire.Limits) (pub
 		SelectedPartitions: counters[0], SelectedGroups: counters[1], Requests: counters[2], RPCs: counters[3], Retries: counters[4], Redirects: counters[5], Candidates: counters[6], Edges: counters[7],
 		SnapshotPins: counters[8], ReadProofs: counters[9], GenerationPins: counters[10], PartitionOpens: counters[11], QueryBytes: counters[12], RequestBytes: counters[13], CandidateBytes: counters[14], ResponseBytes: counters[15],
 	}
-	timings := make([]time.Duration, 20)
+	var timings [20]time.Duration
 	for i := range timings {
 		timings[i] = r.duration()
 	}
@@ -569,7 +597,7 @@ func appendVectorPartitionFastEvidenceSectionV1(dst []byte, evidence public.Fast
 }
 
 func decodeVectorPartitionFastEvidenceV1(src []byte) (public.FastSearchEvidenceV1, error) {
-	r := vectorPartitionWireReaderV1{src: src}
+	r := vectorPartitionWireReaderV1{src: src, ownedStrings: string(src)}
 	evidence := public.FastSearchEvidenceV1{}
 	evidence.Generation.Index, evidence.Generation.Generation = r.string(), r.u64()
 	evidence.IndexedThrough = r.u64()
@@ -603,7 +631,7 @@ func appendVectorPartitionStatusSectionV1(dst []byte, status VectorPartitionStat
 }
 
 func decodeVectorPartitionStatusV1(src []byte) (VectorPartitionStatusV1, error) {
-	r := vectorPartitionWireReaderV1{src: src}
+	r := vectorPartitionWireReaderV1{src: src, ownedStrings: string(src)}
 	status := VectorPartitionStatusV1{NodeConfigSHA256: r.string()}
 	ready := r.u64()
 	if ready > 1 && r.err == nil {

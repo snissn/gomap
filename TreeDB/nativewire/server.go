@@ -186,6 +186,15 @@ type connState struct {
 }
 
 func (s *connState) closeVectorPinned() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeVectorPinnedLocked()
+}
+
+func (s *connState) closeVectorPinnedLocked() error {
 	if s == nil || s.vectorPinned == nil {
 		return nil
 	}
