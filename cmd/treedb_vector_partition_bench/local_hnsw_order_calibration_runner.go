@@ -248,10 +248,8 @@ func validateLocalHNSWOrderCalibrationReportV1(report localHNSWOrderCalibrationR
 	if report.SourceOrderBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.StableIDHashBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.SourceOrderBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.StableIDHashBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1) || report.SourceOrderBuild.VariantIdentity == "" || report.StableIDHashBuild.VariantIdentity == "" || report.SourceOrderBuild.Partitions != 16 || report.StableIDHashBuild.Partitions != 16 || report.SourceOrderBuild.PackBytes == 0 || report.StableIDHashBuild.PackBytes == 0 {
 		return errors.New("invalid local HNSW order build report")
 	}
-	for _, graph := range []localHNSWRepairCalibrationGraphV1{report.SourceOrderGraph, report.StableIDHashGraph} {
-		if graph.Rows != 300000 || graph.NativeReachableRows != 299968 || graph.CombinedReachableRows != 300000 || graph.NativeTraversalRoots != 48 || graph.AuxiliaryEdges != 64 || graph.AuxiliaryMaxDegree > 9 {
-			return errors.New("invalid local HNSW order graph report")
-		}
+	if !localHNSWOrderCalibrationGraphV1Valid(report.SourceOrderGraph, true) || !localHNSWOrderCalibrationGraphV1Valid(report.StableIDHashGraph, false) {
+		return errors.New("invalid local HNSW order graph report")
 	}
 	if report.Calibration.Artifact.Schema != localHNSWAttributionSidecarSchemaV1 || report.Calibration.Artifact.Records != 806 || !localHNSWAttributionSHA256V1(report.Calibration.Artifact.SHA256) || report.Calibration.Summary.Schema != localHNSWOrderCalibrationSchemaV1 || report.Calibration.Summary.SourceOrder.QueryCount != 806 || report.Calibration.Summary.StableIDHash.QueryCount != 806 {
 		return errors.New("invalid local HNSW order calibration report")
@@ -264,9 +262,12 @@ func validateLocalHNSWOrderCalibrationReportV1(report localHNSWOrderCalibrationR
 			}
 			terminations += count
 		}
-		if terminations != 806*16 || !localHNSWAttributionFiniteRecallV1(aggregate.RoutingRecall.Mean) || !localHNSWAttributionFiniteRecallV1(aggregate.P2Recall.Mean) || !localHNSWAttributionFiniteRecallV1(aggregate.P16Recall.Mean) || aggregate.P2Work.Candidates == 0 || aggregate.P2Work.NativeEdges == 0 || aggregate.P16Work.Candidates == 0 || aggregate.P16Work.NativeEdges == 0 || aggregate.P16Work.AuxiliaryEdges == 0 || aggregate.P16Work.AuxiliaryCandidates == 0 || aggregate.P16Work.AuxiliaryAdmissions == 0 {
+		if terminations != 806*16 || !localHNSWAttributionFiniteRecallV1(aggregate.RoutingRecall.Mean) || !localHNSWAttributionFiniteRecallV1(aggregate.P2Recall.Mean) || !localHNSWAttributionFiniteRecallV1(aggregate.P16Recall.Mean) || aggregate.P2Work.Candidates == 0 || aggregate.P2Work.NativeEdges == 0 || aggregate.P16Work.Candidates == 0 || aggregate.P16Work.NativeEdges == 0 {
 			return errors.New("incomplete local HNSW order work")
 		}
+	}
+	if report.Calibration.Summary.SourceOrder.P16Work.AuxiliaryEdges == 0 || report.Calibration.Summary.SourceOrder.P16Work.AuxiliaryCandidates == 0 || report.Calibration.Summary.SourceOrder.P16Work.AuxiliaryAdmissions == 0 {
+		return errors.New("missing source-order auxiliary work")
 	}
 	if len(report.Timing.Cells) != 16 || report.Profiles.Status != "complete" || report.Profiles.Scope == "" {
 		return errors.New("invalid local HNSW order timing")
@@ -301,4 +302,14 @@ func validateLocalHNSWOrderCalibrationReportV1(report localHNSWOrderCalibrationR
 		return errors.New("invalid local HNSW order disposition")
 	}
 	return nil
+}
+
+func localHNSWOrderCalibrationGraphV1Valid(graph localHNSWRepairCalibrationGraphV1, sourceOrder bool) bool {
+	if sourceOrder {
+		return graph.Rows == 300000 && graph.NativeReachableRows == 299968 && graph.CombinedReachableRows == 300000 && graph.NativeTraversalRoots == 48 && graph.AuxiliaryEdges == 64 && graph.AuxiliaryMaxDegree <= 9
+	}
+	if graph.Rows != 300000 || graph.NativeReachableRows == 0 || graph.NativeReachableRows > graph.Rows || graph.CombinedReachableRows != graph.Rows || graph.NativeTraversalRoots < 16 || graph.NativeTraversalRoots > graph.Rows || graph.AuxiliaryMaxDegree > 9 {
+		return false
+	}
+	return graph.AuxiliaryEdges == 2*(graph.NativeTraversalRoots-16)
 }

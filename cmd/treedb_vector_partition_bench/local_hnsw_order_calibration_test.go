@@ -65,3 +65,23 @@ func TestLocalHNSWOrderCalibrationQueryV1(t *testing.T) {
 		t.Fatal("expected missing frozen inputs rejection")
 	}
 }
+
+func TestLocalHNSWOrderCalibrationGraphV1Valid(t *testing.T) {
+	source := localHNSWRepairCalibrationGraphV1{Rows: 300000, NativeReachableRows: 299968, CombinedReachableRows: 300000, NativeTraversalRoots: 48, AuxiliaryEdges: 64, AuxiliaryMaxDegree: 9}
+	if !localHNSWOrderCalibrationGraphV1Valid(source, true) {
+		t.Fatal("source-lock graph rejected")
+	}
+	candidate := source
+	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges = 299900, 64, 96
+	if !localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
+		t.Fatalf("candidate graph rejected: %+v", candidate)
+	}
+	candidate.AuxiliaryEdges--
+	if localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
+		t.Fatalf("invalid candidate graph accepted: %+v", candidate)
+	}
+	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges = candidate.Rows, 16, 0
+	if !localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
+		t.Fatalf("connected candidate graph rejected: %+v", candidate)
+	}
+}
