@@ -149,6 +149,7 @@
       "topology_sha256": "829368f6a31a80e8270ceb9ed3e52d696e5f288fb9c9d6bb3fecf98c814c338a"
     },
     {
+      "container_resources_sha256": "614692a35dfedf139db64e2b30accc0ea81ecd0961d40e1e4d111d0b07a448ef",
       "profiles_sha256": {
         "owned-group-a": {
           "allocs.pprof": "4a86dcb612bbb6a23c96e66716554b1ff35bbd851da848b83689b2607d8f1293",
@@ -274,6 +275,7 @@
       "topology_sha256": "8fd3568b0389179185b24dec81c9b29331f7ee66e253ad7ec52f0e3b50e7d5e8"
     },
     {
+      "container_resources_sha256": "8120ff5a47c70c1b1b7e84a6c739f68a50c181b462ec64855e55efad6d3188ef",
       "profiles_sha256": {},
       "ready_sha256": {
         "owned-group-a": "85a47e36f1dd47084602b24b61bd90a74d3553f7ca41b03ecdabab7e52b7c3b1",
@@ -359,6 +361,7 @@
       "topology_sha256": "1ee1a54e9e698eadbe06bcbdae6a865fc87555b3f317213cfa14310242af0aed"
     },
     {
+      "container_resources_sha256": "cadd26a08169f8ddc24d13d626a3315dc0357fe44c7803f38f73cb63d542f509",
       "profiles_sha256": {},
       "ready_sha256": {
         "owned-group-a": "e0745ecf8ac988a40c3f0c5b2b2e2fd0109b45c729d0e48c51543948089a1525",
@@ -499,6 +502,7 @@
       "search_mode": "strict",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -571,6 +575,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -643,6 +648,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -725,6 +731,7 @@
       "search_mode": "strict",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -796,6 +803,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -867,6 +875,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 1000,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -948,6 +957,7 @@
       "search_mode": "fast",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1020,6 +1030,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1092,6 +1103,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1174,6 +1186,7 @@
       "search_mode": "fast",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1245,6 +1258,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1316,6 +1330,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1397,6 +1412,7 @@
       "search_mode": "pinned",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1469,6 +1485,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1541,6 +1558,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1623,6 +1641,7 @@
       "search_mode": "pinned",
       "topologies": {
         "container": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1694,6 +1713,7 @@
           }
         },
         "native": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,
@@ -1765,6 +1785,7 @@
           }
         },
         "single": {
+          "catalog_proof_reads": 0,
           "counter_median": {
             "candidate_bytes": 229037504,
             "candidates": 3578711,

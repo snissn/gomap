@@ -113,7 +113,7 @@ def _runtime(cell: dict[str, Any]) -> dict[str, float | int]:
     return result
 
 
-def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expected_ids: set[str]) -> None:
+def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expected_ids: set[str]) -> int:
     catalog = cell.get("catalog_reads")
     _require(isinstance(catalog, dict) and isinstance(catalog.get("nodes"), list) and isinstance(catalog.get("total"), dict), "catalog proof evidence is invalid")
     _require({node.get("node_config_sha256") for node in catalog["nodes"] if isinstance(node, dict)} == expected_ids and len(catalog["nodes"]) == len(expected_ids), "catalog proof nodes changed")
@@ -129,6 +129,7 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
     _require(all(counters[key] == 0 for key in ("read_proofs", "generation_pins", "partition_opens")), "request path reopened data or consensus proof")
     _require(counters["snapshot_pins"] == (0 if mode == "pinned" else 1000), "snapshot pin count changed")
     _require(counters["session_pins"] == (concurrency if mode == "pinned" else 0), "session pin count changed")
+    return strict["reads"]
 
 
 def _validate_fast(cell: dict[str, Any], result: dict[str, Any], mode: str) -> None:
@@ -151,6 +152,7 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     recall = metrics.get("recall_at_10")
     _require(isinstance(recall, (int, float)) and not isinstance(recall, bool) and math.isfinite(recall) and .90 <= recall <= 1, "recall is below the frozen floor")
     _require(isinstance(counters, dict) and set(counters) == set(COUNTERS) and all(_uint(counters[key]) for key in COUNTERS), "benchmark counters are invalid")
+    _require(counters["retries"] == 0 and counters["redirects"] == 0, "benchmark cell retried or followed a redirect")
     _require(isinstance(timings, dict) and set(timings) == set(TIMINGS) and all(_uint(timings[key]) for key in TIMINGS), "benchmark timings are invalid")
     samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
     _require(isinstance(samples, list) and len(samples) == 1000 and all(_uint(sample, positive=True) for sample in samples), "raw query timings are invalid")
@@ -159,13 +161,14 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "cell QPS changed")
     generation = cell.get("generation")
     _require(isinstance(generation, dict) and isinstance(generation.get("Index"), str) and generation["Index"] and _uint(generation.get("Generation"), positive=True), "cell generation is invalid")
-    _validate_catalog(cell, mode, concurrency, expected_ids)
+    catalog_proof_reads = _validate_catalog(cell, mode, concurrency, expected_ids)
     _validate_fast(cell, result, mode)
     runtime = _runtime(cell)
     _require({node.get("node_config_sha256") for node in cell["runtime"] if isinstance(node, dict)} == expected_ids and len(cell["runtime"]) == len(expected_ids), "runtime observation nodes changed")
     return {
         "recall": recall, "qps": metrics["qps"], "p95_nanos": metrics["p95_nanos"],
         "generation": generation, "counters": counters, "timings": timings, "runtime": runtime,
+        "catalog_proof_reads": catalog_proof_reads,
     }
 
 
@@ -191,7 +194,9 @@ def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology
         "-warmup": "1000", "-out": str(run_dir / f"search-{mode}.json"),
         "-search-mode": mode, "-max-index-age": "1h", "-max-session-age": "2m",
     }, "benchmark command changed")
-    _require(_read(paths["rc"], 32) == b"0\n" and _read(paths["time"], 1 << 20), "benchmark process did not complete")
+    timing = _read(paths["time"], 1 << 20).decode("utf-8")
+    _require(_read(paths["rc"], 32) == b"0\n" and timing, "benchmark process did not complete")
+    _require(timing.splitlines()[0] == f'\tCommand being timed: "{" ".join(command[4:])}"', "benchmark process command attestation changed")
     if topology == "single":
         _require(command[4] == provenance["binary_path"], "single benchmark client changed")
     elif topology == "native":
@@ -239,6 +244,7 @@ def _median_row(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "p95_nanos_min": min(cell["p95_nanos"] for cell in cells),
         "p95_nanos_median": median(cell["p95_nanos"] for cell in cells),
         "p95_nanos_max": max(cell["p95_nanos"] for cell in cells),
+        "catalog_proof_reads": cells[0]["catalog_proof_reads"],
         "counter_median": {key: median(cell["counters"][key] for cell in cells) for key in COUNTERS},
         "timing_nanos_per_query_median": {key: median(cell["timings"][key] / 1000 for cell in cells) for key in TIMINGS},
         "runtime_per_query_median": {key: median(cell["runtime"][key] / 1000 for cell in cells) for key in RUNTIME_DELTAS},
@@ -313,11 +319,14 @@ def summarize(root: Path) -> dict[str, Any]:
                     logical_reference[concurrency] = logical
                 _require(logical == logical_reference[concurrency], "logical search work changed across topology or mode")
             mode_inputs[mode] = {"path": str(search_path), "sha256": _sha256(search_path), "process": command}
+        container_resources_sha256: str | None = None
         if topology == "container":
-            resources = _load(run_dir / "container-resources.json", 1 << 20)
+            resources_path = run_dir / "container-resources.json"
+            resources = _load(resources_path, 1 << 20)
             hosts = resources.get("nodes")
             _require(resources.get("image_id") == provenance["container_image_id"] and isinstance(hosts, list) and len(hosts) == 4, "container image or node count changed")
             _require(all(host.get("CpusetCpus") == f"{index * 3}-{index * 3 + 2}" and host.get("Memory") == 6 << 30 and host.get("MemorySwap") == 6 << 30 and host.get("PidsLimit") == 768 for index, host in enumerate(hosts)), "container runtime ownership changed")
+            container_resources_sha256 = _sha256(resources_path)
         profiles: dict[str, dict[str, str]] = {}
         if repetition == 1:
             for node in topology_value["nodes"]:
@@ -326,12 +335,15 @@ def summarize(root: Path) -> dict[str, Any]:
                 artifacts = {path.name: _sha256(path) for path in directory.iterdir() if path.is_file()}
                 _require(set(artifacts) == set(PROFILE_NAMES) and all((directory / name).stat().st_size > 0 for name in PROFILE_NAMES), "profile artifact set is incomplete")
                 profiles[node["node_id"]] = artifacts
-        inputs.append({
+        retained_input = {
             "sequence": sequence, "topology": topology, "repetition": repetition,
             "runner_sha256": _sha256(run_dir / "runner.json"), "topology_sha256": _sha256(topology_path),
             "topology_identity_sha256": computed, "ready_sha256": ready, "search": mode_inputs,
             "profiles_sha256": profiles,
-        })
+        }
+        if container_resources_sha256 is not None:
+            retained_input["container_resources_sha256"] = container_resources_sha256
+        inputs.append(retained_input)
     _require(len(generations) == 1, "generation changed across the focused matrix")
     rows: list[dict[str, Any]] = []
     for mode in MODES:

@@ -100,6 +100,13 @@ class RevalidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "age"):
             reduce._validate_cell(value, result, "fast", 1, {"a" * 64})
 
+    def test_retry_or_redirect_is_rejected(self) -> None:
+        for counter in ("retries", "redirects"):
+            value, result = cell()
+            value["counters"][counter] = 1
+            with self.assertRaisesRegex(ValueError, "retried or followed"):
+                reduce._validate_cell(value, result, "strict", 1, {"a" * 64})
+
     def test_only_physical_request_bytes_are_excluded_from_semantic_work(self) -> None:
         self.assertEqual(set(reduce.LOGICAL_COUNTERS) - set(reduce.SEMANTIC_COUNTERS), {"request_bytes"})
 
@@ -143,11 +150,20 @@ class RevalidationTest(unittest.TestCase):
                 "-max-index-age", "1h", "-max-session-age", "2m",
             ]
             command_path.write_text(json.dumps(command), encoding="utf-8")
-            time_path.write_text("ok", encoding="utf-8")
+            def attest() -> None:
+                time_path.write_text(
+                    f'\tCommand being timed: "{" ".join(command[4:])}"\n', encoding="utf-8",
+                )
+
+            attest()
             (run_dir / "bench-strict.rc").write_text("0\n", encoding="utf-8")
             reduce._validate_command(run_dir, result, "strict", "single", provenance, "1,32")
+            time_path.write_text('\tCommand being timed: "stale"\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "process command attestation"):
+                reduce._validate_command(run_dir, result, "strict", "single", provenance, "1,32")
             command[command.index("-concurrency") + 1] = "32,1"
             command_path.write_text(json.dumps(command), encoding="utf-8")
+            attest()
             with self.assertRaisesRegex(ValueError, "benchmark command changed"):
                 reduce._validate_command(run_dir, result, "strict", "single", provenance, "1,32")
 
