@@ -108,6 +108,9 @@ func localHNSWOrderCalibrationSummaryV1Build(ctx context.Context, sidecar string
 // localHNSWOrderCalibrationTimingV1Build keeps the old helper's ordinary-path
 // parity check, then relabels only its already validated public cells.
 func localHNSWOrderCalibrationTimingV1Build(ctx context.Context, sourceOrder, stableIDHash *localHNSWVariantHarnessV1, queries []localHNSWOrderCalibrationQueryV1) (localHNSWRepairCalibrationTimingV1, error) {
+	if sourceOrder == nil || stableIDHash == nil || len(sourceOrder.searchers) == 0 || len(sourceOrder.searchers) != len(stableIDHash.searchers) {
+		return localHNSWRepairCalibrationTimingV1{}, errors.New("invalid local HNSW order timing variants")
+	}
 	raw := make([]localHNSWRepairCalibrationQueryV1, len(queries))
 	for i := range queries {
 		if !localHNSWOrderCalibrationQueryV1Valid(queries[i], len(sourceOrder.searchers)) {

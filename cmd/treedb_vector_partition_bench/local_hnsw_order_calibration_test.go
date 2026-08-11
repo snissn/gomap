@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -55,11 +57,11 @@ func TestLocalHNSWOrderCalibrationQueryV1(t *testing.T) {
 	if !localHNSWOrderCalibrationQueryV1Valid(evidence, 4) || evidence.Schema != localHNSWOrderCalibrationSchemaV1 || len(evidence.SourceSearches) != 4 || len(evidence.HashSearches) != 4 {
 		t.Fatalf("evidence=%+v", evidence)
 	}
-	for _, searches := range [][]localHNSWRepairCalibrationSearchV1{evidence.SourceSearches, evidence.HashSearches} {
-		for _, search := range searches {
-			if search.AuxiliaryEdges > search.NativeEdges+search.AuxiliaryEdges || search.AuxiliaryAdmissions > search.AuxiliaryCandidates {
-				t.Fatalf("search=%+v", search)
-			}
-		}
+	raw, err := json.Marshal(evidence)
+	if err != nil || !strings.Contains(string(raw), `"source_order"`) || !strings.Contains(string(raw), `"stable_id_hash_order"`) || strings.Contains(string(raw), `"overlay_current"`) || strings.Contains(string(raw), `"auxiliary_navigation"`) {
+		t.Fatalf("encoded evidence=%s err=%v", raw, err)
+	}
+	if err := run([]string{"local-hnsw-order-calibration"}, &strings.Builder{}); err == nil {
+		t.Fatal("expected missing frozen inputs rejection")
 	}
 }
