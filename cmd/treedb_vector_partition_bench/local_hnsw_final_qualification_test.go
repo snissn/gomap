@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,6 +24,52 @@ func TestM8ProductionRoutingHitsSupportTopK256V1(t *testing.T) {
 	var out m8ProductionRowOutcomesV1
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.ExactRepresentativeTruthHits) != 1 || out.ExactRepresentativeTruthHits[0] != 256 {
 		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
+func TestLocalHNSWFinalQualificationApprovalV1(t *testing.T) {
+	source, base := testM8QualificationGitCheckoutV1(t, t.TempDir())
+	runGit := func(args ...string) string {
+		t.Helper()
+		command := exec.Command("git", append([]string{"-C", source}, args...)...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	mainBranch := runGit("branch", "--show-current")
+	runGit("checkout", "-qb", "approval")
+	evidenceDir := filepath.Join(source, localHNSWFinalApprovalEvidencePathV1)
+	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(evidenceDir, "summary.json"), []byte(`{"status":"qualified"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", localHNSWFinalApprovalEvidencePathV1)
+	runGit("commit", "-qm", "qualify #4093")
+	approvalHead := runGit("rev-parse", "HEAD")
+	runGit("checkout", "-q", mainBranch)
+	runGit("merge", "--no-ff", "-qm", "Merge pull request #4115 from snissn/approval", "approval")
+	approvalMerge := runGit("rev-parse", "HEAD")
+	runGit("commit", "--allow-empty", "-qm", "later final qualification")
+	head := runGit("rev-parse", "HEAD")
+	if err := localHNSWFinalQualificationApprovalV1(source, approvalMerge, head); err != nil {
+		t.Fatal(err)
+	}
+	for name, sha := range map[string]string{"base": base, "unmerged_head": approvalHead} {
+		if err := localHNSWFinalQualificationApprovalV1(source, sha, head); err == nil {
+			t.Fatalf("accepted %s as #4093 approval", name)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(evidenceDir, "summary.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", localHNSWFinalApprovalEvidencePathV1)
+	runGit("commit", "-qm", "tamper approval evidence")
+	if err := localHNSWFinalQualificationApprovalV1(source, approvalMerge, runGit("rev-parse", "HEAD")); err == nil {
+		t.Fatal("accepted #4093 evidence changed after approval")
 	}
 }
 

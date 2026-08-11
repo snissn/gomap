@@ -8,7 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
+)
+
+const (
+	localHNSWFinalApprovalEvidencePathV1 = "TreeDB/docs/evidence/vector-partition-revalidation-4093"
+	localHNSWFinalApprovalPullRequestV1  = 4115
 )
 
 func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
@@ -56,8 +62,11 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 		return errors.New("local HNSW final qualification source lock")
 	}
 	sourceCheckout, err = localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA)
-	if err != nil || m8GitDirtyInV1(sourceCheckout) || exec.Command("git", "-C", sourceCheckout, "merge-base", "--is-ancestor", approvalSHA, headSHA).Run() != nil {
+	if err != nil || m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("local HNSW final qualification requires clean exact-head source containing the approval SHA")
+	}
+	if err := localHNSWFinalQualificationApprovalV1(sourceCheckout, approvalSHA, headSHA); err != nil {
+		return err
 	}
 	if filepath.Ext(out) != ".json" {
 		return errors.New("local HNSW final qualification report must use .json")
@@ -220,6 +229,31 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "report=%s children=%d disposition=%s\n", out, len(children), report.Disposition)
 	return err
+}
+
+func localHNSWFinalQualificationApprovalV1(checkout, approvalSHA, headSHA string) error {
+	commitRaw, err := exec.Command("git", "-C", checkout, "rev-parse", "--verify", approvalSHA+"^{commit}").Output()
+	if err != nil || strings.TrimSpace(string(commitRaw)) != approvalSHA || exec.Command("git", "-C", checkout, "merge-base", "--is-ancestor", approvalSHA, headSHA).Run() != nil {
+		return errors.New("local HNSW final qualification approval is not an exact ancestor commit")
+	}
+	subjectRaw, err := exec.Command("git", "-C", checkout, "show", "-s", "--format=%s", approvalSHA).Output()
+	subject := strings.TrimSpace(string(subjectRaw))
+	if err != nil || !strings.HasSuffix(subject, fmt.Sprintf("(#%d)", localHNSWFinalApprovalPullRequestV1)) && !strings.HasPrefix(subject, fmt.Sprintf("Merge pull request #%d from ", localHNSWFinalApprovalPullRequestV1)) {
+		return errors.New("local HNSW final qualification approval commit does not identify PR #4115")
+	}
+	approvalTree, err := exec.Command("git", "-C", checkout, "rev-parse", "--verify", approvalSHA+":"+localHNSWFinalApprovalEvidencePathV1).Output()
+	if err != nil {
+		return errors.New("local HNSW final qualification approval evidence tree is missing")
+	}
+	headTree, err := exec.Command("git", "-C", checkout, "rev-parse", "--verify", headSHA+":"+localHNSWFinalApprovalEvidencePathV1).Output()
+	if err != nil || strings.TrimSpace(string(approvalTree)) != strings.TrimSpace(string(headTree)) {
+		return errors.New("local HNSW final qualification #4093 evidence changed after approval")
+	}
+	treeType, err := exec.Command("git", "-C", checkout, "cat-file", "-t", strings.TrimSpace(string(approvalTree))).Output()
+	if err != nil || strings.TrimSpace(string(treeType)) != "tree" {
+		return errors.New("local HNSW final qualification approval evidence is not a tree")
+	}
+	return nil
 }
 
 func localHNSWFinalQualificationDescriptorsV1(fixture fixtureManifest, baseline, candidate m3VariantDescriptorV1, cfg config, executableSHA string) error {
