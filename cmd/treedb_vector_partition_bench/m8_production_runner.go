@@ -3751,7 +3751,11 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 		if auxiliaryPresent {
 			maxUint64 := ^uint64(0)
 			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 ||
-				diagnostic.TraversalRoots-1 > maxUint64/2 || diagnostic.AuxiliaryEdges < 2*(diagnostic.TraversalRoots-1) {
+				diagnostic.TraversalRoots-1 > diagnostic.Rows-diagnostic.ReachableRows ||
+				diagnostic.TraversalRoots-1 > maxUint64/2 || diagnostic.AuxiliaryEdges < 2*(diagnostic.TraversalRoots-1) ||
+				diagnostic.AuxiliaryMaxDegree > diagnostic.AuxiliaryEdges ||
+				(diagnostic.AuxiliaryMaxDegree != 0 && (diagnostic.Rows > maxUint64/diagnostic.AuxiliaryMaxDegree ||
+					diagnostic.AuxiliaryEdges > diagnostic.Rows*diagnostic.AuxiliaryMaxDegree)) {
 				return false
 			}
 			offsetBytes, edgeBytes := (diagnostic.Rows+1)*8, diagnostic.AuxiliaryEdges*4

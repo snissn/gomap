@@ -590,15 +590,18 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
-		"missing":             valid[:1],
-		"duplicate":           {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
-		"disconnected":        {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
-		"aux_disconnected":    {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 1}},
-		"aux_bad_csr":         {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 31, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
-		"aux_too_few_edges":   {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 1, AuxiliaryCSRBytes: 28, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
-		"native_bad_combined": {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 2}, valid[1]},
-		"empty":               {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
-		"row_mismatch":        {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
+		"missing":               valid[:1],
+		"duplicate":             {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
+		"disconnected":          {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
+		"aux_disconnected":      {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 1}},
+		"aux_bad_csr":           {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 31, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_too_few_edges":     {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 1, AuxiliaryCSRBytes: 28, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_bad_roots":         {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 2, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_edges_over_degree": {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 4, AuxiliaryCSRBytes: 40, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_degree_over_edges": {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 3, CombinedReachableRows: 2}},
+		"native_bad_combined":   {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 2}, valid[1]},
+		"empty":                 {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
+		"row_mismatch":          {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
