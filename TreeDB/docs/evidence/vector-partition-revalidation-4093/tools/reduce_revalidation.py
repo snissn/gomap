@@ -41,6 +41,9 @@ TIMINGS = (
     "coordinator_total", "total", "client_encode", "client_write",
     "client_response_read", "client_decode", "client_total",
 )
+REMOVABLE_TIMINGS = (
+    "client_encode", "client_write", "client_decode", "public_adapter", "service_adapter",
+)
 COUNTERS = LOGICAL_COUNTERS + (
     "snapshot_pins", "session_pins", "read_proofs", "generation_pins",
     "partition_opens", "public_request_frame_bytes", "public_response_frame_bytes",
@@ -179,10 +182,24 @@ def _validate_public_endpoint(topology: dict[str, Any], result: dict[str, Any]) 
         _require(result.get("endpoint") == public[0]["public_listen"], "benchmark endpoint is not owned by the retained public node")
 
 
-def _validate_capability_key(provenance: dict[str, Any]) -> None:
+def _validate_capability_key(provenance: dict[str, Any]) -> Path:
     path = Path(str(provenance.get("capability_key_path", "")))
     _require(path.is_file() and _is_sha256(provenance.get("capability_key_sha256")) and
              _sha256(path) == provenance["capability_key_sha256"], "capability key changed")
+    return path.resolve()
+
+
+def _validate_topology_capability_key(topology: dict[str, Any], expected: Path) -> None:
+    _require(all(Path(str(node.get("capability_key_path", ""))).resolve() == expected
+                 for node in topology.get("nodes", ())), "topology capability key changed")
+
+
+def _validate_logical_work(reference: dict[str, int] | None,
+                           counters: dict[str, int]) -> dict[str, int]:
+    logical = {name: counters[name] for name in SEMANTIC_COUNTERS}
+    _require(reference is None or logical == reference,
+             "logical search work changed across concurrency, topology, or mode")
+    return logical
 
 
 def _validate_m3(root: Path, provenance: dict[str, Any]) -> None:
@@ -325,6 +342,8 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
              "benchmark public frame counters are invalid")
     _require(counters["retries"] == 0 and counters["redirects"] == 0, "benchmark cell retried or followed a redirect")
     _require(isinstance(timings, dict) and set(timings) == set(TIMINGS) and all(_uint(timings[key]) for key in TIMINGS), "benchmark timings are invalid")
+    _require(all(_uint(timings[key], positive=True) for key in REMOVABLE_TIMINGS),
+             "benchmark on-ramp timings are invalid")
     samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
     _require(isinstance(samples, list) and len(samples) == 1000 and all(_uint(sample, positive=True) for sample in samples), "raw query timings are invalid")
     _require(timings["client_total"] == sum(samples), "client timing total changed")
@@ -456,7 +475,7 @@ def _validate_provenance(provenance: dict[str, Any]) -> None:
 def summarize(root: Path) -> dict[str, Any]:
     provenance = _load(root / "provenance.json", 1 << 20)
     _validate_provenance(provenance)
-    _validate_capability_key(provenance)
+    capability_key = _validate_capability_key(provenance)
     _require(_sha256(Path(provenance["binary_path"])) == provenance["binary_sha256"], "benchmark binary changed")
     fixture_path = Path(provenance["dataset_directory"]) / "fixture_manifest.json"
     _require(_sha256(fixture_path) == provenance["fixture_manifest_sha256"], "fixture manifest changed")
@@ -470,7 +489,7 @@ def summarize(root: Path) -> dict[str, Any]:
     topology_ids: set[str] = set()
     database_roots: list[Path] = []
     previous_completed: datetime | None = None
-    logical_reference: dict[int, dict[str, int]] = {}
+    logical_reference: dict[str, int] | None = None
     generations: set[str] = set()
     for sequence, (topology, repetition) in enumerate(SEQUENCE, 1):
         run_dir = root / "runs" / topology / f"repeat-{repetition}"
@@ -483,6 +502,7 @@ def summarize(root: Path) -> dict[str, Any]:
         previous_completed = completed
         topology_path = run_dir / "topology.json"
         topology_value = _load(topology_path, 1 << 20)
+        _validate_topology_capability_key(topology_value, capability_key)
         topology_name = TOPOLOGY_NAMES[topology]
         computed, roots = _topology_identity(topology_value, topology_name, 1 if topology == "single" else 4, PUBLIC_ROUTE)
         _require(topology_value.get("topology_identity_sha256") == computed and computed not in topology_ids, "topology identity changed or repeated")
@@ -526,10 +546,7 @@ def summarize(root: Path) -> dict[str, Any]:
                 cells[key] = cell
                 generations.add(json.dumps(cell["generation"], sort_keys=True))
                 # request_bytes includes topology-specific wire identity and is itself topology tax.
-                logical = {name: cell["counters"][name] for name in SEMANTIC_COUNTERS}
-                if concurrency not in logical_reference:
-                    logical_reference[concurrency] = logical
-                _require(logical == logical_reference[concurrency], "logical search work changed across topology or mode")
+                logical_reference = _validate_logical_work(logical_reference, cell["counters"])
             mode_inputs[mode] = {"path": str(search_path), "sha256": _sha256(search_path), "process": command}
         container_resources_sha256: str | None = None
         if topology == "container":
@@ -570,10 +587,10 @@ def summarize(root: Path) -> dict[str, Any]:
                     _require(summary["qps_median"] >= old_qps * .97 and summary["p95_nanos_median"] <= old_p95 * 1.03, f"{topology}/strict/c{concurrency} regressed its control")
                 if concurrency == 1:
                     timing = summary["timing_nanos_per_query_median"]
-                    removable = timing["client_encode"] + timing["client_write"] + timing["client_decode"] + timing["public_adapter"] + timing["service_adapter"]
+                    removable = sum(timing[key] for key in REMOVABLE_TIMINGS)
                     summary["removable_onramp_ratio"] = removable / timing["client_total"]
                     _require(summary["removable_onramp_ratio"] <= .10, f"{topology}/{mode}/c1 removable onramp exceeds 10%")
-                    _require(all(timing[key] / timing["client_total"] < .05 for key in ("client_encode", "client_write", "client_decode", "public_adapter", "service_adapter")), f"{topology}/{mode}/c1 has a removable 5% stage")
+                    _require(all(timing[key] / timing["client_total"] < .05 for key in REMOVABLE_TIMINGS), f"{topology}/{mode}/c1 has a removable 5% stage")
                 row["topologies"][topology] = summary
             native, container = row["topologies"]["native"], row["topologies"]["container"]
             row["native_over_container_qps"] = native["qps_median"] / container["qps_median"]

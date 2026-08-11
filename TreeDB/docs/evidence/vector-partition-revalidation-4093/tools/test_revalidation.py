@@ -129,6 +129,15 @@ class RevalidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "logical work"):
                 validate_cell(value, result, "strict", 1)
 
+    def test_logical_search_work_matches_across_concurrency(self) -> None:
+        first, _ = cell(concurrency=1)
+        reference = reduce._validate_logical_work(None, first["counters"])
+        second, _ = cell(concurrency=32)
+        reduce._validate_logical_work(reference, second["counters"])
+        second["counters"][reduce.SEMANTIC_COUNTERS[0]] += 1
+        with self.assertRaisesRegex(ValueError, "across concurrency"):
+            reduce._validate_logical_work(reference, second["counters"])
+
     def test_fast_identity_is_bound_to_retained_inputs(self) -> None:
         for field, changed in (("IndexedThrough", 2), ("TopologyDigest", "other"),
                                ("AuthorizationOverlayDigest", "other")):
@@ -191,6 +200,13 @@ class RevalidationTest(unittest.TestCase):
         value["timings"]["client_total"] -= 1
         with self.assertRaisesRegex(ValueError, "client timing total"):
             validate_cell(value, result, "strict", 1)
+
+    def test_onramp_timings_are_positive(self) -> None:
+        for timing in reduce.REMOVABLE_TIMINGS:
+            value, result = cell()
+            value["timings"][timing] = 0
+            with self.assertRaisesRegex(ValueError, "on-ramp"):
+                validate_cell(value, result, "strict", 1)
 
     def test_fast_age_bound_is_fail_closed(self) -> None:
         value, result = cell("fast")
@@ -275,6 +291,16 @@ class RevalidationTest(unittest.TestCase):
             path.write_bytes(b"changed")
             with self.assertRaisesRegex(ValueError, "capability key"):
                 reduce._validate_capability_key(provenance)
+
+    def test_topology_nodes_use_the_provenance_capability_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "capability.key"
+            path.write_bytes(b"expected")
+            topology = {"nodes": [{"capability_key_path": str(path)}]}
+            reduce._validate_topology_capability_key(topology, path.resolve())
+            topology["nodes"][0]["capability_key_path"] = str(path.with_name("other.key"))
+            with self.assertRaisesRegex(ValueError, "topology capability key"):
+                reduce._validate_topology_capability_key(topology, path.resolve())
 
     def test_m3_descriptor_is_bound_to_execution_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
