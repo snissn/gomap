@@ -229,6 +229,15 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	if err != nil || !localHNSWFinalQualificationChildValidV1(child, expected) || child.Counts.P2HitSlots != 10000 || child.Counts.RoutingMissSlots != 0 || child.SourceIdentitySHA256 != digest || !localHNSWAttributionSHA256V1(child.Timing.ResultSHA256) {
 		t.Fatalf("child=%+v err=%v", child, err)
 	}
+	report.Status = "experimental_gate_failures"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err != nil {
+		t.Fatal(err)
+	}
+	report.Status = "invalid"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted invalid child report status")
+	}
+	report.Status = "pass"
 
 	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 16, 16, 16
 	report.Rows[0].Attribution.ExhaustivePartitionRecallAtK = 1
