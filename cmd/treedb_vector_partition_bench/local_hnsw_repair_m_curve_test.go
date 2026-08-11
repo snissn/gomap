@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -47,10 +48,14 @@ func TestLocalHNSWRepairMCurveV1(t *testing.T) {
 			t.Fatalf("point[%d]=%+v", i, point)
 		}
 	}
-	if disposition, err := localHNSWRepairMCurveDispositionV1(points); err != nil || (disposition != "no_point_passes_local_quality" && !strings.HasPrefix(disposition, "smallest_m_passes_local_quality_m_")) {
+	encoded, err := json.Marshal(points[0])
+	if err != nil || !strings.Contains(string(encoded), `"m":16`) {
+		t.Fatalf("M cell schema: %s err=%v", encoded, err)
+	}
+	if disposition, err := localHNSWRepairMCurveDispositionV1(points); err != nil || (disposition != "no_point_passes_local_quality" && !strings.HasPrefix(disposition, "local_quality_crossed_smallest_m_")) {
 		t.Fatalf("disposition=%q err=%v", disposition, err)
 	}
-	failed := append([]localHNSWRepairConstructionCurveCellV1(nil), points...)
+	failed := append([]localHNSWRepairMCurveCellV1(nil), points...)
 	failed[0].Quality.P2Recall.Mean = .949
 	failed[0].Quality.P16Recall.Mean = .949
 	failed[1].Quality.P2Recall.Mean = .951
