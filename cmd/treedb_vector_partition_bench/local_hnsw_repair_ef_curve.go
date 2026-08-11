@@ -159,7 +159,7 @@ func localHNSWRepairEFCurveDispositionV1(cells []localHNSWRepairEFCurveCellV1) (
 	}
 	for _, cell := range cells {
 		if cell.P2Recall.Mean >= .95 {
-			return fmt.Sprintf("target_crossed_smallest_passing_ef_%d", cell.EFSearch), nil
+			return fmt.Sprintf("p2_target_crossed_smallest_passing_ef_%d", cell.EFSearch), nil
 		}
 	}
 	return "no_point_reaches_0_9500", nil
