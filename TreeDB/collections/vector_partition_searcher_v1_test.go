@@ -40,6 +40,10 @@ func TestVectorPartitionLocalSearcherV1ExactStableIDsAndPins(t *testing.T) {
 	if status, _, err := s.SearchPreflightV1(VectorPartitionSearchOptionsV1{TopK: 1, MaxStableIDBytes: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || status.MaxStableIDBytes != 2 {
 		t.Fatalf("coherent capped preflight status=%+v err=%v", status, err)
 	}
+	failures := s.Status().Failures
+	if _, _, _, err := s.SearchWithAttributionV1(context.Background(), []float32{1, 0}, VectorPartitionSearchOptionsV1{TopK: 1}); !errors.Is(err, ErrVectorPartitionSearchUnavailable) || s.Status().Failures != failures+1 {
+		t.Fatalf("exact attribution err=%v status=%+v", err, s.Status())
+	}
 	if e := s.Acquire(); e != nil {
 		t.Fatal(e)
 	}

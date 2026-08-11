@@ -282,10 +282,26 @@ same authority. The snapshot binds the lifecycle, catalog, topology,
 ready-set, manifest, router, authorization-overlay, and source-watermark
 identities. Publication swaps one complete snapshot; replacement or
 invalidation prevents new pins while existing pins drain. Snapshot acquisition
-only validates the retained local proof and exact applied identity: it performs
-no quorum call, catalog-log append, manifest reconstruction, generation open,
-or partition open. #4096 owns strict request propagation and #4098 owns the
-explicit relaxed and pinned-session public shapes.
+validates the retained local proof and exact applied identity with no quorum call,
+catalog log append, manifest reconstruction, generation open, or partition open.
+Ordinary `OperationsV1.Search` remains strict: after bounded admission it takes
+exactly one fresh current-term quorum-backed no-log catalog proof, pins the
+matching snapshot, and sends a server-authenticated short-lived capability to
+the coordinator and shards. Those stages require an exact snapshot identity
+and applied-index floor but perform no additional catalog or data-group
+consensus and no request-side asset opens. Forged, expired, wrong-generation,
+or invalidated capabilities fail closed; a request pinned before invalidation
+may drain. The background serving-proof refresh remains quorum-backed and
+no-log, but is retained as separate work rather than charged to a request.
+#4096 owns this strict proof propagation. `OperationsV1.SearchFast` is a
+separate explicit local-snapshot shape: the caller must bound index age and may
+require an indexed-through watermark, which is satisfied by a local wait and
+never falls back to strict search. `OperationsV1.PinSearchSnapshot` applies the
+same bounds once, caps session lifetime and retained snapshots, and reuses that
+immutable snapshot until close, expiry, or invalidation. Both shapes perform no
+request-side consensus and still apply the current atomic authorization overlay
+before returning results. #4098 owns these shapes; they do not weaken the
+strict default or accept caller-authored authority.
 
 The concrete replica-local catalog authority intentionally does not implement
 the serving interface; only the linearizable adapter can capture or refresh a

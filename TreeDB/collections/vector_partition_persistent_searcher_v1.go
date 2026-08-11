@@ -43,15 +43,151 @@ func compactPartitionAdjacencyV1(in []uint32) []uint32 {
 
 const vectorPartitionLocalNavigationBranchV1 = 8
 
+// VectorPartitionLocalGraphVariantV1 selects only the post-build partition
+// graph mutation. It exists for offline causal attribution; callers must bind
+// the selected variant into their pack identity before comparing results.
+type VectorPartitionLocalGraphVariantV1 string
+
+const (
+	VectorPartitionLocalGraphVariantNativeV1         VectorPartitionLocalGraphVariantV1 = "native"
+	VectorPartitionLocalGraphVariantOverlayCurrentV1 VectorPartitionLocalGraphVariantV1 = "overlay_current"
+)
+
+func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
+	switch variant {
+	case VectorPartitionLocalGraphVariantNativeV1, VectorPartitionLocalGraphVariantOverlayCurrentV1:
+		return "partition_local_graph_delta_v1:" + string(variant), nil
+	default:
+		return "", fmt.Errorf("partition-local graph variant=%q", variant)
+	}
+}
+
+func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]byte, variant VectorPartitionLocalGraphVariantV1) [sha256.Size]byte {
+	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
+		return membership
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_local_graph_variant_v1/"))
+	h.Write([]byte(variant))
+	h.Write(membership[:])
+	var out [sha256.Size]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// vectorPartitionLocalGraphDeltaRowV1 is the deterministic, construction-time
+// accounting needed to compare the native local graph with the current
+// partition-only navigation overlay. It intentionally describes the existing
+// mutation; it does not select a repair.
+type vectorPartitionLocalGraphDeltaRowV1 struct {
+	NativeDegree         uint32
+	FinalDegree          uint32
+	OverlayEdges         uint32
+	OverlayDuplicates    uint32
+	DisplacedNativeEdges uint32
+}
+
+func vectorPartitionLocalGraphDeltaV1(nativeRows, finalRows []columnVectorGraphAssetRow, degreeLimit int) ([]vectorPartitionLocalGraphDeltaRowV1, error) {
+	if len(nativeRows) != len(finalRows) || degreeLimit < 2 {
+		return nil, errors.New("partition-local graph delta input")
+	}
+	deltas := make([]vectorPartitionLocalGraphDeltaRowV1, len(nativeRows))
+	for row := range nativeRows {
+		native, nativeSuffix, err := vectorPartitionLayer0AdjacencySplitV1(nativeRows[row].Adjacency)
+		if err != nil {
+			return nil, err
+		}
+		final, finalSuffix, err := vectorPartitionLayer0AdjacencySplitV1(finalRows[row].Adjacency)
+		if err != nil || !vectorPartitionUint32SlicesEqualV1(nativeSuffix, finalSuffix) || len(final) > degreeLimit {
+			return nil, errors.New("partition-local graph delta adjacency")
+		}
+		finalSet := make(map[uint32]struct{}, len(final))
+		for _, neighbor := range final {
+			if int(neighbor) >= len(finalRows) || neighbor == uint32(row) {
+				return nil, errors.New("partition-local graph delta neighbor")
+			}
+			finalSet[neighbor] = struct{}{}
+		}
+		overlay, err := vectorPartitionLocalNavigationEdgesV1(row, len(nativeRows), degreeLimit)
+		if err != nil {
+			return nil, err
+		}
+		nativeSet := make(map[uint32]struct{}, len(native))
+		for _, neighbor := range native {
+			nativeSet[neighbor] = struct{}{}
+		}
+		d := vectorPartitionLocalGraphDeltaRowV1{NativeDegree: uint32(len(native)), FinalDegree: uint32(len(final)), OverlayEdges: uint32(len(overlay))}
+		for _, neighbor := range overlay {
+			if _, ok := nativeSet[neighbor]; ok {
+				d.OverlayDuplicates++
+			}
+		}
+		for _, neighbor := range native {
+			if _, ok := finalSet[neighbor]; !ok {
+				d.DisplacedNativeEdges++
+			}
+		}
+		deltas[row] = d
+	}
+	return deltas, nil
+}
+
+func vectorPartitionLocalNavigationEdgesV1(row, rows, degreeLimit int) ([]uint32, error) {
+	if rows < 1 || row < 0 || row >= rows || degreeLimit < 2 {
+		return nil, errors.New("partition-local navigation delta input")
+	}
+	if rows == 1 {
+		return nil, nil
+	}
+	if degreeLimit == 2 {
+		return []uint32{uint32((row + 1) % rows)}, nil
+	}
+	branch := min(vectorPartitionLocalNavigationBranchV1, degreeLimit-2)
+	edges := make([]uint32, 0, branch+1)
+	if row != 0 {
+		edges = append(edges, uint32((row-1)/branch))
+	}
+	for child := row*branch + 1; child < min(rows, row*branch+branch+1); child++ {
+		edges = append(edges, uint32(child))
+	}
+	return edges, nil
+}
+
+func vectorPartitionUint32SlicesEqualV1(left, right []uint32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // buildVectorPartitionLocalGraphAdjacencyV1 retains the shared native graph
 // construction, then reserves a bounded layer-0 navigation tree in the
 // partition-only pack. It gives the entry a logarithmic-hop route to every
 // local row while leaving global column-graph and router assets unchanged.
 func buildVectorPartitionLocalGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	return buildVectorPartitionLocalGraphAdjacencyVariantV1(rows, def, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+}
+
+func buildVectorPartitionLocalGraphAdjacencyVariantV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) error {
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+		return err
+	}
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
 		return err
 	}
-	return addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+	switch variant {
+	case VectorPartitionLocalGraphVariantNativeV1:
+		return nil
+	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
+		return addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+	default:
+		return fmt.Errorf("partition-local graph variant=%q", variant)
+	}
 }
 
 func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow, degreeLimit int) error {
@@ -536,13 +672,28 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 // authority. Callers install the returned descriptors in the generation M1
 // manifest; publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+}
+
+// MaterializeVectorPartitionLocalSearchAssetsVariantV1 is the offline A/B
+// constructor for #4105. Native assets are intentionally not publishable as a
+// production replacement: callers must retain their own variant-bound manifest
+// and diagnostics while determining whether reachability is preserved.
+func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant)
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+}
+
+func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
@@ -665,7 +816,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 			}
 			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
 		}
-		if err := buildVectorPartitionLocalGraphAdjacencyV1(rows, def); err != nil {
+		if err := buildVectorPartitionLocalGraphAdjacencyVariantV1(rows, def, variant); err != nil {
 			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
 		maxLayer := 0
@@ -702,7 +853,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 		if err != nil {
 			return nil, nil, err
 		}
-		pack.MembershipDigest = membershipDigest
+		// Native A/B packs domain-bind their variant into the existing membership
+		// identity. Production publication and serving recompute the canonical
+		// membership digest and therefore fail closed on a native offline pack.
+		pack.MembershipDigest = vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant)
 		raw, err := encodeColumnHNSWSearchPack(pack)
 		if err != nil {
 			return nil, nil, err
@@ -904,6 +1058,45 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 	return c.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(context.Background(), index, generation, partition)
 }
 
+// OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1 opens one
+// freshly materialized local pack without publishing its manifest or acquiring
+// a production generation pin. It is for bounded offline attribution only.
+// The caller keeps the materializer's StableResourceSet alive until Close.
+func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1) (*VectorPartitionLocalSearcherV1, error) {
+	if c == nil || c.db == nil || ctx == nil {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if manifest.Collection != c.name || manifest.IndexName != index || manifest.Generation == 0 || asset.PartitionID >= manifest.PartitionCount || asset.ID != vectorPartitionLocalAssetIDV1(asset.PartitionID) {
+		return nil, fmt.Errorf("%w: offline pack identity", ErrVectorPartitionSearchUnavailable)
+	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
+		return nil, fmt.Errorf("%w: offline index identity", ErrVectorPartitionSearchUnavailable)
+	}
+	source, err := c.VectorPartitionSourceIdentityV1(index)
+	if err != nil || source.Generation != manifest.SourceGeneration || source.Checksum != manifest.SourceChecksum || source.SchemaHash != manifest.SourceSchemaHash || source.RowCount != manifest.SourceRowCount {
+		return nil, fmt.Errorf("%w: offline source identity", ErrVectorPartitionSearchUnavailable)
+	}
+	members, err := vectorPartitionMembershipsForPartitionWithContextV1(ctx, manifest, asset.PartitionID)
+	if err != nil {
+		return nil, err
+	}
+	home, overlap := 0, 0
+	for _, member := range members {
+		if member.kind == VectorPartitionMembershipHomeV1 {
+			home++
+		} else if member.kind == VectorPartitionMembershipOverlapV1 {
+			overlap++
+		} else {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true)
+}
+
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
 // cancellation-aware cold-open boundary used by routed serving. Checks are
 // placed around lifecycle reads, membership scans, checksum streaming, and
@@ -969,7 +1162,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
-		asset, members, home, overlap,
+		asset, members, home, overlap, false,
 	)
 	if err != nil {
 		return nil, err
@@ -1018,7 +1211,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
-		asset, members, home, overlap,
+		asset, members, home, overlap, false,
 	)
 	if err != nil {
 		return nil, err
@@ -1041,6 +1234,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	members []vectorPartitionMembershipSourceV1,
 	home int,
 	overlap int,
+	allowOfflineNative bool,
 ) (*VectorPartitionLocalSearcherV1, error) {
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
@@ -1065,7 +1259,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		}
 		return nil, fmt.Errorf("%w: membership identity: %v", ErrVectorPartitionSearchUnavailable, errors.Join(digestErr, closeErr))
 	}
-	if recomputedMembershipDigest != expectedMembershipDigest {
+	if recomputedMembershipDigest != expectedMembershipDigest && (!allowOfflineNative || vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) != expectedMembershipDigest) {
 		return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace

@@ -83,7 +83,9 @@ func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	config := ConservativeOperationsConfigV1()
 	config.Enabled = true
 	available := true
+	healthChecks := 0
 	ops, err := NewOperationsV1(service, config, func(context.Context) (OperationsHealthV1, error) {
+		healthChecks++
 		return OperationsHealthV1{Ready: available, Generation: id, State: GenerationActiveV1, Reason: "catalog_source_generation_groups"}, nil
 	})
 	if err != nil {
@@ -96,14 +98,14 @@ func TestOperationsV1UsesLiveHealthAndDelegatesLifecycleV1(t *testing.T) {
 	if health, err := ops.Status(t.Context()); err != nil || health.Ready {
 		t.Fatalf("live health=%+v err=%v", health, err)
 	}
-	if _, err := ops.Search(t.Context(), operationsRequestV1()); !hasOperationErrorCodeV1(err, ErrorUnavailableV1) {
-		t.Fatalf("not-ready search err=%v", err)
+	if _, err := ops.Search(t.Context(), operationsRequestV1()); err != nil {
+		t.Fatalf("strict backend search err=%v", err)
 	}
-	if searches != 0 {
-		t.Fatalf("not-ready search reached backend %d times", searches)
+	if searches != 1 || healthChecks != 2 {
+		t.Fatalf("searches=%d health_checks=%d", searches, healthChecks)
 	}
-	if counters := ops.Counters(); counters.Searches != 1 || counters.Failures != 1 {
-		t.Fatalf("not-ready search counters=%+v", counters)
+	if counters := ops.Counters(); counters.Searches != 1 || counters.Failures != 0 || counters.ReadyChecks != 2 {
+		t.Fatalf("strict search counters=%+v", counters)
 	}
 	if inventory, err := ops.Inventory(t.Context(), id); err != nil || len(inventory) != 1 || inventory[0].Generation != id {
 		t.Fatalf("inventory=%+v err=%v", inventory, err)

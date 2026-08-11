@@ -39,6 +39,59 @@ func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T
 	}
 }
 
+func TestDecodeCollectionMetaAcceptsLegacyV5VectorMetadata(t *testing.T) {
+	want, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyColumnGraph,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encodeNormalizedCollectionMeta(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk collectionMetaDisk
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatal(err)
+	}
+	disk.Version = collectionMetaVersionV5
+	raw, err = json.Marshal(disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeCollectionMeta(raw)
+	if err != nil {
+		t.Fatalf("decode v5 vector metadata: %v", err)
+	}
+	if !collectionMetaValuesEqual(got, want) {
+		t.Fatalf("decoded v5 metadata=%+v want %+v", got, want)
+	}
+
+	disk.Indexes = []IndexDefinition{{Name: "compound", Field: "a", Components: []IndexComponent{{Field: "a", Direction: IndexDirectionAscending}}}}
+	if raw, err = json.Marshal(disk); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeCollectionMeta(raw); err == nil {
+		t.Fatal("v5 metadata with v6 compound components decoded")
+	}
+	for _, version := range []int{collectionMetaVersionV5 - 1, collectionMetaVersion + 1} {
+		disk.Version = version
+		if raw, err = json.Marshal(disk); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeCollectionMeta(raw); err == nil {
+			t.Fatalf("unsupported metadata version %d decoded", version)
+		}
+	}
+}
+
 func TestColumnGraphVectorIndexMetadataCreateStatusDropReopenV2A(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

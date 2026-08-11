@@ -103,6 +103,10 @@ type Server struct {
 	// has been established for this connection. Authorization remains #4059.
 	AuthenticationEnabled bool
 	AuthCatalog           *AuthCatalog
+	// diagnosticCommandWALEnabled is set by the standalone owner. It is a
+	// read-only inventory seam so diagnostics never infer persistence state by
+	// inspecting WAL files.
+	diagnosticCommandWALEnabled func() bool
 
 	nextResponseID            atomic.Int32
 	nextConnectionID          atomic.Int64
@@ -152,14 +156,20 @@ type Server struct {
 	// boundary. That exclusion prevents a concurrent collection mutation from
 	// holding a domain lock while waiting on the command-WAL publish lock that
 	// the journal boundary owns while draining collection barriers.
-	standaloneWriteBoundaryMu  sync.RWMutex
-	standaloneWriteConcernSync func() (bool, error)
-	writeConcernStats          standaloneWriteConcernStats
-	authConnections            sync.Map // map[int64]*authConnectionState
-	nextSASLConversation       atomic.Int32
-	authFailures               atomic.Uint64
-	authorizationAllowed       atomic.Uint64
-	authorizationDenied        atomic.Uint64
+	standaloneWriteBoundaryMu    sync.RWMutex
+	standaloneWriteConcernSync   func() (bool, error)
+	writeConcernStats            standaloneWriteConcernStats
+	authConnections              sync.Map // map[int64]*authConnectionState
+	nextSASLConversation         atomic.Int32
+	authFailures                 atomic.Uint64
+	authorizationAllowed         atomic.Uint64
+	authorizationDenied          atomic.Uint64
+	diagnosticsStartedAt         time.Time
+	diagnosticsMu                sync.Mutex
+	diagnosticsCommands          map[string]mongoCommandDiagnostic
+	diagnosticsNamespaces        map[string]mongoNamespaceDiagnostic
+	diagnosticsDroppedCommands   int64
+	diagnosticsDroppedNamespaces int64
 	// beforeSCRAMIdentityStore is test-only coordination for owner release.
 	beforeSCRAMIdentityStore func()
 	closed                   atomic.Bool
@@ -207,6 +217,9 @@ func NewServer() *Server {
 		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
 		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
 		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
+		diagnosticsStartedAt:     time.Now(),
+		diagnosticsCommands:      make(map[string]mongoCommandDiagnostic),
+		diagnosticsNamespaces:    make(map[string]mongoNamespaceDiagnostic),
 	}
 	s.nextResponseID.Store(0)
 	return s
@@ -758,7 +771,7 @@ func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]b
 	return response, err
 }
 
-func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) (response []byte, retainRequestBody bool, err error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, false, err
@@ -767,8 +780,14 @@ func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header,
 	if err != nil {
 		return nil, false, err
 	}
+	started := time.Now()
+	diagnosticFailed := false
+	defer func() {
+		s.noteDiagnosticCommand(name, q.Query, time.Since(started), diagnosticFailed || err != nil)
+	}()
 
-	response, err := s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
+	response, err = s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
+	diagnosticFailed = err != nil || !commandResponseOK(response)
 	if err != nil {
 		return nil, name != "insert", err
 	}
@@ -781,7 +800,7 @@ func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byt
 	return response, err
 }
 
-func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) (response []byte, retainRequestBody bool, err error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, false, err
@@ -790,7 +809,12 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	if err != nil {
 		return nil, false, err
 	}
-	retainRequestBody := name != "insert"
+	started := time.Now()
+	diagnosticFailed := false
+	defer func() {
+		s.noteDiagnosticCommand(name, msg.Body, time.Since(started), diagnosticFailed || err != nil)
+	}()
+	retainRequestBody = name != "insert"
 
 	if commandRejectsReadOPMsgFeatures(name) {
 		// These read paths neither consume document sequences nor support
@@ -808,20 +832,24 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 		// the flag itself before dispatch, even when a crafted command omits w:0
 		// or claims w:1, and suppress the response so the connection remains usable.
 		s.recordStandaloneMoreToComeRejection()
+		diagnosticFailed = true
 		return nil, retainRequestBody, nil
 	}
 
 	if name == "find" {
 		// The find path builds a raw OP_MSG response directly.
+		base := len(dst)
 		responseID := s.nextID()
-		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
+		response, err = s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
+		diagnosticFailed = err != nil || !opMsgCommandResponseOK(response[base:])
 		if err != nil {
 			return nil, retainRequestBody, err
 		}
 		return response, retainRequestBody, nil
 	}
 
-	response, err := s.commandResponse(ctx, name, msg.Body, msg.Sequences, cursorOwner)
+	response, err = s.commandResponse(ctx, name, msg.Body, msg.Sequences, cursorOwner)
+	diagnosticFailed = err != nil || !commandResponseOK(response)
 	if err != nil {
 		return nil, retainRequestBody, err
 	}
@@ -863,16 +891,29 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	return msgResponse, retainRequestBody, nil
 }
 
+// opMsgCommandResponseOK extracts the command body from one complete OP_MSG
+// response. The fast find encoder returns wire bytes rather than a BSON command
+// document, so dispatch uses this to preserve the same failed-command metrics
+// as the ordinary commandResponse path.
+func opMsgCommandResponseOK(response []byte) bool {
+	header, err := wire.ParseHeader(response)
+	if err != nil || header.OpCode != wire.OpMsg || int(header.MessageLength) != len(response) {
+		return false
+	}
+	msg, err := wire.ParseMsg(response[wire.HeaderLen:])
+	return err == nil && commandResponseOK(msg.Body)
+}
+
 func commandRejectsReadOPMsgFeatures(name string) bool {
 	switch name {
-	case "aggregate", "count", "distinct", "explain", "find":
+	case "aggregate", "count", "distinct", "explain", "find", "serverStatus", "dbStats", "collStats", "top":
 		return true
 	default:
 		return false
 	}
 }
 
-func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (response wire.Document, err error) {
 	if s.authenticationRequired() && !s.authenticated(cursorOwner) && !authUnauthenticatedCommand(name) {
 		return commandError(13, "Unauthorized", "Authentication required")
 	}
@@ -897,13 +938,14 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 // unavailable until it is also added to the executable authorization matrix.
 var mongoGatewaySupportedCommands = map[string]struct{}{
 	"aggregate": {}, "buildInfo": {}, "connectionStatus": {}, "count": {},
+	"collStats": {}, "dbStats": {},
 	"create": {}, "createIndexes": {}, "createUser": {}, "delete": {},
 	"distinct": {}, "dropIndexes": {}, "dropUser": {}, "endSessions": {}, "explain": {},
 	"find": {}, "findAndModify": {}, "getMore": {}, "hello": {},
 	"hostInfo": {}, "insert": {}, "isMaster": {}, "ismaster": {},
 	"killCursors": {}, "listCollections": {}, "listDatabases": {}, "listIndexes": {},
 	"ping": {}, "saslContinue": {}, "saslStart": {}, "update": {}, "updateUser": {},
-	"usersInfo": {},
+	"usersInfo": {}, "serverStatus": {}, "top": {},
 }
 
 func (s *Server) dispatchCommandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
@@ -917,6 +959,14 @@ func (s *Server) dispatchCommandResponse(ctx context.Context, name string, comma
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
 		return marshalDocument(s.connectionStatusResponse(cursorOwner))
+	case "serverStatus":
+		return s.serverStatusResponse(command)
+	case "dbStats":
+		return s.dbStatsResponse(command, cursorOwner)
+	case "collStats":
+		return s.collStatsResponse(command, cursorOwner)
+	case "top":
+		return s.topResponse(command)
 	case "saslStart":
 		return s.saslStartResponse(command, cursorOwner)
 	case "saslContinue":

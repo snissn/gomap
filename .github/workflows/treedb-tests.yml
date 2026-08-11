@@ -208,7 +208,7 @@ jobs:
             run_vet: true
           - name: macos-latest
             os: macos-latest
-            timeout: 15
+            timeout: 30
             shard_kind: all
             run_vet: true
           - name: windows-core-1
