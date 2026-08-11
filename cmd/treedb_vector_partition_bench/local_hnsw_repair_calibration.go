@@ -495,7 +495,11 @@ func localHNSWRepairCalibrationFrozenResultSHA256V1(query localHNSWRepairCalibra
 }
 
 func localHNSWRepairCalibrationOrdinarySearchV1(ctx context.Context, harness *localHNSWVariantHarnessV1, route []uint32, query []float32, variant, queryDigest string) ([]m8CanonicalResultV1, localHNSWRepairCalibrationWorkV1, error) {
-	if harness == nil || len(query) == 0 || !localHNSWAttributionSHA256V1(queryDigest) || queryDigest != localHNSWAttributionQueryFP32SHA256V1(query) || (variant != "overlay_current" && variant != "auxiliary_navigation") {
+	return localHNSWRepairCalibrationOrdinarySearchAtEFV1(ctx, harness, route, query, 128, variant, queryDigest)
+}
+
+func localHNSWRepairCalibrationOrdinarySearchAtEFV1(ctx context.Context, harness *localHNSWVariantHarnessV1, route []uint32, query []float32, efSearch int, variant, queryDigest string) ([]m8CanonicalResultV1, localHNSWRepairCalibrationWorkV1, error) {
+	if harness == nil || len(query) == 0 || efSearch < 10 || !localHNSWAttributionSHA256V1(queryDigest) || queryDigest != localHNSWAttributionQueryFP32SHA256V1(query) || (variant != "overlay_current" && variant != "auxiliary_navigation") {
 		return nil, localHNSWRepairCalibrationWorkV1{}, errors.New("invalid local HNSW repair ordinary query")
 	}
 	seen := make([]bool, len(harness.searchers))
@@ -506,7 +510,7 @@ func localHNSWRepairCalibrationOrdinarySearchV1(ctx context.Context, harness *lo
 			return nil, localHNSWRepairCalibrationWorkV1{}, errors.New("invalid local HNSW repair ordinary route")
 		}
 		seen[partition] = true
-		found, metrics, err := harness.searchers[partition].SearchWithOptionsV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 128})
+		found, metrics, err := harness.searchers[partition].SearchWithOptionsV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: efSearch})
 		if err != nil || metrics.Route != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || metrics.AuxiliaryAdmissions > metrics.AuxiliaryCandidates || math.MaxUint64-work.Candidates < metrics.Candidates || math.MaxUint64-work.NativeEdges < metrics.Edges || math.MaxUint64-work.AuxiliaryEdges < metrics.AuxiliaryEdges || math.MaxUint64-work.AuxiliaryCandidates < metrics.AuxiliaryCandidates || math.MaxUint64-work.AuxiliaryAdmissions < metrics.AuxiliaryAdmissions {
 			return nil, localHNSWRepairCalibrationWorkV1{}, errors.New("invalid local HNSW repair ordinary search")
 		}
