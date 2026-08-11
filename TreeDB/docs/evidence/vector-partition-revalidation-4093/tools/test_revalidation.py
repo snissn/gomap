@@ -280,6 +280,12 @@ class RevalidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "sample chronology"):
                 validate_cell(value, result, "strict", 1)
 
+    def test_runtime_peak_rss_must_not_regress(self) -> None:
+        value, result = cell()
+        value["runtime"][0]["before"]["peak_rss_bytes"] = 2
+        with self.assertRaisesRegex(ValueError, "peak RSS regressed"):
+            validate_cell(value, result, "strict", 1)
+
     def test_runtime_cells_follow_the_declared_concurrency_order(self) -> None:
         first, _ = cell(concurrency=1)
         second, _ = cell(concurrency=32)
@@ -317,6 +323,7 @@ class RevalidationTest(unittest.TestCase):
         container = {"p95_nanos_min": 2, "p95_nanos_max": 4}
         self.assertTrue(reduce._tail_explained(native, container, 1.14, 1.06))
         self.assertFalse(reduce._tail_explained(native, container, 1.05, 1.06))
+        self.assertFalse(reduce._tail_explained(native, container, 1.16, 1.06))
 
     def test_capability_key_digest_is_verified(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

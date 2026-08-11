@@ -265,7 +265,9 @@ def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]], re
         for key in RUNTIME_DELTAS:
             _require(_uint(before.get(key)) and _uint(after.get(key)) and after[key] >= before[key], f"runtime {key} regressed")
             result[key] += after[key] - before[key]
-        _require(_uint(after.get("peak_rss_bytes"), positive=True), "runtime peak RSS is invalid")
+        _require(_uint(before.get("peak_rss_bytes"), positive=True) and
+                 _uint(after.get("peak_rss_bytes"), positive=True) and
+                 after["peak_rss_bytes"] >= before["peak_rss_bytes"], "runtime peak RSS regressed")
         result["peak_rss_bytes"] = max(result["peak_rss_bytes"], after["peak_rss_bytes"])
         for source, target in (("heap_alloc_bytes", "heap_alloc_bytes_after"), ("heap_objects", "heap_objects_after"), ("goroutines", "goroutines_after")):
             _require(_uint(after.get(source), positive=True), f"runtime {source} is invalid")
@@ -492,7 +494,8 @@ def _median_row(cells: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _tail_explained(native: dict[str, Any], container: dict[str, Any], p95_ratio: float,
                     mean_ratio: float) -> bool:
-    return (not .90 <= p95_ratio <= 1.10 and .90 <= mean_ratio <= 1.10 and
+    return (not .90 <= p95_ratio <= 1.10 and max(p95_ratio, 1 / p95_ratio) <= 1.15 and
+            .90 <= mean_ratio <= 1.10 and
             native["p95_nanos_min"] <= container["p95_nanos_max"] and
             container["p95_nanos_min"] <= native["p95_nanos_max"])
 
