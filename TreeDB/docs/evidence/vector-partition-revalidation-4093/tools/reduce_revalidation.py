@@ -17,7 +17,7 @@ from typing import Any
 SOURCE_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(SOURCE_ROOT / "benchmarks/vector_db_compare"))
 from system_qualification import ContractError, _is_sha256, _load, _percentile, _require  # noqa: E402
-from topology_tax import COUNTERS as LOGICAL_COUNTERS, _paths_overlap, _ready_identity, _sha256, _topology_identity  # noqa: E402
+from topology_tax import COUNTERS as LOGICAL_COUNTERS, POSITIVE_COUNTERS, _go_json_sha256, _paths_overlap, _ready_identity, _sha256, _topology_identity  # noqa: E402
 
 
 MODES = ("strict", "fast", "pinned")
@@ -68,6 +68,12 @@ BASELINE = {
 }
 PROFILE_NAMES = ("allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof")
 EXPECTED_SOURCE_HEAD = "6e406e43ec2a6228e84d672a488768e32e6f0b53"
+AUTHORIZATION_OVERLAY_DIGEST = hashlib.sha256(b"vector-partition-no-authorization-overlay-v1").hexdigest()
+RUNTIME_BUDGETS = {
+    "single": (("0-11", 12, 24 << 30),),
+    "native": tuple((f"{index * 3}-{index * 3 + 2}", 3, 6 << 30) for index in range(4)),
+    "container": tuple((f"{index * 3}-{index * 3 + 2}", 3, 6 << 30) for index in range(4)),
+}
 
 
 def _read(path: Path, limit: int = 16 << 20) -> bytes:
@@ -99,6 +105,50 @@ def _time_ns(value: Any) -> int:
 
 def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
+
+
+def _runtime_owners(topology: str, nodes: Any) -> dict[str, dict[str, Any]]:
+    _require(isinstance(nodes, list), "topology runtime ownership is invalid")
+    owners: dict[str, dict[str, Any]] = {}
+    observed: list[tuple[str, int, int]] = []
+    for node in nodes:
+        _require(isinstance(node, dict) and _is_sha256(node.get("node_config_sha256")) and
+                 isinstance(node.get("runtime_ownership"), dict), "topology runtime ownership is invalid")
+        ownership = node["runtime_ownership"]
+        value = (ownership.get("cpu_set"), ownership.get("gomaxprocs"), ownership.get("go_memory_limit_bytes"))
+        _require(isinstance(value[0], str) and _uint(value[1], positive=True) and _uint(value[2], positive=True) and
+                 node["node_config_sha256"] not in owners, "topology runtime ownership is invalid")
+        owners[node["node_config_sha256"]] = ownership
+        observed.append(value)
+    _require(tuple(sorted(observed)) == tuple(sorted(RUNTIME_BUDGETS[topology])), "topology runtime budget changed")
+    return owners
+
+
+def _serving_topology_digest(topology: dict[str, Any]) -> str:
+    endpoints = topology.get("endpoints")
+    applied = topology.get("group_applied_indexes")
+    _require(isinstance(endpoints, dict) and isinstance(applied, dict), "serving topology identity is invalid")
+    return _go_json_sha256({
+        "Topology": topology.get("topology"),
+        "DatasetDirectory": topology.get("dataset_directory"),
+        "Endpoints": {key: endpoints[key] for key in sorted(endpoints)},
+        "GroupAppliedIndexes": {key: applied[key] for key in sorted(applied)},
+    })
+
+
+def _instant(value: Any) -> datetime:
+    _require(isinstance(value, str), "fast snapshot publication is invalid")
+    try:
+        body, separator, suffix = value.partition(".")
+        if separator:
+            split = next((index for index, character in enumerate(suffix) if not character.isdigit()), len(suffix))
+            digits, zone = suffix[:split], suffix[split:]
+            value = f"{body}.{(digits + '000000')[:6]}{zone}"
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ContractError("fast snapshot publication is invalid") from exc
+    _require(moment.tzinfo is not None and moment.timestamp() > 0, "fast snapshot publication is invalid")
+    return moment
 
 
 def _catalog_identity(value: dict[str, Any]) -> dict[str, int]:
@@ -233,21 +283,35 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
     return strict["reads"]
 
 
-def _validate_fast(cell: dict[str, Any], result: dict[str, Any], mode: str) -> None:
+def _validate_fast(cell: dict[str, Any], result: dict[str, Any], mode: str,
+                   expected: dict[str, Any]) -> tuple[Any, ...] | None:
     evidence = cell.get("fast_evidence")
     if mode == "strict":
         _require(evidence is None and "min_index_age_nanos" not in cell and "max_index_age_nanos" not in cell, "strict row retained fast evidence")
-        return
+        return None
     _require(isinstance(evidence, dict), "fast row lacks snapshot evidence")
-    _require(evidence.get("Generation") == cell["generation"] and _uint(evidence.get("IndexedThrough")), "fast snapshot generation or watermark is invalid")
-    _require(isinstance(evidence.get("PublishedAt"), str) and evidence["PublishedAt"] and isinstance(evidence.get("TopologyDigest"), str) and evidence["TopologyDigest"] and isinstance(evidence.get("AuthorizationOverlayDigest"), str) and evidence["AuthorizationOverlayDigest"], "fast snapshot identity is invalid")
+    _require(evidence.get("Generation") == cell["generation"] and
+             evidence.get("IndexedThrough") == expected["IndexedThrough"] and
+             evidence.get("TopologyDigest") == expected["TopologyDigest"] and
+             evidence.get("AuthorizationOverlayDigest") == expected["AuthorizationOverlayDigest"],
+             "fast snapshot identity is invalid")
+    published = _instant(evidence.get("PublishedAt"))
+    started, completed = _time(result["started_at"]), _time(result["completed_at"])
+    _require(published < started, "fast snapshot publication is invalid")
+    earliest = int((started - published).total_seconds() * 1_000_000_000)
+    latest = int((completed - published).total_seconds() * 1_000_000_000)
     minimum, maximum = cell.get("min_index_age_nanos"), cell.get("max_index_age_nanos")
-    _require(_uint(minimum) and _uint(maximum) and minimum <= maximum <= result["max_index_age_nanos"], "fast snapshot age exceeded its bound")
+    _require(_uint(minimum) and _uint(maximum) and earliest <= minimum <= maximum <= latest and
+             maximum <= result["max_index_age_nanos"], "fast snapshot age exceeded its bound")
     age = evidence.get("IndexAge")
-    _require(_uint(age) and age <= minimum, "fast snapshot evidence age postdates its observed range")
+    _require(_uint(age) and earliest <= age <= minimum, "fast snapshot evidence age postdates its observed range")
+    return (evidence["Generation"]["Index"], evidence["Generation"]["Generation"],
+            evidence["IndexedThrough"], evidence["PublishedAt"], evidence["TopologyDigest"],
+            evidence["AuthorizationOverlayDigest"])
 
 
-def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, concurrency: int, expected_nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, concurrency: int,
+                   expected_nodes: dict[str, dict[str, Any]], expected_fast: dict[str, Any]) -> dict[str, Any]:
     _require(isinstance(cell, dict) and cell.get("status") == "valid" and not cell.get("error"), "benchmark cell failed")
     _require(cell.get("budget") == {"probes": 2} and cell.get("concurrency") == concurrency and cell.get("search_mode") == mode, "benchmark cell identity changed")
     metrics, counters, timings = cell.get("metrics"), cell.get("counters"), cell.get("timings")
@@ -255,6 +319,8 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     recall = metrics.get("recall_at_10")
     _require(isinstance(recall, (int, float)) and not isinstance(recall, bool) and math.isfinite(recall) and .90 <= recall <= 1, "recall is below the frozen floor")
     _require(isinstance(counters, dict) and set(counters) == set(COUNTERS) and all(_uint(counters[key]) for key in COUNTERS), "benchmark counters are invalid")
+    _require(all(_uint(counters[key], positive=True) for key in POSITIVE_COUNTERS),
+             "benchmark logical work counters are invalid")
     _require(counters["public_request_frame_bytes"] > 0 and counters["public_response_frame_bytes"] > 0,
              "benchmark public frame counters are invalid")
     _require(counters["retries"] == 0 and counters["redirects"] == 0, "benchmark cell retried or followed a redirect")
@@ -269,13 +335,13 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     _require(isinstance(generation, dict) and isinstance(generation.get("Index"), str) and generation["Index"] and _uint(generation.get("Generation"), positive=True), "cell generation is invalid")
     expected_ids = set(expected_nodes)
     catalog_proof_reads = _validate_catalog(cell, mode, concurrency, expected_ids)
-    _validate_fast(cell, result, mode)
+    fast_identity = _validate_fast(cell, result, mode, expected_fast)
     runtime = _runtime(cell, expected_nodes, result)
     _require({node.get("node_config_sha256") for node in cell["runtime"] if isinstance(node, dict)} == expected_ids and len(cell["runtime"]) == len(expected_ids), "runtime observation nodes changed")
     return {
         "recall": recall, "qps": metrics["qps"], "p95_nanos": metrics["p95_nanos"],
         "generation": generation, "counters": counters, "timings": timings, "runtime": runtime,
-        "catalog_proof_reads": catalog_proof_reads,
+        "catalog_proof_reads": catalog_proof_reads, "fast_identity": fast_identity,
     }
 
 
@@ -323,7 +389,9 @@ def _validate_runtime_cell_order(cells: list[dict[str, Any]], expected_order: tu
         previous_completed = completed
 
 
-def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any], expected_nodes: dict[str, dict[str, Any]], expected_order: tuple[int, ...]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any],
+                     expected_nodes: dict[str, dict[str, Any]], expected_fast: dict[str, Any],
+                     expected_order: tuple[int, ...]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     result = _load(path, 32 << 20)
     _require(result.get("schema_version") == 1 and result.get("result_kind") == "vector_partition_system_bench_v1", "benchmark result identity changed")
     _require(result.get("topology") == TOPOLOGY_NAMES[topology] and _is_sha256(result.get("topology_identity_sha256")), "benchmark topology identity is invalid")
@@ -339,7 +407,9 @@ def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str,
     _require(isinstance(cells, list) and len(cells) == 2, "benchmark must retain c1 and c32")
     by_concurrency = {cell.get("concurrency"): cell for cell in cells if isinstance(cell, dict)}
     _require(set(by_concurrency) == {1, 32}, "benchmark c1/c32 set changed")
-    validated = {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_nodes) for concurrency in (1, 32)}
+    validated = {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_nodes, expected_fast) for concurrency in (1, 32)}
+    _require(len({value["fast_identity"] for value in validated.values()}) == 1,
+             "fast snapshot identity changed within the benchmark")
     _validate_runtime_cell_order(cells, expected_order)
     return result, validated
 
@@ -388,7 +458,10 @@ def summarize(root: Path) -> dict[str, Any]:
     _validate_provenance(provenance)
     _validate_capability_key(provenance)
     _require(_sha256(Path(provenance["binary_path"])) == provenance["binary_sha256"], "benchmark binary changed")
-    _require(_sha256(Path(provenance["dataset_directory"]) / "fixture_manifest.json") == provenance["fixture_manifest_sha256"], "fixture manifest changed")
+    fixture_path = Path(provenance["dataset_directory"]) / "fixture_manifest.json"
+    _require(_sha256(fixture_path) == provenance["fixture_manifest_sha256"], "fixture manifest changed")
+    fixture = _load(fixture_path, 1 << 20)
+    _require(_uint(fixture.get("vectors"), positive=True), "fixture vector count is invalid")
     truth_files = list(Path(provenance["truth_directory"]).glob("*.json"))
     _require(len(truth_files) == 1 and _sha256(truth_files[0]) == provenance["truth_sha256"], "truth artifact changed")
     _validate_m3(root, provenance)
@@ -419,14 +492,20 @@ def summarize(root: Path) -> dict[str, Any]:
         _require(all(not _paths_overlap(root_path, prior) for root_path in canonical_roots for prior in database_roots), "repetition database roots overlap")
         database_roots.extend(canonical_roots)
         ready = {node["node_id"]: _ready_identity(topology_path, topology_value, node, provenance["source_head"], provenance["binary_sha256"], PUBLIC_ROUTE) for node in topology_value["nodes"]}
-        expected_nodes = {node["node_config_sha256"]: node["runtime_ownership"] for node in topology_value["nodes"]}
+        expected_nodes = _runtime_owners(topology, topology_value["nodes"])
+        expected_fast = {
+            "IndexedThrough": fixture["vectors"],
+            "TopologyDigest": _serving_topology_digest(topology_value),
+            "AuthorizationOverlayDigest": AUTHORIZATION_OVERLAY_DIGEST,
+        }
         mode_inputs: dict[str, Any] = {}
         prior_search_completed: datetime | None = None
+        fast_identity: tuple[Any, ...] | None = None
         for mode in expected_modes:
             search_path = run_dir / f"search-{mode}.json"
             concurrency_order = _concurrency_order(topology, repetition, mode)
             result, result_cells = _validate_result(
-                search_path, topology, mode, provenance, expected_nodes,
+                search_path, topology, mode, provenance, expected_nodes, expected_fast,
                 tuple(int(value) for value in concurrency_order.split(",")),
             )
             _validate_public_endpoint(topology_value, result)
@@ -434,6 +513,11 @@ def summarize(root: Path) -> dict[str, Any]:
             search_started, search_completed = _time(result["started_at"]), _time(result["completed_at"])
             _require(prior_search_completed is None or prior_search_completed < search_started, "benchmark mode intervals overlap")
             prior_search_completed = search_completed
+            current_fast = result_cells[1]["fast_identity"]
+            if current_fast is not None:
+                _require(fast_identity is None or current_fast == fast_identity,
+                         "fast snapshot identity changed across benchmark modes")
+                fast_identity = current_fast
             command = _validate_command(
                 run_dir, result, mode, topology, provenance, concurrency_order,
             )

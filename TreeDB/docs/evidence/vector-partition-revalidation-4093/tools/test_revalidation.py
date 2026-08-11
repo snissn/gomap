@@ -21,6 +21,7 @@ runner = importlib.util.module_from_spec(RUNNER_SPEC)
 RUNNER_SPEC.loader.exec_module(runner)
 NODE = "a" * 64
 OWNERS = {NODE: {"cpu_set": "0-11", "gomaxprocs": 12, "go_memory_limit_bytes": 1}}
+EXPECTED_FAST = {"IndexedThrough": 1, "TopologyDigest": "topology", "AuthorizationOverlayDigest": "overlay"}
 PROOF_IDENTITY = {
     "last_term": 1, "last_catalog_applied_index": 1,
     "last_raft_applied_index": 1, "last_raft_log_index": 1,
@@ -54,13 +55,13 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
 
     runtime = {key: 0 for key in reduce.RUNTIME_DELTAS}
     runtime.update({
-        "sample_unix_nano": 1, "rss_bytes": 1, "peak_rss_bytes": 1,
+        "sample_unix_nano": 1_000_000_001, "rss_bytes": 1, "peak_rss_bytes": 1,
         "heap_alloc_bytes": 1, "heap_objects": 1, "goroutines": 1,
         "logical_cpus": 12, "gomaxprocs": 12, "go_memory_limit_bytes": 1,
         "effective_cpu_set": "0-11",
     })
     after = dict(runtime)
-    after["sample_unix_nano"] = 2
+    after["sample_unix_nano"] = 1_000_000_002
     for key in reduce.RUNTIME_DELTAS:
         after[key] = 1
     counters = {key: 1 for key in reduce.COUNTERS}
@@ -87,33 +88,65 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
     }
     result = {
         "max_index_age_nanos": 3_600_000_000_000,
-        "started_at": "1970-01-01T00:00:00.000000000Z",
-        "completed_at": "1970-01-01T00:00:00.000000003Z",
+        "started_at": "1970-01-01T00:00:01.000000000Z",
+        "completed_at": "1970-01-01T00:00:01.000000003Z",
     }
     if mode != "strict":
         value.update({
             "fast_evidence": {
                 "Generation": value["generation"], "IndexedThrough": 1,
-                "PublishedAt": "2026-08-10T00:00:00Z", "IndexAge": 1,
+                "PublishedAt": "1970-01-01T00:00:00.999999Z", "IndexAge": 1000,
                 "TopologyDigest": "topology", "AuthorizationOverlayDigest": "overlay",
             },
-            "min_index_age_nanos": 1, "max_index_age_nanos": 2,
+            "min_index_age_nanos": 1000, "max_index_age_nanos": 1000,
         })
     return value, result
+
+
+def validate_cell(value: dict, result: dict, mode: str, concurrency: int,
+                  owners: dict = OWNERS) -> dict:
+    return reduce._validate_cell(value, result, mode, concurrency, owners, EXPECTED_FAST)
 
 
 class RevalidationTest(unittest.TestCase):
     def test_valid_strict_fast_and_pinned_cells(self) -> None:
         for mode in reduce.MODES:
             value, result = cell(mode)
-            reduce._validate_cell(value, result, mode, 1, OWNERS)
+            validate_cell(value, result, mode, 1)
+
+    def test_runtime_budget_is_frozen(self) -> None:
+        ownership = {"cpu_set": "0-11", "gomaxprocs": 12, "go_memory_limit_bytes": 24 << 30}
+        nodes = [{"node_config_sha256": NODE, "runtime_ownership": ownership}]
+        self.assertEqual(reduce._runtime_owners("single", nodes), {NODE: ownership})
+        ownership["go_memory_limit_bytes"] = 1
+        with self.assertRaisesRegex(ValueError, "runtime budget"):
+            reduce._runtime_owners("single", nodes)
+
+    def test_logical_search_work_counters_are_positive(self) -> None:
+        for counter in reduce.POSITIVE_COUNTERS:
+            value, result = cell()
+            value["counters"][counter] = 0
+            with self.assertRaisesRegex(ValueError, "logical work"):
+                validate_cell(value, result, "strict", 1)
+
+    def test_fast_identity_is_bound_to_retained_inputs(self) -> None:
+        for field, changed in (("IndexedThrough", 2), ("TopologyDigest", "other"),
+                               ("AuthorizationOverlayDigest", "other")):
+            value, result = cell("fast")
+            value["fast_evidence"][field] = changed
+            with self.assertRaisesRegex(ValueError, "snapshot identity"):
+                validate_cell(value, result, "fast", 1)
+        value, result = cell("fast")
+        value["fast_evidence"]["PublishedAt"] = "2026-08-10T00:00:00Z"
+        with self.assertRaisesRegex(ValueError, "publication"):
+            validate_cell(value, result, "fast", 1)
 
     def test_log_barrier_is_rejected(self) -> None:
         value, result = cell()
         for retained in (value["catalog_reads"]["total"], value["catalog_reads"]["nodes"][0]["after"], value["catalog_reads"]["nodes"][0]["delta"]):
             retained["total"]["log_barriers"] = 1
         with self.assertRaisesRegex(ValueError, "log barrier"):
-            reduce._validate_cell(value, result, "strict", 1, OWNERS)
+            validate_cell(value, result, "strict", 1)
 
     def test_catalog_proof_must_succeed_without_a_log_entry(self) -> None:
         for key in ("successes", "verify_leader_calls", "no_log_proofs"):
@@ -121,13 +154,13 @@ class RevalidationTest(unittest.TestCase):
             for retained in (value["catalog_reads"]["total"], value["catalog_reads"]["nodes"][0]["after"], value["catalog_reads"]["nodes"][0]["delta"]):
                 retained["strict_search"][key] = 0
             with self.assertRaisesRegex(ValueError, "catalog proof"):
-                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+                validate_cell(value, result, "strict", 1)
 
     def test_catalog_node_delta_must_match_the_aggregate(self) -> None:
         value, result = cell()
         value["catalog_reads"]["nodes"][0]["delta"]["strict_search"]["log_barriers"] = 1
         with self.assertRaisesRegex(ValueError, "catalog node delta"):
-            reduce._validate_cell(value, result, "strict", 1, OWNERS)
+            validate_cell(value, result, "strict", 1)
 
     def test_catalog_proof_identity_is_required_and_consistent(self) -> None:
         for mutation in ("missing", "contradictory"):
@@ -137,7 +170,7 @@ class RevalidationTest(unittest.TestCase):
             else:
                 value["catalog_reads"]["nodes"][0]["after"]["last_raft_log_index"] = 0
             with self.assertRaisesRegex(ValueError, "catalog proof identity"):
-                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+                validate_cell(value, result, "strict", 1)
 
     def test_benchmark_endpoint_must_belong_to_the_public_node(self) -> None:
         specific = {"nodes": [{"public_listen": "127.0.0.1:10", "local_groups": [{"listen": "127.0.0.1:11"}]}]}
@@ -151,38 +184,38 @@ class RevalidationTest(unittest.TestCase):
         value, result = cell(concurrency=32)
         value["elapsed_nanos"] = 31_000_000
         with self.assertRaisesRegex(ValueError, "elapsed"):
-            reduce._validate_cell(value, result, "strict", 32, OWNERS)
+            validate_cell(value, result, "strict", 32)
 
     def test_client_total_must_equal_raw_samples(self) -> None:
         value, result = cell()
         value["timings"]["client_total"] -= 1
         with self.assertRaisesRegex(ValueError, "client timing total"):
-            reduce._validate_cell(value, result, "strict", 1, OWNERS)
+            validate_cell(value, result, "strict", 1)
 
     def test_fast_age_bound_is_fail_closed(self) -> None:
         value, result = cell("fast")
         value["max_index_age_nanos"] = result["max_index_age_nanos"] + 1
         with self.assertRaisesRegex(ValueError, "age"):
-            reduce._validate_cell(value, result, "fast", 1, OWNERS)
+            validate_cell(value, result, "fast", 1)
 
     def test_fast_evidence_age_must_not_postdate_the_observed_range(self) -> None:
         value, result = cell("fast")
         value["fast_evidence"]["IndexAge"] = 3
         with self.assertRaisesRegex(ValueError, "evidence age"):
-            reduce._validate_cell(value, result, "fast", 1, OWNERS)
+            validate_cell(value, result, "fast", 1)
 
     def test_retry_or_redirect_is_rejected(self) -> None:
         for counter in ("retries", "redirects"):
             value, result = cell()
             value["counters"][counter] = 1
             with self.assertRaisesRegex(ValueError, "retried or followed"):
-                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+                validate_cell(value, result, "strict", 1)
 
     def test_runtime_ownership_must_match_topology_during_measurement(self) -> None:
         value, result = cell()
         value["runtime"][0]["after"]["effective_cpu_set"] = "1-11"
         with self.assertRaisesRegex(ValueError, "runtime ownership"):
-            reduce._validate_cell(value, result, "strict", 1, OWNERS)
+            validate_cell(value, result, "strict", 1)
 
     def test_runtime_samples_must_be_ordered_inside_the_result_interval(self) -> None:
         for before, after in ((1, 1), (2, 1), (0, 2), (1, 4)):
@@ -190,13 +223,13 @@ class RevalidationTest(unittest.TestCase):
             value["runtime"][0]["before"]["sample_unix_nano"] = before
             value["runtime"][0]["after"]["sample_unix_nano"] = after
             with self.assertRaisesRegex(ValueError, "sample chronology"):
-                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+                validate_cell(value, result, "strict", 1)
 
     def test_runtime_cells_follow_the_declared_concurrency_order(self) -> None:
         first, _ = cell(concurrency=1)
         second, _ = cell(concurrency=32)
-        second["runtime"][0]["before"]["sample_unix_nano"] = 3
-        second["runtime"][0]["after"]["sample_unix_nano"] = 4
+        second["runtime"][0]["before"]["sample_unix_nano"] = 1_000_000_003
+        second["runtime"][0]["after"]["sample_unix_nano"] = 1_000_000_004
         reduce._validate_runtime_cell_order([first, second], (1, 32))
         with self.assertRaisesRegex(ValueError, "intervals overlap"):
             reduce._validate_runtime_cell_order([first, first], (1, 1))
@@ -208,7 +241,7 @@ class RevalidationTest(unittest.TestCase):
             value, result = cell()
             value["counters"][counter] = 0
             with self.assertRaisesRegex(ValueError, "public frame"):
-                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+                validate_cell(value, result, "strict", 1)
 
     def test_execution_head_is_frozen(self) -> None:
         provenance = {
