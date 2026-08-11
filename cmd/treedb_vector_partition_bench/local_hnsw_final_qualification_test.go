@@ -1,0 +1,150 @@
+package main
+
+import (
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
+	schedule := localHNSWFinalQualificationScheduleV1()
+	if len(schedule) != 24 || schedule[0].Variant != "m16_efc128" || schedule[8].Variant != "m18_efc256" || schedule[16].Variant != "m16_efc128" {
+		t.Fatalf("schedule=%+v", schedule)
+	}
+	if runs := localHNSWFinalQualificationRunsV1(); len(runs) != 48 || runs[0].Corpus != localHNSWFinalQualificationCorpus250KV1 || runs[24].Corpus != localHNSWFinalQualificationCorpus100KV1 {
+		t.Fatalf("runs=%+v", runs)
+	}
+	counts := localHNSWFinalQualificationCountsV1{QueryCount: 1000, TopK: 10, P2HitSlots: 9500, P16HitSlots: 9520, RoutingMissSlots: 20}
+	if !localHNSWFinalQualificationCountsPassV1(counts) {
+		t.Fatalf("counts=%+v", counts)
+	}
+	counts.P16HitSlots++
+	if localHNSWFinalQualificationCountsPassV1(counts) {
+		t.Fatal("accepted excessive p2/p16 hit-slot gap")
+	}
+	counts.P16HitSlots--
+
+	digest := strings.Repeat("a", 64)
+	cells := make([]localHNSWFinalQualificationTimingCellV1, len(schedule))
+	for i, cell := range schedule {
+		cells[i] = localHNSWFinalQualificationTimingCellV1{localHNSWFinalQualificationCellV1: cell, QPS: 100, P95Nanos: 100, ResultSHA256: make([]string, 1000)}
+		for j := range cells[i].ResultSHA256 {
+			cells[i].ResultSHA256[j] = digest
+		}
+	}
+	if err := localHNSWFinalQualificationTimingPassV1(cells); err != nil {
+		t.Fatal(err)
+	}
+	cells[1].ResultSHA256[0] = strings.Repeat("b", 64)
+	if err := localHNSWFinalQualificationTimingPassV1(cells); err == nil {
+		t.Fatal("accepted unstable timing result")
+	}
+}
+
+func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
+		t.Fatal("accepted missing child report")
+	}
+	for _, name := range []string{"vector_partition_m8_a.json", "vector_partition_m8_b.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
+		t.Fatal("accepted multiple child reports")
+	}
+}
+
+func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
+	fixture := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1, Seed: 1}
+	fixtures := map[string]fixtureManifest{localHNSWFinalQualificationCorpus250KV1: fixture, localHNSWFinalQualificationCorpus100KV1: fixture}
+	roots := localHNSWFinalQualificationRootsV1{"a", "b", "c", "d"}
+	var got []config
+	err := localHNSWFinalQualificationInvokeWithDiscoveryV1(config{out: t.TempDir()}, fixtures, roots, func(cfg config, _ fixtureManifest, _, _ [][]float64, _ io.Writer) error {
+		got = append(got, cfg)
+		return nil
+	}, func(string) error { return nil }, io.Discard)
+	if err != nil || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
+		t.Fatalf("err=%v calls=%d", err, len(got))
+	}
+}
+
+func TestLocalHNSWFinalQualificationReportV1(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	children := make([]localHNSWFinalQualificationChildV1, 0, 48)
+	start := time.Unix(1, 0).UTC()
+	counts := localHNSWFinalQualificationCountsV1{QueryCount: 1000, TopK: 10, P2HitSlots: 9500, P16HitSlots: 9520, RoutingMissSlots: 20}
+	for i, run := range localHNSWFinalQualificationRunsV1() {
+		variantDigest := strings.Repeat("b", 64)
+		if run.Variant == localHNSWFinalQualificationCandidateV1 {
+			variantDigest = strings.Repeat("c", 64)
+		}
+		result := make([]string, 1000)
+		for j := range result {
+			result[j] = digest
+		}
+		childStart := start.Add(time.Duration(i) * time.Second)
+		childCounts := counts
+		if run.Corpus == localHNSWFinalQualificationCorpus250KV1 {
+			if run.Probes == 2 {
+				childCounts.P2HitSlots = 9500
+				childCounts.P16HitSlots = 0
+			} else {
+				childCounts.P2HitSlots = 0
+				childCounts.P16HitSlots = 9520
+			}
+		}
+		children = append(children, localHNSWFinalQualificationChildV1{
+			localHNSWFinalQualificationRunV1: run,
+			ReportSHA256:                     digest,
+			TranscriptSHA256:                 digest,
+			SourceIdentitySHA256:             digest,
+			VariantIdentitySHA256:            variantDigest,
+			M:                                map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant],
+			EfConstruction:                   map[string]int{localHNSWFinalQualificationBaselineV1: 128, localHNSWFinalQualificationCandidateV1: 256}[run.Variant],
+			StartedAt:                        childStart,
+			EndedAt:                          childStart.Add(time.Millisecond),
+			Counts:                           childCounts,
+			Timing:                           localHNSWFinalQualificationTimingCellV1{localHNSWFinalQualificationCellV1: run.localHNSWFinalQualificationCellV1, QPS: 100, P95Nanos: 100, ResultSHA256: result},
+		})
+	}
+	report := localHNSWFinalQualificationReportV1{Schema: localHNSWFinalQualificationSchemaV1, ResultKind: "local_hnsw_final_qualification_v1", Status: "valid", Children: children}
+	if err := localHNSWFinalQualificationReportValidV1(report); err != nil {
+		t.Fatal(err)
+	}
+	report.Children[1].SourceIdentitySHA256 = strings.Repeat("c", 64)
+	if err := localHNSWFinalQualificationReportValidV1(report); err == nil {
+		t.Fatal("accepted source identity drift")
+	}
+	report.Children[1].SourceIdentitySHA256 = digest
+	report.Children = report.Children[:47]
+	if err := localHNSWFinalQualificationReportValidV1(report); err == nil {
+		t.Fatal("accepted missing child run")
+	}
+}
+
+func TestLocalHNSWFinalQualificationUnionV1(t *testing.T) {
+	fixture := fixtureManifest{Queries: 1000, Checksum: strings.Repeat("a", 64)}
+	truth := strings.Repeat("b", 64)
+	calibration := localHNSWQuerySplitV1{Schema: "vector_partition_4105_query_split_v1", DatasetChecksum: fixture.Checksum, TruthArtifactSHA256: truth, Selection: localHNSWQuerySplitSelectionV1}
+	holdout := calibration
+	for ordinal := range fixture.Queries {
+		if localHNSWCalibrationOrdinalV1(ordinal) {
+			calibration.Ordinals = append(calibration.Ordinals, ordinal)
+		} else {
+			holdout.Ordinals = append(holdout.Ordinals, ordinal)
+		}
+	}
+	union, err := localHNSWFinalQualificationUnionV1(calibration, holdout, fixture, truth)
+	if err != nil || len(union) != 1000 || union[0] != 0 || union[999] != 999 {
+		t.Fatalf("union=%v err=%v", len(union), err)
+	}
+	holdout.Ordinals = holdout.Ordinals[:len(holdout.Ordinals)-1]
+	if _, err := localHNSWFinalQualificationUnionV1(calibration, holdout, fixture, truth); err == nil {
+		t.Fatal("accepted incomplete frozen union")
+	}
+}
