@@ -63,7 +63,7 @@ def no_heavy_process() -> None:
             comm = (entry / "comm").read_text(encoding="utf-8").strip()
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
-        if comm in ("go", "KaHIP") or comm.endswith(".test") or comm.startswith("treedb_vector_"):
+        if comm in ("go", "KaHIP") or comm.endswith(".test") or comm.startswith(("treedb_vector_", "treedb-vector-")):
             raise RuntimeError(f"unexpected live heavy process {entry.name} {comm}")
 
 
