@@ -144,6 +144,49 @@ func TestValidateVectorPartitionFastEvidenceV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionNativeWireFastSearchDropsResponseOnInvalidEvidenceV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	client := NewClient(left)
+	defer client.Close()
+	request := public.SearchRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 7}, Query: []float32{1},
+		Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: public.ConsistencyGenerationSnapshotV1,
+		Limits:   public.SearchLimitsV1{RequestBytes: 4, CandidateBytes: 1024, ResponseBytes: 1024, MergeEntries: 1},
+		Deadline: time.Now().Add(time.Second),
+	}
+	options := public.FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 9}
+	peer := make(chan error, 1)
+	go func() {
+		header, _, err := readFrame(right, iwire.DefaultLimits())
+		if err != nil {
+			peer <- err
+			return
+		}
+		body, err := appendVectorPartitionSearchResponseSectionV1(nil, public.SearchResponseV1{Generation: request.Generation, Neighbors: []public.NeighborV1{{ID: "doc-000001", Score: .9}}})
+		if err == nil {
+			body, err = appendVectorPartitionFastEvidenceSectionV1(body, public.FastSearchEvidenceV1{
+				Generation: request.Generation, IndexedThrough: 8, PublishedAt: time.Now(), IndexAge: time.Millisecond,
+				TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay",
+			})
+		}
+		if err == nil {
+			err = writeFrame(right, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, body)
+		}
+		peer <- err
+	}()
+	response, evidence, err := client.VectorSearchFastV1(t.Context(), request, options)
+	if err == nil {
+		t.Fatal("stale evidence was accepted")
+	}
+	if !reflect.DeepEqual(response, public.SearchResponseV1{}) || !reflect.DeepEqual(evidence, public.FastSearchEvidenceV1{}) {
+		t.Fatalf("failed fast search leaked response=%+v evidence=%+v", response, evidence)
+	}
+	if err := <-peer; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVectorPartitionWireV1RejectsMalformedAndOversized(t *testing.T) {
 	request := public.SearchRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 1}, Query: []float32{1, 2}, Metric: public.MetricCosineV1,

@@ -132,10 +132,13 @@ func (c *Client) vectorSearchCommandV1(ctx context.Context, command iwire.Comman
 		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
 	}
 	evidence, err := decodeVectorPartitionFastEvidenceV1(rawEvidence)
-	if err == nil {
-		err = validateVectorPartitionFastEvidenceV1(evidence, request.Generation, *options)
+	if err != nil {
+		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
 	}
-	return response, evidence, err
+	if err := validateVectorPartitionFastEvidenceV1(evidence, request.Generation, *options); err != nil {
+		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
+	}
+	return response, evidence, nil
 }
 
 func (c *Client) vectorCommandLockedV1(ctx context.Context, command iwire.CommandID, request *public.SearchRequestV1, fast *public.FastSearchOptionsV1, pin *public.PinSearchSnapshotOptionsV1) ([]iwire.Section, error) {
