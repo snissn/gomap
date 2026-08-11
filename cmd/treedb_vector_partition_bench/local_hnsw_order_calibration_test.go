@@ -67,12 +67,12 @@ func TestLocalHNSWOrderCalibrationQueryV1(t *testing.T) {
 }
 
 func TestLocalHNSWOrderCalibrationGraphV1Valid(t *testing.T) {
-	source := localHNSWRepairCalibrationGraphV1{Rows: 300000, NativeReachableRows: 299968, CombinedReachableRows: 300000, NativeTraversalRoots: 48, AuxiliaryEdges: 64, AuxiliaryMaxDegree: 9}
+	source := localHNSWRepairCalibrationGraphV1{Rows: 300000, NativeReachableRows: 299968, CombinedReachableRows: 300000, NativeTraversalRoots: 48, AuxiliaryEdges: 64, AuxiliaryCSRBytes: 2400384, AuxiliaryMaxDegree: 4}
 	if !localHNSWOrderCalibrationGraphV1Valid(source, true) {
 		t.Fatal("source-lock graph rejected")
 	}
 	candidate := source
-	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges = 299900, 64, 96
+	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges, candidate.AuxiliaryCSRBytes, candidate.AuxiliaryMaxDegree = 299900, 64, 96, 2400512, 4
 	if !localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
 		t.Fatalf("candidate graph rejected: %+v", candidate)
 	}
@@ -80,7 +80,7 @@ func TestLocalHNSWOrderCalibrationGraphV1Valid(t *testing.T) {
 	if localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
 		t.Fatalf("invalid candidate graph accepted: %+v", candidate)
 	}
-	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges = candidate.Rows, 16, 0
+	candidate.NativeReachableRows, candidate.NativeTraversalRoots, candidate.AuxiliaryEdges, candidate.AuxiliaryCSRBytes, candidate.AuxiliaryMaxDegree = candidate.Rows, 16, 0, 2400128, 0
 	if !localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
 		t.Fatalf("connected candidate graph rejected: %+v", candidate)
 	}

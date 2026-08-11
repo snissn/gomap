@@ -306,10 +306,13 @@ func validateLocalHNSWOrderCalibrationReportV1(report localHNSWOrderCalibrationR
 
 func localHNSWOrderCalibrationGraphV1Valid(graph localHNSWRepairCalibrationGraphV1, sourceOrder bool) bool {
 	if sourceOrder {
-		return graph.Rows == 300000 && graph.NativeReachableRows == 299968 && graph.CombinedReachableRows == 300000 && graph.NativeTraversalRoots == 48 && graph.AuxiliaryEdges == 64 && graph.AuxiliaryMaxDegree <= 9
+		return graph.Rows == 300000 && graph.NativeReachableRows == 299968 && graph.CombinedReachableRows == 300000 && graph.NativeTraversalRoots == 48 && graph.AuxiliaryEdges == 64 && graph.AuxiliaryCSRBytes == 2400384 && graph.AuxiliaryMaxDegree == 4
 	}
-	if graph.Rows != 300000 || graph.NativeReachableRows == 0 || graph.NativeReachableRows > graph.Rows || graph.CombinedReachableRows != graph.Rows || graph.NativeTraversalRoots < 16 || graph.NativeTraversalRoots > graph.Rows || graph.AuxiliaryMaxDegree > 9 {
+	if graph.Rows != 300000 || graph.NativeReachableRows < 16 || graph.NativeReachableRows > graph.Rows || graph.CombinedReachableRows != graph.Rows || graph.NativeTraversalRoots < 16 || graph.NativeTraversalRoots > graph.Rows || graph.AuxiliaryCSRBytes != 8*(graph.Rows+16)+4*graph.AuxiliaryEdges {
 		return false
 	}
-	return graph.AuxiliaryEdges == 2*(graph.NativeTraversalRoots-16)
+	if graph.AuxiliaryEdges == 0 {
+		return graph.AuxiliaryMaxDegree == 0
+	}
+	return graph.AuxiliaryMaxDegree >= 1 && graph.AuxiliaryMaxDegree <= 9 && graph.AuxiliaryEdges == 2*(graph.NativeTraversalRoots-16)
 }
