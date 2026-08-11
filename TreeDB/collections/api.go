@@ -3682,53 +3682,82 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 }
 
 func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
+	out, _, err := m.ListCollectionsBounded(0)
+	return out, err
+}
+
+// ListCollectionsBounded returns catalog metadata in deterministic order and
+// stops after inspecting at most maxCollections catalog entries when that limit
+// is positive. Deleted entries consume the same work budget, so callers can
+// fail closed without walking unbounded catalog history.
+func (m *CollectionManager) ListCollectionsBounded(maxCollections int) ([]CollectionMeta, bool, error) {
 	if m == nil {
-		return nil, errCollectionManagerNil
+		return nil, false, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errCollectionDBNil
+		return nil, false, errCollectionDBNil
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	state, ok := snap.StateToken()
 	if !ok || state.SystemRootPageID == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	prefix := []byte(systemCollectionMetaPrefix)
-	it, err := snap.IteratorAtRoot(state.SystemRootPageID, prefix, prefixEnd(prefix))
+	it, err := snap.IteratorAtRootWithOptions(state.SystemRootPageID, prefix, prefixEnd(prefix), backenddb.IteratorOptions{IncludeTombstones: true})
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer func() { _ = it.Close() }()
 
+	return listCollectionMetasBounded(it, prefix, maxCollections)
+}
+
+type collectionMetaIterator interface {
+	Valid() bool
+	Next()
+	UnsafeKey() []byte
+	ValueCopy([]byte) []byte
+	IsDeleted() bool
+	Error() error
+}
+
+func listCollectionMetasBounded(it collectionMetaIterator, prefix []byte, maxCollections int) ([]CollectionMeta, bool, error) {
 	var out []CollectionMeta
+	inspected := 0
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
+		if maxCollections > 0 && inspected >= maxCollections {
+			if err := it.Error(); err != nil {
+				return nil, false, err
+			}
+			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+			return out, true, nil
+		}
+		inspected++
 		if !it.IsDeleted() {
 			meta, err := decodeCollectionMeta(it.ValueCopy(nil))
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			out = append(out, meta)
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
-	return out, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, false, nil
 }
 
 func (c *Collection) Name() string {
@@ -21776,6 +21805,79 @@ func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool
 		return false, err
 	}
 	return truncated, nil
+}
+
+// ScanDocumentIDsPhysicalFunc is the diagnostics-only counterpart of
+// ScanDocumentIDsFunc. Its limit and returned inspected count charge every
+// physical primary-source entry (including tombstones and merged-run work),
+// while fn receives only live IDs. It therefore proves a complete live count
+// only when the physical primary walk is exhausted.
+func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte) (bool, error)) (inspected int, truncated bool, err error) {
+	if c == nil {
+		return 0, false, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, false, errCollectionDBNil
+	}
+	if maxEntries < 0 {
+		return 0, false, errors.New("collections: max physical entries must not be negative")
+	}
+	if fn == nil {
+		return 0, false, errors.New("collections: scan callback is nil")
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return 0, false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return 0, false, err
+	}
+	if catalog == nil {
+		return 0, false, errCollectionNotFound
+	}
+	rootName := collectionPrimaryRootName(catalog.meta.Name)
+	if maxEntries == 0 {
+		// A missing primary root and no overlay roots are a metadata proof that
+		// this collection has no physical primary entries. Anything else must
+		// fail closed rather than inspect a first entry outside the caller's
+		// shared budget.
+		if catalog.rootID(rootName) == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+			return 0, false, nil
+		}
+		return 0, true, nil
+	}
+	it, err := collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap, catalog, rootName, nil, nil, true, maxEntries, func(count int) { inspected += count })
+	if err != nil {
+		return inspected, false, err
+	}
+	if it == nil {
+		return inspected, false, nil
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		if !it.IsDeleted() {
+			next, err := fn(bytes.Clone(it.UnsafeKey()))
+			if err != nil {
+				return inspected, false, err
+			}
+			if !next {
+				return inspected, false, nil
+			}
+		}
+		it.Next()
+	}
+	if errors.Is(it.Error(), errCollectionIndexScanWorkCap) {
+		return inspected, true, nil
+	}
+	if err := it.Error(); err != nil {
+		return inspected, false, err
+	}
+	return inspected, false, nil
 }
 
 // ScanDocumentsFunc flushes buffered writes before acquiring a snapshot, then

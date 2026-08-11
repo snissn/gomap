@@ -1173,6 +1173,70 @@ func TestCollectionManagerListCollections(t *testing.T) {
 	}
 }
 
+type collectionMetaIteratorTestEntry struct {
+	key, value []byte
+	deleted    bool
+}
+
+type collectionMetaIteratorTestFake struct {
+	entries []collectionMetaIteratorTestEntry
+	idx     int
+	err     error
+}
+
+func (it *collectionMetaIteratorTestFake) Valid() bool { return it.idx < len(it.entries) }
+func (it *collectionMetaIteratorTestFake) Next()       { it.idx++ }
+func (it *collectionMetaIteratorTestFake) UnsafeKey() []byte {
+	return it.entries[it.idx].key
+}
+func (it *collectionMetaIteratorTestFake) ValueCopy(dst []byte) []byte {
+	return append(dst, it.entries[it.idx].value...)
+}
+func (it *collectionMetaIteratorTestFake) IsDeleted() bool { return it.entries[it.idx].deleted }
+func (it *collectionMetaIteratorTestFake) Error() error    { return it.err }
+
+func TestListCollectionMetasBoundedChargesTombstones(t *testing.T) {
+	prefix := []byte(systemCollectionMetaPrefix)
+	encoded := func(name string) []byte {
+		value, err := encodeCollectionMeta(CollectionMeta{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	entries := []collectionMetaIteratorTestEntry{
+		{key: append(append([]byte(nil), prefix...), 'a'), deleted: true},
+		{key: append(append([]byte(nil), prefix...), 'b'), value: encoded("b")},
+		{key: append(append([]byte(nil), prefix...), 'c'), value: encoded("c")},
+	}
+	for _, tc := range []struct {
+		name      string
+		max       int
+		wantNames []string
+		truncated bool
+	}{
+		{name: "over_cap", max: 2, wantNames: []string{"b"}, truncated: true},
+		{name: "at_cap", max: 3, wantNames: []string{"b", "c"}},
+		{name: "legacy_unbounded", max: 0, wantNames: []string{"b", "c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, truncated, err := listCollectionMetasBounded(&collectionMetaIteratorTestFake{entries: entries}, prefix, tc.max)
+			if err != nil || truncated != tc.truncated || len(got) != len(tc.wantNames) {
+				t.Fatalf("metas=%+v truncated=%t err=%v", got, truncated, err)
+			}
+			for i, name := range tc.wantNames {
+				if got[i].Name != name {
+					t.Fatalf("meta[%d]=%q want %q", i, got[i].Name, name)
+				}
+			}
+		})
+	}
+	_, truncated, err := listCollectionMetasBounded(&collectionMetaIteratorTestFake{entries: entries, err: errors.New("cut-point failure")}, prefix, 2)
+	if err == nil || truncated {
+		t.Fatalf("cut-point iterator error truncated=%t err=%v", truncated, err)
+	}
+}
+
 func TestCollectionInsertBatchStatsExposeIndexRunShape(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

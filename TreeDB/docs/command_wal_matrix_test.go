@@ -112,7 +112,7 @@ func TestCommandWALSupportMatrixCoversMongoMutationHandlers(t *testing.T) {
 
 func TestCommandWALSupportMatrixCoversMongoReadOnlyCommands(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
-	for _, command := range []string{"explain"} {
+	for _, command := range []string{"explain", "serverStatus", "top", "dbStats", "collStats"} {
 		entry := requireMatrixEntry(t, matrix, "mongo_gateway", command)
 		if entry.Status != "read-only" || entry.Command != "none" {
 			t.Fatalf("%s entry=%+v, want read-only/none", command, entry)

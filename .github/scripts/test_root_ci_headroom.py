@@ -167,7 +167,7 @@ class RootCIHeadroomContractTests(unittest.TestCase):
         )
 
     def test_timeout_and_shard_enumeration_contract_are_preserved(self) -> None:
-        self.assertIn("    timeout-minutes: 20", self.source)
+        self.assertIn("    timeout-minutes: 40", self.source)
         self.assertIn(
             "go list ./... | grep -v "
             "'^github.com/snissn/gomap/TreeDB/db$'",

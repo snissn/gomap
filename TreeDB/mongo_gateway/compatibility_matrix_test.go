@@ -773,19 +773,34 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "command-gap.serverstatus",
-			expectedStatus: MongoCapabilityNotImplemented,
-			probe:          expectCommandNotFound(bson.D{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			capabilityID:   "diagnostics.serverstatus",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 252, bson.D{{Key: "serverStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, resp)
+				if _, ok := bson.Raw(resp).Lookup("connections").DocumentOK(); !ok {
+					t.Fatalf("serverStatus missing connections: %s", resp)
+				}
+			},
 		},
 		{
-			capabilityID:   "command-gap.top",
-			expectedStatus: MongoCapabilityNotImplemented,
-			probe:          expectCommandNotFound(bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			capabilityID:   "diagnostics.top",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 253, bson.D{{Key: "top", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, resp)
+				if _, ok := bson.Raw(resp).Lookup("totals").DocumentOK(); !ok {
+					t.Fatalf("top missing totals: %s", resp)
+				}
+			},
 		},
 		{
-			capabilityID:   "command-gap.dbstats",
-			expectedStatus: MongoCapabilityNotImplemented,
-			probe:          expectCommandNotFound(bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}),
+			capabilityID:   "diagnostics.dbstats-and-collstats",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				assertOK(t, serveCommand(t, server, 254, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}))
+				assertOK(t, serveCommand(t, server, 255, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}))
+			},
 		},
 		{
 			capabilityID:   "read-command.count-filter-skip-limit",
