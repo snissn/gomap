@@ -194,6 +194,11 @@ def _validate_topology_capability_key(topology: dict[str, Any], expected: Path) 
                  for node in topology.get("nodes", ())), "topology capability key changed")
 
 
+def _validate_topology_dataset(topology: dict[str, Any], provenance: dict[str, Any]) -> None:
+    _require(topology.get("dataset_directory") == provenance.get("dataset_directory"),
+             "topology dataset changed")
+
+
 def _validate_logical_work(reference: dict[str, int] | None,
                            counters: dict[str, int]) -> dict[str, int]:
     logical = {name: counters[name] for name in SEMANTIC_COUNTERS}
@@ -502,6 +507,7 @@ def summarize(root: Path) -> dict[str, Any]:
         previous_completed = completed
         topology_path = run_dir / "topology.json"
         topology_value = _load(topology_path, 1 << 20)
+        _validate_topology_dataset(topology_value, provenance)
         _validate_topology_capability_key(topology_value, capability_key)
         topology_name = TOPOLOGY_NAMES[topology]
         computed, roots = _topology_identity(topology_value, topology_name, 1 if topology == "single" else 4, PUBLIC_ROUTE)

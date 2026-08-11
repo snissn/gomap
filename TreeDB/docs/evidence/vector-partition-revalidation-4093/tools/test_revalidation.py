@@ -302,6 +302,14 @@ class RevalidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "topology capability key"):
                 reduce._validate_topology_capability_key(topology, path.resolve())
 
+    def test_topology_uses_the_provenance_dataset(self) -> None:
+        provenance = {"dataset_directory": "/dataset"}
+        topology = {"dataset_directory": "/dataset"}
+        reduce._validate_topology_dataset(topology, provenance)
+        topology["dataset_directory"] = "/other"
+        with self.assertRaisesRegex(ValueError, "topology dataset"):
+            reduce._validate_topology_dataset(topology, provenance)
+
     def test_m3_descriptor_is_bound_to_execution_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
