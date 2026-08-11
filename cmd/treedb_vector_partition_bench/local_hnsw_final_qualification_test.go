@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
+
+func TestM8ProductionRoutingHitsSupportTopK256V1(t *testing.T) {
+	in := m8ProductionRowOutcomesV1{ExactRepresentativeTruthHits: []uint16{256}}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out m8ProductionRowOutcomesV1
+	if err := json.Unmarshal(raw, &out); err != nil || len(out.ExactRepresentativeTruthHits) != 1 || out.ExactRepresentativeTruthHits[0] != 256 {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
 
 func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
 	schedule := localHNSWFinalQualificationScheduleV1()
@@ -71,7 +84,7 @@ func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 	fixture := fixtureManifest{Vectors: 10, Queries: 1000, Dimensions: 1, Seed: 1}
 	truth := make([][]m8CanonicalResultV1, fixture.Queries)
-	outcome := m8ProductionRowOutcomesV1{Status: "pass", Samples: fixture.Queries, TopKIDs: make([][]string, fixture.Queries), TopKScoreBits: make([][]uint32, fixture.Queries), TotalNanos: make([]uint64, fixture.Queries), ExactRepresentativeTruthHits: make([]uint8, fixture.Queries)}
+	outcome := m8ProductionRowOutcomesV1{Status: "pass", Samples: fixture.Queries, TopKIDs: make([][]string, fixture.Queries), TopKScoreBits: make([][]uint32, fixture.Queries), TotalNanos: make([]uint64, fixture.Queries), ExactRepresentativeTruthHits: make([]uint16, fixture.Queries)}
 	for query := range truth {
 		truth[query], outcome.TopKIDs[query], outcome.TopKScoreBits[query] = make([]m8CanonicalResultV1, 10), make([]string, 10), make([]uint32, 10)
 		outcome.TotalNanos[query], outcome.ExactRepresentativeTruthHits[query] = 1, 10
@@ -118,7 +131,7 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 		TopKIDs:                      make([][]string, localHNSWFinalQueryCountV1),
 		TopKScoreBits:                make([][]uint32, localHNSWFinalQueryCountV1),
 		TotalNanos:                   make([]uint64, localHNSWFinalQueryCountV1),
-		ExactRepresentativeTruthHits: make([]uint8, localHNSWFinalQueryCountV1),
+		ExactRepresentativeTruthHits: make([]uint16, localHNSWFinalQueryCountV1),
 	}
 	for query := range truth {
 		truth[query] = make([]m8CanonicalResultV1, localHNSWFinalTopKV1)

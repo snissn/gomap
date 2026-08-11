@@ -150,7 +150,7 @@ type m8ProductionRowOutcomesV1 struct {
 	TopKIDs                      [][]string `json:"top_k_document_ids"`
 	TopKScoreBits                [][]uint32 `json:"top_k_score_bits"`
 	TotalNanos                   []uint64   `json:"total_nanos"`
-	ExactRepresentativeTruthHits []uint8    `json:"exact_representative_truth_hits,omitempty"`
+	ExactRepresentativeTruthHits []uint16   `json:"exact_representative_truth_hits,omitempty"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -369,7 +369,7 @@ type m8MeasuredCellV1 struct {
 	probes, efSearch int
 	results          [][]m8CanonicalResultV1
 	durations        []uint64
-	routingHits      []uint8
+	routingHits      []uint16
 }
 
 type m8ProductionResourceObservedMaximaV1 struct {
@@ -627,7 +627,7 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 			if len(cell.RoutingHits) != report.Rows[measured.rowIndex].Samples {
 				return fmt.Errorf("missing M8 routing outcomes probes=%d ef=%d", measured.probes, measured.efSearch)
 			}
-			measured.routingHits = append([]uint8(nil), cell.RoutingHits...)
+			measured.routingHits = append([]uint16(nil), cell.RoutingHits...)
 			if err := m8AttachAttributionV1(&report.Rows[measured.rowIndex], cell, measured.results); err != nil {
 				return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
 			}
@@ -895,7 +895,7 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 			}
 			outcome.TotalNanos = append([]uint64(nil), measured.durations...)
 			if measured.routingHits != nil {
-				outcome.ExactRepresentativeTruthHits = append([]uint8(nil), measured.routingHits...)
+				outcome.ExactRepresentativeTruthHits = append([]uint16(nil), measured.routingHits...)
 			}
 		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
 			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
@@ -2269,7 +2269,7 @@ type m8AttributionCellV1 struct {
 	// Local is the approximate route's local-HNSW result, matching the measured
 	// coordinator request. Exact-local recall remains separately in Evidence.
 	Local       [][]m8CanonicalResultV1
-	RoutingHits []uint8
+	RoutingHits []uint16
 }
 
 type m8MembershipOracleRecallV1 struct {
@@ -2673,7 +2673,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		if err != nil {
 			return cell, err
 		}
-		cell.RoutingHits = append(cell.RoutingHits, uint8(m8IDHitCountV1(m8CanonicalIDsV1(truth[i]), m8CanonicalIDsV1(exactResults))))
+		cell.RoutingHits = append(cell.RoutingHits, uint16(m8IDHitCountV1(m8CanonicalIDsV1(truth[i]), m8CanonicalIDsV1(exactResults))))
 		var approximateResults []m8CanonicalResultV1
 		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 			approximateResults, err = harness.search(ctx, query, approximatePartitions[i], topK, efSearch, true)
