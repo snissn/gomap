@@ -572,17 +572,21 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 		if pred.field != selection.indexField {
 			return true
 		}
-		// A concrete probe only covers predicates of its own kind. For
-		// example, choosing a range probe still leaves an equality/$in
-		// predicate on that field to be filtered after materialization.
-		if selection.stage == "secondary_equality_lookup" && isRangePredicate(pred.op) {
-			return true
-		}
-		if selection.stage == "secondary_range_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
-			return true
-		}
-		if selection.stage == "secondary_equality_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+		switch selection.stage {
+		case "secondary_equality_lookup":
+			// The equality probe supplies one equality/$in candidate set. Every
+			// other same-field predicate (including negative, existence, and
+			// negated predicates) is rechecked after materialization.
+			if pred.negate || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+				return true
+			}
 			equalityPredicates++
+		case "secondary_range_lookup":
+			// A range probe similarly cannot prove equality, membership, or a
+			// negative/existence condition on the same field.
+			if pred.negate || !isRangePredicate(pred.op) {
+				return true
+			}
 		}
 	}
 	// The executor probes same-kind equality/$in predicates independently and

@@ -201,7 +201,7 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			}
 			candidate.equalityPrefix++
 			for i, pred := range plan.predicates {
-				if pred.field == eq.field && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+				if !pred.negate && pred.field == eq.field && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 					used[i] = struct{}{}
 				}
 			}
@@ -220,7 +220,7 @@ func buildCompoundIndexPlan(idx collections.IndexDefinition, plan findPlan) (com
 			// skip/limit page could stop at a non-matching cross-type candidate.
 			if compoundRangeIsExactlyTypeBracketed(lower, upper) {
 				for i, pred := range plan.predicates {
-					if pred.field == components[component].Field && isRangePredicate(pred.op) {
+					if !pred.negate && pred.field == components[component].Field && isRangePredicate(pred.op) {
 						used[i] = struct{}{}
 					}
 				}
@@ -318,7 +318,7 @@ func cacheCompoundCanonicalValues(predicates []findPredicate) {
 		if predicates[i].compoundCanonicalized {
 			continue
 		}
-		if predicates[i].op != findPredicateIn {
+		if predicates[i].negate || predicates[i].op != findPredicateIn {
 			continue
 		}
 		predicates[i].compoundCanonicalValues = canonicalCompoundPrefixValues(predicates[i].values)
@@ -387,7 +387,7 @@ func predicatesForField(predicates []findPredicate, field string) []findPredicat
 func oneCompoundEqualityPredicate(predicates []findPredicate) (findPredicate, bool) {
 	var found findPredicate
 	for _, pred := range predicates {
-		if pred.op != findPredicateEq && pred.op != findPredicateIn {
+		if pred.negate || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
 		}
 		if found.field != "" {
@@ -402,7 +402,7 @@ func compoundRangeBounds(predicates []findPredicate) (collections.IndexRangeBoun
 	var lower, upper collections.IndexRangeBound
 	hasRange := false
 	for _, pred := range predicates {
-		if !isRangePredicate(pred.op) {
+		if pred.negate || !isRangePredicate(pred.op) {
 			continue
 		}
 		if len(pred.values) != 1 || rawValueIsNaN(pred.values[0]) {

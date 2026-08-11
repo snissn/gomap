@@ -226,7 +226,7 @@ func findIndexProbesForIndex(plan findPlan, idx collections.IndexDefinition) []f
 	}
 	probes := make([]findIndexProbe, 0, 2)
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || predicateContainsNull(pred) || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+		if pred.field != idx.Field || pred.negate || predicateContainsNull(pred) || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
 		}
 		// Equality probes retain the executor's existing empty-result behavior
@@ -1098,7 +1098,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 		return true
 	}
 	for _, pred := range predicates {
-		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+		if !pred.negate && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			if predicateContainsNull(pred) {
 				continue
 			}
@@ -1109,7 +1109,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 			}
 			continue
 		}
-		if !isRangePredicate(pred.op) {
+		if pred.negate || !isRangePredicate(pred.op) {
 			continue
 		}
 		for _, idx := range meta.Indexes {
@@ -1180,10 +1180,10 @@ func indexedFindStage(plan findPlan, idx collections.IndexDefinition) string {
 		if pred.field != idx.Field {
 			continue
 		}
-		if isRangePredicate(pred.op) {
+		if !pred.negate && isRangePredicate(pred.op) {
 			return "secondary_range_lookup"
 		}
-		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+		if !pred.negate && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return "secondary_equality_lookup"
 		}
 	}
@@ -1192,7 +1192,7 @@ func indexedFindStage(plan findPlan, idx collections.IndexDefinition) string {
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {
 	for _, pred := range predicates {
-		if pred.field == "_id" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+		if !pred.negate && pred.field == "_id" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return pred, true
 		}
 	}
@@ -1207,7 +1207,7 @@ func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
 		return bson.RawValue{}, false
 	}
 	pred := plan.predicates[0]
-	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
+	if pred.negate || pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
 		return bson.RawValue{}, false
 	}
 	if pred.values[0].Type == bson.TypeRegex {
@@ -1307,7 +1307,7 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 		hasRange = hasRange || probe.stage == "secondary_range_lookup"
 	}
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+		if pred.field != idx.Field || pred.negate || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
 		}
 		if predicateContainsNull(pred) {
@@ -1354,7 +1354,7 @@ func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinitio
 		return 0, false
 	}
 	pred := plan.predicates[0]
-	if pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
+	if pred.negate || pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
 		return 0, false
 	}
 	if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
@@ -1379,7 +1379,7 @@ func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, 
 		return 0, false
 	}
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+		if pred.field != idx.Field || pred.negate || !isRangePredicate(pred.op) {
 			return 0, false
 		}
 	}
@@ -1415,7 +1415,7 @@ func indexRangeOptionsForPredicates(predicates []findPredicate, idx collections.
 	var lower, upper indexRangeCandidateBound
 	found := false
 	for _, pred := range predicates {
-		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+		if pred.field != idx.Field || pred.negate || !isRangePredicate(pred.op) {
 			continue
 		}
 		found = true
@@ -2684,6 +2684,14 @@ func parseProjection(projection wire.Document) (projectionMode, map[string]struc
 			includeID = include
 			idSpecified = true
 			continue
+		}
+		// _id has deliberately narrow root-only projection semantics.  Treating
+		// _id.part as an ordinary path would either return the whole root _id
+		// through the inclusion default or silently drop it through an explicit
+		// _id:0.  Until embedded _id traversal has a complete Mongo-compatible
+		// contract, reject it before a scan or cursor can be admitted.
+		if strings.HasPrefix(key, "_id.") {
+			return projectionNone, nil, true, false, fmt.Errorf("Mongo gateway projection does not support dotted paths rooted at _id")
 		}
 		if key == "" || strings.HasPrefix(key, "$") {
 			return projectionNone, nil, true, false, fmt.Errorf("Mongo gateway projection has invalid path %q", key)

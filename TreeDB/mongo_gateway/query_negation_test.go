@@ -125,6 +125,69 @@ func TestMongoDottedProjectionArrayFailureDoesNotPublishCursor(t *testing.T) {
 	}
 }
 
+func TestMongoRootIDDottedProjectionFailsClosedAndExactIDRulesRemainAvailable(t *testing.T) {
+	embeddedID := bson.D{{Key: "part", Value: bson.A{bson.D{{Key: "name", Value: "Ada"}}}}, {Key: "kind", Value: "profile"}}
+	doc, err := bson.Marshal(bson.D{{Key: "_id", Value: embeddedID}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		projection bson.D
+		want       bson.D
+	}{
+		{"exact include id", bson.D{{Key: "_id", Value: int32(1)}}, bson.D{{Key: "_id", Value: embeddedID}}},
+		{"exact exclude id", bson.D{{Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}}},
+		{"ordinary dotted include with root exclusion", bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projection, err := bson.Marshal(test.projection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := bson.Marshal(test.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := projectDocument(wire.Document(doc), wire.Document(projection))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("projected=%s want %s", got, want)
+			}
+		})
+	}
+	for _, projection := range []bson.D{
+		{{Key: "_id.part", Value: int32(1)}},
+		{{Key: "_id.part", Value: int32(0)}},
+		{{Key: "_id.part", Value: int32(1)}, {Key: "_id", Value: int32(0)}},
+	} {
+		raw, err := bson.Marshal(projection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := projectDocument(wire.Document(doc), wire.Document(raw)); err == nil {
+			t.Fatalf("embedded _id dotted projection unexpectedly accepted: %s", raw)
+		}
+	}
+
+	// The parser rejects before it can traverse the embedded array above or
+	// publish a cursor, including for a batchSize:0 request.
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406665, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "scalar"}, {Key: "state", Value: "active"}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406666, bson.D{{Key: "find", Value: "events"}, {Key: "projection", Value: bson.D{{Key: "_id.part", Value: int32(1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	server.cursorMu.Lock()
+	cursors := len(server.cursors)
+	server.cursorMu.Unlock()
+	if cursors != 0 {
+		t.Fatalf("published cursor despite embedded _id dotted projection rejection: %d", cursors)
+	}
+}
+
 func TestMongoFilterFindAndModifyProjectionRejectsBeforeMutation(t *testing.T) {
 	for _, newImage := range []bool{false, true} {
 		t.Run(fmt.Sprintf("new=%v", newImage), func(t *testing.T) {
@@ -528,6 +591,53 @@ func TestMongoNegativeExplainReportsResidualCandidatesAndMaterialization(t *test
 	}
 	if got, ok := stats.Lookup("candidateMaterializedBytes").Int64OK(); !ok || got <= 0 {
 		t.Fatalf("candidateMaterializedBytes=%d ok=%v want >0: %s", got, ok, response)
+	}
+}
+
+func TestMongoSameFieldNegativeAndExistsExplainRemainResidual(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406667, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "x", Value: int32(1)}}}, {Key: "name", Value: "x_1"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406668, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "one"}, {Key: "x", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "two"}, {Key: "x", Value: int32(2)}},
+	}}, {Key: "$db", Value: "app"}}))
+	for _, test := range []struct {
+		name      string
+		predicate bson.D
+	}{
+		{"ne", bson.D{{Key: "$in", Value: bson.A{int32(1)}}, {Key: "$ne", Value: int32(2)}}},
+		{"nin", bson.D{{Key: "$in", Value: bson.A{int32(1)}}, {Key: "$nin", Value: bson.A{int32(2)}}}},
+		{"exists", bson.D{{Key: "$in", Value: bson.A{int32(1)}}, {Key: "$exists", Value: true}}},
+		{"not", bson.D{{Key: "$in", Value: bson.A{int32(1)}}, {Key: "$not", Value: bson.D{{Key: "$in", Value: bson.A{int32(2)}}}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "x", Value: test.predicate}}}, {Key: "$db", Value: "app"}}
+			for _, verbosity := range []string{"queryPlanner", "executionStats"} {
+				t.Run(verbosity, func(t *testing.T) {
+					response := serveCommand(t, server, 406669, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: verbosity}, {Key: "$db", Value: "app"}})
+					assertOK(t, response)
+					winning := bson.Raw(response).Lookup("queryPlanner", "winningPlan").Document()
+					if stage, ok := winning.Lookup("stage").StringValueOK(); !ok || stage != "secondary_equality_lookup" {
+						t.Fatalf("stage=%q ok=%v want secondary_equality_lookup: %s", stage, ok, response)
+					}
+					if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+						t.Fatalf("residualFilter=%v ok=%v want true: %s", residual, ok, response)
+					}
+					if verbosity == "executionStats" {
+						stats := bson.Raw(response).Lookup("executionStats").Document()
+						if got, ok := stats.Lookup("nReturned").Int64OK(); !ok || got != 1 {
+							t.Fatalf("nReturned=%d ok=%v want 1: %s", got, ok, response)
+						}
+						if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 1 {
+							t.Fatalf("candidateDocumentsExamined=%d ok=%v want 1: %s", got, ok, response)
+						}
+						if got, ok := stats.Lookup("candidateDocumentsMaterialized").Int64OK(); !ok || got != 1 {
+							t.Fatalf("candidateDocumentsMaterialized=%d ok=%v want 1: %s", got, ok, response)
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
