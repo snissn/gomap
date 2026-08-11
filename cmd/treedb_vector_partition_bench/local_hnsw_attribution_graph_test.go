@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -14,17 +13,7 @@ func TestLocalHNSWAttributionGraphEvidenceV1(t *testing.T) {
 	for i := range vectors {
 		vectors[i] = []float64{float64(i + 1), float64(i%3 + 1), 1}
 	}
-	source, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sourceDir := source.dir
-	source.owned = false
-	if err := source.Close(); err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(sourceDir)
-	source, err = openM8ProductionExistingAssetSetV1(sourceDir)
+	source, err := newM8HistoricalOverlayRetainedAssetsV1(vectors, []string{"a", "b"}, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,12 +26,12 @@ func TestLocalHNSWAttributionGraphEvidenceV1(t *testing.T) {
 	for i, load := range loads {
 		source.descriptor.PartitionLoads[i] = int(load)
 	}
-	native, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantNativeV1, 9983)
+	native, err := materializeHistoricalLocalHNSWVariantV1(source, collections.VectorPartitionLocalGraphVariantNativeV1, 9983)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer native.Close()
-	overlay, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantOverlayCurrentV1, 9984)
+	overlay, err := materializeHistoricalLocalHNSWVariantV1(source, collections.VectorPartitionLocalGraphVariantOverlayCurrentV1, 9984)
 	if err != nil {
 		t.Fatal(err)
 	}

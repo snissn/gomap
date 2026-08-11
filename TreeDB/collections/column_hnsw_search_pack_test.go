@@ -53,6 +53,157 @@ func TestColumnHNSWSearchPackRoundTrip2312(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
+	v2 := testColumnHNSWSearchPackInput2312()
+	v2.MembershipDigest[0] = 1
+	v2Raw, err := encodeColumnHNSWSearchPack(v2)
+	if err != nil || hnswPackU16(v2Raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV2 {
+		t.Fatalf("digest-only v2 encode err=%v version=%d", err, hnswPackU16(v2Raw, columnHNSWSearchPackHeaderVersionOffset))
+	}
+	v2Pack, err := decodeColumnHNSWSearchPack(v2Raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: v2.BaseIdentity, ExpectedMembershipDigest: v2.MembershipDigest})
+	if err != nil || v2Pack.Header.HasAuxiliaryNavigation || len(v2Pack.AuxiliaryNavigation.Offsets) != 0 || len(v2Pack.AuxiliaryNavigation.Neighbors) != 0 {
+		t.Fatalf("digest-only v2 decode err=%v auxiliary=%+v", err, v2Pack.AuxiliaryNavigation)
+	}
+	v2View, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, v2Raw, mappedresource.SourceHeapCopy, v2.BaseIdentity)
+	var v2Scratch columnVectorGraphNativeSearchScratch
+	if _, v2Stats, err := v2View.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &v2Scratch); err != nil || v2Stats.AuxiliaryEdges != 0 || v2Stats.AuxiliaryCandidates != 0 || v2Stats.AuxiliaryAdmissions != 0 {
+		_ = v2View.Close()
+		t.Fatalf("v2 auxiliary stats=%+v err=%v", v2Stats, err)
+	}
+	if err := v2View.Close(); err != nil {
+		t.Fatalf("close v2 view: %v", err)
+	}
+
+	connected := testColumnHNSWSearchPackInput2312()
+	connected.MembershipDigest[0] = 1
+	connected.HasAuxiliaryNavigation = true
+	connected.AuxiliaryNavigation.Offsets = []uint64{0, 0, 0, 0}
+	connectedRaw, err := encodeColumnHNSWSearchPack(connected)
+	if err != nil || hnswPackU16(connectedRaw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
+		t.Fatalf("connected v3 encode err=%v version=%d", err, hnswPackU16(connectedRaw, columnHNSWSearchPackHeaderVersionOffset))
+	}
+	connectedPack, err := decodeColumnHNSWSearchPack(connectedRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: connected.BaseIdentity, ExpectedMembershipDigest: connected.MembershipDigest})
+	if err != nil || !connectedPack.Header.HasAuxiliaryNavigation || !reflect.DeepEqual(connectedPack.AuxiliaryNavigation.Offsets, []uint64{0, 0, 0, 0}) || len(connectedPack.AuxiliaryNavigation.Neighbors) != 0 {
+		t.Fatalf("connected v3 decode err=%v auxiliary=%+v", err, connectedPack.AuxiliaryNavigation)
+	}
+	input := testColumnHNSWSearchPackAuxiliaryInput4106()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatalf("encode v3: %v", err)
+	}
+	if version := hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset); version != columnHNSWSearchPackVersionV3 {
+		t.Fatalf("version=%d want %d", version, columnHNSWSearchPackVersionV3)
+	}
+	pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		t.Fatalf("decode v3: %v", err)
+	}
+	if !pack.Header.HasAuxiliaryNavigation || !reflect.DeepEqual(pack.AuxiliaryNavigation, columnHNSWSearchPackLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		t.Fatalf("decoded auxiliary=%+v header=%+v", pack.AuxiliaryNavigation, pack.Header)
+	}
+	view, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	if !reflect.DeepEqual(view.AuxiliaryNavigation, columnHNSWSearchPackPreparedLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		_ = view.Close()
+		t.Fatalf("prepared auxiliary=%+v", view.AuxiliaryNavigation)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	results, stats, err := view.searchCosine([]float32{0, 0, 1}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &scratch)
+	if err != nil || len(results) != 1 || results[0].Ordinal != 2 || stats.AuxiliaryEdges == 0 || stats.AuxiliaryCandidates == 0 || stats.AuxiliaryAdmissions == 0 || stats.AuxiliaryAdmissions > stats.AuxiliaryCandidates {
+		_ = view.Close()
+		t.Fatalf("auxiliary traversal results=%+v stats=%+v err=%v", results, stats, err)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("close v3 view: %v", err)
+	}
+	path := t.TempDir() + "/v3-pack.tca"
+	fileRaw := append(make([]byte, int(columnHNSWSearchPackVectorSectionAlignment)), raw...)
+	if err := os.WriteFile(path, fileRaw, 0o600); err != nil {
+		t.Fatalf("WriteFile v3: %v", err)
+	}
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(int64(columnHNSWSearchPackVectorSectionAlignment), int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireFileRange(key, testColumnHNSWSearchPackScope2314(), path, mappedresource.AcquireOptions{Reason: "mapped v3 test", PreferMapped: true, AllowHeapCopy: true, ValidationMode: mappedresource.ValidationVerify, ResourcePath: path})
+	if err != nil {
+		t.Fatalf("AcquireFileRange v3: %v", err)
+	}
+	mappedView, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest})
+	if err != nil {
+		_ = handle.Release()
+		t.Fatalf("new mapped v3 prepared view: %v", err)
+	}
+	if !reflect.DeepEqual(mappedView.AuxiliaryNavigation, columnHNSWSearchPackPreparedLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
+		_ = mappedView.Close()
+		t.Fatalf("mapped v3 prepared auxiliary=%+v", mappedView.AuxiliaryNavigation)
+	}
+	if err := mappedView.Close(); err != nil {
+		t.Fatalf("close mapped v3 view: %v", err)
+	}
+	if manager.Stats().ActiveHandles != 0 {
+		t.Fatalf("mapped v3 manager stats after close=%+v", manager.Stats())
+	}
+	for _, raw := range [][]byte{
+		testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAuxiliaryOffsets, 0, func(payload []byte) { binary.LittleEndian.PutUint64(payload[8:], 0) }),
+		testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionAuxiliaryNeighbors, 0, func(payload []byte) { binary.LittleEndian.PutUint32(payload, 1) }),
+	} {
+		if _, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil {
+			t.Fatal("malformed v3 auxiliary pack was accepted")
+		}
+		if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(raw, mappedresource.SourceHeapCopy, input.BaseIdentity); err == nil {
+			t.Fatal("malformed v3 auxiliary prepared view was accepted")
+		}
+	}
+}
+
+func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) {
+	input := testColumnHNSWSearchPackUpperSeedAnchorInput4114()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer view.Close()
+	var scratch columnVectorGraphNativeSearchScratch
+	results, _, err := view.searchCosine([]float32{0, 1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2}, &scratch)
+	if err != nil || len(results) != 1 || results[0].Ordinal != 3 {
+		t.Fatalf("anchored results=%+v err=%v", results, err)
+	}
+	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: view, opened: 1, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
+	ordinary, ordinaryMetrics, err := searcher.SearchWithOptionsV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
+	attributed, attributedMetrics, _, attributedErr := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
+	if err != nil || attributedErr != nil || !reflect.DeepEqual(ordinary, attributed) || ordinaryMetrics != attributedMetrics || ordinaryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
+		t.Fatalf("ordinary=%+v/%+v err=%v attributed=%+v/%+v err=%v", ordinary, ordinaryMetrics, err, attributed, attributedMetrics, attributedErr)
+	}
+	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
+	if err != nil || seed != 1 {
+		t.Fatalf("upper descent seed=%d err=%v", seed, err)
+	}
+	if got := view.AuxiliaryNavigation.Neighbors[view.AuxiliaryNavigation.Offsets[1]:view.AuxiliaryNavigation.Offsets[2]]; !reflect.DeepEqual(got, []uint32{0}) {
+		t.Fatalf("upper seed anchor=%v want [0]", got)
+	}
+	levelDrift := testColumnHNSWSearchPackMutateSectionPayload2312(raw, columnHNSWSearchPackSectionLevels, 0, func(payload []byte) {
+		binary.LittleEndian.PutUint16(payload[2:], 0)
+	})
+	if _, err := decodeColumnHNSWSearchPack(levelDrift, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity, ExpectedMembershipDigest: input.MembershipDigest}); err == nil {
+		t.Fatal("v3 upper-seed level drift was accepted")
+	}
+	if _, _, err := testColumnHNSWSearchPackPreparedViewFromBytesAllowErr2314(levelDrift, mappedresource.SourceHeapCopy, input.BaseIdentity); err == nil {
+		t.Fatal("v3 prepared upper-seed level drift was accepted")
+	}
+	withoutAuxiliary := input
+	withoutAuxiliary.HasAuxiliaryNavigation = false
+	withoutAuxiliary.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{}
+	withoutRaw, err := encodeColumnHNSWSearchPack(withoutAuxiliary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutView, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, withoutRaw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	defer withoutView.Close()
+	results, _, err = withoutView.searchCosine([]float32{0, 1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil || len(results) != 1 || results[0].Ordinal == 3 {
+		t.Fatalf("unanchored results=%+v err=%v", results, err)
+	}
+}
+
 func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 	raw := testColumnHNSWSearchPackRaw2312(t)
 	cases := []struct {
@@ -72,7 +223,7 @@ func TestColumnHNSWSearchPackDecodeRejectsCorruptEnvelope2312(t *testing.T) {
 		},
 		{
 			name: "bad_version",
-			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV2+1),
+			raw:  testColumnHNSWSearchPackPatchU16Header2312(raw, columnHNSWSearchPackHeaderVersionOffset, columnHNSWSearchPackVersionV3+1),
 			want: "unsupported hnsw_search_pack_v1 version",
 		},
 		{
@@ -1682,6 +1833,44 @@ func testColumnHNSWSearchPackInput2312() columnHNSWSearchPackBuildInput {
 		DocumentIDOffsets:       []uint64{0, 5, 10, 15},
 		DocumentIDBytes:         []byte("doc-adoc-bdoc-c"),
 	}
+}
+
+func testColumnHNSWSearchPackAuxiliaryInput4106() columnHNSWSearchPackBuildInput {
+	input := testColumnHNSWSearchPackInput2312()
+	input.MembershipDigest[0] = 1
+	input.AdjacencyLayers[0] = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 1, 2, 2}, Neighbors: []uint32{1, 0}}
+	input.HasAuxiliaryNavigation = true
+	input.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 1, 1, 2}, Neighbors: []uint32{2, 0}}
+	return input
+}
+
+func testColumnHNSWSearchPackUpperSeedAnchorInput4114() columnHNSWSearchPackBuildInput {
+	input := testColumnHNSWSearchPackInput2312()
+	input.Rows = 4
+	input.EntryOrdinal = 0
+	input.MaxLayer = 1
+	input.M = 2
+	input.MembershipDigest[0] = 1
+	input.NormalizedVectors = []float32{
+		1, 0, 0, 0,
+		0.9, 0.1, 0, 0,
+		0.1, 0.9, 0, 0,
+		0, 1, 0, 0,
+	}
+	input.Levels = []uint16{1, 1, 0, 0}
+	input.AdjacencyLayers = []columnHNSWSearchPackLayerInput{
+		{Offsets: []uint64{0, 1, 1, 2, 2}, Neighbors: []uint32{1, 3}},
+		{Offsets: []uint64{0, 1, 1, 1, 1}, Neighbors: []uint32{1}},
+	}
+	input.HasAuxiliaryNavigation = true
+	input.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: []uint64{0, 1, 2, 3, 3}, Neighbors: []uint32{2, 0, 0}}
+	input.RowRefGenerations = []int64{11, 11, 11, 11}
+	input.RowRefPartIDs = []int64{1, 1, 1, 1}
+	input.RowRefRowIndexes = []int64{0, 1, 2, 3}
+	input.RowRefAppliedCommandLSN = []int64{101, 102, 103, 104}
+	input.DocumentIDOffsets = []uint64{0, 1, 2, 3, 4}
+	input.DocumentIDBytes = []byte("abcd")
+	return input
 }
 
 func testColumnHNSWSearchPackRaw2312(tb testing.TB) []byte {
