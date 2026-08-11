@@ -31,6 +31,9 @@ const (
 	findPredicateGTE
 	findPredicateLT
 	findPredicateLTE
+	findPredicateNE
+	findPredicateNIN
+	findPredicateExists
 )
 
 type findPredicate struct {
@@ -39,6 +42,9 @@ type findPredicate struct {
 	values                  []bson.RawValue
 	compoundCanonicalValues []bson.RawValue
 	compoundCanonicalized   bool
+	// negate is used only for field-level $not.  It deliberately remains a
+	// residual predicate: no complement/index-union claim is safe here.
+	negate bool
 }
 
 type findSort struct {
@@ -59,14 +65,15 @@ type findHint struct {
 }
 
 type findPlan struct {
-	predicates []findPredicate
-	orBranches [][]findPredicate
-	sort       findSort
-	skip       int32
-	limit      int32
-	hint       findHint
-	projection compiledProjection
-	stats      *findExecutionStats
+	predicates  []findPredicate
+	orBranches  [][]findPredicate
+	norBranches [][]findPredicate
+	sort        findSort
+	skip        int32
+	limit       int32
+	hint        findHint
+	projection  compiledProjection
+	stats       *findExecutionStats
 }
 
 // cloneFindPlanForCursor detaches predicate BSON values from the wire command
@@ -95,6 +102,10 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 	for i := range plan.orBranches {
 		out.orBranches[i] = clonePredicates(plan.orBranches[i])
 	}
+	out.norBranches = make([][]findPredicate, len(plan.norBranches))
+	for i := range plan.norBranches {
+		out.norBranches[i] = clonePredicates(plan.norBranches[i])
+	}
 	out.sort.terms = append([]findSortTerm(nil), plan.sort.terms...)
 	out.hint.components = append([]collections.IndexComponent(nil), plan.hint.components...)
 	return out
@@ -107,6 +118,7 @@ func cloneFindPlanForCursor(plan findPlan) findPlan {
 func findPlanCursorRetainedBytes(plan findPlan) int {
 	bytes := 0
 	bytes += len(plan.orBranches) * int(unsafe.Sizeof([]findPredicate{}))
+	bytes += len(plan.norBranches) * int(unsafe.Sizeof([]findPredicate{}))
 	bytes += len(plan.sort.terms) * int(unsafe.Sizeof(findSortTerm{}))
 	bytes += len(plan.hint.components) * int(unsafe.Sizeof(collections.IndexComponent{}))
 	// A cloned projection retains a Go map allocation and its groups, in
@@ -146,6 +158,9 @@ func findPlanCursorRetainedBytes(plan findPlan) int {
 	}
 	add(plan.predicates)
 	for _, branch := range plan.orBranches {
+		add(branch)
+	}
+	for _, branch := range plan.norBranches {
 		add(branch)
 	}
 	for field := range plan.projection.fields {
@@ -211,7 +226,7 @@ func findIndexProbesForIndex(plan findPlan, idx collections.IndexDefinition) []f
 	}
 	probes := make([]findIndexProbe, 0, 2)
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || predicateContainsNull(pred) || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+		if pred.field != idx.Field || pred.negate || predicateContainsNull(pred) || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
 		}
 		// Equality probes retain the executor's existing empty-result behavior
@@ -258,7 +273,7 @@ func selectFindPlannerSelection(meta collections.CollectionMeta, plan findPlan) 
 }
 
 func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error) {
-	predicates, orBranches, err := parseFindFilter(filter)
+	predicates, orBranches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return findPlan{}, err
 	}
@@ -283,13 +298,14 @@ func parseFindPlan(command wire.Document, filter wire.Document) (findPlan, error
 		return findPlan{}, err
 	}
 	return finalizeFindPlan(findPlan{
-		predicates: predicates,
-		orBranches: orBranches,
-		sort:       sortSpec,
-		skip:       skip,
-		limit:      limit,
-		hint:       hint,
-		projection: projection,
+		predicates:  predicates,
+		orBranches:  orBranches,
+		norBranches: norBranches,
+		sort:        sortSpec,
+		skip:        skip,
+		limit:       limit,
+		hint:        hint,
+		projection:  projection,
 	}), nil
 }
 
@@ -379,6 +395,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 			}
 		}
 		if plan.sort.field != "" && !compound.sortSatisfied {
+			if err := validateFindSortDocuments(filtered, plan.sort); err != nil {
+				return findResultSet{}, err
+			}
 			sort.SliceStable(filtered, func(i, j int) bool {
 				return compareDocumentsForFindSort(filtered[i], filtered[j], plan.sort) < 0
 			})
@@ -429,6 +448,9 @@ func (s *Server) executeFind(col *collections.Collection, plan findPlan) (findRe
 	docs = filtered
 
 	if plan.sort.field != "" {
+		if err := validateFindSortDocuments(docs, plan.sort); err != nil {
+			return findResultSet{}, err
+		}
 		sort.SliceStable(docs, func(i, j int) bool { return compareDocumentsForFindSort(docs[i], docs[j], plan.sort) < 0 })
 	}
 
@@ -453,6 +475,11 @@ const (
 	findBatchOverheadBytes                = 5 // BSON document length plus trailing NUL.
 	findBatchResponseReserveBytes         = 4096
 	mongoQueryMaxDecimal128Normalizations = 1024
+	// Negative predicates are residual work. Bound both their choice lists and
+	// boolean branch fan-out so a scan cap cannot multiply an unbounded filter.
+	mongoQueryMaxNegativeChoices   = 256
+	mongoQueryMaxBooleanBranches   = 64
+	mongoQueryMaxBooleanPredicates = 256
 )
 
 func findBatchDocumentBytes(doc wire.Document, index int) int {
@@ -521,7 +548,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 }
 
 func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
-	if len(plan.orBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	if int64(plan.limit) > int64(maxInt) {
@@ -641,7 +668,7 @@ func (s *Server) findUnsortedScanDocuments(col *collections.Collection, material
 // accounting. Ordinary find requests must not branch on nil diagnostics for
 // every scanned record.
 func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && len(plan.norBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -650,7 +677,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 	truncated, err := col.ScanDocumentsFunc(maxDocuments, func(record collections.DocumentRecord) (bool, error) {
 		var match, ok bool
 		var err error
-		if len(plan.orBranches) == 0 {
+		if len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 			if err != nil {
 				return false, err
@@ -660,7 +687,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 			}
 		}
 		var doc wire.Document
-		if !ok || len(plan.orBranches) > 0 {
+		if !ok || len(plan.orBranches) > 0 || len(plan.norBranches) > 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -677,7 +704,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 			matched++
 			return true, nil
 		}
-		if ok && len(plan.orBranches) == 0 {
+		if ok && len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
 				return false, err
@@ -700,7 +727,7 @@ func (s *Server) findUnsortedScanDocumentsWithoutStats(col *collections.Collecti
 }
 
 func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, plan findPlan) ([]wire.Document, bool, error) {
-	if plan.sort.field != "" || (len(plan.orBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
+	if plan.sort.field != "" || (len(plan.orBranches) == 0 && len(plan.norBranches) == 0 && findPlanHasDirectCandidate(col.MetaView(), plan.predicates)) {
 		return nil, false, nil
 	}
 	maxDocuments := s.maxFindScanDocuments()
@@ -710,7 +737,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 		plan.recordCandidate()
 		var match, ok bool
 		var err error
-		if len(plan.orBranches) == 0 {
+		if len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			match, ok, err = storedDocumentMatchesPredicatesForCollection(col, record.Document, plan.predicates)
 			if err != nil {
 				return false, err
@@ -720,7 +747,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 			}
 		}
 		var doc wire.Document
-		if !ok || len(plan.orBranches) > 0 {
+		if !ok || len(plan.orBranches) > 0 || len(plan.norBranches) > 0 {
 			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
@@ -738,7 +765,7 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 			matched++
 			return true, nil
 		}
-		if ok && len(plan.orBranches) == 0 {
+		if ok && len(plan.orBranches) == 0 && len(plan.norBranches) == 0 {
 			plan.recordMaterialized()
 			doc, err = storedDocumentToBSON(col, materializer, record.Document)
 			if err != nil {
@@ -765,6 +792,12 @@ func (s *Server) findUnsortedScanDocumentsWithStats(col *collections.Collection,
 func storedDocumentMatchesPredicates(stored []byte, predicates []findPredicate) (bool, bool, error) {
 	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	for _, pred := range predicates {
+		// The JSON bridge fast path cannot soundly distinguish missing from null
+		// for these operators. Fall back to BSON materialization rather than
+		// risking a false match or rejection.
+		if pred.negate || pred.op == findPredicateNE || pred.op == findPredicateNIN || pred.op == findPredicateExists {
+			return false, false, nil
+		}
 		if isRangePredicate(pred.op) {
 			match, ok, err := storedDocumentMatchesInt64RangePredicate(stored, pred)
 			if err != nil {
@@ -1065,7 +1098,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 		return true
 	}
 	for _, pred := range predicates {
-		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+		if !pred.negate && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			if predicateContainsNull(pred) {
 				continue
 			}
@@ -1076,7 +1109,7 @@ func findPlanHasDirectCandidate(meta collections.CollectionMeta, predicates []fi
 			}
 			continue
 		}
-		if !isRangePredicate(pred.op) {
+		if pred.negate || !isRangePredicate(pred.op) {
 			continue
 		}
 		for _, idx := range meta.Indexes {
@@ -1130,6 +1163,9 @@ func (s *Server) bestIndexedCandidateDocuments(col *collections.Collection, mate
 		// The selector has materialized every usable index candidate to make
 		// its choice. Account for all of that work, not merely the winner.
 		plan.recordCandidates(work)
+		for _, doc := range docs {
+			plan.recordMaterializedBytes(len(doc))
+		}
 		if !bestSet || len(docs) < len(best) {
 			best = docs
 			bestStage, bestName = stage, idx.Name
@@ -1144,10 +1180,10 @@ func indexedFindStage(plan findPlan, idx collections.IndexDefinition) string {
 		if pred.field != idx.Field {
 			continue
 		}
-		if isRangePredicate(pred.op) {
+		if !pred.negate && isRangePredicate(pred.op) {
 			return "secondary_range_lookup"
 		}
-		if pred.op == findPredicateEq || pred.op == findPredicateIn {
+		if !pred.negate && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return "secondary_equality_lookup"
 		}
 	}
@@ -1156,7 +1192,7 @@ func indexedFindStage(plan findPlan, idx collections.IndexDefinition) string {
 
 func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool) {
 	for _, pred := range predicates {
-		if pred.field == "_id" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+		if !pred.negate && pred.field == "_id" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
 			return pred, true
 		}
 	}
@@ -1164,14 +1200,14 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 }
 
 func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
-	if len(plan.orBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
 		return bson.RawValue{}, false
 	}
 	if len(plan.predicates) != 1 {
 		return bson.RawValue{}, false
 	}
 	pred := plan.predicates[0]
-	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
+	if pred.negate || pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
 		return bson.RawValue{}, false
 	}
 	if pred.values[0].Type == bson.TypeRegex {
@@ -1271,7 +1307,7 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 		hasRange = hasRange || probe.stage == "secondary_range_lookup"
 	}
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+		if pred.field != idx.Field || pred.negate || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
 			continue
 		}
 		if predicateContainsNull(pred) {
@@ -1314,11 +1350,11 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 }
 
 func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
-	if plan.limit <= 0 || len(plan.orBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return 0, false
 	}
 	pred := plan.predicates[0]
-	if pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
+	if pred.negate || pred.field != idx.Field || pred.op != findPredicateEq || len(pred.values) != 1 || predicateContainsNull(pred) {
 		return 0, false
 	}
 	if _, ok := indexScalarForBSONValue(pred.values[0], idx.ValueType); !ok {
@@ -1336,14 +1372,14 @@ func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinitio
 }
 
 func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
-	if plan.limit <= 0 {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0 {
 		return 0, false
 	}
 	if plan.sort.field != "" && (len(findSortTerms(plan.sort)) != 1 || plan.sort.field != idx.Field || plan.sort.desc) {
 		return 0, false
 	}
 	for _, pred := range plan.predicates {
-		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+		if pred.field != idx.Field || pred.negate || !isRangePredicate(pred.op) {
 			return 0, false
 		}
 	}
@@ -1379,7 +1415,7 @@ func indexRangeOptionsForPredicates(predicates []findPredicate, idx collections.
 	var lower, upper indexRangeCandidateBound
 	found := false
 	for _, pred := range predicates {
-		if pred.field != idx.Field || !isRangePredicate(pred.op) {
+		if pred.field != idx.Field || pred.negate || !isRangePredicate(pred.op) {
 			continue
 		}
 		found = true
@@ -1599,95 +1635,152 @@ func documentsForIndexedRange(col *collections.Collection, materializer *collect
 }
 
 func parseFindPredicates(filter wire.Document) ([]findPredicate, error) {
-	predicates, _, err := parseFindFilter(filter)
+	predicates, _, _, err := parseFindFilter(filter)
 	return predicates, err
 }
 
-func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, error) {
+func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, [][]findPredicate, error) {
 	if filter == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	elements, err := bson.Raw(filter).Elements()
-	if err != nil {
-		return nil, nil, err
-	}
+	budget := findPredicateParseBudget{remaining: mongoQueryMaxBooleanPredicates}
 	var predicates []findPredicate
 	var orBranches [][]findPredicate
-	for _, elem := range elements {
+	var norBranches [][]findPredicate
+	err := forEachBoundedBSONDocumentElement(bson.Raw(filter), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		if key == "$or" {
 			if orBranches != nil {
-				return nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
+				return errors.New("Mongo gateway find supports only one top-level $or")
 			}
-			orBranches, err = parseOrPredicates(elem.Value())
+			orBranches, err = parseBooleanBranches(elem.Value(), "$or", &budget)
 			if err != nil {
-				return nil, nil, err
+				return err
 			}
-			continue
+			return nil
+		}
+		if key == "$nor" {
+			if norBranches != nil {
+				return errors.New("Mongo gateway find supports only one top-level $nor")
+			}
+			norBranches, err = parseBooleanBranches(elem.Value(), "$nor", &budget)
+			if err != nil {
+				return err
+			}
+			return nil
 		}
 		if key == "$and" {
-			parsed, err := parseAndPredicates(elem.Value())
+			parsed, err := parseAndPredicates(elem.Value(), &budget)
 			if err != nil {
-				return nil, nil, err
+				return err
 			}
 			predicates = append(predicates, parsed...)
-			continue
+			return nil
 		}
 		if strings.HasPrefix(key, "$") {
-			return nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
+			return fmt.Errorf("Mongo gateway find does not support query operator %q", key)
 		}
 		parsed, err := parseFieldPredicate(key, elem.Value())
 		if err != nil {
-			return nil, nil, err
+			return err
+		}
+		if err := budget.consume(len(parsed)); err != nil {
+			return err
 		}
 		predicates = append(predicates, parsed...)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return predicates, orBranches, nil
+	if err := validateFindPredicateWork(predicates, orBranches, norBranches); err != nil {
+		return nil, nil, nil, err
+	}
+	return predicates, orBranches, norBranches, nil
 }
 
-func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
-	elements, err := bson.Raw(doc).Elements()
-	if err != nil {
-		return nil, err
+func validateFindPredicateWork(predicates []findPredicate, orBranches, norBranches [][]findPredicate) error {
+	if len(orBranches) > mongoQueryMaxBooleanBranches || len(norBranches) > mongoQueryMaxBooleanBranches {
+		return fmt.Errorf("Mongo gateway boolean query exceeds %d branches", mongoQueryMaxBooleanBranches)
 	}
+	total := len(predicates)
+	check := func(branches [][]findPredicate) error {
+		for _, branch := range branches {
+			total += len(branch)
+			for _, predicate := range branch {
+				if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
+					return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
+				}
+			}
+		}
+		return nil
+	}
+	for _, predicate := range predicates {
+		if (predicate.op == findPredicateNIN || predicate.negate) && len(predicate.values) > mongoQueryMaxNegativeChoices {
+			return fmt.Errorf("Mongo gateway %s predicate exceeds %d choices", findPredicateName(predicate), mongoQueryMaxNegativeChoices)
+		}
+	}
+	if err := check(orBranches); err != nil {
+		return err
+	}
+	if err := check(norBranches); err != nil {
+		return err
+	}
+	if total > mongoQueryMaxBooleanPredicates {
+		return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+	}
+	return nil
+}
+
+func parseFindPredicateDocument(doc wire.Document, budget *findPredicateParseBudget) ([]findPredicate, error) {
 	var out []findPredicate
-	for _, elem := range elements {
+	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		value := elem.Value()
 		if key == "$and" {
-			preds, err := parseAndPredicates(value)
+			preds, err := parseAndPredicates(value, budget)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			out = append(out, preds...)
-			continue
+			return nil
 		}
 		preds, err := parseFieldPredicate(key, value)
 		if err != nil {
-			return nil, err
+			return err
+		}
+		if err := budget.consume(len(preds)); err != nil {
+			return err
 		}
 		out = append(out, preds...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
+func parseAndPredicates(value bson.RawValue, budget *findPredicateParseBudget) ([]findPredicate, error) {
 	array, ok := value.ArrayOK()
 	if !ok {
 		return nil, errors.New("Mongo gateway $and must be an array")
 	}
-	values, err := array.Values()
+	values, err := boundedBSONArrayValues(array, mongoQueryMaxBooleanPredicates, "$and")
 	if err != nil {
 		return nil, err
 	}
 	if len(values) == 0 {
 		return nil, errors.New("Mongo gateway $and must contain at least one expression")
+	}
+	if len(values) > mongoQueryMaxBooleanPredicates {
+		return nil, fmt.Errorf("Mongo gateway $and exceeds %d predicates", mongoQueryMaxBooleanPredicates)
 	}
 	var out []findPredicate
 	for i, value := range values {
@@ -1695,7 +1788,7 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 		if !ok {
 			return nil, fmt.Errorf("Mongo gateway $and[%d] must be a document", i)
 		}
-		preds, err := parseFindPredicateDocument(wire.Document(doc))
+		preds, err := parseFindPredicateDocument(wire.Document(doc), budget)
 		if err != nil {
 			return nil, err
 		}
@@ -1705,24 +1798,29 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 }
 
 func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
+	budget := findPredicateParseBudget{remaining: mongoQueryMaxBooleanPredicates}
+	return parseBooleanBranches(value, "$or", &budget)
+}
+
+func parseBooleanBranches(value bson.RawValue, operator string, budget *findPredicateParseBudget) ([][]findPredicate, error) {
 	array, ok := value.ArrayOK()
 	if !ok {
-		return nil, errors.New("Mongo gateway $or must be an array")
+		return nil, fmt.Errorf("Mongo gateway %s must be an array", operator)
 	}
-	values, err := array.Values()
+	values, err := boundedBSONArrayValues(array, mongoQueryMaxBooleanBranches, operator)
 	if err != nil {
 		return nil, err
 	}
 	if len(values) == 0 {
-		return nil, errors.New("Mongo gateway $or must contain at least one expression")
+		return nil, fmt.Errorf("Mongo gateway %s must contain at least one expression", operator)
 	}
 	branches := make([][]findPredicate, 0, len(values))
 	for i, value := range values {
 		doc, ok := value.DocumentOK()
 		if !ok {
-			return nil, fmt.Errorf("Mongo gateway $or[%d] must be a document", i)
+			return nil, fmt.Errorf("Mongo gateway %s[%d] must be a document", operator, i)
 		}
-		predicates, err := parseFindPredicateDocument(wire.Document(doc))
+		predicates, err := parseFindPredicateDocument(wire.Document(doc), budget)
 		if err != nil {
 			return nil, err
 		}
@@ -1731,9 +1829,95 @@ func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
 	return branches, nil
 }
 
+// boundedBSONArrayValues walks the raw BSON array without first materializing
+// every element. Query operands are client-controlled, so discovering the
+// first over-cap element must reject before a max-wire array can allocate a
+// proportional []RawValue backing slice.
+func boundedBSONArrayValues(array bson.RawArray, max int, operator string) ([]bson.RawValue, error) {
+	length, remaining, ok := bsoncore.ReadLength(array)
+	if !ok || length < 5 || int(length) != len(array) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return nil, errors.New("Mongo gateway invalid BSON array")
+	}
+	remaining = remaining[:len(remaining)-1]
+	values := make([]bson.RawValue, 0, min(max, 8))
+	for len(remaining) != 0 {
+		element, next, ok := bsoncore.ReadElement(remaining)
+		if !ok {
+			return nil, errors.New("Mongo gateway invalid BSON array")
+		}
+		value, err := bson.RawElement(element).ValueErr()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) == max {
+			if operator == "$or" || operator == "$nor" {
+				return nil, fmt.Errorf("Mongo gateway %s exceeds %d branches", operator, max)
+			}
+			if operator == "$and" {
+				return nil, fmt.Errorf("Mongo gateway $and exceeds %d predicates", max)
+			}
+			return nil, fmt.Errorf("Mongo gateway %s exceeds %d choices", operator, max)
+		}
+		values = append(values, value)
+		remaining = next
+	}
+	return values, nil
+}
+
+// findPredicateParseBudget is shared by the filter root and every allowed
+// boolean branch. It prevents a valid-looking nesting shape from doing
+// proportional parse work before the global predicate admission check.
+type findPredicateParseBudget struct {
+	remaining int
+}
+
+func (budget *findPredicateParseBudget) consume(count int) error {
+	if count < 0 || count > budget.remaining {
+		return findPredicateCapError()
+	}
+	budget.remaining -= count
+	return nil
+}
+
+func findPredicateCapError() error {
+	return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+}
+
+// forEachBoundedBSONDocumentElement walks a BSON document directly from its
+// wire representation. In particular, it never calls Raw.Elements(), whose
+// result backing slice scales with a client-controlled document width. The
+// over-cap element is detected before its value is decoded or retained.
+func forEachBoundedBSONDocumentElement(doc bson.Raw, max int, limitError error, visit func(bson.RawElement) error) error {
+	length, remaining, ok := bsoncore.ReadLength(doc)
+	if !ok || length < 5 || int(length) != len(doc) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return errors.New("Mongo gateway invalid BSON document")
+	}
+	remaining = remaining[:len(remaining)-1]
+	count := 0
+	for len(remaining) != 0 {
+		element, next, ok := bsoncore.ReadElement(remaining)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON document")
+		}
+		if count == max {
+			return limitError
+		}
+		raw := bson.RawElement(element)
+		if err := raw.Validate(); err != nil {
+			return err
+		}
+		if err := visit(raw); err != nil {
+			return err
+		}
+		count++
+		remaining = next
+	}
+	return nil
+}
+
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
-	if field == "" || strings.HasPrefix(field, "$") {
-		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q", field)
+	if err := validateMongoDocumentPath(field); err != nil {
+		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q: %w", field, err)
 	}
 	if doc, ok := value.DocumentOK(); ok {
 		isOperatorDoc, err := operatorDocument(doc)
@@ -1743,62 +1927,169 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 		if !isOperatorDoc {
 			return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
 		}
-		elements, err := doc.Elements()
-		if err != nil {
-			return nil, err
-		}
-		out := make([]findPredicate, 0, len(elements))
-		for _, elem := range elements {
+		out := make([]findPredicate, 0, min(mongoQueryMaxBooleanPredicates, 4))
+		seen := make(map[string]struct{}, min(mongoQueryMaxBooleanPredicates, 4))
+		err = forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 			op, err := elem.KeyErr()
 			if err != nil {
-				return nil, err
+				return err
 			}
+			if _, duplicate := seen[op]; duplicate {
+				return fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+			}
+			seen[op] = struct{}{}
 			opValue := elem.Value()
 			switch op {
-			case "$in":
+			case "$in", "$nin":
 				array, ok := opValue.ArrayOK()
 				if !ok {
-					return nil, fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
+					return fmt.Errorf("Mongo gateway find field %q %s must be an array", field, op)
 				}
-				values, err := array.Values()
+				var values []bson.RawValue
+				if op == "$nin" {
+					values, err = boundedBSONArrayValues(array, mongoQueryMaxNegativeChoices, op)
+				} else {
+					values, err = array.Values()
+				}
 				if err != nil {
-					return nil, err
+					return err
 				}
-				out = append(out, findPredicate{field: field, op: findPredicateIn, values: values})
+				kind := findPredicateIn
+				if op == "$nin" {
+					kind = findPredicateNIN
+				}
+				out = append(out, findPredicate{field: field, op: kind, values: values})
+			case "$ne":
+				out = append(out, findPredicate{field: field, op: findPredicateNE, values: []bson.RawValue{opValue}})
+			case "$exists":
+				exists, ok := opValue.BooleanOK()
+				if !ok {
+					return fmt.Errorf("Mongo gateway find field %q $exists must be boolean", field)
+				}
+				valueType, raw, err := bson.MarshalValue(exists)
+				if err != nil {
+					return err
+				}
+				out = append(out, findPredicate{field: field, op: findPredicateExists, values: []bson.RawValue{{Type: valueType, Value: raw}}})
+			case "$not":
+				notDoc, ok := opValue.DocumentOK()
+				if !ok {
+					return fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
+				}
+				if err := validateNotOperandWork(notDoc); err != nil {
+					return err
+				}
+				inner, err := parseFieldPredicate(field, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: notDoc})
+				if err != nil || len(inner) != 1 || inner[0].negate || !findPredicateSupportsNot(inner[0].op) {
+					if err != nil {
+						return err
+					}
+					return fmt.Errorf("Mongo gateway find field %q $not requires one supported operator", field)
+				}
+				inner[0].negate = true
+				out = append(out, inner[0])
 			case "$gt", "$gte", "$lt", "$lte":
 				out = append(out, findPredicate{field: field, op: rangeOperator(op), values: []bson.RawValue{opValue}})
 			default:
-				return nil, fmt.Errorf("Mongo gateway unsupported find operator %q", op)
+				return fmt.Errorf("Mongo gateway unsupported find operator %q", op)
 			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 		return out, nil
 	}
 	return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
 }
 
-func operatorDocument(doc bson.Raw) (bool, error) {
-	elements, err := doc.Elements()
+// validateNotOperandWork admits the raw array before the recursive parser can
+// call RawArray.Values for the only supported $not inner predicate.
+func validateNotOperandWork(doc bson.Raw) error {
+	var op string
+	var value bson.RawValue
+	count := 0
+	err := forEachBoundedBSONDocumentElement(doc, 1, errors.New("Mongo gateway $not requires one supported operator"), func(elem bson.RawElement) error {
+		var err error
+		op, err = elem.KeyErr()
+		if err != nil {
+			return err
+		}
+		value = elem.Value()
+		count++
+		return nil
+	})
 	if err != nil {
-		return false, err
+		return err
 	}
-	if len(elements) == 0 {
-		return false, nil
+	if count != 1 {
+		return errors.New("Mongo gateway $not requires one supported operator")
 	}
+	if op != "$in" && op != "$nin" {
+		return nil
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return errors.New("Mongo gateway $not array operand must be an array")
+	}
+	_, err = boundedBSONArrayValues(array, mongoQueryMaxNegativeChoices, op)
+	return err
+}
+
+func findPredicateSupportsNot(op findPredicateOp) bool {
+	switch op {
+	case findPredicateIn, findPredicateNIN, findPredicateNE, findPredicateExists,
+		findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
+		return true
+	default:
+		return false
+	}
+}
+
+// validateMongoDocumentPath is shared by query, sort, and projection parsing.
+// Query paths deliberately remain document-only at evaluation time; parsing
+// still permits numeric field names because BSON documents may use them.
+func validateMongoDocumentPath(path string) error {
+	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return errors.New("path must contain non-empty segments")
+	}
+	segments := strings.Split(path, ".")
+	if len(segments) > mongoMutationMaxPathDepth {
+		return fmt.Errorf("path exceeds %d components", mongoMutationMaxPathDepth)
+	}
+	for _, segment := range segments {
+		if strings.HasPrefix(segment, "$") {
+			return errors.New("path has unsupported segment")
+		}
+	}
+	return nil
+}
+
+func operatorDocument(doc bson.Raw) (bool, error) {
 	sawOperator := false
 	sawNonOperator := false
-	for _, elem := range elements {
+	count := 0
+	err := forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return false, err
+			return err
 		}
+		count++
 		if strings.HasPrefix(key, "$") {
 			sawOperator = true
 		} else {
 			sawNonOperator = true
 		}
 		if sawOperator && sawNonOperator {
-			return false, errors.New("Mongo gateway find field predicate document cannot mix operator and non-operator keys")
+			return errors.New("Mongo gateway find field predicate document cannot mix operator and non-operator keys")
 		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return false, nil
 	}
 	return sawOperator, nil
 }
@@ -1823,12 +2114,15 @@ func documentMatchesPredicates(doc wire.Document, predicates []findPredicate) (b
 
 func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPredicate, remainingDecimal128Normalizations *int) (bool, error) {
 	for _, pred := range predicates {
+		if predicateRejectsArrayTraversal(pred) && documentPathContainsArray(doc, pred.field) {
+			return false, fmt.Errorf("Mongo gateway %s predicate does not support array path %q", findPredicateName(pred), pred.field)
+		}
 		values, ok, err := lookupDocumentPredicateValues(doc, pred.field)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
-			if missingValueMatchesPredicate(pred) {
+			if missingValueMatchesPredicate(pred) != pred.negate {
 				continue
 			}
 			return false, nil
@@ -1844,35 +2138,120 @@ func documentMatchesPredicatesWithBudget(doc wire.Document, predicates []findPre
 				break
 			}
 		}
-		if !matched {
+		if matched == pred.negate {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
+func predicateRejectsArrayTraversal(pred findPredicate) bool {
+	return pred.negate || pred.op == findPredicateNE || pred.op == findPredicateNIN || pred.op == findPredicateExists
+}
+
+func findPredicateName(pred findPredicate) string {
+	if pred.negate {
+		return "$not"
+	}
+	switch pred.op {
+	case findPredicateNE:
+		return "$ne"
+	case findPredicateNIN:
+		return "$nin"
+	case findPredicateExists:
+		return "$exists"
+	default:
+		return "query"
+	}
+}
+
+// documentPathContainsArray is deliberately a structural check, not the
+// matcher’s historical fan-out lookup. #4066 does not claim multikey/array
+// semantics, so any array encountered at or below a requested path rejects.
+func documentPathContainsArray(doc wire.Document, field string) bool {
+	parts := strings.Split(field, ".")
+	current := bson.Raw(doc)
+	for i, part := range parts {
+		value := current.Lookup(part)
+		if value.IsZero() {
+			return false
+		}
+		if _, array := value.ArrayOK(); array {
+			return true
+		}
+		if i == len(parts)-1 {
+			return false
+		}
+		next, ok := value.DocumentOK()
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	return false
+}
+
+func validateFindSortDocuments(docs []wire.Document, sortSpec findSort) error {
+	for _, term := range findSortTerms(sortSpec) {
+		if !strings.Contains(term.field, ".") {
+			continue
+		}
+		for _, doc := range docs {
+			if documentPathContainsArray(doc, term.field) {
+				return fmt.Errorf("Mongo gateway dotted sort does not support array path %q", term.field)
+			}
+		}
+	}
+	return nil
+}
+
 func documentMatchesPlan(doc wire.Document, plan findPlan) (bool, error) {
 	remainingDecimal128Normalizations := mongoQueryMaxDecimal128Normalizations
 	match, err := documentMatchesPredicatesWithBudget(doc, plan.predicates, &remainingDecimal128Normalizations)
-	if err != nil || !match || len(plan.orBranches) == 0 {
+	if err != nil || !match {
 		return match, err
 	}
+	if len(plan.orBranches) != 0 {
+		match = false
+	}
 	for _, branch := range plan.orBranches {
+		branchMatch, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
+		if err != nil {
+			return false, err
+		}
+		if branchMatch {
+			match = true
+			break
+		}
+	}
+	if !match {
+		return false, nil
+	}
+	for _, branch := range plan.norBranches {
 		match, err := documentMatchesPredicatesWithBudget(doc, branch, &remainingDecimal128Normalizations)
 		if err != nil {
 			return false, err
 		}
 		if match {
-			return true, nil
+			return false, nil
 		}
 	}
-	return false, nil
+	return true, nil
 }
 
 func missingValueMatchesPredicate(pred findPredicate) bool {
 	switch pred.op {
 	case findPredicateEq, findPredicateIn:
 		return predicateContainsNull(pred)
+	case findPredicateNE:
+		// Mongo's $ne:null is the non-null/existence form; unlike ordinary
+		// $ne it does not include a missing path.
+		return !predicateContainsNull(pred)
+	case findPredicateNIN:
+		return true
+	case findPredicateExists:
+		exists, _ := pred.values[0].BooleanOK()
+		return !exists
 	default:
 		return false
 	}
@@ -1911,6 +2290,23 @@ func valueMatchesPredicateWithBudget(value bson.RawValue, pred findPredicate, re
 			}
 		}
 		return false, nil
+	case findPredicateNE:
+		equal, err := rawValuesEqualModeBudget(value, pred.values[0], false, remainingDecimal128Normalizations)
+		return !equal, err
+	case findPredicateNIN:
+		for _, candidate := range pred.values {
+			equal, err := rawValuesEqualModeBudget(value, candidate, false, remainingDecimal128Normalizations)
+			if err != nil {
+				return false, err
+			}
+			if equal {
+				return false, nil
+			}
+		}
+		return true, nil
+	case findPredicateExists:
+		exists, _ := pred.values[0].BooleanOK()
+		return exists, nil
 	case findPredicateGT, findPredicateGTE, findPredicateLT, findPredicateLTE:
 		if rawValueIsNaN(value) || rawValueIsNaN(pred.values[0]) {
 			return false, nil
@@ -1967,8 +2363,8 @@ func parseFindSortDocument(sortDoc wire.Document) (findSort, error) {
 		if err != nil {
 			return findSort{}, err
 		}
-		if field == "" || strings.HasPrefix(field, "$") || strings.Contains(field, ".") {
-			return findSort{}, errors.New("Mongo gateway find sort field must be a supported document field")
+		if err := validateMongoDocumentPath(field); err != nil {
+			return findSort{}, fmt.Errorf("Mongo gateway find sort field %q is invalid: %w", field, err)
 		}
 		if _, duplicate := seen[field]; duplicate {
 			return findSort{}, fmt.Errorf("Mongo gateway find sort repeats field %q", field)
@@ -2069,6 +2465,9 @@ func compileProjection(projection wire.Document) (compiledProjection, error) {
 	if err != nil {
 		return compiledProjection{}, err
 	}
+	if _, err := projectionTree(fields); err != nil {
+		return compiledProjection{}, err
+	}
 	return compiledProjection{
 		present:     true,
 		mode:        mode,
@@ -2105,6 +2504,98 @@ func projectDocumentWithProjection(doc wire.Document, projection compiledProject
 }
 
 func projectDocumentWithEffectiveProjection(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
+	tree, err := projectionTree(projection.fields)
+	if err != nil {
+		return nil, err
+	}
+	if mode == projectionInclude {
+		out, _, err := projectIncludedDocument(bson.Raw(doc), tree, projection.includeID, true)
+		return wire.Document(out), err
+	}
+	return projectExcludedDocument(bson.Raw(doc), tree, projection.includeID)
+}
+
+// Projection intentionally supports only document traversal. A dotted path
+// that would enter an array rejects instead of borrowing Mongo's positional or
+// multikey projection semantics.
+type projectionNode struct {
+	terminal bool
+	children map[string]*projectionNode
+}
+
+func projectionTree(fields map[string]struct{}) (*projectionNode, error) {
+	root := &projectionNode{children: make(map[string]*projectionNode)}
+	for field := range fields {
+		if err := validateMongoDocumentPath(field); err != nil {
+			return nil, fmt.Errorf("Mongo gateway projection has invalid path %q: %w", field, err)
+		}
+		parts := strings.Split(field, ".")
+		node := root
+		for _, part := range parts {
+			if node.terminal {
+				return nil, fmt.Errorf("Mongo gateway projection paths overlap at %q", field)
+			}
+			if node.children[part] == nil {
+				node.children[part] = &projectionNode{children: make(map[string]*projectionNode)}
+			}
+			node = node.children[part]
+		}
+		if node.terminal || len(node.children) != 0 {
+			return nil, fmt.Errorf("Mongo gateway projection paths overlap at %q", field)
+		}
+		node.terminal = true
+	}
+	return root, nil
+}
+
+func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID, root bool) ([]byte, bool, error) {
+	elements, err := bson.Raw(doc).Elements()
+	if err != nil {
+		return nil, false, err
+	}
+	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, false, err
+		}
+		if root && key == "_id" {
+			if includeID {
+				out = appendRawValueElement(out, key, elem.Value())
+			}
+			continue
+		}
+		child := node.children[key]
+		if child == nil {
+			continue
+		}
+		if child.terminal {
+			out = appendRawValueElement(out, key, elem.Value())
+			continue
+		}
+		nested, ok := elem.Value().DocumentOK()
+		if !ok {
+			if _, array := elem.Value().ArrayOK(); array {
+				return nil, false, fmt.Errorf("Mongo gateway dotted projection does not traverse arrays")
+			}
+			continue
+		}
+		projected, present, err := projectIncludedDocument(nested, child, false, false)
+		if err != nil {
+			return nil, false, err
+		}
+		if present {
+			out = appendRawValueElement(out, key, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: projected})
+		}
+	}
+	out, err = bsoncore.AppendDocumentEnd(out, idx)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, len(out) > 5, nil
+}
+
+func projectExcludedDocument(doc bson.Raw, node *projectionNode, includeID bool) (wire.Document, error) {
 	elements, err := bson.Raw(doc).Elements()
 	if err != nil {
 		return nil, err
@@ -2115,16 +2606,30 @@ func projectDocumentWithEffectiveProjection(doc wire.Document, projection compil
 		if err != nil {
 			return nil, err
 		}
-		if key == "_id" && !projection.includeID {
+		if key == "_id" && !includeID {
 			continue
 		}
-		_, selected := projection.fields[key]
-		if mode == projectionInclude && (selected || key == "_id") {
+		child := node.children[key]
+		if child == nil {
 			out = appendRawValueElement(out, key, elem.Value())
+			continue
 		}
-		if mode == projectionExclude && !selected {
+		if child.terminal {
+			continue
+		}
+		nested, ok := elem.Value().DocumentOK()
+		if !ok {
+			if _, array := elem.Value().ArrayOK(); array {
+				return nil, fmt.Errorf("Mongo gateway dotted projection does not traverse arrays")
+			}
 			out = appendRawValueElement(out, key, elem.Value())
+			continue
 		}
+		projected, err := projectExcludedDocument(nested, child, true)
+		if err != nil {
+			return nil, err
+		}
+		out = appendRawValueElement(out, key, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: projected})
 	}
 	out, err = bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
@@ -2147,6 +2652,15 @@ const (
 	projectionInclude
 	projectionExclude
 )
+
+func projectionHasDottedPath(projection compiledProjection) bool {
+	for field := range projection.fields {
+		if strings.Contains(field, ".") {
+			return true
+		}
+	}
+	return false
+}
 
 func parseProjection(projection wire.Document) (projectionMode, map[string]struct{}, bool, bool, error) {
 	elements, err := bson.Raw(projection).Elements()
@@ -2171,8 +2685,16 @@ func parseProjection(projection wire.Document) (projectionMode, map[string]struc
 			idSpecified = true
 			continue
 		}
-		if strings.Contains(key, ".") {
-			return projectionNone, nil, true, false, errors.New("Mongo gateway projection currently supports top-level fields only")
+		// _id has deliberately narrow root-only projection semantics.  Treating
+		// _id.part as an ordinary path would either return the whole root _id
+		// through the inclusion default or silently drop it through an explicit
+		// _id:0.  Until embedded _id traversal has a complete Mongo-compatible
+		// contract, reject it before a scan or cursor can be admitted.
+		if strings.HasPrefix(key, "_id.") {
+			return projectionNone, nil, true, false, fmt.Errorf("Mongo gateway projection does not support dotted paths rooted at _id")
+		}
+		if key == "" || strings.HasPrefix(key, "$") {
+			return projectionNone, nil, true, false, fmt.Errorf("Mongo gateway projection has invalid path %q", key)
 		}
 		nextMode := projectionExclude
 		if include {
