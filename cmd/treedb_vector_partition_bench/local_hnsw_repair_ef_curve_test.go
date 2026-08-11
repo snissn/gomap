@@ -75,7 +75,7 @@ func TestLocalHNSWRepairEFCurveV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(timing.Cells) != 16 || timing.RoutesSHA256 != cells[0].RoutesSHA256 || (timing.Gate.Disposition != "calibration_timing_gate_pass" && timing.Gate.Disposition != "calibration_timing_gate_fail") || timing.Gate.P2QPS148Over128 <= 0 || timing.Gate.P16QPS148Over128 <= 0 || timing.Gate.P2P95148Over128 <= 0 || timing.Gate.P16P95148Over128 <= 0 {
+	if timing.Variant != localHNSWRepairEFCurveTimingVariantV1 || len(timing.Cells) != 16 || timing.RoutesSHA256 != cells[0].RoutesSHA256 || (timing.Gate.Disposition != "calibration_timing_gate_pass" && timing.Gate.Disposition != "calibration_timing_gate_fail") || timing.Gate.P2QPS148Over128 <= 0 || timing.Gate.P16QPS148Over128 <= 0 || timing.Gate.P2P95148Over128 <= 0 || timing.Gate.P16P95148Over128 <= 0 {
 		t.Fatalf("timing=%+v", timing)
 	}
 	for _, cell := range timing.Cells {

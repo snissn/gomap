@@ -21,6 +21,7 @@ import (
 )
 
 const localHNSWRepairEFCurveSchemaV1 = "treedb_local_hnsw_repair_ef_curve_v1"
+const localHNSWRepairEFCurveTimingVariantV1 = "source_order_auxiliary_navigation_v3"
 
 var localHNSWRepairEFCurvePointsV1 = []int{64, 128, 512, 4096}
 
@@ -66,6 +67,7 @@ type localHNSWRepairEFCurveTimingGateV1 struct {
 }
 
 type localHNSWRepairEFCurveTimingV1 struct {
+	Variant      string                               `json:"variant"`
 	RoutesSHA256 string                               `json:"routes_sha256"`
 	Cells        []localHNSWRepairEFCurveTimingCellV1 `json:"cells"`
 	Gate         localHNSWRepairEFCurveTimingGateV1   `json:"gate"`
@@ -212,7 +214,7 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 }
 
 func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, repair *localHNSWVariantHarnessV1, ordinals []int, queries [][]float32) (localHNSWRepairEFCurveTimingV1, error) {
-	var out localHNSWRepairEFCurveTimingV1
+	out := localHNSWRepairEFCurveTimingV1{Variant: localHNSWRepairEFCurveTimingVariantV1}
 	if source == nil || repair == nil || len(ordinals) == 0 || len(ordinals) != len(queries) || localHNSWAttributionGraphHarnessV1(source, repair) != nil {
 		return out, errors.New("invalid local HNSW repair EF timing inputs")
 	}
@@ -708,7 +710,7 @@ func validateLocalHNSWRepairEFCurveReportV1(report localHNSWRepairEFCurveReportV
 		if !slices.Equal(report.EFSearch, []int{128, 148}) || report.Disposition != "p2_target_crossed_smallest_passing_ef_148" {
 			return errors.New("invalid local HNSW repair EF timing points")
 		}
-		if !localHNSWAttributionSHA256V1(report.Timing.RoutesSHA256) || report.Timing.RoutesSHA256 != routes {
+		if report.Timing.Variant != localHNSWRepairEFCurveTimingVariantV1 || !localHNSWAttributionSHA256V1(report.Timing.RoutesSHA256) || report.Timing.RoutesSHA256 != routes {
 			return errors.New("invalid local HNSW repair EF timing routes")
 		}
 		for _, cell := range report.Timing.Cells {
