@@ -554,6 +554,134 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	}
 }
 
+func TestVectorPartitionLocalGraphStableIDHashClusteredOrderFixedEF(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	rows := make([]columnGraphRebuildInputRowV2A, 64)
+	for i := range rows {
+		cluster := i / 16
+		vector := make([]float32, 8)
+		for d := range vector {
+			vector[d] = float32(((i+1)*(d+3))%11-5) / 100
+		}
+		vector[cluster] += 1
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("cluster-%d-%02d", cluster, i%16), vector: vector}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.Collection, m.IndexName = "building", col.name, def.Name
+	m.IndexDefinitionDigest, m.Generation, m.PartitionCount = VectorIndexDefinitionDigestV1(def), 4107, 1
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	control, cr, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 41071, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cr.Release()
+	hash, hr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 41072, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hr.Release()
+	hashAgain, hr2, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 41073, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hr2.Release()
+	controlRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), control[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), hash[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashAgainRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), hashAgain[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(hashRaw, hashAgainRaw) {
+		t.Fatal("clustered hash-order rebuild bytes differ")
+	}
+	canonicalMembership, err := decodeVectorPartitionMembershipDigestV1(control[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashMembership, err := decodeVectorPartitionMembershipDigestV1(hash[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashMembership != vectorPartitionLocalGraphVariantMembershipDigestV1(canonicalMembership, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1) {
+		t.Fatal("clustered hash-order pack did not bind canonical membership through its offline variant")
+	}
+	decode := func(raw []byte, membership [sha256.Size]byte) *columnHNSWSearchPack {
+		pack, decodeErr := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: membership})
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		return &pack
+	}
+	controlPack := decode(controlRaw, canonicalMembership)
+	hashPack := decode(hashRaw, hashMembership)
+	type stableRow struct {
+		level  uint16
+		vector []float32
+	}
+	stableRows := func(pack *columnHNSWSearchPack) map[string]stableRow {
+		out := make(map[string]stableRow, pack.Header.Rows)
+		for ordinal := 0; ordinal < pack.Header.Rows; ordinal++ {
+			startID, endID := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
+			if endID < startID || endID > uint64(len(pack.DocumentIDBytes)) {
+				t.Fatalf("missing stable ID ordinal=%d", ordinal)
+			}
+			start := ordinal * pack.Header.Dimensions
+			out[string(pack.DocumentIDBytes[startID:endID])] = stableRow{level: pack.Levels[ordinal], vector: append([]float32(nil), pack.NormalizedVectors[start:start+pack.Header.Dimensions]...)}
+		}
+		return out
+	}
+	if !reflect.DeepEqual(stableRows(controlPack), stableRows(hashPack)) {
+		t.Fatal("clustered hash-order candidate changed stable IDs, vectors, or levels")
+	}
+	c, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, control[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	h, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, hash[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	query := []float32{-0.05, 0.95, -0.05, -0.05, -0.05, -0.05, -0.05, -0.05}
+	if !slices.Equal(query, rows[21].vector) || rows[21].id != "cluster-1-05" {
+		t.Fatalf("clustered fixture drift row=%+v", rows[21])
+	}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1}
+	controlResults, controlMetrics, controlTrace, err := c.SearchWithAttributionV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashResults, hashMetrics, hashTrace, err := h.SearchWithAttributionV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(controlResults) != 1 || controlResults[0].ID != "cluster-1-15" || len(hashResults) != 1 || hashResults[0].ID != "cluster-1-05" || hashResults[0].Score <= controlResults[0].Score || controlMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || hashMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || controlTrace.VisitedOrdinalsSHA256 == hashTrace.VisitedOrdinalsSHA256 {
+		t.Fatalf("clustered source/hash fixed-EF witness source=%+v/%+v/%+v hash=%+v/%+v/%+v", controlResults, controlMetrics, controlTrace, hashResults, hashMetrics, hashTrace)
+	}
+}
+
 func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing.T) {
 	input := testColumnHNSWSearchPackAuxiliaryInput4106()
 	raw, err := encodeColumnHNSWSearchPack(input)
