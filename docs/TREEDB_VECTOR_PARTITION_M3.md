@@ -85,9 +85,13 @@ identity, recomputed membership set, descriptor, and native HNSW header, and
 holds an M1 generation reader pin until `Close`. Missing, corrupt,
 stale-generation, cross-membership, or malformed assets fail closed.
 
-`SearchWithMetrics` uses the no-document native HNSW route and returns
-candidate/edge accounting. Search status exposes route, pack/mapped/heap bytes,
-open time, searches, failures, candidates, edges, memberships, and pins.
+`SearchWithMetrics` uses the no-document native HNSW route. Rebuilt v3 packs
+expand native layer-0 neighbors first and may then expand their separately
+bounded auxiliary component-root CSR; native edges are never displaced or
+charged to the `2M` HNSW degree cap. Metrics and status report native
+candidates/edges separately from auxiliary edge visits, newly scored auxiliary
+candidates, and auxiliary frontier admissions, alongside route,
+pack/mapped/heap bytes, open time, searches, failures, memberships, and pins.
 Lifecycle status independently re-verifies all referenced assets and reports
 missing, corrupt, and stale counts. Results are response-owned stable IDs and
 FP32 cosine scores only.
