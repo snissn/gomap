@@ -151,6 +151,23 @@ func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 	}
 }
 
+func localHNSWFinalQualificationTestGateEvidenceV1(report *m8ProductionReportV1) {
+	report.Status = "experimental_gate_failures"
+	report.Config.Partitions, report.Config.RecallTarget = 16, 0.95
+	report.Dataset.Vectors = 16
+	report.Failure.Passed = true
+	report.Resources = m8ProductionResourceEvidenceV1{PersistentAssetBytes: 1, PeakRSSMeasured: true, BalanceHardCap: 1, MaxPartitionLoad: 1, PartitionLoads: make([]uint64, 16), LimitComparisons: []m8ProductionResourceLimitComparisonV1{{Configured: 1, Observed: 1}}}
+	report.PackDiagnostics = make([]m8PartitionPackDiagnosticsV1, 16)
+	for partition := range report.PackDiagnostics {
+		report.Resources.PartitionLoads[partition] = 1
+		report.PackDiagnostics[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+	}
+	for i := range report.Rows {
+		report.Rows[i].RecallAtK = 1
+	}
+	report.GateLedger = m8ProductionGateLedgerForReportV1(*report)
+}
+
 func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 	fixture := fixtureManifest{Vectors: 10, Queries: 1000, Dimensions: 1, Seed: 1}
 	truth := make([][]m8CanonicalResultV1, fixture.Queries)
@@ -181,7 +198,8 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
 		exhaustive := run.Probes == 16
 		reportPath, transcriptPath := filepath.Join(dir, "vector_partition_m8_test.json"), filepath.Join(dir, "vector_partition_m8_measurements_test.json")
-		report := m8ProductionReportV1{Status: "pass", ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
+		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
+		localHNSWFinalQualificationTestGateEvidenceV1(&report)
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
 	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
@@ -217,7 +235,6 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	}
 	expected := localHNSWFinalQualificationRunV1{Corpus: localHNSWFinalQualificationCorpus250KV1, localHNSWFinalQualificationCellV1: localHNSWFinalQualificationCellV1{Variant: localHNSWFinalQualificationBaselineV1, Probes: 2, Concurrency: 1}}
 	report := m8ProductionReportV1{
-		Status:                "pass",
 		ExecutionID:           "m8-production-test",
 		MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: "/transcript", SHA256: digest},
 		Variant:               &m3VariantDescriptorV1{PartitionHNSWM: 16, IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}},
@@ -225,15 +242,37 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	}
 	transcript := m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{outcome}}
 	started := time.Unix(1, 0).UTC()
+	localHNSWFinalQualificationTestGateEvidenceV1(&report)
 	child, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started)
 	if err != nil || !localHNSWFinalQualificationChildValidV1(child, expected) || child.Counts.P2HitSlots != 10000 || child.Counts.RoutingMissSlots != 0 || child.SourceIdentitySHA256 != digest || !localHNSWAttributionSHA256V1(child.Timing.ResultSHA256) {
 		t.Fatalf("child=%+v err=%v", child, err)
 	}
+	report.Resources.LimitComparisons[0].Observed = 2
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted child report with forged resource gate")
+	}
+	report.Resources.LimitComparisons[0].Observed = 1
+	report.Rows[0].Status = "fail"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted failed child row")
+	}
+	report.Rows[0].Status = "pass"
+	transcript.Outcomes[0].Status = "fail"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted failed child outcome")
+	}
+	transcript.Outcomes[0].Status = "pass"
+	report.Status = "invalid"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted invalid child report status")
+	}
+	report.Status = "experimental_gate_failures"
 
 	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 16, 16, 16
 	report.Rows[0].Attribution.ExhaustivePartitionRecallAtK = 1
 	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
 	report.Rows[0].Attribution.ExhaustivePartitionScoreParity = true
+	localHNSWFinalQualificationTestGateEvidenceV1(&report)
 	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +282,7 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	}
 	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
 	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 2, 2, 2
+	localHNSWFinalQualificationTestGateEvidenceV1(&report)
 
 	transcript.Outcomes[0].ExactRepresentativeTruthHits = nil
 	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started.Add(time.Second)); err == nil {
