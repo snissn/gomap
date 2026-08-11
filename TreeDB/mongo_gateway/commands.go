@@ -4059,6 +4059,14 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 	}
 	retained += planBytes
 	retainedPlan := cloneFindPlanForCursor(plan)
+	// Compound cursors retain IDs, so their normal batch decoder has not yet
+	// observed every result when batchSize is zero (or when a later getMore
+	// would reach it). Validate dotted projections before publishing the cursor
+	// just as openCursor does for retained BSON documents. This walks one
+	// bounded ID at a time and retains no decoded BSON.
+	if err := s.preflightCompoundCursorProjection(col, ids, &retainedPlan, plan.projection); err != nil {
+		return 0, nil, err
+	}
 	cursor := &serverCursor{ns: ns, owner: owner, compoundIDs: ids, compoundCollection: col, compoundPlan: &retainedPlan, projection: plan.projection, lastUsed: time.Now()}
 	batch, consumed, materialized, err := s.compoundCursorBatch(col, ids, &retainedPlan, plan.projection, 0, batchSize, 0)
 	if err != nil {
@@ -4089,6 +4097,51 @@ func (s *Server) openCompoundIDCursor(ns string, col *collections.Collection, id
 	}
 	s.addCursorLocked(cursorID, cursor)
 	return cursorID, batch, nil
+}
+
+func (s *Server) preflightCompoundCursorProjection(col *collections.Collection, ids [][]byte, plan *findPlan, projection compiledProjection) error {
+	if !projectionHasDottedPath(projection) {
+		return nil
+	}
+	if col == nil {
+		return errors.New("mongo gateway compound cursor has no collection")
+	}
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = materializer.Close() }()
+	materialized := 0
+	for _, id := range ids {
+		stored, err := col.Get(id)
+		if err != nil {
+			return err
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		doc, err := storedDocumentToBSON(col, materializer, stored)
+		if err != nil {
+			return err
+		}
+		if len(doc) > s.maxCursorRetainedBytes()-materialized {
+			return fmt.Errorf("%w: Mongo gateway compound cursor projection preflight exceeded %d bytes", errMongoFindScanCapExceeded, s.maxCursorRetainedBytes())
+		}
+		materialized += len(doc)
+		if plan != nil {
+			match, err := documentMatchesPlan(doc, *plan)
+			if err != nil {
+				return err
+			}
+			if !match {
+				continue
+			}
+		}
+		if _, err := projectDocumentWithProjection(doc, projection); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) compoundCursorBatch(col *collections.Collection, ids [][]byte, plan *findPlan, projection compiledProjection, start, maxDocs, committedMaterialized int) (bson.A, int, int, error) {

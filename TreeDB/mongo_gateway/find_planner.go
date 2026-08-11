@@ -1643,54 +1643,58 @@ func parseFindFilter(filter wire.Document) ([]findPredicate, [][]findPredicate, 
 	if filter == nil {
 		return nil, nil, nil, nil
 	}
-	elements, err := bson.Raw(filter).Elements()
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	budget := findPredicateParseBudget{remaining: mongoQueryMaxBooleanPredicates}
 	var predicates []findPredicate
 	var orBranches [][]findPredicate
 	var norBranches [][]findPredicate
-	for _, elem := range elements {
+	err := forEachBoundedBSONDocumentElement(bson.Raw(filter), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, nil, nil, err
+			return err
 		}
 		if key == "$or" {
 			if orBranches != nil {
-				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $or")
+				return errors.New("Mongo gateway find supports only one top-level $or")
 			}
-			orBranches, err = parseBooleanBranches(elem.Value(), "$or")
+			orBranches, err = parseBooleanBranches(elem.Value(), "$or", &budget)
 			if err != nil {
-				return nil, nil, nil, err
+				return err
 			}
-			continue
+			return nil
 		}
 		if key == "$nor" {
 			if norBranches != nil {
-				return nil, nil, nil, errors.New("Mongo gateway find supports only one top-level $nor")
+				return errors.New("Mongo gateway find supports only one top-level $nor")
 			}
-			norBranches, err = parseBooleanBranches(elem.Value(), "$nor")
+			norBranches, err = parseBooleanBranches(elem.Value(), "$nor", &budget)
 			if err != nil {
-				return nil, nil, nil, err
+				return err
 			}
-			continue
+			return nil
 		}
 		if key == "$and" {
-			parsed, err := parseAndPredicates(elem.Value())
+			parsed, err := parseAndPredicates(elem.Value(), &budget)
 			if err != nil {
-				return nil, nil, nil, err
+				return err
 			}
 			predicates = append(predicates, parsed...)
-			continue
+			return nil
 		}
 		if strings.HasPrefix(key, "$") {
-			return nil, nil, nil, fmt.Errorf("Mongo gateway find does not support query operator %q", key)
+			return fmt.Errorf("Mongo gateway find does not support query operator %q", key)
 		}
 		parsed, err := parseFieldPredicate(key, elem.Value())
 		if err != nil {
-			return nil, nil, nil, err
+			return err
+		}
+		if err := budget.consume(len(parsed)); err != nil {
+			return err
 		}
 		predicates = append(predicates, parsed...)
+		return nil
+	})
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	if err := validateFindPredicateWork(predicates, orBranches, norBranches); err != nil {
 		return nil, nil, nil, err
@@ -1731,36 +1735,39 @@ func validateFindPredicateWork(predicates []findPredicate, orBranches, norBranch
 	return nil
 }
 
-func parseFindPredicateDocument(doc wire.Document) ([]findPredicate, error) {
-	elements, err := bson.Raw(doc).Elements()
-	if err != nil {
-		return nil, err
-	}
+func parseFindPredicateDocument(doc wire.Document, budget *findPredicateParseBudget) ([]findPredicate, error) {
 	var out []findPredicate
-	for _, elem := range elements {
+	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		value := elem.Value()
 		if key == "$and" {
-			preds, err := parseAndPredicates(value)
+			preds, err := parseAndPredicates(value, budget)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			out = append(out, preds...)
-			continue
+			return nil
 		}
 		preds, err := parseFieldPredicate(key, value)
 		if err != nil {
-			return nil, err
+			return err
+		}
+		if err := budget.consume(len(preds)); err != nil {
+			return err
 		}
 		out = append(out, preds...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
+func parseAndPredicates(value bson.RawValue, budget *findPredicateParseBudget) ([]findPredicate, error) {
 	array, ok := value.ArrayOK()
 	if !ok {
 		return nil, errors.New("Mongo gateway $and must be an array")
@@ -1781,7 +1788,7 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 		if !ok {
 			return nil, fmt.Errorf("Mongo gateway $and[%d] must be a document", i)
 		}
-		preds, err := parseFindPredicateDocument(wire.Document(doc))
+		preds, err := parseFindPredicateDocument(wire.Document(doc), budget)
 		if err != nil {
 			return nil, err
 		}
@@ -1791,10 +1798,11 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 }
 
 func parseOrPredicates(value bson.RawValue) ([][]findPredicate, error) {
-	return parseBooleanBranches(value, "$or")
+	budget := findPredicateParseBudget{remaining: mongoQueryMaxBooleanPredicates}
+	return parseBooleanBranches(value, "$or", &budget)
 }
 
-func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredicate, error) {
+func parseBooleanBranches(value bson.RawValue, operator string, budget *findPredicateParseBudget) ([][]findPredicate, error) {
 	array, ok := value.ArrayOK()
 	if !ok {
 		return nil, fmt.Errorf("Mongo gateway %s must be an array", operator)
@@ -1812,7 +1820,7 @@ func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredica
 		if !ok {
 			return nil, fmt.Errorf("Mongo gateway %s[%d] must be a document", operator, i)
 		}
-		predicates, err := parseFindPredicateDocument(wire.Document(doc))
+		predicates, err := parseFindPredicateDocument(wire.Document(doc), budget)
 		if err != nil {
 			return nil, err
 		}
@@ -1856,6 +1864,57 @@ func boundedBSONArrayValues(array bson.RawArray, max int, operator string) ([]bs
 	return values, nil
 }
 
+// findPredicateParseBudget is shared by the filter root and every allowed
+// boolean branch. It prevents a valid-looking nesting shape from doing
+// proportional parse work before the global predicate admission check.
+type findPredicateParseBudget struct {
+	remaining int
+}
+
+func (budget *findPredicateParseBudget) consume(count int) error {
+	if count < 0 || count > budget.remaining {
+		return findPredicateCapError()
+	}
+	budget.remaining -= count
+	return nil
+}
+
+func findPredicateCapError() error {
+	return fmt.Errorf("Mongo gateway boolean query exceeds %d predicates", mongoQueryMaxBooleanPredicates)
+}
+
+// forEachBoundedBSONDocumentElement walks a BSON document directly from its
+// wire representation. In particular, it never calls Raw.Elements(), whose
+// result backing slice scales with a client-controlled document width. The
+// over-cap element is detected before its value is decoded or retained.
+func forEachBoundedBSONDocumentElement(doc bson.Raw, max int, limitError error, visit func(bson.RawElement) error) error {
+	length, remaining, ok := bsoncore.ReadLength(doc)
+	if !ok || length < 5 || int(length) != len(doc) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return errors.New("Mongo gateway invalid BSON document")
+	}
+	remaining = remaining[:len(remaining)-1]
+	count := 0
+	for len(remaining) != 0 {
+		element, next, ok := bsoncore.ReadElement(remaining)
+		if !ok {
+			return errors.New("Mongo gateway invalid BSON document")
+		}
+		if count == max {
+			return limitError
+		}
+		raw := bson.RawElement(element)
+		if err := raw.Validate(); err != nil {
+			return err
+		}
+		if err := visit(raw); err != nil {
+			return err
+		}
+		count++
+		remaining = next
+	}
+	return nil
+}
+
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
 	if err := validateMongoDocumentPath(field); err != nil {
 		return nil, fmt.Errorf("Mongo gateway unsupported find predicate %q: %w", field, err)
@@ -1868,19 +1927,15 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 		if !isOperatorDoc {
 			return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
 		}
-		elements, err := doc.Elements()
-		if err != nil {
-			return nil, err
-		}
-		out := make([]findPredicate, 0, len(elements))
-		seen := make(map[string]struct{}, len(elements))
-		for _, elem := range elements {
+		out := make([]findPredicate, 0, min(mongoQueryMaxBooleanPredicates, 4))
+		seen := make(map[string]struct{}, min(mongoQueryMaxBooleanPredicates, 4))
+		err = forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 			op, err := elem.KeyErr()
 			if err != nil {
-				return nil, err
+				return err
 			}
 			if _, duplicate := seen[op]; duplicate {
-				return nil, fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
+				return fmt.Errorf("Mongo gateway find field %q repeats operator %q", field, op)
 			}
 			seen[op] = struct{}{}
 			opValue := elem.Value()
@@ -1888,7 +1943,7 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			case "$in", "$nin":
 				array, ok := opValue.ArrayOK()
 				if !ok {
-					return nil, fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
+					return fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
 				}
 				var values []bson.RawValue
 				if op == "$nin" {
@@ -1897,7 +1952,7 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 					values, err = array.Values()
 				}
 				if err != nil {
-					return nil, err
+					return err
 				}
 				kind := findPredicateIn
 				if op == "$nin" {
@@ -1909,35 +1964,39 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			case "$exists":
 				exists, ok := opValue.BooleanOK()
 				if !ok {
-					return nil, fmt.Errorf("Mongo gateway find field %q $exists must be boolean", field)
+					return fmt.Errorf("Mongo gateway find field %q $exists must be boolean", field)
 				}
 				valueType, raw, err := bson.MarshalValue(exists)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				out = append(out, findPredicate{field: field, op: findPredicateExists, values: []bson.RawValue{{Type: valueType, Value: raw}}})
 			case "$not":
 				notDoc, ok := opValue.DocumentOK()
 				if !ok {
-					return nil, fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
+					return fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
 				}
 				if err := validateNotOperandWork(notDoc); err != nil {
-					return nil, err
+					return err
 				}
 				inner, err := parseFieldPredicate(field, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: notDoc})
 				if err != nil || len(inner) != 1 || inner[0].negate || !findPredicateSupportsNot(inner[0].op) {
 					if err != nil {
-						return nil, err
+						return err
 					}
-					return nil, fmt.Errorf("Mongo gateway find field %q $not requires one supported operator", field)
+					return fmt.Errorf("Mongo gateway find field %q $not requires one supported operator", field)
 				}
 				inner[0].negate = true
 				out = append(out, inner[0])
 			case "$gt", "$gte", "$lt", "$lte":
 				out = append(out, findPredicate{field: field, op: rangeOperator(op), values: []bson.RawValue{opValue}})
 			default:
-				return nil, fmt.Errorf("Mongo gateway unsupported find operator %q", op)
+				return fmt.Errorf("Mongo gateway unsupported find operator %q", op)
 			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 		return out, nil
 	}
@@ -1947,21 +2006,29 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 // validateNotOperandWork admits the raw array before the recursive parser can
 // call RawArray.Values for the only supported $not inner predicate.
 func validateNotOperandWork(doc bson.Raw) error {
-	elements, err := doc.Elements()
+	var op string
+	var value bson.RawValue
+	count := 0
+	err := forEachBoundedBSONDocumentElement(doc, 1, errors.New("Mongo gateway $not requires one supported operator"), func(elem bson.RawElement) error {
+		var err error
+		op, err = elem.KeyErr()
+		if err != nil {
+			return err
+		}
+		value = elem.Value()
+		count++
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if len(elements) != 1 {
+	if count != 1 {
 		return errors.New("Mongo gateway $not requires one supported operator")
-	}
-	op, err := elements[0].KeyErr()
-	if err != nil {
-		return err
 	}
 	if op != "$in" && op != "$nin" {
 		return nil
 	}
-	array, ok := elements[0].Value().ArrayOK()
+	array, ok := value.ArrayOK()
 	if !ok {
 		return errors.New("Mongo gateway $not array operand must be an array")
 	}
@@ -1999,28 +2066,30 @@ func validateMongoDocumentPath(path string) error {
 }
 
 func operatorDocument(doc bson.Raw) (bool, error) {
-	elements, err := doc.Elements()
-	if err != nil {
-		return false, err
-	}
-	if len(elements) == 0 {
-		return false, nil
-	}
 	sawOperator := false
 	sawNonOperator := false
-	for _, elem := range elements {
+	count := 0
+	err := forEachBoundedBSONDocumentElement(doc, mongoQueryMaxBooleanPredicates, findPredicateCapError(), func(elem bson.RawElement) error {
 		key, err := elem.KeyErr()
 		if err != nil {
-			return false, err
+			return err
 		}
+		count++
 		if strings.HasPrefix(key, "$") {
 			sawOperator = true
 		} else {
 			sawNonOperator = true
 		}
 		if sawOperator && sawNonOperator {
-			return false, errors.New("Mongo gateway find field predicate document cannot mix operator and non-operator keys")
+			return errors.New("Mongo gateway find field predicate document cannot mix operator and non-operator keys")
 		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return false, nil
 	}
 	return sawOperator, nil
 }

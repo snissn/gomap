@@ -413,6 +413,61 @@ func TestMongoNegativeQueryRawArrayCapsRejectBeforeFullMaterialization(t *testin
 	}
 }
 
+func TestMongoWideNorBranchRejectsBeforeDocumentMaterializationOrMutation(t *testing.T) {
+	nearCapBranch := make(bson.D, 0, mongoQueryMaxBooleanPredicates)
+	for i := 0; i < mongoQueryMaxBooleanPredicates; i++ {
+		nearCapBranch = append(nearCapBranch, bson.E{Key: fmt.Sprintf("score_%03d", i), Value: int32(i)})
+	}
+	nearCap, err := bson.Marshal(bson.D{{Key: "$nor", Value: bson.A{nearCapBranch}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(nearCap)); err != nil {
+		t.Fatalf("near-cap single $nor branch rejected: %v", err)
+	}
+
+	// Use a raw, several-megabyte branch rather than a compact high-level
+	// shape. The parser must stop at predicate 257 without allocating a raw
+	// element slice proportional to the remaining wire document.
+	wideBranch := append(bson.D(nil), nearCapBranch...)
+	filler := strings.Repeat("x", 1024)
+	for i := mongoQueryMaxBooleanPredicates; i < mongoQueryMaxBooleanPredicates*16; i++ {
+		wideBranch = append(wideBranch, bson.E{Key: fmt.Sprintf("score_%04d", i), Value: filler})
+	}
+	filter := bson.D{{Key: "$nor", Value: bson.A{wideBranch}}}
+	raw, err := bson.Marshal(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(raw)); err == nil || !strings.Contains(err.Error(), "exceeds "+fmt.Sprint(mongoQueryMaxBooleanPredicates)+" predicates") {
+		t.Fatalf("wide $nor branch error=%v want bounded predicate rejection", err)
+	}
+	// The same document walker is reached through every supported nesting
+	// route; no branch may regain an eager Raw.Elements allocation.
+	nested, err := bson.Marshal(bson.D{{Key: "$or", Value: bson.A{bson.D{{Key: "$and", Value: bson.A{wideBranch}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(nested)); err == nil || !strings.Contains(err.Error(), "exceeds "+fmt.Sprint(mongoQueryMaxBooleanPredicates)+" predicates") {
+		t.Fatalf("nested $or/$and wide branch error=%v want bounded predicate rejection", err)
+	}
+
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406654, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score_000", Value: int32(0)}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406655, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor for wide $nor branch: %d", len(server.cursors))
+	}
+	write := serveCommand(t, server, 406656, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, write, "BadValue")
+	check := serveCommand(t, server, 406657, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "x"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, check)
+	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 {
+		t.Fatal("wide $nor branch mutated document")
+	}
+}
+
 func TestMongoMalformedNegativeFilterRejectsBeforeRoutedObservation(t *testing.T) {
 	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
 	lookups := 0

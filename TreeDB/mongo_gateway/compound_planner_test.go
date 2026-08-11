@@ -643,6 +643,29 @@ func TestMongoCompoundPlannerCursorMaterializationCapFailsBeforeCursorPublicatio
 	}
 }
 
+func TestMongoCompoundPlannerDottedProjectionPreflightsBeforeZeroBatchCursorPublication(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 40651104, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}, {Key: "created", Value: int32(-1)}}}, {Key: "name", Value: "tenant_created"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 40651105, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "safe"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(2)}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}},
+		bson.D{{Key: "_id", Value: "array"}, {Key: "tenant", Value: "t"}, {Key: "created", Value: int32(1)}, {Key: "profile", Value: bson.A{bson.D{{Key: "name", Value: "Grace"}}}}},
+	}}, {Key: "$db", Value: "app"}}))
+
+	response := serveCommand(t, server, 40651106, bson.D{
+		{Key: "find", Value: "events"},
+		{Key: "filter", Value: bson.D{{Key: "tenant", Value: "t"}}},
+		{Key: "sort", Value: bson.D{{Key: "created", Value: int32(-1)}}},
+		{Key: "projection", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	server.cursorMu.Lock()
+	defer server.cursorMu.Unlock()
+	if len(server.cursors) != 0 {
+		t.Fatalf("published compound cursor before dotted projection preflight: %d", len(server.cursors))
+	}
+}
+
 func TestMongoCompoundPlannerCursorCapsRetainedIDsBeforePublication(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
 	// This admits the cloned command plan and one small result, but not the
