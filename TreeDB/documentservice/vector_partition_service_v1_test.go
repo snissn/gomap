@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -12,6 +13,13 @@ type documentVectorPartitionBackendV1 struct{ calls int }
 func (b *documentVectorPartitionBackendV1) SearchVectorPartitionV1(_ context.Context, r vectorpartition.SearchRequestV1) (vectorpartition.SearchResponseV1, error) {
 	b.calls++
 	return vectorpartition.SearchResponseV1{Generation: r.Generation}, nil
+}
+func (b *documentVectorPartitionBackendV1) SearchVectorPartitionFastV1(ctx context.Context, r vectorpartition.SearchRequestV1, options vectorpartition.FastSearchOptionsV1) (vectorpartition.SearchResponseV1, vectorpartition.FastSearchEvidenceV1, error) {
+	response, err := b.SearchVectorPartitionV1(ctx, r)
+	return response, vectorpartition.FastSearchEvidenceV1{Generation: r.Generation, IndexedThrough: options.MinIndexedThrough}, err
+}
+func (*documentVectorPartitionBackendV1) PinVectorPartitionSearchSnapshotV1(context.Context, vectorpartition.PinSearchSnapshotOptionsV1) (vectorpartition.SearchSnapshotBackendV1, vectorpartition.FastSearchEvidenceV1, error) {
+	return nil, vectorpartition.FastSearchEvidenceV1{}, errors.New("unsupported")
 }
 func (*documentVectorPartitionBackendV1) RegisterVectorPartitionV1(context.Context, vectorpartition.GenerationRegistrationV1) (vectorpartition.GenerationStatusV1, error) {
 	return vectorpartition.GenerationStatusV1{}, nil

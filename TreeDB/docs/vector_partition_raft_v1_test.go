@@ -33,7 +33,8 @@ func TestDocsVectorPartitionServingSnapshotNoLogAuthorityContract(t *testing.T) 
 	for path, needles := range map[string][]string{
 		filepath.Join(root, "docs", "spec", "vector-partition-raft-v1.md"): {
 			"immutable serving snapshot", "appends no `LogBarrier` entry", "short process-local monotonic",
-			"existing pins drain", "no quorum call", "#4096", "#4098",
+			"existing pins drain", "no quorum call", "#4096", "OperationsV1.SearchFast",
+			"OperationsV1.PinSearchSnapshot", "local wait", "current atomic authorization overlay", "#4098",
 		},
 		filepath.Join(root, "docs", "spec", "raftcluster.md"): {
 			"LinearizableCatalogMetaReadProofV1", "committed entry from that term",

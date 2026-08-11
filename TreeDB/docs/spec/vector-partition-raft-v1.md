@@ -293,9 +293,15 @@ consensus and no request-side asset opens. Forged, expired, wrong-generation,
 or invalidated capabilities fail closed; a request pinned before invalidation
 may drain. The background serving-proof refresh remains quorum-backed and
 no-log, but is retained as separate work rather than charged to a request.
-#4096 owns this strict proof propagation. #4098 owns separate
-explicit relaxed and pinned-session shapes; it does not weaken this strict
-default or accept caller-authored authority.
+#4096 owns this strict proof propagation. `OperationsV1.SearchFast` is a
+separate explicit local-snapshot shape: the caller must bound index age and may
+require an indexed-through watermark, which is satisfied by a local wait and
+never falls back to strict search. `OperationsV1.PinSearchSnapshot` applies the
+same bounds once, caps session lifetime and retained snapshots, and reuses that
+immutable snapshot until close, expiry, or invalidation. Both shapes perform no
+request-side consensus and still apply the current atomic authorization overlay
+before returning results. #4098 owns these shapes; they do not weaken the
+strict default or accept caller-authored authority.
 
 The concrete replica-local catalog authority intentionally does not implement
 the serving interface; only the linearizable adapter can capture or refresh a

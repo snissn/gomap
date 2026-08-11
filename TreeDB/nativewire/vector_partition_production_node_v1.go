@@ -14,10 +14,12 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 type VectorPartitionProductionNodeShardV1 struct {
@@ -45,6 +47,9 @@ type VectorPartitionProductionNodeOptionsV1 struct {
 	AuthorizationOverlayDigest string
 	IndexedThrough             uint64
 	StrictCapabilityKey        []byte
+	MaxPinnedSessions          int
+	MaxPinnedSessionAge        time.Duration
+	MaxRetainedSnapshots       int
 }
 
 type VectorPartitionProductionNodeGroupEvidenceV1 struct {
@@ -322,6 +327,7 @@ func NewVectorPartitionProductionNodeV1(ctx context.Context, opts VectorPartitio
 		ServingSnapshot: &VectorPartitionServingSnapshotPublisherOptionsV1{
 			Authority: replicated, GenerationSources: generationSources, TopologyDigest: opts.TopologyDigest,
 			AuthorizationOverlayDigest: opts.AuthorizationOverlayDigest, IndexedThrough: opts.IndexedThrough,
+			MaxPinnedSessions: opts.MaxPinnedSessions, MaxPinnedSessionAge: opts.MaxPinnedSessionAge, MaxRetainedSnapshots: opts.MaxRetainedSnapshots,
 		},
 		StrictCapabilityKey: opts.StrictCapabilityKey,
 	})
@@ -363,6 +369,15 @@ func (n *VectorPartitionProductionNodeV1) GroupEvidenceV1() []VectorPartitionPro
 		return nil
 	}
 	return slices.Clone(n.evidence)
+}
+
+// PublishSearchSnapshotV1 publishes one complete update watermark and returns
+// the local read-your-writes token accepted by SearchFast.
+func (n *VectorPartitionProductionNodeV1) PublishSearchSnapshotV1(ctx context.Context, indexedThrough uint64, authorizationDigest string, deniedDocumentIDs []string) (public.IndexedWriteTokenV1, error) {
+	if n == nil || n.topology == nil {
+		return public.IndexedWriteTokenV1{}, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	return n.topology.PublishSearchSnapshotV1(ctx, indexedThrough, authorizationDigest, deniedDocumentIDs)
 }
 
 func (n *VectorPartitionProductionNodeV1) Close() error {
