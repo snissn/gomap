@@ -14,7 +14,7 @@ import (
 
 func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
 	schedule := localHNSWFinalQualificationScheduleV1()
-	if len(schedule) != 24 || schedule[0].Variant != "m16_efc128" || schedule[8].Variant != "m18_efc256" || schedule[16].Variant != "m16_efc128" {
+	if len(schedule) != 24 || schedule[0].Variant != "m16_efc128" || schedule[2].Variant != "m18_efc256" || schedule[8].Variant != "m18_efc256" || schedule[16].Variant != "m16_efc128" {
 		t.Fatalf("schedule=%+v", schedule)
 	}
 	if runs := localHNSWFinalQualificationRunsV1(); len(runs) != 48 || runs[0].Corpus != localHNSWFinalQualificationCorpus250KV1 || runs[24].Corpus != localHNSWFinalQualificationCorpus100KV1 {
@@ -49,7 +49,7 @@ func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
 
 func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 	dir := t.TempDir()
-	if _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
+	if _, _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
 		t.Fatal("accepted missing child report")
 	}
 	for _, name := range []string{"vector_partition_m8_a.json", "vector_partition_m8_b.json"} {
@@ -57,21 +57,43 @@ func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
+	if _, _, _, err := localHNSWFinalQualificationChildReportV1(dir); err == nil {
 		t.Fatal("accepted multiple child reports")
 	}
 }
 
 func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
-	fixture := fixtureManifest{Vectors: 1, Queries: 1, Dimensions: 1, Seed: 1}
-	fixtures := map[string]fixtureManifest{localHNSWFinalQualificationCorpus250KV1: fixture, localHNSWFinalQualificationCorpus100KV1: fixture}
+	fixture := fixtureManifest{Vectors: 10, Queries: 1000, Dimensions: 1, Seed: 1}
+	truth := make([][]m8CanonicalResultV1, fixture.Queries)
+	outcome := m8ProductionRowOutcomesV1{Status: "pass", Samples: fixture.Queries, TopKIDs: make([][]string, fixture.Queries), TopKScoreBits: make([][]uint32, fixture.Queries), TotalNanos: make([]uint64, fixture.Queries), ExactRepresentativeTruthHits: make([]uint8, fixture.Queries)}
+	for query := range truth {
+		truth[query], outcome.TopKIDs[query], outcome.TopKScoreBits[query] = make([]m8CanonicalResultV1, 10), make([]string, 10), make([]uint32, 10)
+		outcome.TotalNanos[query], outcome.ExactRepresentativeTruthHits[query] = 1, 10
+		for rank := range truth[query] {
+			id := "doc-" + strconv.Itoa(rank)
+			truth[query][rank].ID, outcome.TopKIDs[query][rank] = id, id
+		}
+	}
+	digest := strings.Repeat("a", 64)
+	inputs := map[string]localHNSWFinalQualificationCorpusInputV1{
+		localHNSWFinalQualificationCorpus250KV1: {Fixture: fixture, Dataset: "/dataset-250", TruthCache: "/truth-250", TruthCacheSHA256: digest, Truth: truth},
+		localHNSWFinalQualificationCorpus100KV1: {Fixture: fixture, Dataset: "/dataset-100", TruthCache: "/truth-100", TruthCacheSHA256: digest, Truth: truth},
+	}
 	roots := localHNSWFinalQualificationRootsV1{"a", "b", "c", "d"}
 	var got []config
-	err := localHNSWFinalQualificationInvokeWithDiscoveryV1(config{out: t.TempDir()}, fixtures, roots, func(cfg config, _ fixtureManifest, _, _ [][]float64, _ io.Writer) error {
+	call := 0
+	children, err := localHNSWFinalQualificationInvokeWithDiscoveryV1(config{out: t.TempDir(), baseSHA: strings.Repeat("a", 40), headSHA: strings.Repeat("b", 40), sourceCheckout: "/source", command: []string{"/bench"}}, inputs, roots, func(cfg config, _ fixtureManifest, _, _ [][]float64, _ io.Writer) error {
 		got = append(got, cfg)
 		return nil
-	}, func(string) error { return nil }, io.Discard)
-	if err != nil || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
+	}, func(string) (m8ProductionReportV1, m8ProductionMeasurementTranscriptV1, string, error) {
+		run := localHNSWFinalQualificationRunsV1()[call]
+		call++
+		rowOutcome := outcome
+		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
+		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1}}}}
+		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, digest, nil
+	}, io.Discard)
+	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
 		t.Fatalf("err=%v calls=%d", err, len(got))
 	}
 }

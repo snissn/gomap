@@ -41,15 +41,17 @@ const (
 func localHNSWFinalQualificationScheduleV1() []localHNSWFinalQualificationCellV1 {
 	cells := make([]localHNSWFinalQualificationCellV1, 0, 24)
 	for repetition := range 3 {
-		variants := []string{localHNSWFinalQualificationBaselineV1, localHNSWFinalQualificationCandidateV1}
-		if repetition%2 == 1 {
-			variants[0], variants[1] = variants[1], variants[0]
-		}
+		pair := 0
 		for _, probes := range []int{2, 16} {
 			for _, concurrency := range []int{1, 32} {
+				variants := []string{localHNSWFinalQualificationBaselineV1, localHNSWFinalQualificationCandidateV1}
+				if (repetition+pair)%2 == 1 {
+					variants[0], variants[1] = variants[1], variants[0]
+				}
 				for _, variant := range variants {
 					cells = append(cells, localHNSWFinalQualificationCellV1{Repetition: repetition, Variant: variant, Probes: probes, Concurrency: concurrency})
 				}
+				pair++
 			}
 		}
 	}
@@ -144,6 +146,14 @@ type localHNSWFinalQualificationRootsV1 struct {
 	Baseline100K, Candidate100K string
 }
 
+type localHNSWFinalQualificationCorpusInputV1 struct {
+	Fixture          fixtureManifest
+	Dataset          string
+	TruthCache       string
+	TruthCacheSHA256 string
+	Truth            [][]m8CanonicalResultV1
+}
+
 func (r localHNSWFinalQualificationRootsV1) database(corpus, variant string) string {
 	if corpus == localHNSWFinalQualificationCorpus250KV1 && variant == localHNSWFinalQualificationBaselineV1 {
 		return r.Baseline250K
@@ -161,36 +171,88 @@ func (r localHNSWFinalQualificationRootsV1) database(corpus, variant string) str
 }
 
 type localHNSWFinalQualificationRunnerV1 func(config, fixtureManifest, [][]float64, [][]float64, io.Writer) error
+type localHNSWFinalQualificationDiscoveryV1 func(string) (m8ProductionReportV1, m8ProductionMeasurementTranscriptV1, string, error)
 
-func localHNSWFinalQualificationInvokeV1(cfg config, fixtures map[string]fixtureManifest, roots localHNSWFinalQualificationRootsV1, runner localHNSWFinalQualificationRunnerV1, stdout io.Writer) error {
-	return localHNSWFinalQualificationInvokeWithDiscoveryV1(cfg, fixtures, roots, runner, func(dir string) error { _, _, err := localHNSWFinalQualificationChildReportV1(dir); return err }, stdout)
+func localHNSWFinalQualificationInvokeV1(cfg config, inputs map[string]localHNSWFinalQualificationCorpusInputV1, roots localHNSWFinalQualificationRootsV1, runner localHNSWFinalQualificationRunnerV1, stdout io.Writer) ([]localHNSWFinalQualificationChildV1, error) {
+	return localHNSWFinalQualificationInvokeWithDiscoveryV1(cfg, inputs, roots, runner, localHNSWFinalQualificationChildReportV1, stdout)
 }
 
-func localHNSWFinalQualificationInvokeWithDiscoveryV1(cfg config, fixtures map[string]fixtureManifest, roots localHNSWFinalQualificationRootsV1, runner localHNSWFinalQualificationRunnerV1, discover func(string) error, stdout io.Writer) error {
+func localHNSWFinalQualificationInvokeWithDiscoveryV1(cfg config, inputs map[string]localHNSWFinalQualificationCorpusInputV1, roots localHNSWFinalQualificationRootsV1, runner localHNSWFinalQualificationRunnerV1, discover localHNSWFinalQualificationDiscoveryV1, stdout io.Writer) ([]localHNSWFinalQualificationChildV1, error) {
 	if runner == nil || discover == nil {
-		return errors.New("missing local HNSW final qualification runner")
+		return nil, errors.New("missing local HNSW final qualification runner")
 	}
+	children := make([]localHNSWFinalQualificationChildV1, 0, len(localHNSWFinalQualificationRunsV1()))
 	for i, run := range localHNSWFinalQualificationRunsV1() {
-		fixture, ok := fixtures[run.Corpus]
+		input, ok := inputs[run.Corpus]
 		db := roots.database(run.Corpus, run.Variant)
 		if !ok || db == "" {
-			return errors.New("missing local HNSW final qualification child input")
+			return nil, errors.New("missing local HNSW final qualification child input")
 		}
-		child := cfg
-		child.m8ExistingDB, child.probes, child.concurrency, child.efSearch = db, []int{run.Probes}, []int{run.Concurrency}, []int{128}
-		child.out, child.profiles = filepath.Join(cfg.out, "child-"+strconv.Itoa(i)), filepath.Join(cfg.out, "child-"+strconv.Itoa(i), "profiles")
+		child, err := localHNSWFinalQualificationChildConfigV1(cfg, input, db, run, i)
+		if err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(child.out, 0o755); err != nil {
-			return err
+			return nil, err
 		}
-		vectors, queries := fixtureData(fixture)
-		if err := runner(child, fixture, vectors, queries, stdout); err != nil {
-			return err
+		vectors, queries := fixtureData(input.Fixture)
+		startedAt := time.Now().UTC()
+		if err := runner(child, input.Fixture, vectors, queries, stdout); err != nil {
+			return nil, err
 		}
-		if err := discover(child.out); err != nil {
-			return err
+		endedAt := time.Now().UTC()
+		report, transcript, reportSHA256, err := discover(child.out)
+		if err != nil {
+			return nil, err
 		}
+		evidence, err := localHNSWFinalQualificationChildFromTranscriptV1(run, report, transcript, reportSHA256, input.Truth, startedAt, endedAt)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, evidence)
 	}
-	return nil
+	return children, nil
+}
+
+func localHNSWFinalQualificationChildConfigV1(base config, input localHNSWFinalQualificationCorpusInputV1, db string, run localHNSWFinalQualificationRunV1, ordinal int) (config, error) {
+	if len(base.command) == 0 || input.Dataset == "" || input.TruthCache == "" || !localHNSWAttributionSHA256V1(input.TruthCacheSHA256) || db == "" {
+		return config{}, errors.New("invalid local HNSW final qualification child config")
+	}
+	out := filepath.Join(base.out, "child-"+strconv.Itoa(ordinal))
+	args := []string{
+		"-mode", m8ProductionMultiGroupModeV1,
+		"-dataset", input.Dataset,
+		"-partitions", "16",
+		"-probes", strconv.Itoa(run.Probes),
+		"-overlap", "0.2",
+		"-top-k", "10",
+		"-recall-target", "0.9",
+		"-seed", strconv.FormatInt(input.Fixture.Seed, 10),
+		"-base-sha", base.baseSHA,
+		"-head-sha", base.headSHA,
+		"-source-checkout", base.sourceCheckout,
+		"-format", "json",
+		"-out", out,
+		"-raft-groups", "4",
+		"-raft-nodes-per-group", "3",
+		"-concurrency", strconv.Itoa(run.Concurrency),
+		"-warmup", "0",
+		"-profiles", filepath.Join(out, "profiles"),
+		"-m8-existing-db", db,
+		"-m8-max-rss-bytes", strconv.FormatUint(m8QualificationPeakRSSCapBytesV1, 10),
+		"-m8-max-persistent-asset-bytes", strconv.FormatUint(m8QualificationPersistentAssetCapBytesV1, 10),
+		"-m8-max-exact-truth-visits", strconv.FormatInt(m8QualificationExactTruthCapV1(input.Fixture), 10),
+		"-m8-truth-cache", input.TruthCache,
+		"-m8-truth-cache-sha256", input.TruthCacheSHA256,
+		"-router-candidates", strconv.Itoa(m8QualificationRouterCandidatesV1),
+		"-ef-search", "128",
+	}
+	child, err := parseConfig(args)
+	if err != nil {
+		return config{}, err
+	}
+	child.command = append([]string{base.command[0]}, args...)
+	return child, nil
 }
 
 func localHNSWFinalQualificationChildValidV1(child localHNSWFinalQualificationChildV1, expected localHNSWFinalQualificationRunV1) bool {
@@ -205,44 +267,44 @@ func localHNSWFinalQualificationChildValidV1(child localHNSWFinalQualificationCh
 
 // localHNSWFinalQualificationChildReportV1 reads exactly the one report
 // emitted into a dedicated child directory by the existing M8 runner.
-func localHNSWFinalQualificationChildReportV1(dir string) (m8ProductionReportV1, string, error) {
+func localHNSWFinalQualificationChildReportV1(dir string) (m8ProductionReportV1, m8ProductionMeasurementTranscriptV1, string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return m8ProductionReportV1{}, "", err
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", err
 	}
 	var path string
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.Type().IsRegular() && strings.HasPrefix(name, "vector_partition_m8_") && strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, "vector_partition_m8_measurements_") {
 			if path != "" {
-				return m8ProductionReportV1{}, "", errors.New("multiple local HNSW final qualification child reports")
+				return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", errors.New("multiple local HNSW final qualification child reports")
 			}
 			path = filepath.Join(dir, name)
 		}
 	}
 	if path == "" {
-		return m8ProductionReportV1{}, "", errors.New("missing local HNSW final qualification child report")
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", errors.New("missing local HNSW final qualification child report")
 	}
 	raw, err := readBoundedRegularFileV1(path, m8QualificationMatrixMaxBytesV1)
 	if err != nil {
-		return m8ProductionReportV1{}, "", err
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", err
 	}
 	var report m8ProductionReportV1
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&report); err != nil {
-		return m8ProductionReportV1{}, "", err
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", err
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return m8ProductionReportV1{}, "", errors.New("local HNSW final qualification child report has trailing JSON")
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", errors.New("local HNSW final qualification child report has trailing JSON")
 	}
 	transcript, err := m8ReadProductionMeasurementTranscriptV1(report)
 	if err != nil || transcript.ExecutionID != report.ExecutionID {
-		return m8ProductionReportV1{}, "", errors.New("invalid local HNSW final qualification child transcript")
+		return m8ProductionReportV1{}, m8ProductionMeasurementTranscriptV1{}, "", errors.New("invalid local HNSW final qualification child transcript")
 	}
 	digest := sha256.Sum256(raw)
-	return report, hex.EncodeToString(digest[:]), nil
+	return report, transcript, hex.EncodeToString(digest[:]), nil
 }
 
 func localHNSWFinalQualificationChildFromTranscriptV1(expected localHNSWFinalQualificationRunV1, report m8ProductionReportV1, transcript m8ProductionMeasurementTranscriptV1, reportSHA256 string, truth [][]m8CanonicalResultV1, startedAt, endedAt time.Time) (localHNSWFinalQualificationChildV1, error) {
