@@ -176,7 +176,11 @@ func localHNSWRepairCalibrationQueryV1Build(ctx context.Context, source *m8Produ
 }
 
 func localHNSWRepairCalibrationSearchesV1(ctx context.Context, harness *localHNSWVariantHarnessV1, query []float32) ([]localHNSWRepairCalibrationSearchV1, [][]m8CanonicalResultV1, error) {
-	if harness == nil || len(query) == 0 {
+	return localHNSWRepairCalibrationSearchesAtEFV1(ctx, harness, query, 128)
+}
+
+func localHNSWRepairCalibrationSearchesAtEFV1(ctx context.Context, harness *localHNSWVariantHarnessV1, query []float32, efSearch int) ([]localHNSWRepairCalibrationSearchV1, [][]m8CanonicalResultV1, error) {
+	if harness == nil || len(query) == 0 || efSearch < 10 {
 		return nil, nil, errors.New("invalid local HNSW repair search")
 	}
 	searches := make([]localHNSWRepairCalibrationSearchV1, len(harness.searchers))
@@ -185,7 +189,7 @@ func localHNSWRepairCalibrationSearchesV1(ctx context.Context, harness *localHNS
 		if searcher == nil || searcher.Status().SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
 			return nil, nil, errors.New("invalid local HNSW repair search route")
 		}
-		found, metrics, attribution, err := searcher.SearchWithAttributionV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 128})
+		found, metrics, attribution, err := searcher.SearchWithAttributionV1(ctx, query, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: efSearch})
 		if err != nil || metrics.Route != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || !localHNSWAttributionSearchValidV1(attribution) || metrics.AuxiliaryAdmissions > metrics.AuxiliaryCandidates {
 			return nil, nil, errors.New("invalid local HNSW repair attributed search")
 		}
