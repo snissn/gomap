@@ -61,7 +61,7 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
             "errors": 0, "timeouts": 0, "recall_at_10": .95, "qps": 1000.0,
             "p50_nanos": 1_000_000, "p95_nanos": 1_000_000, "p99_nanos": 1_000_000,
         },
-        "counters": counters, "timings": {key: 1 for key in reduce.TIMINGS},
+        "counters": counters, "timings": {key: 1_000_000_000 if key == "client_total" else 1 for key in reduce.TIMINGS},
         "catalog_reads": {"nodes": [{
             "node_config_sha256": NODE,
             "before": {name: stage() for name in reduce.CATALOG_STAGES},
@@ -116,6 +116,12 @@ class RevalidationTest(unittest.TestCase):
         value["elapsed_nanos"] = 31_000_000
         with self.assertRaisesRegex(ValueError, "elapsed"):
             reduce._validate_cell(value, result, "strict", 32, OWNERS)
+
+    def test_client_total_must_equal_raw_samples(self) -> None:
+        value, result = cell()
+        value["timings"]["client_total"] -= 1
+        with self.assertRaisesRegex(ValueError, "client timing total"):
+            reduce._validate_cell(value, result, "strict", 1, OWNERS)
 
     def test_fast_age_bound_is_fail_closed(self) -> None:
         value, result = cell("fast")

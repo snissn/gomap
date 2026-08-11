@@ -189,6 +189,7 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     _require(isinstance(timings, dict) and set(timings) == set(TIMINGS) and all(_uint(timings[key]) for key in TIMINGS), "benchmark timings are invalid")
     samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
     _require(isinstance(samples, list) and len(samples) == 1000 and all(_uint(sample, positive=True) for sample in samples), "raw query timings are invalid")
+    _require(timings["client_total"] == sum(samples), "client timing total changed")
     _require(_uint(elapsed, positive=True) and elapsed >= max(sum(samples[lane::concurrency]) for lane in range(concurrency)), "cell elapsed time is too small")
     _require((metrics.get("p50_nanos"), metrics.get("p95_nanos"), metrics.get("p99_nanos")) == tuple(_percentile(samples, value) for value in (50, 95, 99)), "cell percentiles changed")
     _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "cell QPS changed")
