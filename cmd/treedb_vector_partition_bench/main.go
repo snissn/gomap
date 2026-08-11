@@ -54,6 +54,7 @@ const (
 	maxSourceHNSWDegree                     = partitionHNSWDegree
 	maxPartitionLocalHNSWM                  = 32
 	partitionHNSWDefaultEfC                 = 128
+	maxPartitionHNSWEfC                     = 4_096
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
 	qualificationSyntheticGeneratorV1       = "treedb_vector_partition_high_entropy_synthetic_v1"
 	qualificationEmbeddingGeneratorV1       = "treedb_vector_partition_embedding_mixture_v1"
@@ -1213,8 +1214,8 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 	if efConstruction == 0 {
 		efConstruction = partitionHNSWDefaultEfC
 	}
-	if efConstruction < m {
-		return 0, 0, fmt.Errorf("effective partition HNSW efConstruction=%d must be >= M=%d", efConstruction, m)
+	if efConstruction < m || efConstruction > maxPartitionHNSWEfC {
+		return 0, 0, fmt.Errorf("effective partition HNSW efConstruction must be in [%d,%d]", m, maxPartitionHNSWEfC)
 	}
 	return m, efConstruction, nil
 }

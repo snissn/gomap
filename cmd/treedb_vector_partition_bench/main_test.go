@@ -1882,6 +1882,7 @@ func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "1"},
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "33"},
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "18", "-partition-hnsw-ef-construction", "17"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-ef-construction", "4097"},
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-hnsw-ef-construction", "256"},
 	} {
 		if _, err := parseConfig(args); err == nil {
