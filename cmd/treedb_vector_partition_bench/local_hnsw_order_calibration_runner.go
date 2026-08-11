@@ -311,8 +311,11 @@ func localHNSWOrderCalibrationGraphV1Valid(graph localHNSWRepairCalibrationGraph
 	if graph.Rows != 300000 || graph.NativeReachableRows < 16 || graph.NativeReachableRows > graph.Rows || graph.CombinedReachableRows != graph.Rows || graph.NativeTraversalRoots < 16 || graph.NativeTraversalRoots > graph.Rows || graph.AuxiliaryCSRBytes != 8*(graph.Rows+16)+4*graph.AuxiliaryEdges {
 		return false
 	}
+	if graph.AuxiliaryEdges != 2*(graph.NativeTraversalRoots-16) {
+		return false
+	}
 	if graph.AuxiliaryEdges == 0 {
 		return graph.AuxiliaryMaxDegree == 0
 	}
-	return graph.AuxiliaryMaxDegree >= 1 && graph.AuxiliaryMaxDegree <= 9 && graph.AuxiliaryEdges == 2*(graph.NativeTraversalRoots-16)
+	return graph.AuxiliaryMaxDegree >= 1 && graph.AuxiliaryMaxDegree <= 9
 }

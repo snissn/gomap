@@ -84,4 +84,8 @@ func TestLocalHNSWOrderCalibrationGraphV1Valid(t *testing.T) {
 	if !localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
 		t.Fatalf("connected candidate graph rejected: %+v", candidate)
 	}
+	candidate.NativeTraversalRoots = 17
+	if localHNSWOrderCalibrationGraphV1Valid(candidate, false) {
+		t.Fatalf("zero-edge multi-root candidate accepted: %+v", candidate)
+	}
 }
