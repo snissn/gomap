@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -239,10 +240,23 @@ func localHNSWFinalQualificationApprovalV1(checkout, approvalSHA, headSHA string
 	if err != nil || strings.TrimSpace(string(commitRaw)) != approvalSHA || exec.Command("git", "-C", checkout, "merge-base", "--is-ancestor", approvalSHA, headSHA).Run() != nil {
 		return errors.New("local HNSW final qualification approval is not an exact ancestor commit")
 	}
+	parentsRaw, err := exec.Command("git", "-C", checkout, "show", "-s", "--format=%P", approvalSHA).Output()
+	if err != nil || len(strings.Fields(string(parentsRaw))) != 2 {
+		return errors.New("local HNSW final qualification approval is not the #4115 merge commit")
+	}
 	subjectRaw, err := exec.Command("git", "-C", checkout, "show", "-s", "--format=%s", approvalSHA).Output()
 	subject := strings.TrimSpace(string(subjectRaw))
-	if err != nil || !strings.HasSuffix(subject, fmt.Sprintf("(#%d)", localHNSWFinalApprovalPullRequestV1)) && !strings.HasPrefix(subject, fmt.Sprintf("Merge pull request #%d from ", localHNSWFinalApprovalPullRequestV1)) {
+	if err != nil || !strings.HasPrefix(subject, fmt.Sprintf("Merge pull request #%d from ", localHNSWFinalApprovalPullRequestV1)) {
 		return errors.New("local HNSW final qualification approval commit does not identify PR #4115")
+	}
+	firstParentRaw, err := exec.Command("git", "-C", checkout, "rev-list", "--first-parent", headSHA).Output()
+	if err != nil || !slices.Contains(strings.Fields(string(firstParentRaw)), approvalSHA) {
+		return errors.New("local HNSW final qualification approval is not on the final first-parent chain")
+	}
+	diff := exec.Command("git", "-C", checkout, "diff", "--quiet", approvalSHA+"^1", approvalSHA, "--", localHNSWFinalApprovalEvidencePathV1).Run()
+	exit, changed := diff.(*exec.ExitError)
+	if !changed || exit.ExitCode() != 1 {
+		return errors.New("local HNSW final qualification approval did not introduce the #4093 evidence")
 	}
 	approvalTree, err := exec.Command("git", "-C", checkout, "rev-parse", "--verify", approvalSHA+":"+localHNSWFinalApprovalEvidencePathV1).Output()
 	if err != nil {

@@ -79,6 +79,13 @@ func TestLocalHNSWFinalQualificationApprovalV1(t *testing.T) {
 			t.Fatalf("accepted %s as #4093 approval", name)
 		}
 	}
+	runGit("checkout", "-qb", "fake-approval")
+	runGit("commit", "--allow-empty", "-qm", "fake (#4115)")
+	fakeApproval := runGit("rev-parse", "HEAD")
+	if err := localHNSWFinalQualificationApprovalV1(source, fakeApproval, fakeApproval); err == nil {
+		t.Fatal("accepted branch-only commit as merged #4093 approval")
+	}
+	runGit("checkout", "-q", mainBranch)
 	if err := os.WriteFile(filepath.Join(evidenceDir, "summary.json"), []byte(`{}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
