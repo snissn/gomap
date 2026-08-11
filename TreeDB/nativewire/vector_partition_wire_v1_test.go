@@ -1,8 +1,11 @@
 package nativewire
 
 import (
+	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
 	"net"
 	"os"
 	"reflect"
@@ -144,8 +147,74 @@ func TestVectorPartitionWireV1RejectsMalformedAndOversized(t *testing.T) {
 	if _, err := decodeVectorPartitionSearchRequestV1(append(append([]byte(nil), raw...), 0), limits); err == nil {
 		t.Fatal("vector request with trailing bytes decoded")
 	}
+	_, versionBytes := binary.Uvarint(raw)
+	overflowVersion := binary.AppendUvarint(nil, uint64(math.MaxUint32)+2)
+	overflowVersion = append(overflowVersion, raw[versionBytes:]...)
+	if _, err := decodeVectorPartitionSearchRequestV1(overflowVersion, limits); err == nil {
+		t.Fatal("overflowing vector request version decoded")
+	}
 	if _, err := appendVectorPartitionSearchResponseSectionV1(nil, public.SearchResponseV1{Timing: public.SearchTimingV1{Total: -1}}); err == nil {
 		t.Fatal("negative vector timing encoded")
+	}
+}
+
+func TestVectorPartitionNativeWirePropagatesRequestDeadlineV1(t *testing.T) {
+	observed := make(chan error, 1)
+	config := public.ConservativeOperationsConfigV1()
+	config.Enabled = true
+	operations, err := public.NewOperationsV1(new(public.ServiceV1), config, func(ctx context.Context) (public.OperationsHealthV1, error) {
+		<-ctx.Done()
+		observed <- ctx.Err()
+		return public.OperationsHealthV1{}, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+	deadline := time.Now().Add(20 * time.Millisecond)
+	missingDeadline, err := appendVectorPartitionCommandBodyV1(nil, iwire.CommandVectorStatus, nil, nil, nil, time.Time{}, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingSections, err := iwire.DecodeSections(missingDeadline, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.registry.ValidateRequestSections(missingSections); err == nil {
+		t.Fatal("vector command without deadline was accepted")
+	}
+	body, err := appendVectorPartitionCommandBodyV1(nil, iwire.CommandVectorStatus, nil, nil, nil, deadline, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections, err := iwire.DecodeSections(body, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handled := make(chan error, 1)
+	go func() {
+		_, err := server.handleVectorPartitionCommandV1(context.Background(), nil, command, nil)
+		handled <- err
+	}()
+	select {
+	case err := <-observed:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("server operation context = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server operation ignored the request deadline")
+	}
+	select {
+	case err := <-handled:
+		if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrTimeout {
+			t.Fatalf("deadline result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server retained the timed-out request")
 	}
 }
 
@@ -178,6 +247,7 @@ func BenchmarkVectorPartitionPublicTransportV1(b *testing.B) {
 		request.Query[i] = float32(i+1) / 128
 	}
 	options := public.FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 9}
+	commandDeadline := time.Unix(0, 123456789)
 	response := public.SearchResponseV1{Generation: request.Generation, Neighbors: []public.NeighborV1{
 		{ID: "doc-000001", Score: .99}, {ID: "doc-000002", Score: .98}, {ID: "doc-000003", Score: .97}, {ID: "doc-000004", Score: .96}, {ID: "doc-000005", Score: .95},
 		{ID: "doc-000006", Score: .94}, {ID: "doc-000007", Score: .93}, {ID: "doc-000008", Score: .92}, {ID: "doc-000009", Score: .91}, {ID: "doc-000010", Score: .90},
@@ -192,7 +262,7 @@ func BenchmarkVectorPartitionPublicTransportV1(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			var err error
-			requestBody, err = appendVectorPartitionCommandBodyV1(requestBody[:0], iwire.CommandVectorSearchFast, &request, &options, nil, limits)
+			requestBody, err = appendVectorPartitionCommandBodyV1(requestBody[:0], iwire.CommandVectorSearchFast, &request, &options, nil, commandDeadline, limits)
 			if err != nil {
 				b.Fatal(err)
 			}

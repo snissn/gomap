@@ -774,7 +774,8 @@ is terminal for the named cursor but not for the connection.
 ```
 
 These are connection-local read commands and never deterministic mutation or
-command-WAL entries. They use the existing native-wire framing, deadlines,
+command-WAL entries. Every command requires the generic `deadline` section and
+uses the existing native-wire framing, bounded operation context,
 connection limits, cancellation, and error frames. Their direct binary sections
 are:
 

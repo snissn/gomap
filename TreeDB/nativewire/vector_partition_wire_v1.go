@@ -139,7 +139,17 @@ func (c *Client) vectorSearchCommandV1(ctx context.Context, command iwire.Comman
 }
 
 func (c *Client) vectorCommandLockedV1(ctx context.Context, command iwire.CommandID, request *public.SearchRequestV1, fast *public.FastSearchOptionsV1, pin *public.PinSearchSnapshotOptionsV1) ([]iwire.Section, error) {
-	body, err := appendVectorPartitionCommandBodyV1(c.requestBody[:0], command, request, fast, pin, c.limits)
+	var deadline time.Time
+	if ctx != nil {
+		deadline, _ = ctx.Deadline()
+	}
+	if request != nil && !request.Deadline.IsZero() && (deadline.IsZero() || request.Deadline.Before(deadline)) {
+		deadline = request.Deadline
+	}
+	if deadline.IsZero() {
+		return nil, protocolError(iwire.ErrInvalidCommand, "bounded vector command deadline is required")
+	}
+	body, err := appendVectorPartitionCommandBodyV1(c.requestBody[:0], command, request, fast, pin, deadline, c.limits)
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +176,18 @@ func validateVectorPartitionFastEvidenceV1(evidence public.FastSearchEvidenceV1,
 func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *connState, cmd iwire.ValidatedCommand, dst []byte) ([]byte, error) {
 	if s.vectorPartitionOperations == nil || !s.vectorPartitionOperations.Enabled() {
 		return nil, protocolError(iwire.ErrConsistencyUnavailable, "vector partition operations are unavailable")
+	}
+	deadline, err := deadlineUnixNanosFromSections(cmd.Known)
+	if err != nil {
+		return nil, err
+	}
+	if deadline > 0 {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, deadline))
+		defer cancel()
 	}
 	switch cmd.Header.ID {
 	case iwire.CommandVectorStatus:
@@ -310,13 +332,24 @@ func vectorPartitionClientErrorV1(err error) error {
 	return &public.ErrorV1{Code: code, Err: cause}
 }
 
-func appendVectorPartitionCommandBodyV1(dst []byte, command iwire.CommandID, request *public.SearchRequestV1, fast *public.FastSearchOptionsV1, pin *public.PinSearchSnapshotOptionsV1, limits iwire.Limits) ([]byte, error) {
+func appendVectorPartitionCommandBodyV1(dst []byte, command iwire.CommandID, request *public.SearchRequestV1, fast *public.FastSearchOptionsV1, pin *public.PinSearchSnapshotOptionsV1, deadline time.Time, limits iwire.Limits) ([]byte, error) {
 	body, err := appendCommandHeaderSection(dst, command)
 	if err != nil {
 		return nil, err
 	}
+	if !deadline.IsZero() {
+		if deadline.UnixNano() <= 0 {
+			return nil, protocolError(iwire.ErrInvalidCommand, "vector command deadline cannot be encoded")
+		}
+		body, err = iwire.AppendSectionHeader(body, iwire.SectionDeadline, 0, uvarintLen(uint64(deadline.UnixNano())))
+		if err == nil {
+			body = binary.AppendUvarint(body, uint64(deadline.UnixNano()))
+		}
+	}
 	if request != nil {
-		body, err = appendVectorPartitionSearchRequestSectionV1(body, *request, limits)
+		if err == nil {
+			body, err = appendVectorPartitionSearchRequestSectionV1(body, *request, limits)
+		}
 	}
 	if err == nil && fast != nil {
 		body, err = appendVectorPartitionFastOptionsSectionV1(body, *fast)
@@ -365,7 +398,12 @@ func decodeVectorPartitionSearchRequestV1(src []byte, limits iwire.Limits) (publ
 func decodeVectorPartitionSearchRequestIntoV1(src []byte, limits iwire.Limits, query []float32) (public.SearchRequestV1, error) {
 	r := vectorPartitionWireReaderV1{src: src}
 	request := public.SearchRequestV1{}
-	request.Version = uint32(r.u64())
+	version := r.u64()
+	if version > math.MaxUint32 && r.err == nil {
+		r.err = protocolError(iwire.ErrInvalidCommand, "vector request version overflows uint32")
+	} else {
+		request.Version = uint32(version)
+	}
 	request.Generation.Index = r.string()
 	request.Generation.Generation = r.u64()
 	queryCount := r.int()

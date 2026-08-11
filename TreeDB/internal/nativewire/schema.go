@@ -642,6 +642,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:      "vector_status",
 			Kind:      CommandKindRead,
 			LocalOnly: true,
+			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
 		},
 		{
 			ID:        CommandVectorSearchStrict,
@@ -650,6 +651,7 @@ func v1CommandSchemas() []CommandSchema {
 			Kind:      CommandKindRead,
 			LocalOnly: true,
 			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
 				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
 			},
 		},
@@ -660,6 +662,7 @@ func v1CommandSchemas() []CommandSchema {
 			Kind:      CommandKindRead,
 			LocalOnly: true,
 			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
 				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
 				{ID: SectionVectorFastOptions, Name: "vector_fast_options", Required: true},
 			},
@@ -671,6 +674,7 @@ func v1CommandSchemas() []CommandSchema {
 			Kind:      CommandKindRead,
 			LocalOnly: true,
 			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
 				{ID: SectionVectorPinOptions, Name: "vector_pin_options", Required: true},
 			},
 		},
@@ -681,6 +685,7 @@ func v1CommandSchemas() []CommandSchema {
 			Kind:      CommandKindRead,
 			LocalOnly: true,
 			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
 				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
 			},
 		},
@@ -690,6 +695,7 @@ func v1CommandSchemas() []CommandSchema {
 			Name:      "vector_close_pinned_snapshot",
 			Kind:      CommandKindRead,
 			LocalOnly: true,
+			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
 		},
 	}
 }
