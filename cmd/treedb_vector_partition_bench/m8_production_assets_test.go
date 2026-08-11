@@ -600,6 +600,8 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		"aux_too_many_edges":      {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 4, AuxiliaryCSRBytes: 40, AuxiliaryMaxDegree: 2, CombinedReachableRows: 2}},
 		"aux_edges_over_degree":   {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 3, MaxLayer: 1, RowsByLayer: []uint64{3, 1}, AuxiliaryEdges: 4, AuxiliaryCSRBytes: 48, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
 		"aux_degree_over_edges":   {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 3, CombinedReachableRows: 2}},
+		"aux_incomplete_one_root": {{PartitionID: 0, Rows: 3, ReachableRows: 2, TraversalRoots: 1, MaxLayer: 1, RowsByLayer: []uint64{3, 2}, AuxiliaryEdges: 1, AuxiliaryCSRBytes: 36, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
+		"aux_entry_root_anchor":   {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{3, 1}, AuxiliaryEdges: 3, AuxiliaryCSRBytes: 44, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
 		"aux_without_anchor_rows": {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 0, RowsByLayer: []uint64{3}, AuxiliaryEdges: 3, AuxiliaryCSRBytes: 44, AuxiliaryMaxDegree: 2, CombinedReachableRows: 3}, valid[1]},
 		"native_bad_combined":     {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 2}, valid[1]},
 		"empty":                   {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},

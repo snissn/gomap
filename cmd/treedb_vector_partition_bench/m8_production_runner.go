@@ -3743,7 +3743,8 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 		partition := int(diagnostic.PartitionID)
 		if partition < 0 || partition >= partitions || seen[partition] || diagnostic.Rows == 0 ||
 			diagnostic.Rows != loads[partition] || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows > diagnostic.Rows ||
-			diagnostic.TraversalRoots == 0 || diagnostic.TraversalRoots > diagnostic.Rows {
+			diagnostic.TraversalRoots == 0 || diagnostic.TraversalRoots > diagnostic.Rows ||
+			(diagnostic.ReachableRows < diagnostic.Rows && diagnostic.TraversalRoots == 1) {
 			return false
 		}
 		nativeReachable := diagnostic.ReachableRows == diagnostic.Rows && diagnostic.TraversalRoots == 1
@@ -3770,8 +3771,23 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 			if upperRows > diagnostic.TraversalRoots {
 				minAnchorEdges = upperRows - diagnostic.TraversalRoots
 			}
-			if diagnostic.AuxiliaryEdges < bridgeEdges || diagnostic.AuxiliaryEdges-bridgeEdges < minAnchorEdges ||
-				diagnostic.AuxiliaryEdges-bridgeEdges > maxAnchorEdges || diagnostic.AuxiliaryMaxDegree > diagnostic.AuxiliaryEdges ||
+			if diagnostic.MaxLayer > 0 {
+				maxAnchorEdges = min(maxAnchorEdges, upperRows-1)
+			}
+			if diagnostic.AuxiliaryEdges < bridgeEdges {
+				return false
+			}
+			anchorEdges := diagnostic.AuxiliaryEdges - bridgeEdges
+			const auxiliaryBranchV1 = uint64(8)
+			expectedMaxDegree := min(diagnostic.TraversalRoots-1, auxiliaryBranchV1)
+			if diagnostic.TraversalRoots > 2*auxiliaryBranchV1 {
+				expectedMaxDegree++
+			}
+			if anchorEdges > 0 {
+				expectedMaxDegree = max(expectedMaxDegree, 1)
+			}
+			if anchorEdges < minAnchorEdges || anchorEdges > maxAnchorEdges ||
+				diagnostic.AuxiliaryMaxDegree != expectedMaxDegree ||
 				(diagnostic.AuxiliaryMaxDegree != 0 && (diagnostic.Rows > maxUint64/diagnostic.AuxiliaryMaxDegree ||
 					diagnostic.AuxiliaryEdges > diagnostic.Rows*diagnostic.AuxiliaryMaxDegree)) {
 				return false
