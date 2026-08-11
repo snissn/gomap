@@ -118,7 +118,7 @@ func (c *Client) vectorSearchCommandV1(ctx context.Context, command iwire.Comman
 		}
 		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
 	}
-	response, err := decodeVectorPartitionSearchResponseV1(rawResponse, c.limits)
+	response, err := decodeVectorPartitionSearchResponseV1(rawResponse, request.TopK, c.limits)
 	if err != nil {
 		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
 	}
@@ -565,12 +565,12 @@ func appendVectorPartitionSearchResponseSectionV1(dst []byte, response public.Se
 	return body, nil
 }
 
-func decodeVectorPartitionSearchResponseV1(src []byte, limits iwire.Limits) (public.SearchResponseV1, error) {
+func decodeVectorPartitionSearchResponseV1(src []byte, maxNeighbors int, limits iwire.Limits) (public.SearchResponseV1, error) {
 	r := vectorPartitionWireReaderV1{src: src, ownedStrings: string(src)}
 	response := public.SearchResponseV1{}
 	response.Generation.Index, response.Generation.Generation = r.string(), r.u64()
 	count := r.int()
-	if r.err == nil && (count < 0 || count > limits.MaxByteVectorItems || count > (len(src)-r.off)/5) {
+	if r.err == nil && (count < 0 || count > maxNeighbors || count > limits.MaxByteVectorItems || count > (len(src)-r.off)/5) {
 		r.err = protocolError(iwire.ErrResourceExhausted, "vector neighbor count exceeds bound")
 	}
 	if r.err == nil {

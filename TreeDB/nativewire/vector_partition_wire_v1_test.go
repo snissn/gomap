@@ -62,9 +62,12 @@ func TestVectorPartitionWireV1RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw = vectorPartitionTestSectionV1(t, body, iwire.SectionVectorSearchResponse, limits)
-	gotResponse, err := decodeVectorPartitionSearchResponseV1(raw, limits)
+	gotResponse, err := decodeVectorPartitionSearchResponseV1(raw, request.TopK, limits)
 	if err != nil || !reflect.DeepEqual(gotResponse, response) {
 		t.Fatalf("response round trip = %+v, err=%v", gotResponse, err)
+	}
+	if _, err := decodeVectorPartitionSearchResponseV1(raw, 1, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("response exceeded requested top-k: %v", err)
 	}
 	for i := range raw {
 		raw[i] = 0
@@ -246,7 +249,7 @@ func TestVectorPartitionWireV1RejectsMalformedAndOversized(t *testing.T) {
 	badResponse := appendString(nil, "embedding")
 	badResponse = binary.AppendUvarint(badResponse, 1)
 	badResponse = binary.AppendUvarint(badResponse, 100)
-	if _, err := decodeVectorPartitionSearchResponseV1(badResponse, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
+	if _, err := decodeVectorPartitionSearchResponseV1(badResponse, limits.MaxByteVectorItems, limits); nativeCodeOf(err) != iwire.ErrResourceExhausted {
 		t.Fatalf("impossible neighbor count decoded: %v", err)
 	}
 	if _, err := appendVectorPartitionSearchResponseSectionV1(nil, public.SearchResponseV1{Timing: public.SearchTimingV1{Total: -1}}); err == nil {
@@ -576,7 +579,7 @@ func BenchmarkVectorPartitionPublicTransportV1(b *testing.B) {
 			if err != nil || !ok {
 				b.Fatal("native response section missing")
 			}
-			vectorPartitionBenchmarkResponseSink, err = decodeVectorPartitionSearchResponseV1(rawResponse, limits)
+			vectorPartitionBenchmarkResponseSink, err = decodeVectorPartitionSearchResponseV1(rawResponse, request.TopK, limits)
 			if err != nil {
 				b.Fatal(err)
 			}
