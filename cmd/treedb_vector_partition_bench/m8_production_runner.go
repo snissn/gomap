@@ -3747,10 +3747,11 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 			return false
 		}
 		nativeReachable := diagnostic.ReachableRows == diagnostic.Rows && diagnostic.TraversalRoots == 1
-		auxiliaryPresent := diagnostic.AuxiliaryEdges != 0 || diagnostic.AuxiliaryCSRBytes != 0 || diagnostic.AuxiliaryMaxDegree != 0 || diagnostic.CombinedReachableRows != 0
+		auxiliaryPresent := diagnostic.AuxiliaryEdges != 0 || diagnostic.AuxiliaryCSRBytes != 0 || diagnostic.AuxiliaryMaxDegree != 0
 		if auxiliaryPresent {
 			maxUint64 := ^uint64(0)
-			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 {
+			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 ||
+				diagnostic.TraversalRoots-1 > maxUint64/2 || diagnostic.AuxiliaryEdges < 2*(diagnostic.TraversalRoots-1) {
 				return false
 			}
 			offsetBytes, edgeBytes := (diagnostic.Rows+1)*8, diagnostic.AuxiliaryEdges*4
@@ -3759,7 +3760,7 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 				(diagnostic.AuxiliaryEdges == 0) != (diagnostic.AuxiliaryMaxDegree == 0) {
 				return false
 			}
-		} else if !nativeReachable {
+		} else if !nativeReachable || (diagnostic.CombinedReachableRows != 0 && diagnostic.CombinedReachableRows != diagnostic.Rows) {
 			return false
 		}
 		seen[partition] = true
