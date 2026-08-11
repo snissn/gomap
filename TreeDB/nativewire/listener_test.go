@@ -169,6 +169,13 @@ func TestNewInProcessClientMirrorsServerLimits(t *testing.T) {
 	}
 }
 
+func TestNewServerAcceptsPublicFrameLimit(t *testing.T) {
+	server := NewServer(ServerOptions{MaxFrameSize: 2 << 20})
+	if got := server.limits.MaxFrameSize; got != 2<<20 {
+		t.Fatalf("MaxFrameSize=%d want %d", got, 2<<20)
+	}
+}
+
 func TestInProcessRoundTripRejectsOversizedRequestFrame(t *testing.T) {
 	maxFrameSize := uint64(iwire.FrameHeaderLenV1) + 128
 	server := NewServer(ServerOptions{Limits: iwire.Limits{MaxFrameSize: maxFrameSize}})

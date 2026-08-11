@@ -754,6 +754,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 			return nil, operationsErr
 		}
 		node.publicServer = nativewire.NewServer(nativewire.ServerOptions{
+			MaxFrameSize:                    vectorPartitionSystemWireMaxBytesV1,
 			MaxConnections:                  vectorPartitionSystemMaxConnectionsV1,
 			ConnectionIdleTimeout:           vectorPartitionSystemIdleTimeoutV1,
 			VectorPartitionOperations:       operations,

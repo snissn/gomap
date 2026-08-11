@@ -75,6 +75,7 @@ const (
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
 	Limits                          iwire.Limits
+	MaxFrameSize                    uint64
 	MaxInFlight                     int
 	MaxConnections                  int
 	MaxCollectionHandles            int
@@ -302,6 +303,9 @@ func (s *connState) responseScratch() []byte {
 // NewServer creates a native-wire server with defaulted limits and policies.
 func NewServer(opts ServerOptions) *Server {
 	limits := opts.Limits
+	if opts.MaxFrameSize != 0 {
+		limits.MaxFrameSize = opts.MaxFrameSize
+	}
 	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
 		limits.MaxFrameSize = defaultLimits.MaxFrameSize
