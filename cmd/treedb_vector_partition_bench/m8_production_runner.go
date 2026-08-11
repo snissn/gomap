@@ -220,15 +220,19 @@ type m8AttributionStageOwnerV1 struct {
 // directed layer-0 traversal can reveal an unreachable entry-reachable subset,
 // but is not a substitute for the exact-oracle quality measurement.
 type m8PartitionPackDiagnosticsV1 struct {
-	PartitionID         uint32   `json:"partition_id"`
-	Rows                uint64   `json:"rows"`
-	ReachableRows       uint64   `json:"reachable_rows"`
-	TraversalRoots      uint64   `json:"traversal_roots"`
-	MaxLayer            int      `json:"max_layer"`
-	RowsByLayer         []uint64 `json:"rows_by_layer"`
-	EdgesByLayer        []uint64 `json:"edges_by_layer"`
-	Layer0DegreeLimit   uint64   `json:"layer0_degree_limit"`
-	Layer0SaturatedRows uint64   `json:"layer0_saturated_rows"`
+	PartitionID           uint32   `json:"partition_id"`
+	Rows                  uint64   `json:"rows"`
+	ReachableRows         uint64   `json:"reachable_rows"`
+	TraversalRoots        uint64   `json:"traversal_roots"`
+	MaxLayer              int      `json:"max_layer"`
+	RowsByLayer           []uint64 `json:"rows_by_layer"`
+	EdgesByLayer          []uint64 `json:"edges_by_layer"`
+	Layer0DegreeLimit     uint64   `json:"layer0_degree_limit"`
+	Layer0SaturatedRows   uint64   `json:"layer0_saturated_rows"`
+	AuxiliaryEdges        uint64   `json:"auxiliary_edges"`
+	AuxiliaryCSRBytes     uint64   `json:"auxiliary_csr_bytes"`
+	AuxiliaryMaxDegree    uint64   `json:"auxiliary_max_degree"`
+	CombinedReachableRows uint64   `json:"combined_reachable_rows"`
 }
 
 type m8ProductionRowV1 struct {
@@ -2268,6 +2272,8 @@ func (h *m8AttributionHarnessV1) packDiagnostics() ([]m8PartitionPackDiagnostics
 			TraversalRoots: pack.TraversalRoots, MaxLayer: pack.MaxLayer,
 			RowsByLayer: append([]uint64(nil), pack.RowsByLayer...), EdgesByLayer: append([]uint64(nil), pack.EdgesByLayer...),
 			Layer0DegreeLimit: pack.Layer0DegreeLimit, Layer0SaturatedRows: pack.Layer0SaturatedRows,
+			AuxiliaryEdges: pack.AuxiliaryEdges, AuxiliaryCSRBytes: pack.AuxiliaryCSRBytes,
+			AuxiliaryMaxDegree: pack.AuxiliaryMaxDegree, CombinedReachableRows: pack.CombinedReachableRows,
 		}
 	}
 	return diagnostics, nil
@@ -3726,7 +3732,8 @@ func m8ProductionGateValuesV1(ledger m8ProductionGateLedgerV1) []string {
 // topology an acceptance condition, not merely an informational artifact. A
 // structurally readable older pack can still contain disconnected directed
 // layer-0 components, so every configured partition must be reported exactly
-// once as a nonempty, fully reachable, single-root pack.
+// once as either a fully reachable native pack or a fully reachable V3
+// native-plus-auxiliary pack.
 func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV1, partitions int, loads []uint64) bool {
 	if partitions < 1 || len(diagnostics) != partitions || len(loads) != partitions {
 		return false
@@ -3735,7 +3742,24 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 	for _, diagnostic := range diagnostics {
 		partition := int(diagnostic.PartitionID)
 		if partition < 0 || partition >= partitions || seen[partition] || diagnostic.Rows == 0 ||
-			diagnostic.Rows != loads[partition] || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows != diagnostic.Rows || diagnostic.TraversalRoots != 1 {
+			diagnostic.Rows != loads[partition] || diagnostic.ReachableRows == 0 || diagnostic.ReachableRows > diagnostic.Rows ||
+			diagnostic.TraversalRoots == 0 || diagnostic.TraversalRoots > diagnostic.Rows {
+			return false
+		}
+		nativeReachable := diagnostic.ReachableRows == diagnostic.Rows && diagnostic.TraversalRoots == 1
+		auxiliaryPresent := diagnostic.AuxiliaryEdges != 0 || diagnostic.AuxiliaryCSRBytes != 0 || diagnostic.AuxiliaryMaxDegree != 0 || diagnostic.CombinedReachableRows != 0
+		if auxiliaryPresent {
+			maxUint64 := ^uint64(0)
+			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 {
+				return false
+			}
+			offsetBytes, edgeBytes := (diagnostic.Rows+1)*8, diagnostic.AuxiliaryEdges*4
+			if edgeBytes > maxUint64-offsetBytes || diagnostic.AuxiliaryCSRBytes != offsetBytes+edgeBytes ||
+				diagnostic.CombinedReachableRows != diagnostic.Rows || diagnostic.AuxiliaryMaxDegree > 9 ||
+				(diagnostic.AuxiliaryEdges == 0) != (diagnostic.AuxiliaryMaxDegree == 0) {
+				return false
+			}
+		} else if !nativeReachable {
 			return false
 		}
 		seen[partition] = true
