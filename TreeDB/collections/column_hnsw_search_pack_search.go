@@ -19,6 +19,45 @@ func columnHNSWSearchPackStatsModeSupportedForSearch(mode columnVectorGraphNativ
 	return mode.normalized() != columnVectorGraphNativeSearchStatsModeBenchmarkDebug
 }
 
+// layer0ExpansionDegreeV1 is the largest one-row tile a prepared pack search
+// can expand. Auxiliary navigation is a separate V3 channel, so it must be
+// included after the native 2M bound rather than silently reusing that bound.
+func (v *columnHNSWSearchPackPreparedView) layer0ExpansionDegreeV1() (int, error) {
+	if v == nil || v.Header.Rows < 0 || v.Header.M < 0 {
+		return 0, errColumnHNSWSearchPackSearchUnavailable
+	}
+	rows := v.Header.Rows
+	degree := v.Header.M
+	if degree < 1 {
+		degree = 1
+	}
+	if degree > math.MaxInt/2 {
+		degree = rows
+	} else {
+		degree *= 2
+	}
+	if degree > rows {
+		degree = rows
+	}
+	if !v.Header.HasAuxiliaryNavigation {
+		return degree, nil
+	}
+	// V3 views are semantically validated by the reader: a row has no more
+	// than eight tree children plus one parent or seed anchor. Do not rescan
+	// CSR offsets per query; this is the fixed bound for the appended tile.
+	maxAuxiliary := vectorPartitionLocalNavigationBranchV1 + 1
+	if rows <= 1 {
+		maxAuxiliary = 0
+	} else if rows-1 < maxAuxiliary {
+		maxAuxiliary = rows - 1
+	}
+	if maxAuxiliary > math.MaxInt-degree {
+		return 0, errColumnHNSWSearchPackSearchUnavailable
+	}
+	degree += maxAuxiliary
+	return degree, nil
+}
+
 func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	return v.searchCosineWithContext(context.Background(), query, opts, scratch)
 }
@@ -106,15 +145,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if efSearch > candidateLimit {
 		efSearch = candidateLimit
 	}
-	degree := v.Header.M
-	if degree < 1 {
-		degree = 1
-	}
-	if degree <= math.MaxInt/2 {
-		degree *= 2
-	}
-	if degree > rowCount {
-		degree = rowCount
+	degree, err := v.layer0ExpansionDegreeV1()
+	if err != nil {
+		return nil, stats, err
 	}
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)

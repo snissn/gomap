@@ -977,7 +977,7 @@ func TestVectorPartitionLocalAuxiliaryNavigationKeepsNativeLayer0AndEntryReachab
 	if err := validateVectorPartitionLocalAuxiliaryNavigationV1(native, 0, auxiliary); err != nil {
 		t.Fatalf("validate auxiliary: %v", err)
 	}
-	if len(auxiliary.Neighbors) == 0 || len(auxiliary.Neighbors)%2 != 0 {
+	if len(auxiliary.Neighbors) == 0 {
 		t.Fatalf("auxiliary directed bridge count=%d", len(auxiliary.Neighbors))
 	}
 	for row := range native {
@@ -998,6 +998,20 @@ func TestVectorPartitionLocalAuxiliaryNavigationKeepsNativeLayer0AndEntryReachab
 		t.Fatalf("native plus auxiliary reachability: %v", err)
 	} else if got != len(native) {
 		t.Fatalf("native plus auxiliary entry reaches %d/%d rows", got, len(native))
+	}
+	upperSeeds := 0
+	for ordinal, row := range native {
+		level, err := columnVectorGraphAdjacencyMaxLayer(row.Adjacency)
+		if err != nil || level == 0 {
+			continue
+		}
+		upperSeeds++
+		if got, err := vectorPartitionLayer0AuxiliaryReachabilityFrom3999(native, auxiliary, ordinal); err != nil || got != len(native) {
+			t.Fatalf("native plus auxiliary upper seed=%d reaches %d/%d err=%v", ordinal, got, len(native), err)
+		}
+	}
+	if upperSeeds == 0 {
+		t.Fatal("fixture has no upper-layer seed")
 	}
 	saturated := false
 	for row := range native {
@@ -1054,15 +1068,22 @@ func vectorPartitionLayer0Reachability3999(rows []columnVectorGraphAssetRow) (in
 }
 
 func vectorPartitionLayer0AuxiliaryReachability3999(rows []columnVectorGraphAssetRow, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) (int, error) {
+	return vectorPartitionLayer0AuxiliaryReachabilityFrom3999(rows, auxiliary, 0)
+}
+
+func vectorPartitionLayer0AuxiliaryReachabilityFrom3999(rows []columnVectorGraphAssetRow, auxiliary vectorPartitionLocalAuxiliaryNavigationV1, entryOrdinal int) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
+	}
+	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
+		return 0, errors.New("auxiliary entry ordinal")
 	}
 	if len(auxiliary.Offsets) != len(rows)+1 || auxiliary.Offsets[0] != 0 || auxiliary.Offsets[len(rows)] != uint64(len(auxiliary.Neighbors)) {
 		return 0, errors.New("auxiliary csr shape")
 	}
 	seen := make([]bool, len(rows))
-	queue := []int{0}
-	seen[0] = true
+	queue := []int{entryOrdinal}
+	seen[entryOrdinal] = true
 	for head := 0; head < len(queue); head++ {
 		ordinal := queue[head]
 		layer0, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)

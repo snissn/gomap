@@ -639,7 +639,7 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		if len(v.AdjacencyLayers) != 0 {
 			native = v.AdjacencyLayers[0]
 		}
-		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx, v.Header.Rows, v.Header.EntryOrdinal, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
+		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx, v.Header.Rows, v.Header.EntryOrdinal, v.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary navigation: %w", err)
 		}
 		v.AuxiliaryNavigation = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}

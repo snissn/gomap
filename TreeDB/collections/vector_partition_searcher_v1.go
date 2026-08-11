@@ -802,19 +802,9 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if efSearch > rowCount {
 		efSearch = rowCount
 	}
-	degree := header.M
-	if degree < 1 {
-		degree = 1
-	}
-	if degree <= math.MaxInt/2 {
-		degree *= 2
-	}
-	if degree > rowCount {
-		// A graph cannot expose more distinct neighbors than it has rows.
-		// Capping here keeps the preflight bound identical to the scratch the
-		// native path actually prepares, even for a tiny shard whose persisted
-		// index definition has a much larger M.
-		degree = rowCount
+	degree, err := prepared.layer0ExpansionDegreeV1()
+	if err != nil {
+		return 0, ErrVectorPartitionSearchUnavailable
 	}
 	// Native traversal must materialize every retained ef_search candidate so
 	// the public stable-ID tie-break runs before final top-k truncation.

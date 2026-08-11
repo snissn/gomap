@@ -67,7 +67,7 @@ SHA-256. Ordinary non-partition packs remain wire version 1; historical
 partition packs use version 2. Rebuilt partition packs use version 3, retaining
 the version-2 header binding and adding a required, separately encoded
 auxiliary-navigation CSR. That channel is deterministically derived from native
-layer-0 reachability roots, is checksum-covered and source/membership-bound,
+layer-0 reachability roots and upper-layer seed anchors, is checksum-covered and source/membership-bound,
 and preserves native layer-0 plus all higher layers byte-for-byte. Even a
 connected pack emits an explicit empty version-3 channel, so reopen rejects a
 missing or substituted repair topology.
@@ -87,7 +87,8 @@ stale-generation, cross-membership, or malformed assets fail closed.
 
 `SearchWithMetrics` uses the no-document native HNSW route. Rebuilt v3 packs
 expand native layer-0 neighbors first and may then expand their separately
-bounded auxiliary component-root CSR; native edges are never displaced or
+bounded auxiliary component-root CSR (including upper-layer seed anchors);
+native edges are never displaced or
 charged to the `2M` HNSW degree cap. Metrics and status report native
 candidates/edges separately from auxiliary edge visits, newly scored auxiliary
 candidates, and auxiliary frontier admissions, alongside route,

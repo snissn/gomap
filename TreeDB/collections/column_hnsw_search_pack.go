@@ -647,7 +647,7 @@ func validateColumnHNSWSearchPackBuildInput(input columnHNSWSearchPackBuildInput
 		if len(input.AdjacencyLayers) != 0 {
 			native = input.AdjacencyLayers[0]
 		}
-		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(input.Rows, input.EntryOrdinal, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}); err != nil {
+		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(input.Rows, input.EntryOrdinal, input.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}); err != nil {
 			return fmt.Errorf("collections: hnsw search pack auxiliary navigation: %w", err)
 		}
 	} else if len(input.AuxiliaryNavigation.Offsets) != 0 || len(input.AuxiliaryNavigation.Neighbors) != 0 {
@@ -805,7 +805,7 @@ func decodeColumnHNSWSearchPackSections(raw []byte, opts columnHNSWSearchPackDec
 		if len(pack.AdjacencyLayers) != 0 {
 			native = pack.AdjacencyLayers[0]
 		}
-		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(pack.Header.Rows, pack.Header.EntryOrdinal, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
+		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(pack.Header.Rows, pack.Header.EntryOrdinal, pack.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
 			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary navigation: %w", err)
 		}
 		pack.AuxiliaryNavigation = columnHNSWSearchPackLayer{Offsets: offsets, Neighbors: neighbors}

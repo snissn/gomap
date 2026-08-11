@@ -279,7 +279,7 @@ func validateLocalHNSWRepairCalibrationReportV1(report localHNSWRepairCalibratio
 	if report.OverlayBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.OverlayBuild.Variant != string(collections.VectorPartitionLocalGraphVariantOverlayCurrentV1) || report.RepairBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.RepairBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.OverlayBuild.Partitions != 16 || report.RepairBuild.Partitions != 16 || report.OverlayBuild.PackBytes == 0 || report.RepairBuild.PackBytes == 0 {
 		return errors.New("invalid local HNSW repair build report")
 	}
-	if report.Graph.Rows != 300000 || report.Graph.NativeReachableRows != 299968 || report.Graph.CombinedReachableRows != 300000 || report.Graph.NativeTraversalRoots != 48 || report.Graph.AuxiliaryEdges != 64 || report.Graph.AuxiliaryMaxDegree > 9 {
+	if report.Graph.Rows != 300000 || report.Graph.NativeReachableRows != 299968 || report.Graph.CombinedReachableRows != 300000 || report.Graph.NativeTraversalRoots != 48 || report.Graph.NativeTraversalRoots < 16 || report.Graph.AuxiliaryEdges < 2*(report.Graph.NativeTraversalRoots-16) || report.Graph.AuxiliaryCSRBytes != 8*(report.Graph.Rows+16)+4*report.Graph.AuxiliaryEdges || report.Graph.AuxiliaryMaxDegree > 9 {
 		return errors.New("invalid local HNSW repair graph report")
 	}
 	if report.Calibration.Artifact.Schema != localHNSWAttributionSidecarSchemaV1 || report.Calibration.Artifact.Records != 806 || !localHNSWAttributionSHA256V1(report.Calibration.Artifact.SHA256) || report.Calibration.Summary.Schema != localHNSWRepairCalibrationSchemaV1 || report.Calibration.Summary.Overlay.QueryCount != 806 || report.Calibration.Summary.Repair.QueryCount != 806 {

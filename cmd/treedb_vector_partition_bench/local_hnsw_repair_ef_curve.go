@@ -675,7 +675,7 @@ func validateLocalHNSWRepairEFCurveReportV1(report localHNSWRepairEFCurveReportV
 			return errors.New("invalid local HNSW repair EF curve historical context")
 		}
 	}
-	if report.RepairBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.RepairBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.RepairBuild.Partitions != 16 || report.RepairBuild.PackBytes == 0 || report.Graph.Rows != 300000 || report.Graph.NativeReachableRows != 299968 || report.Graph.CombinedReachableRows != 300000 || report.Graph.NativeTraversalRoots != 48 || report.Graph.AuxiliaryEdges != 64 || report.Graph.AuxiliaryCSRBytes != 2400384 || report.Graph.AuxiliaryMaxDegree != 4 {
+	if report.RepairBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.RepairBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.RepairBuild.Partitions != 16 || report.RepairBuild.PackBytes == 0 || report.Graph.Rows != 300000 || report.Graph.NativeReachableRows != 299968 || report.Graph.CombinedReachableRows != 300000 || report.Graph.NativeTraversalRoots != 48 || report.Graph.NativeTraversalRoots < 16 || report.Graph.AuxiliaryEdges < 2*(report.Graph.NativeTraversalRoots-16) || report.Graph.AuxiliaryCSRBytes != 8*(report.Graph.Rows+16)+4*report.Graph.AuxiliaryEdges || report.Graph.AuxiliaryMaxDegree > 9 {
 		return errors.New("invalid local HNSW repair EF curve graph")
 	}
 	if len(report.Cells) != len(report.EFSearch) {

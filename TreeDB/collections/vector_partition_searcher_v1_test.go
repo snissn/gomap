@@ -485,6 +485,38 @@ func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionHNSWSearchScratchIncludesAuxiliaryFanoutV3(t *testing.T) {
+	const rows = 64
+	base := columnHNSWSearchPackHeader{Rows: rows, Dimensions: 3, VectorStride: 4, M: 2, EfSearch: 8}
+	v2 := &columnHNSWSearchPackPreparedView{Header: base}
+	offsets := make([]uint64, rows+1)
+	for ordinal := 1; ordinal <= rows; ordinal++ {
+		offsets[ordinal] = 9
+	}
+	v3 := &columnHNSWSearchPackPreparedView{Header: base, AuxiliaryNavigation: columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9}}}
+	v3.Header.HasAuxiliaryNavigation = true
+	if got, err := v2.layer0ExpansionDegreeV1(); err != nil || got != 4 {
+		t.Fatalf("v2 expansion=%d err=%v want 4", got, err)
+	}
+	if got, err := v3.layer0ExpansionDegreeV1(); err != nil || got != 13 {
+		t.Fatalf("v3 expansion=%d err=%v want 13", got, err)
+	}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8}
+	v2Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v2, 0, 3, 0, v2.Header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3Bytes, err := vectorPartitionSearchScratchBytesV1(opts, v3, 0, 3, 0, v3.Header)
+	if err != nil || v3Bytes <= v2Bytes {
+		t.Fatalf("v2=%d v3=%d err=%v", v2Bytes, v3Bytes, err)
+	}
+	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: v3, opened: 1}
+	_, preflightBytes, err := searcher.SearchPreflightV1(opts)
+	if err != nil || preflightBytes != v3Bytes {
+		t.Fatalf("preflight=%d want=%d err=%v", preflightBytes, v3Bytes, err)
+	}
+}
+
 func TestVectorPartitionExactSearchScratchIncludesCanonicalQueryV1(t *testing.T) {
 	const (
 		rows       = 3
