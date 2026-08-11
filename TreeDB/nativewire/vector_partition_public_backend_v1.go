@@ -54,13 +54,75 @@ func NewVectorPartitionPublicBackendV1(opts VectorPartitionPublicBackendOptionsV
 }
 
 func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
-	adapterStarted := time.Now()
-	started := adapterStarted
-	if b == nil || b.opts.Topology.Status().Closed {
-		return public.SearchResponseV1{}, errors.New("production topology is unavailable")
+	started := time.Now()
+	r, err := b.coordinatorRequestV1(request)
+	if err != nil {
+		return public.SearchResponseV1{}, err
+	}
+	adapterNanos := time.Since(started)
+	response, err := b.opts.Topology.searchStrictV1(ctx, r)
+	return b.publicSearchResponseV1(request, response, err, started, adapterNanos)
+}
+
+func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionFastV1(ctx context.Context, request public.SearchRequestV1, options public.FastSearchOptionsV1) (public.SearchResponseV1, public.FastSearchEvidenceV1, error) {
+	started := time.Now()
+	r, err := b.coordinatorRequestV1(request)
+	if err != nil {
+		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
+	}
+	adapterNanos := time.Since(started)
+	response, evidence, err := b.opts.Topology.searchFastV1(ctx, r, options.MaxIndexAge, options.MinIndexedThrough)
+	result, err := b.publicSearchResponseV1(request, response, err, started, adapterNanos)
+	if err != nil {
+		return public.SearchResponseV1{}, public.FastSearchEvidenceV1{}, err
+	}
+	return result, publicFastSearchEvidenceV1(request.Generation, evidence), nil
+}
+
+type vectorPartitionPublicPinnedSearchV1 struct {
+	backend *VectorPartitionPublicBackendV1
+	pinned  *vectorPartitionPinnedTopologySearchV1
+}
+
+func (b *VectorPartitionPublicBackendV1) PinVectorPartitionSearchSnapshotV1(ctx context.Context, options public.PinSearchSnapshotOptionsV1) (public.SearchSnapshotBackendV1, public.FastSearchEvidenceV1, error) {
+	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
+		return nil, public.FastSearchEvidenceV1{}, errors.New("production topology is unavailable")
+	}
+	pinned, evidence, err := b.opts.Topology.pinSearchSnapshotV1(ctx, options.MaxIndexAge, options.MinIndexedThrough, options.MaxSessionAge)
+	if err != nil {
+		return nil, public.FastSearchEvidenceV1{}, publicBackendErrorV1(err)
+	}
+	generation := public.GenerationIDV1{Index: b.opts.Identity.Index.IndexName, Generation: b.opts.Identity.Generation}
+	return &vectorPartitionPublicPinnedSearchV1{backend: b, pinned: pinned}, publicFastSearchEvidenceV1(generation, evidence), nil
+}
+
+func (p *vectorPartitionPublicPinnedSearchV1) SearchVectorPartitionV1(ctx context.Context, request public.SearchRequestV1) (public.SearchResponseV1, error) {
+	if p == nil || p.backend == nil || p.pinned == nil {
+		return public.SearchResponseV1{}, errors.New("pinned vector search is unavailable")
+	}
+	started := time.Now()
+	r, err := p.backend.coordinatorRequestV1(request)
+	if err != nil {
+		return public.SearchResponseV1{}, err
+	}
+	adapterNanos := time.Since(started)
+	response, err := p.pinned.searchV1(ctx, r)
+	return p.backend.publicSearchResponseV1(request, response, err, started, adapterNanos)
+}
+
+func (p *vectorPartitionPublicPinnedSearchV1) Close() error {
+	if p == nil || p.pinned == nil {
+		return nil
+	}
+	return p.pinned.Close()
+}
+
+func (b *VectorPartitionPublicBackendV1) coordinatorRequestV1(request public.SearchRequestV1) (VectorPartitionCoordinatorRequestV1, error) {
+	if b == nil || b.opts.Topology == nil || b.opts.Topology.Status().Closed {
+		return VectorPartitionCoordinatorRequestV1{}, errors.New("production topology is unavailable")
 	}
 	if err := b.checkID(request.Generation); err != nil {
-		return public.SearchResponseV1{}, err
+		return VectorPartitionCoordinatorRequestV1{}, err
 	}
 	r := b.opts.RequestBase
 	sequence := b.sequence.Add(1)
@@ -72,15 +134,17 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	if !request.Deadline.IsZero() {
 		r.DeadlineUnixNano = request.Deadline.UnixNano()
 	}
-	adapterNanos := time.Since(adapterStarted)
-	response, err := b.opts.Topology.searchStrictV1(ctx, r)
-	if err != nil {
-		return public.SearchResponseV1{}, publicBackendErrorV1(err)
+	return r, nil
+}
+
+func (b *VectorPartitionPublicBackendV1) publicSearchResponseV1(request public.SearchRequestV1, response VectorPartitionCoordinatorResponseV1, searchErr error, started time.Time, adapterNanos time.Duration) (public.SearchResponseV1, error) {
+	if searchErr != nil {
+		return public.SearchResponseV1{}, publicBackendErrorV1(searchErr)
 	}
 	if response.PartitionGeneration != request.Generation.Generation {
 		return public.SearchResponseV1{}, &public.ErrorV1{Code: public.ErrorGenerationMismatchV1, Err: errors.New("serving topology returned another generation")}
 	}
-	adapterStarted = time.Now()
+	adapterStarted := time.Now()
 	result := public.SearchResponseV1{Generation: request.Generation, Counters: public.SearchCountersV1{
 		SelectedPartitions: response.Counters.SelectedPartitions, SelectedGroups: response.Counters.SelectedGroups,
 		Requests: response.Counters.Requests, RPCs: response.Counters.RPCs, Retries: response.Counters.Retries, Redirects: response.Counters.Redirects,
@@ -88,22 +152,11 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 		SnapshotPins: response.Counters.SnapshotPins, ReadProofs: response.Counters.ReadProofs, GenerationPins: response.Counters.GenerationPins, PartitionOpens: response.Counters.PartitionOpens,
 		QueryBytes: response.Counters.QueryBytes, RequestBytes: response.Counters.RequestBytes, CandidateBytes: response.Counters.CandidateBytes, ResponseBytes: response.Counters.ResponseBytes,
 	}, Timing: public.SearchTimingV1{
-		PublicAdapter:        adapterNanos,
-		RouterOpen:           time.Duration(response.Timing.RouterOpenNanos),
-		RouterSearch:         time.Duration(response.Timing.RouterSearchNanos),
-		Placement:            time.Duration(response.Timing.PlacementNanos),
-		CoordinatorLifecycle: time.Duration(response.Timing.LifecycleNanos),
-		Dispatch:             time.Duration(response.Timing.DispatchNanos),
-		Queue:                time.Duration(response.Timing.QueueNanos),
-		RPC:                  time.Duration(response.Timing.RPCNanos),
-		Network:              time.Duration(response.Timing.NetworkNanos),
-		ReadIndexApply:       time.Duration(response.Timing.ReadIndexApplyNanos),
-		GenerationOpen:       time.Duration(response.Timing.GenerationOpenNanos),
-		ShardSearch:          time.Duration(response.Timing.ShardSearchNanos),
-		Response:             time.Duration(response.Timing.ResponseNanos),
-		Dedupe:               time.Duration(response.Timing.DedupeNanos),
-		Merge:                time.Duration(response.Timing.MergeNanos),
-		CoordinatorTotal:     time.Duration(response.Timing.TotalNanos),
+		PublicAdapter: adapterNanos, RouterOpen: time.Duration(response.Timing.RouterOpenNanos), RouterSearch: time.Duration(response.Timing.RouterSearchNanos),
+		Placement: time.Duration(response.Timing.PlacementNanos), CoordinatorLifecycle: time.Duration(response.Timing.LifecycleNanos), Dispatch: time.Duration(response.Timing.DispatchNanos),
+		Queue: time.Duration(response.Timing.QueueNanos), RPC: time.Duration(response.Timing.RPCNanos), Network: time.Duration(response.Timing.NetworkNanos),
+		ReadIndexApply: time.Duration(response.Timing.ReadIndexApplyNanos), GenerationOpen: time.Duration(response.Timing.GenerationOpenNanos), ShardSearch: time.Duration(response.Timing.ShardSearchNanos),
+		Response: time.Duration(response.Timing.ResponseNanos), Dedupe: time.Duration(response.Timing.DedupeNanos), Merge: time.Duration(response.Timing.MergeNanos), CoordinatorTotal: time.Duration(response.Timing.TotalNanos),
 	}}
 	result.Neighbors = make([]public.NeighborV1, len(response.Neighbors))
 	for i, n := range response.Neighbors {
@@ -112,6 +165,14 @@ func (b *VectorPartitionPublicBackendV1) SearchVectorPartitionV1(ctx context.Con
 	result.Timing.PublicAdapter += time.Since(adapterStarted)
 	result.Timing.Total = max(time.Since(started), result.Timing.PublicAdapter+result.Timing.CoordinatorTotal)
 	return result, nil
+}
+
+func publicFastSearchEvidenceV1(generation public.GenerationIDV1, evidence vectorPartitionFastSearchEvidenceV1) public.FastSearchEvidenceV1 {
+	return public.FastSearchEvidenceV1{
+		Generation: generation, IndexedThrough: evidence.Identity.IndexedThrough,
+		PublishedAt: time.Unix(0, evidence.Identity.PublishedAtUnixNano), IndexAge: evidence.Age,
+		TopologyDigest: evidence.Identity.TopologyDigest, AuthorizationOverlayDigest: evidence.Identity.AuthorizationOverlayDigest,
+	}
 }
 
 func (b *VectorPartitionPublicBackendV1) RegisterVectorPartitionV1(ctx context.Context, registration public.GenerationRegistrationV1) (public.GenerationStatusV1, error) {

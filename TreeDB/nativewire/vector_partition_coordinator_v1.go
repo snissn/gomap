@@ -333,6 +333,7 @@ type VectorPartitionCoordinatorV1 struct {
 
 type vectorPartitionCoordinatorStrictSearchV1 struct {
 	snapshot *VectorPartitionServingSnapshotLeaseV1
+	proof    vectorPartitionServingAuthorityProofV1
 	key      []byte
 }
 
@@ -779,11 +780,11 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	return c.searchV1(ctx, request, nil)
 }
 
-func (c *VectorPartitionCoordinatorV1) searchStrictV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, snapshot *VectorPartitionServingSnapshotLeaseV1, key []byte) (VectorPartitionCoordinatorResponseV1, error) {
+func (c *VectorPartitionCoordinatorV1) searchStrictV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, snapshot *VectorPartitionServingSnapshotLeaseV1, proof vectorPartitionServingAuthorityProofV1, key []byte) (VectorPartitionCoordinatorResponseV1, error) {
 	if snapshot == nil || snapshot.snapshot == nil {
 		return VectorPartitionCoordinatorResponseV1{}, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, "")
 	}
-	return c.searchV1(ctx, request, &vectorPartitionCoordinatorStrictSearchV1{snapshot: snapshot, key: key})
+	return c.searchV1(ctx, request, &vectorPartitionCoordinatorStrictSearchV1{snapshot: snapshot, proof: proof, key: key})
 }
 
 func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, strict *vectorPartitionCoordinatorStrictSearchV1) (response VectorPartitionCoordinatorResponseV1, resultErr error) {
@@ -1372,7 +1373,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 						break
 					}
 				}
-				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.snapshot.proof.read, groupApplied, strict.key)
+				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, groupApplied, strict.key)
 				if err != nil {
 					return nil, nil, nil, zero, err
 				}
@@ -1386,7 +1387,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			shardRequest.RequestBytesLimit = requestBytes
 			if strict != nil {
 				identity := strict.snapshot.IdentityV1()
-				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.snapshot.proof.read, shardRequest.StrictCapability.GroupAppliedIndex, strict.key)
+				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, shardRequest.StrictCapability.GroupAppliedIndex, strict.key)
 				if err != nil {
 					return nil, nil, nil, zero, err
 				}

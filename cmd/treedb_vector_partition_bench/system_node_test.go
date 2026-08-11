@@ -230,11 +230,12 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	for i, value := range vectors[0] {
 		query[i] = float32(value)
 	}
-	response, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: public.SearchRequestV1{
+	searchRequest := public.SearchRequestV1{
 		Version: 1, Generation: public.GenerationIDV1{Index: assets.manifest.IndexName, Generation: assets.manifest.Generation}, Query: query,
 		Metric: public.MetricCosineV1, TopK: 10, Probes: 2, EfSearch: 128, Consistency: public.ConsistencyGenerationSnapshotV1,
 		Limits: public.SearchLimitsV1{RequestBytes: 4 << 20, CandidateBytes: 64 << 20, ResponseBytes: 16 << 20, MergeEntries: 2560}, Deadline: time.Now().Add(30 * time.Second),
-	}})
+	}
+	response, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search", Search: searchRequest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,15 +257,53 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	snapshot := func(ctx context.Context) (map[string]vectorPartitionSystemNodeObservationV1, error) {
 		return vectorPartitionSystemCatalogReadSnapshotV1(ctx, topology, nativewire.ProbeVectorPartitionShardEndpointV1)
 	}
-	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, len(queries), snapshot)
+	cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, len(queries), vectorPartitionSystemSearchStrictV1, 0, 0, snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cell.Status != "valid" || cell.Generation.Index == "" || cell.Generation.Generation == 0 || cell.ElapsedNanos == 0 || cell.Metrics.CompletedQueries != len(queries) || cell.Metrics.RecallAt10 <= 0 || cell.Counters["selected_partitions"] != uint64(4*len(queries)) || cell.Counters["selected_groups"] == 0 || cell.Counters["query_bytes"] == 0 || cell.Counters["response_bytes"] == 0 || cell.Counters["public_request_frame_bytes"] == 0 || cell.Counters["public_response_frame_bytes"] == 0 || cell.Counters["snapshot_pins"] != uint64(len(queries)) || cell.Counters["read_proofs"] != 0 || cell.Counters["generation_pins"] != 0 || cell.Counters["partition_opens"] != 0 || cell.Timings["total"] == 0 || cell.Timings["coordinator_total"] == 0 || cell.Timings["client_total"] == 0 || cell.Timings["rpc"] == 0 || cell.Timings["read_index_apply"] != 0 || cell.Timings["shard_search"] == 0 || cell.CatalogReads.Total.Total.Reads != uint64(len(queries)) || cell.CatalogReads.Total.StrictSearch.Reads != uint64(len(queries)) || cell.CatalogReads.Total.OperationsHealth.Reads != 0 || cell.CatalogReads.Total.CoordinatorLifecycle.Reads != 0 || cell.CatalogReads.Total.ShardLifecycle.Reads != 0 || cell.CatalogReads.Total.Total.LogBarriers != 0 || cell.CatalogReads.Total.Total.NoLogProofs != cell.CatalogReads.Total.Total.Reads || len(cell.TotalNanos) != len(queries) {
 		t.Fatalf("system benchmark cell = %+v", cell)
 	}
+	for _, mode := range []string{vectorPartitionSystemSearchFastV1, vectorPartitionSystemSearchPinnedV1} {
+		cell, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0, mode, time.Hour, time.Minute, snapshot)
+		if err != nil {
+			t.Fatalf("%s system benchmark cell: %v", mode, err)
+		}
+		wantPins, wantSessions := uint64(len(queries)), uint64(0)
+		if mode == vectorPartitionSystemSearchPinnedV1 {
+			wantPins, wantSessions = 0, 2
+		}
+		if cell.FastEvidence == nil || cell.FastEvidence.IndexedThrough != uint64(len(vectors)) || cell.Counters["snapshot_pins"] != wantPins || cell.Counters["session_pins"] != wantSessions || cell.CatalogReads.Total.StrictSearch.Reads != 0 || cell.CatalogReads.Total.CoordinatorLifecycle.Reads != 0 || cell.CatalogReads.Total.ShardLifecycle.Reads != 0 || cell.Counters["read_proofs"] != 0 || cell.Counters["generation_pins"] != 0 || cell.Counters["partition_opens"] != 0 {
+			t.Fatalf("%s system benchmark cell = %+v", mode, cell)
+		}
+	}
+	pinOptions := public.PinSearchSnapshotOptionsV1{FastSearchOptionsV1: public.FastSearchOptionsV1{MaxIndexAge: time.Hour}, MaxSessionAge: time.Minute}
+	if _, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "pin_search_snapshot", PinOptions: &pinOptions}); err != nil {
+		t.Fatal(err)
+	}
+	deniedID, overlayDigest := response.Search.Neighbors[0].ID, strings.Repeat("a", 64)
+	token, err := node.production.PublishSearchSnapshotV1(t.Context(), uint64(len(vectors)), overlayDigest, []string{deniedID})
+	if err != nil || token.Sequence != uint64(len(vectors)) {
+		t.Fatalf("publish search snapshot token=%+v err=%v", token, err)
+	}
+	if _, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search_pinned", Search: searchRequest}); err == nil {
+		t.Fatal("older pinned snapshot ignored the current authorization overlay")
+	}
+	if _, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "close_pinned_snapshot"}); err != nil {
+		t.Fatal(err)
+	}
+	fastOptions := public.FastSearchOptionsV1{MaxIndexAge: time.Hour, MinIndexedThrough: token.Sequence}
+	filtered, err := client.call(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search_fast", Search: searchRequest, FastOptions: &fastOptions})
+	if err != nil || filtered.Search == nil || filtered.FastEvidence == nil || filtered.FastEvidence.AuthorizationOverlayDigest != overlayDigest {
+		t.Fatalf("filtered fast search=%+v err=%v", filtered, err)
+	}
+	for _, neighbor := range filtered.Search.Neighbors {
+		if neighbor.ID == deniedID {
+			t.Fatalf("revoked document %q remained visible", deniedID)
+		}
+	}
 	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
-	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0, snapshot); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
+	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0, vectorPartitionSystemSearchStrictV1, 0, 0, snapshot); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
 		t.Fatalf("mismatched live topology error = %v", err)
 	}
 	if err := node.Close(); err != nil {
@@ -284,7 +323,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	for index := range repeatedQueries {
 		repeatedQueries[index], repeatedTruth[index] = queries[index%len(queries)], truth[index%len(truth)]
 	}
-	cell, err = vectorPartitionSystemBenchCell(t.Context(), subprocessReady.PublicEndpoint, configSHA, repeatedQueries, repeatedTruth, 4, 2, 128, 1, len(repeatedQueries), snapshot)
+	cell, err = vectorPartitionSystemBenchCell(t.Context(), subprocessReady.PublicEndpoint, configSHA, repeatedQueries, repeatedTruth, 4, 2, 128, 1, len(repeatedQueries), vectorPartitionSystemSearchStrictV1, 0, 0, snapshot)
 	if err != nil || cell.CatalogReads.Total.StrictSearch.Reads != uint64(len(repeatedQueries)) {
 		t.Fatalf("subprocess system benchmark cell = %+v, %v\nstdout:\n%s\nstderr:\n%s", cell, err, process.stdout.String(), process.stderr.String())
 	}
@@ -323,6 +362,13 @@ func TestVectorPartitionSystemCatalogAndRuntimeDeltaV1(t *testing.T) {
 	missingLog["node"] = node
 	if _, _, err := vectorPartitionSystemCatalogReadDeltaV1(before, missingLog, 2); err == nil || !strings.Contains(err.Error(), "non-monotonic or lack proof") {
 		t.Fatalf("invalid no-log proof evidence error = %v", err)
+	}
+}
+
+func TestVectorPartitionSystemPeakRSSV1(t *testing.T) {
+	var peak vectorPartitionSystemPeakRSSV1
+	if peak.observe(10) != 10 || peak.observe(9) != 10 || peak.observe(11) != 11 {
+		t.Fatal("peak RSS must be monotonic")
 	}
 }
 
@@ -476,7 +522,7 @@ func TestVectorPartitionSystemBenchPersistsFailedCellV1(t *testing.T) {
 	topology, closeEndpoints := writeVectorPartitionSystemTopologyWithLiveEndpointsTestV1(t, "127.0.0.1:1", dataset)
 	defer closeEndpoints()
 	args := []string{"-endpoint", "127.0.0.1:1", "-topology", topology, "-dataset", dataset, "-truth-cache", cache, "-truth-cache-sha256", strings.TrimPrefix(fields[1], "artifact_sha256="), "-probes", "2", "-concurrency", "1", "-out", out, "-top-k", "10", "-ef-search", "128", "-warmup", "0"}
-	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, string, time.Duration, time.Duration, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1, Metrics: vectorPartitionSystemBenchMetricsV1{Queries: 2}}, context.DeadlineExceeded
 	}
 	if err := runVectorPartitionSystemBenchWithCellV1(args, io.Discard, runCell, nativewire.ProbeVectorPartitionShardEndpointV1); !errors.Is(err, context.DeadlineExceeded) {
@@ -530,7 +576,7 @@ func TestVectorPartitionSystemBenchRejectsShardIdentityDriftAroundCellV1(t *test
 		}
 		return nativewire.VectorPartitionShardEndpointIdentityV1{}, errors.New("unexpected endpoint")
 	}
-	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, string, time.Duration, time.Duration, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
 		drifted = true
 		return vectorPartitionSystemBenchCellV1{Status: "valid", Budget: map[string]int{"probes": 2}, Concurrency: 1}, nil
 	}
@@ -658,7 +704,7 @@ func TestVectorPartitionSystemBenchRejectsMismatchedTopologyDatasetV1(t *testing
 	dataset := writeFixtureForTest(t, 10, 2, 2)
 	topology := writeVectorPartitionSystemTopologyEvidenceTestV1(t, "127.0.0.1:1", t.TempDir())
 	called := false
-	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
+	runCell := func(context.Context, string, string, [][]float32, [][]m8CanonicalResultV1, int, int, int, int, int, string, time.Duration, time.Duration, vectorPartitionSystemCatalogSnapshotV1) (vectorPartitionSystemBenchCellV1, error) {
 		called = true
 		return vectorPartitionSystemBenchCellV1{}, nil
 	}
