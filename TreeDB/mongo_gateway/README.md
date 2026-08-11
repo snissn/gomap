@@ -81,7 +81,7 @@ call concurrently.
 <!-- mongo-capability-summary:begin -->
 ## Executable capability summary
 
-Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:5e10ca5eea0c0e5c4730d0909b1af77ac887d1b3d941b56d8e9086b352ceba04`
+Manifest: `treedb.mongo-gateway.capability-manifest/v1/sha256:6e9425a7b60720800cfb0d7590c9378751420382cf5eeb7a765a43c34b1b28af`
 
 | Surface | Status | Boundary |
 |---|---|---|

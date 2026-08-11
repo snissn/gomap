@@ -247,7 +247,7 @@ func (s *Server) findAndModifyExisting(col *collections.Collection, item mongoUp
 		if item.selector == nil {
 			return nil, nil, false, errors.New("Mongo gateway filter findAndModify has no selector")
 		}
-		return item.selector.findAndModifyFilterExisting(col, item)
+		return item.selector.findAndModifyFilterExisting(col, item, newImage, projection)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
