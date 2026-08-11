@@ -19,6 +19,45 @@ func columnHNSWSearchPackStatsModeSupportedForSearch(mode columnVectorGraphNativ
 	return mode.normalized() != columnVectorGraphNativeSearchStatsModeBenchmarkDebug
 }
 
+// layer0ExpansionDegreeV1 is the largest one-row tile a prepared pack search
+// can expand. Auxiliary navigation is a separate V3 channel, so it must be
+// included after the native 2M bound rather than silently reusing that bound.
+func (v *columnHNSWSearchPackPreparedView) layer0ExpansionDegreeV1() (int, error) {
+	if v == nil || v.Header.Rows < 0 || v.Header.M < 0 {
+		return 0, errColumnHNSWSearchPackSearchUnavailable
+	}
+	rows := v.Header.Rows
+	degree := v.Header.M
+	if degree < 1 {
+		degree = 1
+	}
+	if degree > math.MaxInt/2 {
+		degree = rows
+	} else {
+		degree *= 2
+	}
+	if degree > rows {
+		degree = rows
+	}
+	if !v.Header.HasAuxiliaryNavigation {
+		return degree, nil
+	}
+	// V3 views are semantically validated by the reader: a row has no more
+	// than eight tree children plus one parent or seed anchor. Do not rescan
+	// CSR offsets per query; this is the fixed bound for the appended tile.
+	maxAuxiliary := vectorPartitionLocalNavigationBranchV1 + 1
+	if rows <= 1 {
+		maxAuxiliary = 0
+	} else if rows-1 < maxAuxiliary {
+		maxAuxiliary = rows - 1
+	}
+	if maxAuxiliary > math.MaxInt-degree {
+		return 0, errColumnHNSWSearchPackSearchUnavailable
+	}
+	degree += maxAuxiliary
+	return degree, nil
+}
+
 func (v *columnHNSWSearchPackPreparedView) searchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	return v.searchCosineWithContext(context.Background(), query, opts, scratch)
 }
@@ -106,15 +145,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if efSearch > candidateLimit {
 		efSearch = candidateLimit
 	}
-	degree := v.Header.M
-	if degree < 1 {
-		degree = 1
-	}
-	if degree <= math.MaxInt/2 {
-		degree *= 2
-	}
-	if degree > rowCount {
-		degree = rowCount
+	degree, err := v.layer0ExpansionDegreeV1()
+	if err != nil {
+		return nil, stats, err
 	}
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
@@ -211,10 +244,18 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		if err != nil {
 			return nil, stats, err
 		}
-		if len(adjacency) == 0 {
+		auxiliary := []uint32(nil)
+		if v.Header.HasAuxiliaryNavigation {
+			start, end := v.AuxiliaryNavigation.Offsets[candidate.ordinal], v.AuxiliaryNavigation.Offsets[candidate.ordinal+1]
+			auxiliary = v.AuxiliaryNavigation.Neighbors[start:end]
+		}
+		if len(adjacency) == 0 && len(auxiliary) == 0 {
 			continue
 		}
-		scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency))
+		if len(auxiliary) > math.MaxInt-len(adjacency) {
+			return nil, stats, errColumnHNSWSearchPackSearchUnavailable
+		}
+		scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency)+len(auxiliary))
 		tile := scratch.scoreTileRowIDs[:0]
 		for i, neighbor := range adjacency {
 			if i&255 == 0 {
@@ -241,6 +282,45 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 		if len(tile) != 0 {
 			if err := v.scoreAndPushFrontierVisitedTile(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
 				return nil, stats, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
+		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
+			continue
+		}
+		tile = scratch.scoreTileRowIDs[:0]
+		for i, neighbor := range auxiliary {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
+			if countLoopEdges {
+				stats.AuxiliaryEdges++
+			}
+			if uint64(neighbor) >= rowCount64 {
+				return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 ordinal=%d auxiliary[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			}
+			neighborOrdinal := int(neighbor)
+			if visitMarks[neighborOrdinal] == visitEpoch {
+				continue
+			}
+			visitMarks[neighborOrdinal] = visitEpoch
+			tile = append(tile, neighbor)
+			if opts.CandidateLimit > 0 && uint64(len(tile))+visitedCandidates >= uint64(candidateLimit) {
+				break
+			}
+		}
+		if len(tile) != 0 {
+			beforeCandidates, beforeFrontier := visitedCandidates, len(scratch.frontier)
+			if err := v.scoreAndPushFrontierVisitedTile(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+				return nil, stats, err
+			}
+			if countLoopEdges {
+				stats.AuxiliaryCandidates += visitedCandidates - beforeCandidates
+				stats.AuxiliaryAdmissions += uint64(len(scratch.frontier) - beforeFrontier)
 			}
 			if err := ctx.Err(); err != nil {
 				return nil, stats, err

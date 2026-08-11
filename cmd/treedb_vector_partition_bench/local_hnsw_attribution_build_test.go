@@ -36,7 +36,15 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if evidence.Schema != localHNSWAttributionBuildSchemaV1 || evidence.Variant != "native" || evidence.VariantIdentity == "" || evidence.FileID != 9989 || evidence.Partitions != 4 || evidence.ElapsedNanos <= 0 || evidence.CloneLogicalBytes <= 0 || evidence.PackBytes == 0 || evidence.MappedBytes == 0 || evidence.CPUAvailable && evidence.CPUDeltaNanos < 0 {
 		t.Fatalf("evidence=%+v", evidence)
 	}
-	if _, _, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantV1("wrong"), 9990); err == nil {
+	repaired, repairEvidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 9990)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repaired.Close()
+	if repairEvidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || repairEvidence.VariantIdentity == "" || repairEvidence.FileID != 9990 || repairEvidence.Partitions != 4 || repairEvidence.PackBytes == 0 {
+		t.Fatalf("repair evidence=%+v", repairEvidence)
+	}
+	if _, _, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantV1("wrong"), 9991); err == nil {
 		t.Fatal("expected invalid variant rejection")
 	}
 }

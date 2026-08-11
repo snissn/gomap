@@ -541,13 +541,15 @@ func (h *vectorPartitionSearchResultMaxHeapV1) down(parent int) {
 	}
 }
 
-// VectorPartitionSearchMetricsV1 reports native traversal work for one local
-// no-document search. Candidates and Edges use the same counters as TreeDB's
-// prepared HNSW path.
+// VectorPartitionSearchMetricsV1 reports native and separately bounded
+// auxiliary traversal work for one local no-document search.
 type VectorPartitionSearchMetricsV1 struct {
-	Candidates uint64
-	Edges      uint64
-	Route      string
+	Candidates          uint64
+	Edges               uint64
+	AuxiliaryEdges      uint64
+	AuxiliaryCandidates uint64
+	AuxiliaryAdmissions uint64
+	Route               string
 }
 
 // VectorPartitionSearchOptionsV1 is the bounded M3 no-document search
@@ -568,17 +570,18 @@ const (
 )
 
 type VectorPartitionSearchStatusV1 struct {
-	Generation                          uint64
-	PartitionID                         uint32
-	HomeMemberships, OverlapMemberships int
-	MaxStableIDBytes                    int
-	PackBytes, MappedBytes, HeapBytes   uint64
-	OpenNanos                           uint64
-	SearchRoute                         string
-	Candidates, Edges                   uint64
-	ActivePins                          uint64
-	Opened, Searches, Failures          uint64
-	Retired                             bool
+	Generation                                               uint64
+	PartitionID                                              uint32
+	HomeMemberships, OverlapMemberships                      int
+	MaxStableIDBytes                                         int
+	PackBytes, MappedBytes, HeapBytes                        uint64
+	OpenNanos                                                uint64
+	SearchRoute                                              string
+	Candidates, Edges                                        uint64
+	AuxiliaryEdges, AuxiliaryCandidates, AuxiliaryAdmissions uint64
+	ActivePins                                               uint64
+	Opened, Searches, Failures                               uint64
+	Retired                                                  bool
 }
 
 // VectorPartitionPackDiagnosticsV1 is an explicit offline inspection result
@@ -586,14 +589,18 @@ type VectorPartitionSearchStatusV1 struct {
 // computing connectivity walks the full persisted graph and must never become
 // request-path work.
 type VectorPartitionPackDiagnosticsV1 struct {
-	Rows                uint64   `json:"rows"`
-	ReachableRows       uint64   `json:"reachable_rows"`
-	TraversalRoots      uint64   `json:"traversal_roots"`
-	MaxLayer            int      `json:"max_layer"`
-	RowsByLayer         []uint64 `json:"rows_by_layer"`
-	EdgesByLayer        []uint64 `json:"edges_by_layer"`
-	Layer0DegreeLimit   uint64   `json:"layer0_degree_limit"`
-	Layer0SaturatedRows uint64   `json:"layer0_saturated_rows"`
+	Rows                  uint64   `json:"rows"`
+	ReachableRows         uint64   `json:"reachable_rows"`
+	TraversalRoots        uint64   `json:"traversal_roots"`
+	MaxLayer              int      `json:"max_layer"`
+	RowsByLayer           []uint64 `json:"rows_by_layer"`
+	EdgesByLayer          []uint64 `json:"edges_by_layer"`
+	Layer0DegreeLimit     uint64   `json:"layer0_degree_limit"`
+	Layer0SaturatedRows   uint64   `json:"layer0_saturated_rows"`
+	AuxiliaryEdges        uint64   `json:"auxiliary_edges"`
+	AuxiliaryCSRBytes     uint64   `json:"auxiliary_csr_bytes"`
+	AuxiliaryMaxDegree    uint64   `json:"auxiliary_max_degree"`
+	CombinedReachableRows uint64   `json:"combined_reachable_rows"`
 }
 
 // PackDiagnosticsV1 scans the immutable prepared pack and reports topology
@@ -638,6 +645,26 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		}
 		d.EdgesByLayer[layer] = uint64(len(adjacency.Neighbors))
 	}
+	auxiliary := pack.AuxiliaryNavigation
+	if pack.Header.HasAuxiliaryNavigation {
+		if len(auxiliary.Offsets) != rows+1 || auxiliary.Offsets[0] != 0 || auxiliary.Offsets[rows] != uint64(len(auxiliary.Neighbors)) {
+			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if uint64(len(auxiliary.Offsets)) > math.MaxUint64/8 || uint64(len(auxiliary.Neighbors)) > math.MaxUint64/4 {
+			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		d.AuxiliaryEdges = uint64(len(auxiliary.Neighbors))
+		d.AuxiliaryCSRBytes = uint64(len(auxiliary.Offsets))*8 + uint64(len(auxiliary.Neighbors))*4
+		for ordinal := range rows {
+			start, end := auxiliary.Offsets[ordinal], auxiliary.Offsets[ordinal+1]
+			if end < start || end > uint64(len(auxiliary.Neighbors)) {
+				return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			if degree := end - start; degree > d.AuxiliaryMaxDegree {
+				d.AuxiliaryMaxDegree = degree
+			}
+		}
+	}
 	base := pack.AdjacencyLayers[0]
 	seen := make([]bool, rows)
 	visit := func(start int) (int, error) {
@@ -679,6 +706,31 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		}
 		d.TraversalRoots++
 	}
+	combinedSeen := make([]bool, rows)
+	combinedQueue := []int{pack.Header.EntryOrdinal}
+	combinedSeen[pack.Header.EntryOrdinal] = true
+	for head := 0; head < len(combinedQueue); head++ {
+		ordinal := combinedQueue[head]
+		for _, adjacency := range []columnHNSWSearchPackPreparedLayer{base, auxiliary} {
+			if len(adjacency.Offsets) == 0 {
+				continue
+			}
+			start, end := adjacency.Offsets[ordinal], adjacency.Offsets[ordinal+1]
+			if end < start || end > uint64(len(adjacency.Neighbors)) {
+				return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			for _, neighbor := range adjacency.Neighbors[start:end] {
+				if int(neighbor) >= rows {
+					return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+				}
+				if !combinedSeen[neighbor] {
+					combinedSeen[neighbor] = true
+					combinedQueue = append(combinedQueue, int(neighbor))
+				}
+			}
+		}
+	}
+	d.CombinedReachableRows = uint64(len(combinedQueue))
 	return d, nil
 }
 
@@ -750,19 +802,9 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if efSearch > rowCount {
 		efSearch = rowCount
 	}
-	degree := header.M
-	if degree < 1 {
-		degree = 1
-	}
-	if degree <= math.MaxInt/2 {
-		degree *= 2
-	}
-	if degree > rowCount {
-		// A graph cannot expose more distinct neighbors than it has rows.
-		// Capping here keeps the preflight bound identical to the scratch the
-		// native path actually prepares, even for a tiny shard whose persisted
-		// index definition has a much larger M.
-		degree = rowCount
+	degree, err := prepared.layer0ExpansionDegreeV1()
+	if err != nil {
+		return 0, ErrVectorPartitionSearchUnavailable
 	}
 	// Native traversal must materialize every retained ef_search candidate so
 	// the public stable-ID tie-break runs before final top-k truncation.
@@ -885,23 +927,24 @@ func checkedVectorPartitionScratchProductV1(left, right uint64) (uint64, error) 
 }
 
 type VectorPartitionLocalSearcherV1 struct {
-	mu                                  sync.Mutex
-	asset                               VectorPartitionSearchAssetV1
-	vectorInvNorms                      []float32
-	digest                              string
-	pins                                uint64
-	retired                             bool
-	opened, searches, failures          uint64
-	partitionPin                        *VectorPartitionReaderPinV1
-	closing                             bool
-	persistentPinReleased               bool
-	prepared                            *columnHNSWSearchPackPreparedView
-	homeMemberships, overlapMemberships int
-	packBytes, mappedBytes, heapBytes   uint64
-	openNanos                           uint64
-	searchRoute                         string
-	maxStableIDBytes                    int
-	candidates, edges                   uint64
+	mu                                                       sync.Mutex
+	asset                                                    VectorPartitionSearchAssetV1
+	vectorInvNorms                                           []float32
+	digest                                                   string
+	pins                                                     uint64
+	retired                                                  bool
+	opened, searches, failures                               uint64
+	partitionPin                                             *VectorPartitionReaderPinV1
+	closing                                                  bool
+	persistentPinReleased                                    bool
+	prepared                                                 *columnHNSWSearchPackPreparedView
+	homeMemberships, overlapMemberships                      int
+	packBytes, mappedBytes, heapBytes                        uint64
+	openNanos                                                uint64
+	searchRoute                                              string
+	maxStableIDBytes                                         int
+	candidates, edges                                        uint64
+	auxiliaryEdges, auxiliaryCandidates, auxiliaryAdmissions uint64
 }
 
 // Close releases the M1 generation pin held by a persistent opener. It is
@@ -1222,7 +1265,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
+		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, AuxiliaryEdges: stats.AuxiliaryEdges, AuxiliaryCandidates: stats.AuxiliaryCandidates, AuxiliaryAdmissions: stats.AuxiliaryAdmissions, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
 		if attribution != nil {
 			h := sha256.New()
 			h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
@@ -1247,6 +1290,9 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		s.searches++
 		s.candidates += metrics.Candidates
 		s.edges += metrics.Edges
+		s.auxiliaryEdges += metrics.AuxiliaryEdges
+		s.auxiliaryCandidates += metrics.AuxiliaryCandidates
+		s.auxiliaryAdmissions += metrics.AuxiliaryAdmissions
 		s.mu.Unlock()
 		return out, metrics, nil
 	}
@@ -1454,7 +1500,7 @@ func (s *VectorPartitionLocalSearcherV1) Status() VectorPartitionSearchStatusV1 
 }
 
 func (s *VectorPartitionLocalSearcherV1) statusLockedV1() VectorPartitionSearchStatusV1 {
-	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges}
+	st := VectorPartitionSearchStatusV1{Generation: s.asset.Generation, PartitionID: s.asset.PartitionID, ActivePins: s.pins, Opened: s.opened, Searches: s.searches, Failures: s.failures, Retired: s.retired, HomeMemberships: s.homeMemberships, OverlapMemberships: s.overlapMemberships, MaxStableIDBytes: s.maxStableIDBytes, PackBytes: s.packBytes, MappedBytes: s.mappedBytes, HeapBytes: s.heapBytes, OpenNanos: s.openNanos, SearchRoute: s.searchRoute, Candidates: s.candidates, Edges: s.edges, AuxiliaryEdges: s.auxiliaryEdges, AuxiliaryCandidates: s.auxiliaryCandidates, AuxiliaryAdmissions: s.auxiliaryAdmissions}
 	if s.prepared != nil {
 		return st
 	}

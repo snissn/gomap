@@ -936,11 +936,10 @@ func TestColumnGraphRebuildVectorIndexAdjacencyValidatesAllDimsBeforeScoringV2A(
 	}
 }
 
-// This compact ordered fixture used to reproduce the directed entry-reachability
-// collapse that was observed in retained partition-local packs. The assertion
-// is deliberately structural: exact scoring cannot compensate for a pack whose
-// native entry cannot traverse to its stored rows.
-func TestVectorPartitionLocalGraphAdjacencyKeepsLayer0EntryReachable(t *testing.T) {
+// This compact ordered fixture reproduces the directed entry-reachability
+// collapse observed in retained partition-local packs. The auxiliary channel
+// must repair that structural path without changing the native HNSW graph.
+func TestVectorPartitionLocalAuxiliaryNavigationKeepsNativeLayer0AndEntryReachable(t *testing.T) {
 	const count = 4096
 	def := columnGraphRebuildVectorIndexDefinitionV2A(16, 16)
 	rows := make([]columnVectorGraphAssetRow, count)
@@ -963,34 +962,73 @@ func TestVectorPartitionLocalGraphAdjacencyKeepsLayer0EntryReachable(t *testing.
 	} else if got >= len(native) {
 		t.Fatalf("native layer-0 entry reaches %d/%d rows; fixture no longer reproduces the base failure", got, len(native))
 	}
-	if err := buildVectorPartitionLocalGraphAdjacencyV1(rows, def); err != nil {
-		t.Fatalf("buildVectorPartitionLocalGraphAdjacencyV1: %v", err)
+	if err := buildColumnVectorGraphAdjacency(repeated, def); err != nil {
+		t.Fatalf("repeat buildColumnVectorGraphAdjacency: %v", err)
 	}
-	if err := buildVectorPartitionLocalGraphAdjacencyV1(repeated, def); err != nil {
-		t.Fatalf("repeat buildVectorPartitionLocalGraphAdjacencyV1: %v", err)
+	before := cloneColumnVectorGraphAssetRows3999(native)
+	auxiliary, err := buildVectorPartitionLocalAuxiliaryNavigationV1(native, 0)
+	if err != nil {
+		t.Fatalf("build auxiliary: %v", err)
 	}
-	if got, err := vectorPartitionLayer0Reachability3999(rows); err != nil {
-		t.Fatalf("repaired layer-0 reachability: %v", err)
-	} else if got != len(rows) {
-		t.Fatalf("repaired layer-0 entry reaches %d/%d rows", got, len(rows))
+	repeatedAuxiliary, err := buildVectorPartitionLocalAuxiliaryNavigationV1(repeated, 0)
+	if err != nil {
+		t.Fatalf("repeat build auxiliary: %v", err)
 	}
-	for row := range rows {
-		layer0, repairedSuffix, err := vectorPartitionLayer0AdjacencySplitV1(rows[row].Adjacency)
+	if err := validateVectorPartitionLocalAuxiliaryNavigationV1(native, 0, auxiliary); err != nil {
+		t.Fatalf("validate auxiliary: %v", err)
+	}
+	if len(auxiliary.Neighbors) == 0 {
+		t.Fatalf("auxiliary directed bridge count=%d", len(auxiliary.Neighbors))
+	}
+	for row := range native {
+		if degree := auxiliary.Offsets[row+1] - auxiliary.Offsets[row]; degree > vectorPartitionLocalNavigationBranchV1+1 {
+			t.Fatalf("auxiliary row=%d degree=%d exceeds cap", row, degree)
+		}
+	}
+	malformed := auxiliary
+	malformed.Neighbors = append([]uint32(nil), auxiliary.Neighbors...)
+	malformed.Neighbors[0] = uint32((int(malformed.Neighbors[0]) + 1) % len(native))
+	if err := validateVectorPartitionLocalAuxiliaryNavigationV1(native, 0, malformed); err == nil {
+		t.Fatal("malformed auxiliary navigation was accepted")
+	}
+	if !slices.Equal(auxiliary.Offsets, repeatedAuxiliary.Offsets) || !slices.Equal(auxiliary.Neighbors, repeatedAuxiliary.Neighbors) {
+		t.Fatal("auxiliary navigation is nondeterministic")
+	}
+	if got, err := vectorPartitionLayer0AuxiliaryReachability3999(native, auxiliary); err != nil {
+		t.Fatalf("native plus auxiliary reachability: %v", err)
+	} else if got != len(native) {
+		t.Fatalf("native plus auxiliary entry reaches %d/%d rows", got, len(native))
+	}
+	upperSeeds := 0
+	for ordinal, row := range native {
+		level, err := columnVectorGraphAdjacencyMaxLayer(row.Adjacency)
+		if err != nil || level == 0 {
+			continue
+		}
+		upperSeeds++
+		if got, err := vectorPartitionLayer0AuxiliaryReachabilityFrom3999(native, auxiliary, ordinal); err != nil || got != len(native) {
+			t.Fatalf("native plus auxiliary upper seed=%d reaches %d/%d err=%v", ordinal, got, len(native), err)
+		}
+	}
+	if upperSeeds == 0 {
+		t.Fatal("fixture has no upper-layer seed")
+	}
+	saturated := false
+	for row := range native {
+		layer0, suffix, err := vectorPartitionLayer0AdjacencySplitV1(native[row].Adjacency)
 		if err != nil || len(layer0) > 2*def.M {
-			t.Fatalf("repaired row=%d layer-0 degree=%d err=%v", row, len(layer0), err)
+			t.Fatalf("native row=%d layer-0 degree=%d err=%v", row, len(layer0), err)
 		}
-		_, nativeSuffix, nativeErr := vectorPartitionLayer0AdjacencySplitV1(native[row].Adjacency)
-		if nativeErr != nil || !slices.Equal(repairedSuffix, nativeSuffix) {
-			t.Fatalf("repaired row=%d higher-layer encoding changed repaired=%v native=%v err=%v", row, repairedSuffix, nativeSuffix, nativeErr)
+		if len(layer0) == 2*def.M {
+			saturated = true
 		}
-		for _, neighbor := range layer0 {
-			if int(neighbor) >= len(rows) || neighbor == uint32(row) {
-				t.Fatalf("repaired row=%d invalid neighbor=%d", row, neighbor)
-			}
+		_, beforeSuffix, beforeErr := vectorPartitionLayer0AdjacencySplitV1(before[row].Adjacency)
+		if beforeErr != nil || !slices.Equal(native[row].Adjacency, before[row].Adjacency) || !slices.Equal(suffix, beforeSuffix) {
+			t.Fatalf("auxiliary changed native adjacency row=%d", row)
 		}
-		if !slices.Equal(rows[row].Adjacency, repeated[row].Adjacency) {
-			t.Fatalf("repaired adjacency is nondeterministic at row=%d", row)
-		}
+	}
+	if !saturated {
+		t.Fatal("fixture no longer contains a saturated native layer-0 row")
 	}
 }
 
@@ -1018,6 +1056,47 @@ func vectorPartitionLayer0Reachability3999(rows []columnVectorGraphAssetRow) (in
 		}
 		for _, neighbor := range layer0 {
 			if int(neighbor) >= len(rows) {
+				return 0, fmt.Errorf("neighbor=%d out of range rows=%d", neighbor, len(rows))
+			}
+			if !seen[neighbor] {
+				seen[neighbor] = true
+				queue = append(queue, int(neighbor))
+			}
+		}
+	}
+	return len(queue), nil
+}
+
+func vectorPartitionLayer0AuxiliaryReachability3999(rows []columnVectorGraphAssetRow, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) (int, error) {
+	return vectorPartitionLayer0AuxiliaryReachabilityFrom3999(rows, auxiliary, 0)
+}
+
+func vectorPartitionLayer0AuxiliaryReachabilityFrom3999(rows []columnVectorGraphAssetRow, auxiliary vectorPartitionLocalAuxiliaryNavigationV1, entryOrdinal int) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
+		return 0, errors.New("auxiliary entry ordinal")
+	}
+	if len(auxiliary.Offsets) != len(rows)+1 || auxiliary.Offsets[0] != 0 || auxiliary.Offsets[len(rows)] != uint64(len(auxiliary.Neighbors)) {
+		return 0, errors.New("auxiliary csr shape")
+	}
+	seen := make([]bool, len(rows))
+	queue := []int{entryOrdinal}
+	seen[entryOrdinal] = true
+	for head := 0; head < len(queue); head++ {
+		ordinal := queue[head]
+		layer0, _, err := vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
+		if err != nil {
+			return 0, err
+		}
+		start, end := auxiliary.Offsets[ordinal], auxiliary.Offsets[ordinal+1]
+		if end < start || end > uint64(len(auxiliary.Neighbors)) {
+			return 0, errors.New("auxiliary csr offsets")
+		}
+		neighbors := append(append([]uint32(nil), layer0...), auxiliary.Neighbors[start:end]...)
+		for _, neighbor := range neighbors {
+			if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
 				return 0, fmt.Errorf("neighbor=%d out of range rows=%d", neighbor, len(rows))
 			}
 			if !seen[neighbor] {

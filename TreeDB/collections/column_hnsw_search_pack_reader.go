@@ -42,15 +42,16 @@ type columnHNSWSearchPackPreparedView struct {
 	Header   columnHNSWSearchPackHeader
 	Sections []columnHNSWSearchPackSection
 
-	NormalizedVectors []float32
-	Levels            []uint16
-	AdjacencyLayers   []columnHNSWSearchPackPreparedLayer
-	RowRefGenerations []int64
-	RowRefPartIDs     []int64
-	RowRefRowIndexes  []int64
-	RowRefAppliedLSNs []int64
-	DocumentIDOffsets []uint64
-	DocumentIDBytes   []byte
+	NormalizedVectors   []float32
+	Levels              []uint16
+	AdjacencyLayers     []columnHNSWSearchPackPreparedLayer
+	AuxiliaryNavigation columnHNSWSearchPackPreparedLayer
+	RowRefGenerations   []int64
+	RowRefPartIDs       []int64
+	RowRefRowIndexes    []int64
+	RowRefAppliedLSNs   []int64
+	DocumentIDOffsets   []uint64
+	DocumentIDBytes     []byte
 
 	manager *mappedresource.Manager
 	handle  *mappedresource.Handle
@@ -248,7 +249,7 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 	headerSize := columnHNSWSearchPackHeaderSize
 	switch version {
 	case columnHNSWSearchPackVersionV1:
-	case columnHNSWSearchPackVersionV2:
+	case columnHNSWSearchPackVersionV2, columnHNSWSearchPackVersionV3:
 		headerSize = columnHNSWSearchPackHeaderSizeV2
 	default:
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: unsupported hnsw_search_pack_v1 version=%d", version)
@@ -326,10 +327,10 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 		return columnHNSWSearchPack{}, opts, err
 	}
 	var membershipDigest [sha256.Size]byte
-	if version == columnHNSWSearchPackVersionV2 {
+	if version == columnHNSWSearchPackVersionV2 || version == columnHNSWSearchPackVersionV3 {
 		copy(membershipDigest[:], raw[columnHNSWSearchPackHeaderMembershipDigestOffset:columnHNSWSearchPackHeaderSizeV2])
 		if membershipDigest == ([sha256.Size]byte{}) {
-			return columnHNSWSearchPack{}, opts, errors.New("collections: hnsw_search_pack_v1 version 2 missing membership digest")
+			return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 version %d missing membership digest", version)
 		}
 	}
 	if opts.ExpectedMembershipDigest != ([sha256.Size]byte{}) && membershipDigest != opts.ExpectedMembershipDigest {
@@ -341,10 +342,17 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 	dataLength := hnswPackU64(raw, columnHNSWSearchPackHeaderDataLengthOffset)
 	sectionCount32 := hnswPackU32(raw, columnHNSWSearchPackHeaderSectionCountOffset)
 	expectedSectionCount := uint32(8 + 2*layerCount32)
+	if version == columnHNSWSearchPackVersionV3 {
+		expectedSectionCount += 2
+	}
 	if sectionCount32 != expectedSectionCount {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section_count=%d want %d", sectionCount32, expectedSectionCount)
 	}
-	if sectionCount32 > 8+2*opts.MaxLayers {
+	maxSectionCount := uint32(8 + 2*opts.MaxLayers)
+	if version == columnHNSWSearchPackVersionV3 {
+		maxSectionCount += 2
+	}
+	if sectionCount32 > maxSectionCount {
 		return columnHNSWSearchPack{}, opts, fmt.Errorf("collections: hnsw_search_pack_v1 section_count=%d exceeds cap", sectionCount32)
 	}
 	if directoryOffset != uint64(headerSize) || directoryLength != uint64(sectionCount32)*columnHNSWSearchPackSectionEntrySize {
@@ -395,6 +403,7 @@ func decodeColumnHNSWSearchPackEnvelopeWithContext(ctx context.Context, raw []by
 			BaseManifestChecksum:   baseIdentity.ManifestChecksum,
 			BaseSchemaHash:         baseIdentity.SchemaHash,
 			MembershipDigest:       membershipDigest,
+			HasAuxiliaryNavigation: version == columnHNSWSearchPackVersionV3,
 			TotalLength:            totalLength,
 			DataOffset:             dataOffset,
 			DataLength:             dataLength,
@@ -591,6 +600,50 @@ func (v *columnHNSWSearchPackPreparedView) prepareSectionViewsWithContext(ctx co
 		}
 		v.AdjacencyLayers[layer] = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
 	}
+	if v.Header.HasAuxiliaryNavigation {
+		offsetsSection, err := columnHNSWSearchPackRequireSection(v.Sections, columnHNSWSearchPackSectionAuxiliaryOffsets, 0, rows+1, 8)
+		if err != nil {
+			return err
+		}
+		offsetBytes, err := v.sectionDirectBytes(raw, offsetsSection, 8, "auxiliary_offsets")
+		if err != nil {
+			return err
+		}
+		offsets, err := mappedresource.Uint64View(offsetBytes)
+		if err != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary offsets direct view: %w", err)
+		}
+		neighborsSection, err := columnHNSWSearchPackFindSection(v.Sections, columnHNSWSearchPackSectionAuxiliaryNeighbors, 0)
+		if err != nil {
+			return err
+		}
+		maxAuxiliaryNeighbors := uint64(0)
+		if v.Header.Rows > 1 {
+			maxAuxiliaryNeighbors = uint64(v.Header.Rows-1) * 2
+		}
+		if neighborsSection.Length%4 != 0 || neighborsSection.Count != neighborsSection.Length/4 || neighborsSection.Count > maxAuxiliaryNeighbors || neighborsSection.Count > opts.MaxNeighbors || neighborsSection.Count > uint64(math.MaxInt) {
+			return errors.New("collections: hnsw_search_pack_v1 auxiliary neighbors shape")
+		}
+		neighborBytes, err := v.sectionDirectBytes(raw, neighborsSection, 4, "auxiliary_neighbors")
+		if err != nil {
+			return err
+		}
+		neighbors, err := mappedresource.Uint32View(neighborBytes)
+		if err != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary neighbors direct view: %w", err)
+		}
+		if v.Header.Rows > 0 && len(v.AdjacencyLayers) == 0 {
+			return errors.New("collections: hnsw_search_pack_v1 auxiliary navigation requires layer 0")
+		}
+		var native columnHNSWSearchPackPreparedLayer
+		if len(v.AdjacencyLayers) != 0 {
+			native = v.AdjacencyLayers[0]
+		}
+		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(ctx, v.Header.Rows, v.Header.EntryOrdinal, v.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary navigation: %w", err)
+		}
+		v.AuxiliaryNavigation = columnHNSWSearchPackPreparedLayer{Offsets: offsets, Neighbors: neighbors}
+	}
 	if v.RowRefGenerations, err = v.int64DirectView(raw, columnHNSWSearchPackSectionRowRefGeneration, rows); err != nil {
 		return err
 	}
@@ -786,6 +839,9 @@ func (v *columnHNSWSearchPackPreparedView) validateLive() error {
 	}
 	if len(v.AdjacencyLayers) != v.Header.AdjacencyLayerCount {
 		return fmt.Errorf("collections: hnsw_search_pack_v1 prepared adjacency layers=%d want %d", len(v.AdjacencyLayers), v.Header.AdjacencyLayerCount)
+	}
+	if v.Header.HasAuxiliaryNavigation && (len(v.AuxiliaryNavigation.Offsets) != v.Header.Rows+1 || len(v.AdjacencyLayers) == 0) {
+		return errors.New("collections: hnsw_search_pack_v1 prepared auxiliary navigation unavailable")
 	}
 	return nil
 }

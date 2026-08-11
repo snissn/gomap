@@ -63,9 +63,14 @@ order equals HNSW row order.
 
 The returned descriptors are installed in M1's manifest, which binds each
 logical partition to its exact membership digest, asset ref, length, CRC, and
-SHA-256. Partition packs use wire version 2 of the existing pack format to
-persist the same membership digest in the header; ordinary non-partition packs
-remain wire version 1.
+SHA-256. Ordinary non-partition packs remain wire version 1; historical
+partition packs use version 2. Rebuilt partition packs use version 3, retaining
+the version-2 header binding and adding a required, separately encoded
+auxiliary-navigation CSR. That channel is deterministically derived from native
+layer-0 reachability roots and upper-layer seed anchors, is checksum-covered and source/membership-bound,
+and preserves native layer-0 plus all higher layers byte-for-byte. Even a
+connected pack emits an explicit empty version-3 channel, so reopen rejects a
+missing or substituted repair topology.
 
 The column manifest keeps vector-index control state inline. Small records retain
 the existing version-2 encoding; records that would exceed the reserved inline
@@ -80,9 +85,14 @@ identity, recomputed membership set, descriptor, and native HNSW header, and
 holds an M1 generation reader pin until `Close`. Missing, corrupt,
 stale-generation, cross-membership, or malformed assets fail closed.
 
-`SearchWithMetrics` uses the no-document native HNSW route and returns
-candidate/edge accounting. Search status exposes route, pack/mapped/heap bytes,
-open time, searches, failures, candidates, edges, memberships, and pins.
+`SearchWithMetrics` uses the no-document native HNSW route. Rebuilt v3 packs
+expand native layer-0 neighbors first and may then expand their separately
+bounded auxiliary component-root CSR (including upper-layer seed anchors);
+native edges are never displaced or
+charged to the `2M` HNSW degree cap. Metrics and status report native
+candidates/edges separately from auxiliary edge visits, newly scored auxiliary
+candidates, and auxiliary frontier admissions, alongside route,
+pack/mapped/heap bytes, open time, searches, failures, memberships, and pins.
 Lifecycle status independently re-verifies all referenced assets and reports
 missing, corrupt, and stale counts. Results are response-owned stable IDs and
 FP32 cosine scores only.

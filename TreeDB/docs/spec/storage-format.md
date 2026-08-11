@@ -123,6 +123,19 @@ membership kinds. There are no optional tagged fields and this pre-alpha
 decoder accepts only version 3; older directories require rebuild rather than
 migration.
 
+Partition-local `hnsw_search_pack_v1` assets use wire version 3 when rebuilt
+with the reachability repair. Version 3 retains the version-2 176-byte header
+and required membership digest, then adds exactly two checksum-covered CSR
+sections for auxiliary offsets and neighbors. The auxiliary CSR is present even
+when empty and must exactly contain the deterministic branching-factor-eight
+tree over native layer-0 directed-reachability roots (entry component first),
+plus one directed edge from every non-root row with a persisted upper HNSW
+level to its component root. Those seed anchors preserve ordinary upper-layer
+descent before layer-0 reaches the component bridge. Its ordinals, offsets,
+tree bridges, seed anchors, degree cap, edge total, source identity, and
+membership binding validate before a reader exposes a prepared view.
+Versions 1 and 2 retain their existing layouts and have no auxiliary channel.
+
 For M3 bounded-overlap manifests, the canonical balance-policy grammar is
 `m3_bounded_overlap_v1:capacity=<u64>,budget=<u64>,realized=<u64>,unspent=<u64>`
 followed by the optional suffix `,build_identity=<64-lowercase-hex-sha256>`.
