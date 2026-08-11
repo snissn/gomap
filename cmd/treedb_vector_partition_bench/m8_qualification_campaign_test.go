@@ -1226,9 +1226,21 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		if !ok {
 			t.Fatalf("fixture=%d expected config", fixture.Vectors)
 		}
-		variant := m3VariantDescriptorV1{PartitionHNSWM: partitionConfig.Degree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: routerConfig.MaxScalarWork, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits}
+		definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, partitionConfig.Degree).VectorIndexes[0]
+		variant := m3VariantDescriptorV1{IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(definition), PartitionHNSWM: partitionConfig.Degree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: routerConfig.MaxScalarWork, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits}
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
+		}
+		candidate := variant
+		candidate.PartitionHNSWM = 18
+		definition.M, definition.EfConstruction = 18, 256
+		candidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
+		if !m8QualificationM3BuildCapsV1(candidate, fixture) {
+			t.Fatalf("fixture=%d rejected M18/eFC256 local candidate", fixture.Vectors)
+		}
+		candidate.IndexDefinitionDigest = variant.IndexDefinitionDigest
+		if m8QualificationM3BuildCapsV1(candidate, fixture) {
+			t.Fatalf("fixture=%d accepted M18 with the default local definition", fixture.Vectors)
 		}
 		wantRouterMaxVectors, ok := m8QualificationRouterMaxVectorsV1(fixture.Vectors)
 		if !ok || routerConfig.MaxVectors != wantRouterMaxVectors {
