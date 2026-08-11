@@ -93,6 +93,9 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("local HNSW final qualification executable does not bind the exact clean head")
+	}
 
 	fixtures := map[string]fixtureManifest{}
 	datasets := map[string]string{localHNSWFinalQualificationCorpus250KV1: dataset250, localHNSWFinalQualificationCorpus100KV1: dataset100}
