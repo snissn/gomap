@@ -148,7 +148,7 @@ func runLocalHNSWRepairCalibrationV1(args []string, stdout io.Writer) (runErr er
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, source.Close()) }()
-	if err := m8BindRetainedM3DescriptorV1(source, fixture); err != nil {
+	if err := localHNSWRepairCalibrationBindDescriptorV1(source, fixture); err != nil {
 		return err
 	}
 	calibration, err := localHNSWAttributionCalibrationV1Build(source, fixture, inputs.Calibration.Ordinals)
