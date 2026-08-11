@@ -22,6 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -995,6 +996,60 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	}
 }
 
+func TestM3ConfiguredPartitionLocalHNSWBuildsProductionV3Packs(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
+	}
+	persist := filepath.Join(t.TempDir(), "m3")
+	args := []string{
+		"-dataset", writeFixtureForTest(t, 64, 8, 8),
+		"-out", t.TempDir(),
+		"-m3-persist-db", persist,
+		"-partitions", "4",
+		"-probes", "1",
+		"-overlap", "0",
+		"-top-k", "4",
+		"-stage", "overlap,partition_index",
+		"-partition-repetitions", "1",
+		"-partition-pivots", "2",
+		"-partition-max-leaf-bucket", "8",
+		"-partition-degree", "4",
+		"-partition-hnsw-m", "18",
+		"-partition-hnsw-ef-construction", "256",
+		"-router-max-scalar-work", "50000000000",
+	}
+	if err := runWithHermeticProvenance(t, args, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	db, err := backenddb.Open(backenddb.Options{Dir: persist, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	col, err := collections.NewCollectionManager(db).OpenCollection(m3BenchmarkCollection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := col.Meta()
+	if len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].M != 18 || meta.VectorIndexes[0].EfConstruction != 256 {
+		t.Fatalf("local index definition=%+v", meta.VectorIndexes)
+	}
+	descriptor, err := m3ReadVariantDescriptorV1(persist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.IndexDefinitionDigest != collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]) {
+		t.Fatalf("descriptor index digest=%s", descriptor.IndexDefinitionDigest)
+	}
+	searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, descriptor.PartitionGeneration, 0)
+	if err != nil {
+		t.Fatalf("production-open configured V3 pack: %v", err)
+	}
+	if err := searcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestM3PartitionIndexFailsBeforePartialEvidenceWithoutNamespacePersistence(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "evidence")
 	args := []string{
@@ -1802,15 +1857,32 @@ func TestKaHIPAdapterRoundTripV1(t *testing.T) {
 	}
 }
 
-func TestPartitionLocalHNSWMIsIndependentAndM3OnlyV1(t *testing.T) {
-	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-degree", "4", "-partition-hnsw-m", "16"}
+func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
+	base := []string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-degree", "4", "-partition-hnsw-m", "18", "-partition-hnsw-ef-construction", "256"}
 	cfg, err := parseConfig(base)
-	if err != nil || cfg.partition.Degree != 4 || cfg.partitionHNSWM != 16 {
+	if err != nil || cfg.partition.Degree != 4 || cfg.partitionHNSWM != 18 || cfg.partitionHNSWEfC != 256 {
 		t.Fatalf("partition config=%+v err=%v", cfg, err)
+	}
+	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(cfg); err != nil || m != 18 || efConstruction != 256 {
+		t.Fatalf("configured local HNSW M/eFC=%d/%d err=%v", m, efConstruction, err)
+	}
+	defaultCfg, err := parseConfig([]string{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(defaultCfg); err != nil || m != partitionHNSWDegree || efConstruction != partitionHNSWDefaultEfC {
+		t.Fatalf("default local HNSW M/eFC=%d/%d err=%v", m, efConstruction, err)
+	}
+	router := m3RouterBuildOptionsV1(cfg.routerConfig, 1, 2)
+	if router.M != partitionHNSWDegree || router.EfConstruction != partitionHNSWDefaultEfC || router.EfSearch != 128 {
+		t.Fatalf("router HNSW M/eFC/search=%d/%d/%d", router.M, router.EfConstruction, router.EfSearch)
 	}
 	for _, args := range [][]string{
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-hnsw-m", "16"},
 		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "1"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "33"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "overlap,partition_index", "-overlap", "0", "-partition-hnsw-m", "18", "-partition-hnsw-ef-construction", "17"},
+		{"-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-stage", "partition", "-partition-hnsw-ef-construction", "256"},
 	} {
 		if _, err := parseConfig(args); err == nil {
 			t.Fatalf("accepted malformed local HNSW config %#v", args)
@@ -2938,7 +3010,7 @@ func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
 }
 
 func TestM3InheritedPartitionHNSWMFailsBeforeMaterializationV1(t *testing.T) {
-	args := []string{"-stage", "overlap,partition_index", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-overlap", "0", "-partition-degree", "32", "-m3-persist-db", t.TempDir()}
+	args := []string{"-stage", "overlap,partition_index", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-overlap", "0", "-partition-degree", "33", "-m3-persist-db", t.TempDir()}
 	if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "effective partition HNSW M") {
 		t.Fatalf("parseConfig inherited M error=%v", err)
 	}
