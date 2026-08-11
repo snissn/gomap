@@ -51,6 +51,12 @@ RUNTIME_DELTAS = (
     "voluntary_context_switches", "nonvoluntary_context_switches",
     "total_alloc_bytes", "mallocs", "frees", "num_gc", "pause_total_nanos",
 )
+CATALOG_STAGES = ("total", "strict_search", "serving_refresh", "operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown")
+CATALOG_FIELDS = (
+    "reads", "successes", "failures", "verify_leader_calls", "log_barriers", "no_log_proofs",
+    "total_nanos", "admission_nanos", "verify_leader_nanos", "barrier_nanos",
+    "current_term_nanos", "raft_apply_nanos", "applied_read_nanos",
+)
 BASELINE = {
     ("single", 1): (668.6856, 1_843_000),
     ("single", 32): (3043.812, 16_301_000),
@@ -90,7 +96,7 @@ def _validate_capability_key(provenance: dict[str, Any]) -> None:
              _sha256(path) == provenance["capability_key_sha256"], "capability key changed")
 
 
-def _runtime(cell: dict[str, Any]) -> dict[str, float | int]:
+def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) -> dict[str, float | int]:
     nodes = cell.get("runtime")
     _require(isinstance(nodes, list) and nodes, "runtime observations are missing")
     result: dict[str, float | int] = {key: 0 for key in RUNTIME_DELTAS}
@@ -102,6 +108,11 @@ def _runtime(cell: dict[str, Any]) -> dict[str, float | int]:
         identities.add(node["node_config_sha256"])
         before, after = node.get("before"), node.get("after")
         _require(isinstance(before, dict) and isinstance(after, dict), "runtime observation is invalid")
+        owner = expected_nodes.get(node["node_config_sha256"])
+        _require(isinstance(owner, dict) and all(
+            before.get(observed) == after.get(observed) == owner.get(configured)
+            for observed, configured in (("effective_cpu_set", "cpu_set"), ("gomaxprocs", "gomaxprocs"), ("go_memory_limit_bytes", "go_memory_limit_bytes"))
+        ), "runtime ownership changed during measurement")
         for key in RUNTIME_DELTAS:
             _require(_uint(before.get(key)) and _uint(after.get(key)) and after[key] >= before[key], f"runtime {key} regressed")
             result[key] += after[key] - before[key]
@@ -118,9 +129,23 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
     _require(isinstance(catalog, dict) and isinstance(catalog.get("nodes"), list) and isinstance(catalog.get("total"), dict), "catalog proof evidence is invalid")
     _require({node.get("node_config_sha256") for node in catalog["nodes"] if isinstance(node, dict)} == expected_ids and len(catalog["nodes"]) == len(expected_ids), "catalog proof nodes changed")
     total = catalog["total"]
+    summed = {name: {key: 0 for key in CATALOG_FIELDS} for name in CATALOG_STAGES}
+    for node in catalog["nodes"]:
+        before, after, delta = node.get("before"), node.get("after"), node.get("delta")
+        _require(all(isinstance(value, dict) for value in (before, after, delta)), "catalog node evidence is invalid")
+        for name in CATALOG_STAGES:
+            prior, current, retained = before.get(name), after.get(name), delta.get(name)
+            _require(all(isinstance(value, dict) and set(value) == set(CATALOG_FIELDS) for value in (prior, current, retained)) and
+                     all(_uint(prior[key]) and _uint(current[key]) and current[key] >= prior[key] for key in CATALOG_FIELDS),
+                     "catalog node observation is invalid")
+            expected = {key: current[key] - prior[key] for key in CATALOG_FIELDS}
+            _require(retained == expected, "catalog node delta changed")
+            for key in CATALOG_FIELDS:
+                summed[name][key] += retained[key]
+    _require(all(total.get(name) == summed[name] for name in CATALOG_STAGES), "catalog node totals disagree with the aggregate")
     strict, refresh, aggregate = total.get("strict_search"), total.get("serving_refresh"), total.get("total")
     _require(all(isinstance(value, dict) for value in (strict, refresh, aggregate)), "catalog proof attribution is invalid")
-    for name in ("total", "strict_search", "serving_refresh", "operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown"):
+    for name in CATALOG_STAGES:
         value = total.get(name)
         _require(isinstance(value, dict) and
                  value.get("reads") == value.get("successes") == value.get("verify_leader_calls") == value.get("no_log_proofs") and
@@ -152,7 +177,7 @@ def _validate_fast(cell: dict[str, Any], result: dict[str, Any], mode: str) -> N
     _require(_uint(age) and age <= minimum, "fast snapshot evidence age postdates its observed range")
 
 
-def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, concurrency: int, expected_ids: set[str]) -> dict[str, Any]:
+def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, concurrency: int, expected_nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
     _require(isinstance(cell, dict) and cell.get("status") == "valid" and not cell.get("error"), "benchmark cell failed")
     _require(cell.get("budget") == {"probes": 2} and cell.get("concurrency") == concurrency and cell.get("search_mode") == mode, "benchmark cell identity changed")
     metrics, counters, timings = cell.get("metrics"), cell.get("counters"), cell.get("timings")
@@ -169,9 +194,10 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     _require(math.isclose(metrics.get("qps", 0), 1_000_000_000_000 / elapsed, rel_tol=1e-12), "cell QPS changed")
     generation = cell.get("generation")
     _require(isinstance(generation, dict) and isinstance(generation.get("Index"), str) and generation["Index"] and _uint(generation.get("Generation"), positive=True), "cell generation is invalid")
+    expected_ids = set(expected_nodes)
     catalog_proof_reads = _validate_catalog(cell, mode, concurrency, expected_ids)
     _validate_fast(cell, result, mode)
-    runtime = _runtime(cell)
+    runtime = _runtime(cell, expected_nodes)
     _require({node.get("node_config_sha256") for node in cell["runtime"] if isinstance(node, dict)} == expected_ids and len(cell["runtime"]) == len(expected_ids), "runtime observation nodes changed")
     return {
         "recall": recall, "qps": metrics["qps"], "p95_nanos": metrics["p95_nanos"],
@@ -214,7 +240,7 @@ def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology
     return {key: _sha256(path) for key, path in paths.items()}
 
 
-def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any], expected_ids: set[str]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     result = _load(path, 32 << 20)
     _require(result.get("schema_version") == 1 and result.get("result_kind") == "vector_partition_system_bench_v1", "benchmark result identity changed")
     _require(result.get("topology") == TOPOLOGY_NAMES[topology] and _is_sha256(result.get("topology_identity_sha256")), "benchmark topology identity is invalid")
@@ -230,7 +256,7 @@ def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str,
     _require(isinstance(cells, list) and len(cells) == 2, "benchmark must retain c1 and c32")
     by_concurrency = {cell.get("concurrency"): cell for cell in cells if isinstance(cell, dict)}
     _require(set(by_concurrency) == {1, 32}, "benchmark c1/c32 set changed")
-    return result, {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_ids) for concurrency in (1, 32)}
+    return result, {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_nodes) for concurrency in (1, 32)}
 
 
 def _mode_order(topology: str, repetition: int) -> tuple[str, ...]:
@@ -303,12 +329,12 @@ def summarize(root: Path) -> dict[str, Any]:
         _require(all(not _paths_overlap(root_path, prior) for root_path in canonical_roots for prior in database_roots), "repetition database roots overlap")
         database_roots.extend(canonical_roots)
         ready = {node["node_id"]: _ready_identity(topology_path, topology_value, node, provenance["source_head"], provenance["binary_sha256"], PUBLIC_ROUTE) for node in topology_value["nodes"]}
-        node_ids = {node["node_config_sha256"] for node in topology_value["nodes"]}
+        expected_nodes = {node["node_config_sha256"]: node["runtime_ownership"] for node in topology_value["nodes"]}
         mode_inputs: dict[str, Any] = {}
         prior_search_completed: datetime | None = None
         for mode in expected_modes:
             search_path = run_dir / f"search-{mode}.json"
-            result, result_cells = _validate_result(search_path, topology, mode, provenance, node_ids)
+            result, result_cells = _validate_result(search_path, topology, mode, provenance, expected_nodes)
             _require(result["topology_identity_sha256"] == computed and started <= _time(result["started_at"]) < _time(result["completed_at"]) <= completed, "benchmark escaped its runner interval")
             search_started, search_completed = _time(result["started_at"]), _time(result["completed_at"])
             _require(prior_search_completed is None or prior_search_completed < search_started, "benchmark mode intervals overlap")
