@@ -952,6 +952,11 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
+	// Routing hits are uint16 values: at most five digits plus a comma.
+	routingBytes, err := memoryMul(durationCount, 6)
+	if err != nil {
+		return 0, err
+	}
 	withResults, err := memoryAdd(64<<10, resultBytes)
 	if err != nil {
 		return 0, err
@@ -960,7 +965,11 @@ func m8ProductionMeasurementTranscriptMaxBytesV1(report m8ProductionReportV1) (i
 	if err != nil {
 		return 0, err
 	}
-	return memoryAdd(withScores, durationBytes)
+	withDurations, err := memoryAdd(withScores, durationBytes)
+	if err != nil {
+		return 0, err
+	}
+	return memoryAdd(withDurations, routingBytes)
 }
 
 func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8ProductionMeasurementTranscriptV1, report m8ProductionReportV1) error {

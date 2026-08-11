@@ -27,6 +27,22 @@ func TestM8ProductionRoutingHitsSupportTopK256V1(t *testing.T) {
 	}
 }
 
+func TestM8ProductionMeasurementTranscriptByteBoundIncludesRoutingHitsV1(t *testing.T) {
+	report := m8ProductionReportV1{
+		Dataset: fixtureManifest{Vectors: 250_000},
+		Config:  m8ProductionConfigEvidenceV1{TopK: 10},
+		Rows:    []m8ProductionRowV1{{Status: "pass", Samples: 1_000}},
+	}
+	got, err := m8ProductionMeasurementTranscriptMaxBytesV1(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(64<<10) + 10_000*int64(len("doc-249999")+3+11) + 1_000*(21+6)
+	if got != want {
+		t.Fatalf("got=%d want=%d", got, want)
+	}
+}
+
 func TestLocalHNSWFinalQualificationApprovalV1(t *testing.T) {
 	source, base := testM8QualificationGitCheckoutV1(t, t.TempDir())
 	runGit := func(args ...string) string {
