@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -221,6 +222,10 @@ func m8ValidateRetainedM3ProvenanceV1(cfg config, descriptor m3VariantDescriptor
 }
 
 func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAssetsV1, err error) {
+	return openM8ProductionExistingAssetSetModeV1(dir, true)
+}
+
+func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8ProductionMultiGroupAssetsV1, err error) {
 	info, statErr := os.Stat(dir)
 	if statErr != nil {
 		return nil, fmt.Errorf("M8 existing assets directory: %w", statErr)
@@ -234,9 +239,13 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 			_ = h.Close()
 		}
 	}()
-	h.db, err = backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	h.db, err = backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: readOnly, DisableBackgroundPrune: true})
 	if err != nil {
-		return nil, fmt.Errorf("open retained M8 assets read-only: %w", err)
+		mode := "read-only"
+		if !readOnly {
+			mode = "read-write"
+		}
+		return nil, fmt.Errorf("open retained M8 assets %s: %w", mode, err)
 	}
 	manager := collections.NewCollectionManager(h.db)
 	collectionName, nameErr := m8ExistingCollectionNameV1(manager)
@@ -253,6 +262,109 @@ func openM8ProductionExistingAssetSetV1(dir string) (_ *m8ProductionMultiGroupAs
 	}
 	h.status = h.router.Status()
 	h.manifest = h.status.Manifest
+	return h, nil
+}
+
+type localHNSWVariantHarnessV1 struct {
+	assets     *m8ProductionMultiGroupAssetsV1
+	resources  interface{ Release() }
+	searchers  []*collections.VectorPartitionLocalSearcherV1
+	packAssets []collections.VectorPartitionAssetV1
+}
+
+func (h *localHNSWVariantHarnessV1) Close() error {
+	if h == nil {
+		return nil
+	}
+	var err error
+	for i, searcher := range h.searchers {
+		if searcher != nil {
+			err = errors.Join(err, searcher.Close())
+			h.searchers[i] = nil
+		}
+	}
+	if h.resources != nil {
+		h.resources.Release()
+		h.resources = nil
+	}
+	if h.assets != nil {
+		err = errors.Join(err, h.assets.Close())
+		h.assets = nil
+	}
+	return err
+}
+
+// materializeRetainedLocalHNSWVariantV1 makes a disposable reflink clone and
+// builds one graph variant against the literal retained manifest. It never
+// publishes a variant manifest and uses the retained router handle for routes.
+func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV1, tempRoot string, variant collections.VectorPartitionLocalGraphVariantV1, fileID uint32) (_ *localHNSWVariantHarnessV1, err error) {
+	if source == nil || source.collection == nil || source.router == nil || tempRoot == "" || fileID == 0 {
+		return nil, errors.New("retained local HNSW variant inputs")
+	}
+	if source.manifest.IntegrityDigest != source.status.Manifest.IntegrityDigest || source.manifest.ReadySetDigest != source.status.Manifest.ReadySetDigest {
+		return nil, errors.New("retained local HNSW variant requires raw retained manifest")
+	}
+	if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+		return nil, err
+	}
+	clone, err := os.MkdirTemp(tempRoot, "treedb-4105-variant-*")
+	if err != nil {
+		return nil, err
+	}
+	if output, err := exec.Command("cp", "-a", "--reflink=auto", source.dir+"/.", clone).CombinedOutput(); err != nil {
+		_ = os.RemoveAll(clone)
+		return nil, fmt.Errorf("reflink clone retained DB: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := backenddb.RebindDurableRootSnapshotV1(clone); err != nil {
+		_ = os.RemoveAll(clone)
+		return nil, err
+	}
+	owned, err := openM8ProductionExistingAssetSetModeV1(clone, false)
+	if err != nil {
+		_ = os.RemoveAll(clone)
+		return nil, err
+	}
+	owned.owned = true
+	if owned.manifest.IntegrityDigest != source.manifest.IntegrityDigest || owned.manifest.SourceChecksum != source.manifest.SourceChecksum || owned.manifest.Generation != source.manifest.Generation {
+		return nil, errors.Join(errors.New("reflink clone retained manifest identity mismatch"), owned.Close())
+	}
+	inputs := make([]collections.VectorPartitionSearchAssetV1, source.manifest.PartitionCount)
+	sourceID := collections.VectorPartitionSourceIdentityV1{Generation: source.manifest.SourceGeneration, Checksum: source.manifest.SourceChecksum, SchemaHash: source.manifest.SourceSchemaHash, RowCount: source.manifest.SourceRowCount}
+	var dimensions int
+	for _, candidate := range owned.collection.Meta().VectorIndexes {
+		if candidate.Name == source.manifest.IndexName && candidate.Dimensions > 0 {
+			dimensions = candidate.Dimensions
+			break
+		}
+	}
+	if dimensions == 0 {
+		return nil, errors.Join(errors.New("retained index definition missing"), owned.Close())
+	}
+	for p := range inputs {
+		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: dimensions}
+	}
+	assets, resources, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	if err != nil {
+		return nil, errors.Join(err, owned.Close())
+	}
+	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets))}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, h.Close())
+		}
+	}()
+	if len(assets) != len(inputs) {
+		return nil, errors.New("retained variant asset count mismatch")
+	}
+	for p, asset := range assets {
+		if asset.PartitionID != uint32(p) {
+			return nil, errors.New("retained variant partition ordering mismatch")
+		}
+		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return h, nil
 }
 

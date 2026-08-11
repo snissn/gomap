@@ -2,6 +2,8 @@ package collections
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -103,6 +105,275 @@ func TestOpenVectorPartitionLocalSearcherForGenerationWithContextV1RejectsCancel
 	cancel()
 	if _, err := col.OpenVectorPartitionLocalSearcherForGenerationWithContextV1(ctx, def.Name, 1, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled cold open err=%v", err)
+	}
+}
+
+func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Collection, manifest.IndexName, manifest.IndexDefinitionDigest = col.name, def.Name, VectorIndexDefinitionDigestV1(def)
+	manifest.Generation, manifest.PartitionCount = 91, 2
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}, {Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions}}
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, manifest, 977, inputs, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, assets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := searcher.Close(); err != nil {
+		t.Fatal(err)
+	}
+	nativeManifest := manifest
+	nativeManifest.Assets = assets
+	nativeManifest.Canonicalize()
+	if err := col.PublishVectorPartitionManifestV1(nativeManifest, nil); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("native offline pack publication err=%v", err)
+	}
+	wrongPartition := assets[0]
+	wrongPartition.PartitionID = 1
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongPartition); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong partition err=%v", err)
+	}
+	wrongSource := manifest
+	wrongSource.SourceChecksum++
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, wrongSource, assets[0]); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong source err=%v", err)
+	}
+	wrongMembers := manifest
+	wrongMembers.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 1, PartitionID: 0}, {VectorOrdinal: 0, PartitionID: 1}}
+	wrongMembers.Canonicalize()
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, wrongMembers, assets[0]); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong membership err=%v", err)
+	}
+	wrongAsset := assets[0]
+	wrongAsset.ID = "wrong"
+	if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, wrongAsset); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("wrong asset err=%v", err)
+	}
+}
+
+func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	rows := make([]columnGraphRebuildInputRowV2A, 8)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State = "building"
+	m.Collection = col.name
+	m.IndexName = def.Name
+	m.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	m.Generation = 92
+	m.PartitionCount = 1
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	native, nr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 981, in, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nr.Release()
+	overlay, or, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 982, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer or.Release()
+	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	o, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, overlay[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comparison.NativeReciprocalEdges == 0 || comparison.FinalReciprocalEdges == 0 {
+		t.Fatalf("reciprocity native=%d final=%d", comparison.NativeReciprocalEdges, comparison.FinalReciprocalEdges)
+	}
+	if comparison.Schema != VectorPartitionLocalGraphComparisonSchemaV1 || comparison.EntryOrdinal != 0 || comparison.NativeDistances.Count == 0 || comparison.FinalDistances.Count == 0 || comparison.NativeDistances.Count != comparison.Native.EdgesByLayer[0] || comparison.FinalDistances.Count != comparison.Final.EdgesByLayer[0] {
+		t.Fatalf("comparison summary=%+v", comparison)
+	}
+	for _, summary := range []VectorPartitionLocalGraphDistanceDistributionV1{comparison.NativeDistances, comparison.FinalDistances} {
+		if math.IsNaN(summary.Mean) || math.IsInf(summary.Mean, 0) || summary.Min > summary.P50 || summary.P50 > summary.P95 || summary.P95 > summary.P99 || summary.P99 > summary.Max || summary.Mean < summary.Min || summary.Mean > summary.Max {
+			t.Fatalf("distance summary=%+v", summary)
+		}
+	}
+	found := false
+	for _, row := range comparison.Rows {
+		for _, edge := range row.DisplacedEdges {
+			if edge.DistanceRank > 0 && edge.Distance >= 0 && edge.NativeReciprocal {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing scored reciprocal displaced edge: %+v", comparison.Rows)
+	}
+	query := []float32{1, 1, 1}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 4}
+	ordinary, ordinaryMetrics, err := o.SearchWithOptionsV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributed, attributedMetrics, attribution, err := o.SearchWithAttributionV1(t.Context(), query, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ordinary, attributed) || ordinaryMetrics != attributedMetrics {
+		t.Fatalf("attribution parity ordinary=%+v/%+v attributed=%+v/%+v", ordinary, ordinaryMetrics, attributed, attributedMetrics)
+	}
+	if attribution.Schema != "treedb_vector_partition_search_attribution_v1" || attribution.VisitedRows == 0 || attribution.VisitedRows != uint64(len(attribution.VisitedOrdinals)) || attribution.FrontierAdmissions == 0 || len(attribution.VisitedOrdinalsSHA256) != 64 {
+		t.Fatalf("attribution=%+v", attribution)
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
+	var raw [4]byte
+	for i, x := range attribution.VisitedOrdinals {
+		if i > 0 && attribution.VisitedOrdinals[i-1] >= x {
+			t.Fatalf("visited=%v", attribution.VisitedOrdinals)
+		}
+		binary.LittleEndian.PutUint32(raw[:], x)
+		h.Write(raw[:])
+	}
+	if hex.EncodeToString(h.Sum(nil)) != attribution.VisitedOrdinalsSHA256 {
+		t.Fatalf("digest=%s", attribution.VisitedOrdinalsSHA256)
+	}
+	switch attribution.TerminationReason {
+	case "candidate_limit", "frontier_empty_retained_full", "frontier_empty_no_seed", "distance_bound":
+	default:
+		t.Fatalf("termination=%q", attribution.TerminationReason)
+	}
+	if _, err = CompareVectorPartitionLocalGraphPacksV1(n, n); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("native pack accepted as overlay err=%v", err)
+	}
+}
+
+func TestValidVectorPartitionLocalGraphL0V1RejectsFutureOffset(t *testing.T) {
+	if !validVectorPartitionLocalGraphL0V1(3, columnHNSWSearchPackPreparedLayer{Offsets: []uint64{0, 1, 2, 2}, Neighbors: []uint32{2, 0}}) {
+		t.Fatal("valid L0 rejected")
+	}
+	if validVectorPartitionLocalGraphL0V1(3, columnHNSWSearchPackPreparedLayer{Offsets: []uint64{0, 1, 3, 2}, Neighbors: []uint32{2, 0}}) {
+		t.Fatal("decreasing future offset accepted")
+	}
+}
+
+func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	rows := make([]columnGraphRebuildInputRowV2A, 64)
+	state := uint64(0x4105)
+	for i := range rows {
+		vector := make([]float32, 8)
+		for d := range vector {
+			state += 0x9e3779b97f4a7c15
+			x := state
+			x = (x ^ x>>30) * 0xbf58476d1ce4e5b9
+			x = (x ^ x>>27) * 0x94d049bb133111eb
+			x ^= x >> 31
+			vector[d] = float32(int32(x>>32)) / float32(1<<31)
+		}
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: vector}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testVectorPartitionManifestV1()
+	m.State, m.Collection, m.IndexName = "building", col.name, def.Name
+	m.IndexDefinitionDigest, m.Generation, m.PartitionCount = VectorIndexDefinitionDigestV1(def), 93, 1
+	m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	m.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		m.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	m.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: m.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	native, nr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nr.Release()
+	overlay, or, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 984, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer or.Release()
+	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+	o, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, overlay[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Close()
+	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	displaced03 := false
+	for _, edge := range comparison.Rows[0].DisplacedEdges {
+		displaced03 = displaced03 || edge.NeighborOrdinal == 3
+	}
+	if !displaced03 {
+		t.Fatalf("missing displaced native edge 0->3: %+v", comparison.Rows[0])
+	}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1}
+	nativeResults, nativeMetrics, nativeTrace, err := n.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayResults, overlayMetrics, overlayTrace, err := o.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nativeResults) != 1 || nativeResults[0].ID != "v40" || len(overlayResults) != 1 || overlayResults[0].ID != "v0" {
+		t.Fatalf("native=%+v overlay=%+v", nativeResults, overlayResults)
+	}
+	if nativeMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || overlayMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || nativeTrace.VisitedOrdinalsSHA256 == overlayTrace.VisitedOrdinalsSHA256 {
+		t.Fatalf("native metrics/trace=%+v/%+v overlay=%+v/%+v", nativeMetrics, nativeTrace, overlayMetrics, overlayTrace)
+	}
+	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
+		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
 	}
 }
 
@@ -349,6 +620,86 @@ func TestVectorPartitionLocalNavigationOverlayReservesNativeEdgeAtM2V1(t *testin
 		if err != nil || len(layer0) > 2 || !slices.Contains(layer0, nativeEdges[i]) || !slices.Equal(m1a[i].Adjacency, m1b[i].Adjacency) {
 			t.Fatalf("M=1 row=%d layer0=%v err=%v repeat=%v", i, layer0, err, m1b[i].Adjacency)
 		}
+	}
+}
+
+func TestVectorPartitionLocalGraphDeltaAccountsSaturatedDisplacementV1(t *testing.T) {
+	const degreeLimit = 4
+	native := make([]columnVectorGraphAssetRow, 8)
+	for row := range native {
+		overlay, err := vectorPartitionLocalNavigationEdgesV1(row, len(native), degreeLimit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		layer0 := make([]uint32, 0, degreeLimit)
+		for neighbor := range native {
+			if neighbor == row || slices.Contains(overlay, uint32(neighbor)) {
+				continue
+			}
+			layer0 = append(layer0, uint32(neighbor))
+			if len(layer0) == degreeLimit {
+				break
+			}
+		}
+		if len(layer0) != degreeLimit {
+			t.Fatalf("row=%d native fixture degree=%d", row, len(layer0))
+		}
+		// The layered suffix makes a mutation above layer 0 observable. Every
+		// native row is saturated, so the deterministic overlay must displace
+		// some of its builder-selected edges.
+		native[row].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(layer0, []uint32{1, 1, 1, uint32((row + 5) % len(native))})
+	}
+	final := cloneColumnVectorGraphAssetRows3999(native)
+	if err := addVectorPartitionLocalNavigationOverlayV1(final, degreeLimit); err != nil {
+		t.Fatal(err)
+	}
+	deltas, err := vectorPartitionLocalGraphDeltaV1(native, final, degreeLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deltas) != len(native) {
+		t.Fatalf("deltas=%d want=%d", len(deltas), len(native))
+	}
+	// Row 1 is an internal binary-tree node: parent 0 and children 3/4 occupy
+	// three slots, leaving only one native edge under the shared cap.
+	if got := deltas[1]; got.NativeDegree != 4 || got.FinalDegree != 4 || got.OverlayEdges != 3 || got.DisplacedNativeEdges != 3 {
+		t.Fatalf("row 1 delta=%+v want saturated internal displacement", got)
+	}
+	if deltas[0].DisplacedNativeEdges == 0 {
+		t.Fatalf("root delta=%+v want native displacement", deltas[0])
+	}
+	for row := range native {
+		_, nativeSuffix, nativeErr := vectorPartitionLayer0AdjacencySplitV1(native[row].Adjacency)
+		finalLayer0, finalSuffix, finalErr := vectorPartitionLayer0AdjacencySplitV1(final[row].Adjacency)
+		if nativeErr != nil || finalErr != nil || !vectorPartitionUint32SlicesEqualV1(nativeSuffix, finalSuffix) || len(finalLayer0) > degreeLimit {
+			t.Fatalf("row=%d suffix or degree changed native=%v final=%v degree=%d", row, nativeSuffix, finalSuffix, len(finalLayer0))
+		}
+	}
+}
+
+func TestVectorPartitionLocalGraphDeltaFailsClosedV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{{Adjacency: []uint32{1}}, {Adjacency: []uint32{0}}}
+	if _, err := vectorPartitionLocalGraphDeltaV1(rows[:1], rows, 4); err == nil {
+		t.Fatal("accepted mismatched graph rows")
+	}
+	corrupt := cloneColumnVectorGraphAssetRows3999(rows)
+	corrupt[0].Adjacency = []uint32{2}
+	if _, err := vectorPartitionLocalGraphDeltaV1(rows, corrupt, 4); err == nil {
+		t.Fatal("accepted out-of-range final neighbor")
+	}
+}
+
+func TestVectorPartitionLocalGraphVariantIdentityFailsClosedV1(t *testing.T) {
+	native, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantNativeV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil || native == overlay {
+		t.Fatalf("variant identities native=%q overlay=%q err=%v", native, overlay, err)
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1("unknown"); err == nil {
+		t.Fatal("accepted unknown graph variant")
 	}
 }
 

@@ -219,17 +219,18 @@ type VectorPartitionCoordinatorNeighborV1 struct {
 }
 
 type VectorPartitionCoordinatorCountersV1 struct {
-	SelectedPartitions, SelectedGroups uint64
-	Requests, RPCs, Retries, Redirects uint64
-	Cancellations, Failures            uint64
-	QueryBytes, RequestBytes           uint64
-	ResponseBytes, CandidateBytes      uint64
-	MaxShardPartitions                 uint64
-	MaxShardRequestBytes               uint64
-	MaxShardResponseBytes              uint64
-	MaxShardCandidateBytes             uint64
-	Candidates, Edges, MergeEntries    uint64
-	Duplicates, ScoreDisagreements     uint64
+	SelectedPartitions, SelectedGroups                       uint64
+	Requests, RPCs, Retries, Redirects                       uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens uint64
+	Cancellations, Failures                                  uint64
+	QueryBytes, RequestBytes                                 uint64
+	ResponseBytes, CandidateBytes                            uint64
+	MaxShardPartitions                                       uint64
+	MaxShardRequestBytes                                     uint64
+	MaxShardResponseBytes                                    uint64
+	MaxShardCandidateBytes                                   uint64
+	Candidates, Edges, MergeEntries                          uint64
+	Duplicates, ScoreDisagreements                           uint64
 }
 
 type VectorPartitionCoordinatorTimingV1 struct {
@@ -328,6 +329,12 @@ type VectorPartitionCoordinatorV1 struct {
 	closeOnce           sync.Once
 	closeErr            error
 	routerCloseErr      error
+}
+
+type vectorPartitionCoordinatorStrictSearchV1 struct {
+	snapshot *VectorPartitionServingSnapshotLeaseV1
+	proof    vectorPartitionServingAuthorityProofV1
+	key      []byte
 }
 
 // A router session owns one generation-pinned M4 router for the lifetime of a
@@ -770,6 +777,17 @@ func normalizeVectorPartitionCoordinatorLimitsV1(limits VectorPartitionCoordinat
 }
 
 func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request VectorPartitionCoordinatorRequestV1) (response VectorPartitionCoordinatorResponseV1, resultErr error) {
+	return c.searchV1(ctx, request, nil)
+}
+
+func (c *VectorPartitionCoordinatorV1) searchStrictV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, snapshot *VectorPartitionServingSnapshotLeaseV1, proof vectorPartitionServingAuthorityProofV1, key []byte) (VectorPartitionCoordinatorResponseV1, error) {
+	if snapshot == nil || snapshot.snapshot == nil {
+		return VectorPartitionCoordinatorResponseV1{}, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, "")
+	}
+	return c.searchV1(ctx, request, &vectorPartitionCoordinatorStrictSearchV1{snapshot: snapshot, proof: proof, key: key})
+}
+
+func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, strict *vectorPartitionCoordinatorStrictSearchV1) (response VectorPartitionCoordinatorResponseV1, resultErr error) {
 	started := time.Now()
 	if c == nil {
 		return response, &VectorPartitionCoordinatorErrorV1{
@@ -810,38 +828,59 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	openStarted := time.Now()
-	routerLease, err := c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
-	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
-	if err != nil {
-		return response, c.wrapError(err, "")
-	}
-	defer func() {
-		if closeErr := routerLease.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, c.wrapError(fmt.Errorf("%w: close router: %w", ErrVectorPartitionCoordinatorUnavailable, closeErr), ""))
+	var routerLease *vectorPartitionCoordinatorRouterLeaseV1
+	var router VectorPartitionCoordinatorRouterV1
+	if strict == nil {
+		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
+		if err != nil {
+			return response, c.wrapError(err, "")
 		}
-	}()
-	router := routerLease.session.router
+		defer func() {
+			if closeErr := routerLease.Close(); closeErr != nil {
+				resultErr = errors.Join(resultErr, c.wrapError(fmt.Errorf("%w: close router: %w", ErrVectorPartitionCoordinatorUnavailable, closeErr), ""))
+			}
+		}()
+		router = routerLease.session.router
+	} else {
+		router = strict.snapshot.snapshot.router.session.router
+	}
+	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
+	if router == nil {
+		return response, c.wrapError(ErrVectorPartitionCoordinatorUnavailable, "")
+	}
 	status := router.Status()
 	if err := c.validateRouterStatus(status); err != nil {
-		if vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
+		if strict == nil && vectorPartitionCoordinatorRouterStatusInvalidatesSessionV1(err) {
 			c.retireRouterSessionV1(routerLease)
 		}
 		return response, c.wrapError(err, "")
 	}
-	lifecycleStarted := time.Now()
-	replicatedReadySetDigest, err := c.validateReplicatedLifecycle(
-		raftcluster.WithCatalogMetaReadSourceV1(requestCtx, raftcluster.CatalogMetaReadSourceCoordinatorLifecycleV1), status,
-	)
-	response.Timing.LifecycleNanos = elapsedNanosV1(lifecycleStarted)
-	if err != nil {
-		if vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err) {
-			c.retireRouterSessionV1(routerLease)
+	replicatedReadySetDigest := ""
+	if strict == nil {
+		lifecycleStarted := time.Now()
+		replicatedReadySetDigest, err = c.validateReplicatedLifecycle(
+			raftcluster.WithCatalogMetaReadSourceV1(requestCtx, raftcluster.CatalogMetaReadSourceCoordinatorLifecycleV1), status,
+		)
+		response.Timing.LifecycleNanos = elapsedNanosV1(lifecycleStarted)
+		if err != nil {
+			if vectorPartitionCoordinatorReplicatedLifecycleInvalidatesSessionV1(err) {
+				c.retireRouterSessionV1(routerLease)
+			}
+			return response, c.wrapError(err, "")
 		}
-		return response, c.wrapError(err, "")
-	}
-	if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
-		c.retireRouterSessionV1(routerLease)
-		return response, c.wrapError(err, "")
+		if err := c.recordRouterSessionIdentityV1(routerLease, status, replicatedReadySetDigest); err != nil {
+			c.retireRouterSessionV1(routerLease)
+			return response, c.wrapError(err, "")
+		}
+	} else {
+		identity := strict.snapshot.IdentityV1()
+		if identity.ManifestIntegrityDigest != status.Manifest.IntegrityDigest {
+			return response, c.wrapError(fmt.Errorf("%w: strict manifest integrity", ErrVectorPartitionCoordinatorGenerationMismatch), "")
+		}
+		if identity.RouterModelDigest != status.ModelDigest {
+			return response, c.wrapError(fmt.Errorf("%w: strict router model", ErrVectorPartitionCoordinatorGenerationMismatch), "")
+		}
+		replicatedReadySetDigest = identity.ReadySetDigest
 	}
 	if err := validateVectorPartitionCoordinatorRouterRequestV1(request, status); err != nil {
 		return response, c.wrapError(err, "")
@@ -861,7 +900,7 @@ func (c *VectorPartitionCoordinatorV1) Search(ctx context.Context, request Vecto
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, replicatedReadySetDigest, routed.Partitions)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, replicatedReadySetDigest, routed.Partitions, strict)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -975,8 +1014,11 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	responseBytes, responseBytesOK := addUint64V1(counters.ResponseBytes, response.ResponseBytes)
 	candidates, candidatesOK := addUint64V1(counters.Candidates, response.Candidates)
 	edges, edgesOK := addUint64V1(counters.Edges, response.Edges)
+	readProofs, readProofsOK := addUint64V1(counters.ReadProofs, response.ReadProofs)
+	generationPins, generationPinsOK := addUint64V1(counters.GenerationPins, response.GenerationPins)
+	partitionOpens, partitionOpensOK := addUint64V1(counters.PartitionOpens, response.PartitionOpens)
 	candidateBytes, candidateBytesOK := mulUint64V1(response.Candidates, 64)
-	if !responseBytesOK || !candidatesOK || !edgesOK || !candidateBytesOK {
+	if !responseBytesOK || !candidatesOK || !edgesOK || !readProofsOK || !generationPinsOK || !partitionOpensOK || !candidateBytesOK {
 		return false
 	}
 	shardCandidateBytes := candidateBytes
@@ -987,6 +1029,9 @@ func accumulateVectorPartitionCoordinatorResponseCountersV1(
 	counters.ResponseBytes = responseBytes
 	counters.Candidates = candidates
 	counters.Edges = edges
+	counters.ReadProofs = readProofs
+	counters.GenerationPins = generationPins
+	counters.PartitionOpens = partitionOpens
 	counters.CandidateBytes = candidateBytes
 	counters.MaxShardResponseBytes = max(counters.MaxShardResponseBytes, response.ResponseBytes)
 	counters.MaxShardCandidateBytes = max(counters.MaxShardCandidateBytes, shardCandidateBytes)
@@ -1171,7 +1216,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1280,17 +1325,6 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 				Consistency: request.Consistency, StatsMode: VectorPartitionShardSearchStatsBasicV1,
 				TopK: request.TopK, EfSearch: request.EfSearch, DeadlineUnixNano: request.DeadlineUnixNano,
 			}
-			budgetRequest := shardRequest
-			budgetRequest.TargetNodeID = longestTarget
-			requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(budgetRequest)
-			if err != nil || requestBytes > shardLimits.MaxRequestBytes {
-				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
-			}
-			shardRequest.RequestBytesLimit = requestBytes
-			totalRequestBytes, ok = addUint64V1(totalRequestBytes, requestBytes)
-			if !ok || totalRequestBytes > request.RequestBytesLimit {
-				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
-			}
 			responseReservation, err := vectorPartitionCoordinatorShardResponseReservationV1(
 				len(ids), request.TopK, shardLimits.MaxStableIDBytes,
 			)
@@ -1330,6 +1364,38 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			}
 			candidateShare = min(candidateShare, shardLimits.MaxCandidateBytes)
 			shardRequest.CandidateBytesLimit = candidateShare
+			if strict != nil {
+				identity := strict.snapshot.IdentityV1()
+				groupApplied := uint64(0)
+				for _, ready := range identity.ReadyGroups {
+					if ready.GroupID == groupID {
+						groupApplied = ready.AppliedIndex
+						break
+					}
+				}
+				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, groupApplied, strict.key)
+				if err != nil {
+					return nil, nil, nil, zero, err
+				}
+			}
+			budgetRequest := shardRequest
+			budgetRequest.TargetNodeID = longestTarget
+			requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(budgetRequest)
+			if err != nil || requestBytes > shardLimits.MaxRequestBytes {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
+			shardRequest.RequestBytesLimit = requestBytes
+			if strict != nil {
+				identity := strict.snapshot.IdentityV1()
+				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, shardRequest.StrictCapability.GroupAppliedIndex, strict.key)
+				if err != nil {
+					return nil, nil, nil, zero, err
+				}
+			}
+			totalRequestBytes, ok = addUint64V1(totalRequestBytes, requestBytes)
+			if !ok || totalRequestBytes > request.RequestBytesLimit {
+				return nil, nil, nil, zero, ErrVectorPartitionCoordinatorBudgetExceeded
+			}
 			tasks = append(tasks, vectorPartitionCoordinatorTaskV1{
 				index: taskIndex, group: group, partitionIDs: ids, candidateRows: rows, request: shardRequest,
 			})
@@ -1471,6 +1537,14 @@ func vectorPartitionCoordinatorShardRequestBytesV1(request VectorPartitionShardS
 			return 0, ErrVectorPartitionCoordinatorBudgetExceeded
 		}
 	}
+	capabilityBytes, err := vectorPartitionStrictSearchCapabilityBytesV1(request.StrictCapability)
+	if err != nil {
+		return 0, ErrVectorPartitionCoordinatorBudgetExceeded
+	}
+	size, ok = addUint64V1(size, capabilityBytes)
+	if !ok {
+		return 0, ErrVectorPartitionCoordinatorBudgetExceeded
+	}
 	return size, nil
 }
 
@@ -1606,9 +1680,6 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		return err
 	}
 	proof := response.Proof
-	// M5 may prove a current-term read while the latest applied TreeDB command
-	// remains in an older term across a command-free committed gap. The applied
-	// index, not an ordering between those terms, is the safety boundary.
 	if response.Version != VectorPartitionShardSearchVersionV1 || response.RequestID != request.RequestID ||
 		response.Partitions != uint64(len(task.partitionIDs)) || len(response.Partials) != len(task.partitionIDs) ||
 		len(task.candidateRows) != len(task.partitionIDs) ||
@@ -1617,13 +1688,27 @@ func (c *VectorPartitionCoordinatorV1) validateShardResponse(ctx context.Context
 		proof.SourceSchemaHash != request.SourceSchemaHash || proof.SourceRowCount != request.SourceRowCount ||
 		proof.PartitionGeneration != request.PartitionGeneration || proof.RouterGeneration != request.RouterGeneration ||
 		proof.ReadySetDigest != request.ReadySetDigest ||
-		proof.ReadTerm == 0 || proof.ReadIndex == 0 || proof.AppliedTerm == 0 || proof.AppliedIndex < proof.ReadIndex ||
-		proof.ServingNode == "" || proof.LeaderNode == "" ||
-		proof.LeaderNode != proof.ServingNode ||
+		proof.ServingNode == "" ||
 		!slices.Contains(task.group.Members, proof.ServingNode) ||
-		!slices.Contains(task.group.Members, proof.LeaderNode) ||
 		request.TargetNodeID != "" && proof.ServingNode != request.TargetNodeID {
 		return ErrVectorPartitionCoordinatorMalformedResponse
+	}
+	if request.StrictCapability != nil {
+		capability := request.StrictCapability
+		if proof.Kind != vectorPartitionShardSearchProofStrictSnapshotV1 || proof.LeaderNode != "" ||
+			proof.ReadTerm != 0 || proof.ReadIndex != 0 || proof.AppliedTerm != 0 || proof.AppliedIndex != 0 ||
+			proof.ServingIdentityDigest != capability.ServingIdentityDigest ||
+			proof.CatalogAppliedIndex != capability.CatalogAppliedIndex || proof.GroupAppliedIndex != capability.GroupAppliedIndex {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
+	} else {
+		// M5 may prove a current-term read while the latest applied TreeDB
+		// command remains in an older term across a command-free gap.
+		if proof.Kind != "" && proof.Kind != vectorPartitionShardSearchProofReadIndexV1 ||
+			proof.ReadTerm == 0 || proof.ReadIndex == 0 || proof.AppliedTerm == 0 || proof.AppliedIndex < proof.ReadIndex ||
+			proof.LeaderNode == "" || proof.LeaderNode != proof.ServingNode || !slices.Contains(task.group.Members, proof.LeaderNode) {
+			return ErrVectorPartitionCoordinatorMalformedResponse
+		}
 	}
 	var timingSubtotal uint64
 	for _, component := range [...]uint64{

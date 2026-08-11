@@ -7,10 +7,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"sync"
 	"unsafe"
 )
@@ -23,6 +26,9 @@ var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partit
 // once to FP32.
 const VectorPartitionCanonicalScoreContractV1 = "fp32_normalized_cosine_binary64_accum_score_desc_stable_id_asc_best_duplicate_v1"
 
+// VectorPartitionLocalGraphComparisonSchemaV1 identifies offline graph-delta evidence.
+const VectorPartitionLocalGraphComparisonSchemaV1 = "treedb_vector_partition_local_graph_comparison_v1"
+
 // CanonicalVectorPartitionCosineScoreV1 executes the public V1 score contract
 // over caller-owned source vectors.
 func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, error) {
@@ -34,6 +40,240 @@ func CanonicalVectorPartitionCosineScoreV1(query, vector []float32) (float32, er
 		return 0, err
 	}
 	return scorer.ScoreV1(vector)
+}
+
+type VectorPartitionLocalGraphEdgeEvidenceV1 struct {
+	NeighborOrdinal  uint32  `json:"neighbor_ordinal"`
+	NativePosition   int     `json:"native_position"`
+	DistanceRank     int     `json:"distance_rank"`
+	Distance         float64 `json:"distance"`
+	NativeReciprocal bool    `json:"native_reciprocal"`
+	FinalReciprocal  bool    `json:"final_reciprocal"`
+}
+type VectorPartitionLocalGraphRowEvidenceV1 struct {
+	Ordinal           uint32                                    `json:"ordinal"`
+	TreeRole          string                                    `json:"tree_role"`
+	NativeDegree      int                                       `json:"native_degree"`
+	FinalDegree       int                                       `json:"final_degree"`
+	OverlayEdges      int                                       `json:"overlay_edges"`
+	OverlayDuplicates int                                       `json:"overlay_duplicates"`
+	Displaced         int                                       `json:"displaced"`
+	NativeSaturated   bool                                      `json:"native_saturated"`
+	FinalSaturated    bool                                      `json:"final_saturated"`
+	DisplacedEdges    []VectorPartitionLocalGraphEdgeEvidenceV1 `json:"displaced_edges,omitempty"`
+}
+type VectorPartitionLocalGraphDistanceDistributionV1 struct {
+	Count uint64  `json:"count"`
+	Min   float64 `json:"min,omitempty"`
+	Mean  float64 `json:"mean,omitempty"`
+	P50   float64 `json:"p50,omitempty"`
+	P95   float64 `json:"p95,omitempty"`
+	P99   float64 `json:"p99,omitempty"`
+	Max   float64 `json:"max,omitempty"`
+}
+type VectorPartitionLocalGraphComparisonV1 struct {
+	Schema                string                                          `json:"schema"`
+	EntryOrdinal          int                                             `json:"entry_ordinal"`
+	Native                VectorPartitionPackDiagnosticsV1                `json:"native"`
+	Final                 VectorPartitionPackDiagnosticsV1                `json:"final"`
+	Rows                  []VectorPartitionLocalGraphRowEvidenceV1        `json:"rows"`
+	NativeDistances       VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_distances"`
+	FinalDistances        VectorPartitionLocalGraphDistanceDistributionV1 `json:"final_distances"`
+	NativeReciprocalEdges uint64                                          `json:"native_reciprocal_edges"`
+	FinalReciprocalEdges  uint64                                          `json:"final_reciprocal_edges"`
+}
+
+// CompareVectorPartitionLocalGraphPacksV1 is an offline-only prepared-pack
+// comparison. It never decodes assets or participates in serving.
+func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocalSearcherV1) (VectorPartitionLocalGraphComparisonV1, error) {
+	if native == nil || final == nil {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := native.Acquire(); err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	defer native.Release()
+	if final != native {
+		if err := final.Acquire(); err != nil {
+			return VectorPartitionLocalGraphComparisonV1{}, err
+		}
+		defer final.Release()
+	}
+	nd, err := native.PackDiagnosticsV1()
+	if err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	fd, err := final.PackDiagnosticsV1()
+	if err != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, err
+	}
+	native.mu.Lock()
+	np := native.prepared
+	native.mu.Unlock()
+	final.mu.Lock()
+	fp := final.prepared
+	final.mu.Unlock()
+	if np == nil || fp == nil || np.validateLive() != nil || fp.validateLive() != nil {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if np.Header.Rows != fp.Header.Rows || np.Header.Dimensions != fp.Header.Dimensions || np.Header.M != fp.Header.M || np.Header.EfConstruction != fp.Header.EfConstruction || np.Header.EfSearch != fp.Header.EfSearch || np.Header.EntryOrdinal != fp.Header.EntryOrdinal || np.Header.MaxLayer != fp.Header.MaxLayer || np.Header.BaseManifestGeneration != fp.Header.BaseManifestGeneration || np.Header.BaseManifestChecksum != fp.Header.BaseManifestChecksum || np.Header.BaseSchemaHash != fp.Header.BaseSchemaHash || np.Header.MembershipDigest != vectorPartitionLocalGraphVariantMembershipDigestV1(fp.Header.MembershipDigest, VectorPartitionLocalGraphVariantNativeV1) || !slices.Equal(np.Levels, fp.Levels) || !slices.Equal(np.NormalizedVectors, fp.NormalizedVectors) || !slices.Equal(np.DocumentIDOffsets, fp.DocumentIDOffsets) || !bytes.Equal(np.DocumentIDBytes, fp.DocumentIDBytes) || !slices.Equal(np.RowRefGenerations, fp.RowRefGenerations) || !slices.Equal(np.RowRefPartIDs, fp.RowRefPartIDs) || !slices.Equal(np.RowRefRowIndexes, fp.RowRefRowIndexes) || !slices.Equal(np.RowRefAppliedLSNs, fp.RowRefAppliedLSNs) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if len(np.AdjacencyLayers) == 0 || len(np.AdjacencyLayers) != len(fp.AdjacencyLayers) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if !validVectorPartitionLocalGraphL0V1(np.Header.Rows, np.AdjacencyLayers[0]) || !validVectorPartitionLocalGraphL0V1(fp.Header.Rows, fp.AdjacencyLayers[0]) {
+		return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	for layer := 1; layer < len(np.AdjacencyLayers); layer++ {
+		if !slices.Equal(np.AdjacencyLayers[layer].Offsets, fp.AdjacencyLayers[layer].Offsets) || !slices.Equal(np.AdjacencyLayers[layer].Neighbors, fp.AdjacencyLayers[layer].Neighbors) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	out := VectorPartitionLocalGraphComparisonV1{Schema: VectorPartitionLocalGraphComparisonSchemaV1, EntryOrdinal: np.Header.EntryOrdinal, Native: nd, Final: fd, Rows: make([]VectorPartitionLocalGraphRowEvidenceV1, np.Header.Rows)}
+	limit := np.Header.M * 2
+	has := func(edges []uint32, want uint32) bool {
+		for _, edge := range edges {
+			if edge == want {
+				return true
+			}
+		}
+		return false
+	}
+	distance := func(left, right int) (float64, bool) {
+		score, e := canonicalVectorPartitionNormalizedScoreV1(np.NormalizedVectors[left*np.Header.VectorStride:left*np.Header.VectorStride+np.Header.Dimensions], np.NormalizedVectors[right*np.Header.VectorStride:right*np.Header.VectorStride+np.Header.Dimensions])
+		d := 1 - float64(score)
+		return d, e == nil && !math.IsNaN(d) && !math.IsInf(d, 0)
+	}
+	var nativeDistances, finalDistances []float64
+	for i := 0; i < np.Header.Rows; i++ {
+		if np.Header.EntryOrdinal != 0 {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		a, b := np.AdjacencyLayers[0], fp.AdjacencyLayers[0]
+		nn := a.Neighbors[a.Offsets[i]:a.Offsets[i+1]]
+		fn := b.Neighbors[b.Offsets[i]:b.Offsets[i+1]]
+		rowDistances := make(map[uint32]float64, len(nn))
+		for _, x := range nn {
+			d, ok := distance(i, int(x))
+			if !ok {
+				return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			rowDistances[x] = d
+			nativeDistances = append(nativeDistances, d)
+		}
+		for _, x := range fn {
+			d, ok := distance(i, int(x))
+			if !ok {
+				return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			finalDistances = append(finalDistances, d)
+		}
+		tree, treeErr := vectorPartitionLocalNavigationEdgesV1(i, np.Header.Rows, limit)
+		if treeErr != nil {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		expected := append([]uint32(nil), tree...)
+		seenExpected := map[uint32]bool{}
+		for _, x := range tree {
+			seenExpected[x] = true
+		}
+		for _, x := range nn {
+			if len(expected) >= limit {
+				break
+			}
+			if !seenExpected[x] {
+				expected = append(expected, x)
+				seenExpected[x] = true
+			}
+		}
+		if !slices.Equal(expected, fn) {
+			return VectorPartitionLocalGraphComparisonV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		row := VectorPartitionLocalGraphRowEvidenceV1{Ordinal: uint32(i), TreeRole: "leaf", NativeDegree: len(nn), FinalDegree: len(fn), NativeSaturated: len(nn) >= limit, FinalSaturated: len(fn) >= limit, OverlayEdges: len(tree)}
+		if i == 0 {
+			row.TreeRole = "root"
+		} else if len(tree) > 1 {
+			row.TreeRole = "internal"
+		}
+		seen := map[uint32]bool{}
+		for _, x := range nn {
+			seen[x] = true
+		}
+		for _, x := range tree {
+			if seen[x] {
+				row.OverlayDuplicates++
+			}
+		}
+		for pos, x := range nn {
+			found := false
+			for _, y := range fn {
+				if x == y {
+					found = true
+				}
+			}
+			if !found {
+				row.Displaced++
+				d := rowDistances[x]
+				rank := 1
+				for _, y := range nn {
+					dy := rowDistances[y]
+					if dy < d || (dy == d && y < x) {
+						rank++
+					}
+				}
+				nback := a.Neighbors[a.Offsets[x]:a.Offsets[x+1]]
+				fback := b.Neighbors[b.Offsets[x]:b.Offsets[x+1]]
+				row.DisplacedEdges = append(row.DisplacedEdges, VectorPartitionLocalGraphEdgeEvidenceV1{NeighborOrdinal: x, NativePosition: pos, DistanceRank: rank, Distance: d, NativeReciprocal: has(nback, uint32(i)), FinalReciprocal: has(fback, uint32(i))})
+			}
+		}
+		for _, x := range nn {
+			if has(a.Neighbors[a.Offsets[x]:a.Offsets[x+1]], uint32(i)) {
+				out.NativeReciprocalEdges++
+			}
+		}
+		for _, x := range fn {
+			if has(b.Neighbors[b.Offsets[x]:b.Offsets[x+1]], uint32(i)) {
+				out.FinalReciprocalEdges++
+			}
+		}
+		out.Rows[i] = row
+	}
+	out.NativeDistances = vectorPartitionLocalGraphDistanceSummaryV1(nativeDistances)
+	out.FinalDistances = vectorPartitionLocalGraphDistanceSummaryV1(finalDistances)
+	return out, nil
+}
+
+func vectorPartitionLocalGraphDistanceSummaryV1(values []float64) VectorPartitionLocalGraphDistanceDistributionV1 {
+	if len(values) == 0 {
+		return VectorPartitionLocalGraphDistanceDistributionV1{}
+	}
+	sort.Float64s(values)
+	sum := 0.0
+	for _, v := range values {
+		sum += v
+	}
+	pick := func(p int) float64 { return values[(p*len(values)+99)/100-1] }
+	return VectorPartitionLocalGraphDistanceDistributionV1{Count: uint64(len(values)), Min: values[0], Mean: sum / float64(len(values)), P50: pick(50), P95: pick(95), P99: pick(99), Max: values[len(values)-1]}
+}
+
+func validVectorPartitionLocalGraphL0V1(rows int, layer columnHNSWSearchPackPreparedLayer) bool {
+	if rows < 1 || len(layer.Offsets) != rows+1 || layer.Offsets[0] != 0 || layer.Offsets[len(layer.Offsets)-1] != uint64(len(layer.Neighbors)) {
+		return false
+	}
+	for row := 0; row < rows; row++ {
+		if layer.Offsets[row+1] < layer.Offsets[row] || layer.Offsets[row+1] > uint64(len(layer.Neighbors)) {
+			return false
+		}
+		seen := map[uint32]bool{}
+		for _, neighbor := range layer.Neighbors[layer.Offsets[row]:layer.Offsets[row+1]] {
+			if int(neighbor) >= rows || int(neighbor) == row || seen[neighbor] {
+				return false
+			}
+			seen[neighbor] = true
+		}
+	}
+	return true
 }
 
 // CanonicalVectorPartitionCosineScorerV1 retains one normalized query so a
@@ -886,6 +1126,31 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithMetrics(query []float32, topK
 // an in-flight native traversal may call this method in a goroutine: Close
 // defers the persistent generation-pin release until the search pin exits.
 func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	return s.searchWithOptionsV1(ctx, query, opts, nil)
+}
+
+// VectorPartitionSearchAttributionV1 is offline evidence for one prepared
+// partition-local HNSW traversal.
+type VectorPartitionSearchAttributionV1 struct {
+	Schema                string   `json:"schema"`
+	FrontierAdmissions    uint64   `json:"frontier_admissions"`
+	VisitedRows           uint64   `json:"visited_rows"`
+	VisitedOrdinalsSHA256 string   `json:"visited_ordinals_sha256"`
+	TerminationReason     string   `json:"termination_reason"`
+	VisitedOrdinals       []uint32 `json:"-"`
+}
+
+// SearchWithAttributionV1 runs the offline prepared-pack attribution path.
+func (s *VectorPartitionLocalSearcherV1) SearchWithAttributionV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, VectorPartitionSearchAttributionV1, error) {
+	var attribution VectorPartitionSearchAttributionV1
+	results, metrics, err := s.searchWithOptionsV1(ctx, query, opts, &attribution)
+	return results, metrics, attribution, err
+}
+
+func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, attribution *VectorPartitionSearchAttributionV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	if attribution != nil {
+		*attribution = VectorPartitionSearchAttributionV1{Schema: "treedb_vector_partition_search_attribution_v1"}
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -927,7 +1192,20 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 		if nativeTopK > s.prepared.Header.Rows {
 			nativeTopK = s.prepared.Header.Rows
 		}
-		results, stats, err := s.prepared.searchCosineWithContext(ctx, query, columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}, &columnVectorGraphNativeSearchScratch{})
+		scratch := &columnVectorGraphNativeSearchScratch{}
+		nativeOpts := columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}
+		var trace columnHNSWSearchPackAttributionTrace
+		if attribution != nil {
+			nativeOpts.StatsMode = columnVectorGraphNativeSearchStatsModeWorkAccounting
+		}
+		var results []columnVectorGraphNativeSearchResult
+		var stats columnVectorGraphNativeSearchStats
+		var err error
+		if attribution != nil {
+			results, stats, err = s.prepared.searchCosineWithContextTrace(ctx, query, nativeOpts, scratch, &trace)
+		} else {
+			results, stats, err = s.prepared.searchCosineWithContext(ctx, query, nativeOpts, scratch)
+		}
 		if err != nil {
 			s.recordFailure()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -945,12 +1223,36 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
 		metrics := VectorPartitionSearchMetricsV1{Candidates: stats.Candidates, Edges: stats.Edges, Route: VectorPartitionSearchRouteHNSWSearchPackV1}
+		if attribution != nil {
+			h := sha256.New()
+			h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
+			var raw [4]byte
+			for ordinal, mark := range scratch.visitMarks {
+				if mark == scratch.visitEpoch {
+					attribution.VisitedOrdinals = append(attribution.VisitedOrdinals, uint32(ordinal))
+					binary.LittleEndian.PutUint32(raw[:], uint32(ordinal))
+					h.Write(raw[:])
+				}
+			}
+			attribution.VisitedRows = uint64(len(attribution.VisitedOrdinals))
+			attribution.FrontierAdmissions = stats.FrontierPushes
+			attribution.TerminationReason = trace.Termination
+			attribution.VisitedOrdinalsSHA256 = hex.EncodeToString(h.Sum(nil))
+			if attribution.VisitedRows == 0 || attribution.TerminationReason == "" {
+				s.recordFailure()
+				return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution", ErrVectorPartitionSearchUnavailable)
+			}
+		}
 		s.mu.Lock()
 		s.searches++
 		s.candidates += metrics.Candidates
 		s.edges += metrics.Edges
 		s.mu.Unlock()
 		return out, metrics, nil
+	}
+	if attribution != nil {
+		s.recordFailure()
+		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: attribution requires prepared pack", ErrVectorPartitionSearchUnavailable)
 	}
 	normalizedQuery, err := canonicalVectorPartitionNormalizeV1(query)
 	if err != nil {

@@ -33,6 +33,7 @@ import (
 
 const (
 	collectionMetaVersion        = 6
+	collectionMetaVersionV5      = 5
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -22815,8 +22816,15 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		return CollectionMeta{}, err
 	}
-	if disk.Version != collectionMetaVersion {
+	if disk.Version != collectionMetaVersionV5 && disk.Version != collectionMetaVersion {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
+	}
+	if disk.Version == collectionMetaVersionV5 {
+		for _, index := range disk.Indexes {
+			if len(index.Components) != 0 {
+				return CollectionMeta{}, errors.New("collections: version 5 metadata cannot define compound index components")
+			}
+		}
 	}
 	meta := CollectionMeta{
 		Name:          disk.Name,

@@ -56,13 +56,13 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 	if err := p.ValidateCatalogMetaReadProofLeaseV1(proof); err != nil {
 		t.Fatalf("validate proof lease: %v", err)
 	}
-	for _, source := range []CatalogMetaReadSourceV1{CatalogMetaReadSourceCoordinatorLifecycleV1, CatalogMetaReadSourceShardLifecycleV1, CatalogMetaReadSourceUnknownV1} {
+	for _, source := range []CatalogMetaReadSourceV1{CatalogMetaReadSourceStrictSearchV1, CatalogMetaReadSourceServingRefreshV1, CatalogMetaReadSourceCoordinatorLifecycleV1, CatalogMetaReadSourceShardLifecycleV1, CatalogMetaReadSourceUnknownV1} {
 		if got, err := p.LinearizableCatalogMetaAppliedIndexV1(WithCatalogMetaReadSourceV1(ctx, source)); err != nil || got != index {
 			t.Fatalf("attributed linearizable applied index=%d err=%v want %d", got, err, index)
 		}
 	}
 	stats := p.CatalogMetaLinearizableReadStatsV1()
-	if stats.Total.Reads != 4 || stats.Total.Successes != 4 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 4 || stats.Total.LogBarriers != 0 || stats.Total.NoLogProofs != 4 || stats.OperationsHealth.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
+	if stats.Total.Reads != 6 || stats.Total.Successes != 6 || stats.Total.Failures != 0 || stats.Total.VerifyLeaderCalls != 6 || stats.Total.LogBarriers != 0 || stats.Total.NoLogProofs != 6 || stats.OperationsHealth.Reads != 1 || stats.StrictSearch.Reads != 1 || stats.ServingRefresh.Reads != 1 || stats.CoordinatorLifecycle.Reads != 1 || stats.ShardLifecycle.Reads != 1 || stats.Unknown.Reads != 1 || stats.LastTerm == 0 || stats.LastCatalogApplied != index || stats.LastRaftApplied < index || stats.LastRaftLog < index {
 		t.Fatalf("catalog read stats=%+v", stats)
 	}
 	if got := p.raft.LastIndex(); got != lastLogBeforeReads {

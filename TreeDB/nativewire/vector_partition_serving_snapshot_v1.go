@@ -20,6 +20,13 @@ import (
 
 const vectorPartitionServingSnapshotRefreshTimeoutV1 = time.Second
 
+const (
+	defaultVectorPartitionMaxPinnedSessionsV1    = 64
+	defaultVectorPartitionMaxPinnedSessionAgeV1  = 2 * time.Second
+	defaultVectorPartitionMaxRetainedSnapshotsV1 = 2
+	defaultVectorPartitionMaxWatermarkWaitV1     = time.Second
+)
+
 // VectorPartitionServingSnapshotPublisherOptionsV1 binds the immutable local
 // assets to the replicated serving identity. GenerationSources contains only
 // groups owned by this process; every source is pinned and every local
@@ -31,6 +38,10 @@ type VectorPartitionServingSnapshotPublisherOptionsV1 struct {
 	TopologyDigest             string
 	AuthorizationOverlayDigest string
 	IndexedThrough             uint64
+	MaxPinnedSessions          int
+	MaxPinnedSessionAge        time.Duration
+	MaxRetainedSnapshots       int
+	MaxWatermarkWait           time.Duration
 }
 
 // VectorPartitionServingSnapshotIdentityV1 is the immutable identity exposed
@@ -38,6 +49,7 @@ type VectorPartitionServingSnapshotPublisherOptionsV1 struct {
 // identity, but it never mutates the identity or its assets.
 type VectorPartitionServingSnapshotIdentityV1 struct {
 	SnapshotDigest             string                                               `json:"snapshot_digest"`
+	ServingIdentityDigest      string                                               `json:"serving_identity_digest"`
 	Lifecycle                  raftplacement.VectorPartitionLifecycleIdentityV1     `json:"lifecycle"`
 	CatalogEpoch               uint64                                               `json:"catalog_epoch"`
 	CatalogDigest              string                                               `json:"catalog_digest"`
@@ -60,13 +72,17 @@ type VectorPartitionServingSnapshotIdentityV1 struct {
 }
 
 type VectorPartitionServingSnapshotPublisherStatsV1 struct {
-	Builds, BuildFailures                      uint64
-	Publications, Replacements, Invalidations  uint64
-	ProofRefreshes, ProofRefreshFailures       uint64
-	Acquisitions, AcquisitionRejections        uint64
-	Releases, SnapshotCloses                   uint64
-	RouterPins, GenerationPins, PartitionOpens uint64
-	CurrentPins, CurrentSnapshots              uint64
+	Builds, BuildFailures                         uint64
+	Publications, Replacements, Invalidations     uint64
+	ProofRefreshes, ProofRefreshFailures          uint64
+	Acquisitions, AcquisitionRejections           uint64
+	StrictAcquisitions, StrictAcquisitionFailures uint64
+	FastAcquisitions, FastAcquisitionFailures     uint64
+	PinnedAcquisitions, PinnedAcquisitionFailures uint64
+	Releases, SnapshotCloses                      uint64
+	RouterPins, GenerationPins, PartitionOpens    uint64
+	CurrentPins, CurrentSnapshots                 uint64
+	CurrentPinnedSessions, RetainedSnapshots      uint64
 }
 
 type vectorPartitionServingSnapshotV1 struct {
@@ -85,11 +101,14 @@ type vectorPartitionServingSnapshotV1 struct {
 type VectorPartitionServingSnapshotPublisherV1 struct {
 	opts VectorPartitionServingSnapshotPublisherOptionsV1
 
-	mu       sync.Mutex
-	current  *vectorPartitionServingSnapshotV1
-	closed   bool
-	revision uint64
-	stats    VectorPartitionServingSnapshotPublisherStatsV1
+	publishMu sync.Mutex
+	mu        sync.Mutex
+	current   *vectorPartitionServingSnapshotV1
+	retired   map[*vectorPartitionServingSnapshotV1]struct{}
+	closed    bool
+	revision  uint64
+	stats     VectorPartitionServingSnapshotPublisherStatsV1
+	changed   chan struct{}
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -101,10 +120,16 @@ type VectorPartitionServingSnapshotPublisherV1 struct {
 }
 
 type VectorPartitionServingSnapshotLeaseV1 struct {
-	publisher *VectorPartitionServingSnapshotPublisherV1
-	snapshot  *vectorPartitionServingSnapshotV1
-	closeOnce sync.Once
-	closeErr  error
+	publisher  *VectorPartitionServingSnapshotPublisherV1
+	snapshot   *vectorPartitionServingSnapshotV1
+	proof      vectorPartitionServingAuthorityProofV1
+	revision   uint64
+	expires    time.Time
+	pinned     bool
+	useMu      sync.RWMutex
+	expiryDone chan struct{}
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func NewVectorPartitionServingSnapshotPublisherV1(opts VectorPartitionServingSnapshotPublisherOptionsV1) (*VectorPartitionServingSnapshotPublisherV1, error) {
@@ -124,9 +149,25 @@ func NewVectorPartitionServingSnapshotPublisherV1(opts VectorPartitionServingSna
 		sources[group] = source
 	}
 	opts.GenerationSources = sources
+	if opts.MaxPinnedSessions == 0 {
+		opts.MaxPinnedSessions = defaultVectorPartitionMaxPinnedSessionsV1
+	}
+	if opts.MaxPinnedSessionAge == 0 {
+		opts.MaxPinnedSessionAge = defaultVectorPartitionMaxPinnedSessionAgeV1
+	}
+	if opts.MaxRetainedSnapshots == 0 {
+		opts.MaxRetainedSnapshots = defaultVectorPartitionMaxRetainedSnapshotsV1
+	}
+	if opts.MaxWatermarkWait == 0 {
+		opts.MaxWatermarkWait = defaultVectorPartitionMaxWatermarkWaitV1
+	}
+	if opts.MaxPinnedSessions < 1 || opts.MaxPinnedSessionAge <= 0 || opts.MaxRetainedSnapshots < 1 || opts.MaxWatermarkWait <= 0 {
+		return nil, fmt.Errorf("%w: invalid pinned serving snapshot bounds", ErrVectorPartitionShardSearchAssetsUnavailable)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &VectorPartitionServingSnapshotPublisherV1{
-		opts: opts, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1),
+		opts: opts, retired: make(map[*vectorPartitionServingSnapshotV1]struct{}), changed: make(chan struct{}),
+		ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -137,6 +178,28 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 	if p == nil {
 		return ErrVectorPartitionShardSearchAssetsUnavailable
 	}
+	p.mu.Lock()
+	indexedThrough, overlayDigest := p.opts.IndexedThrough, p.opts.AuthorizationOverlayDigest
+	p.mu.Unlock()
+	return p.PublishStateV1(ctx, indexedThrough, overlayDigest)
+}
+
+// PublishStateV1 publishes one complete immutable snapshot at a monotonic
+// source watermark. Concurrent publishers serialize; an older watermark can
+// never replace a newer one.
+func (p *VectorPartitionServingSnapshotPublisherV1) PublishStateV1(ctx context.Context, indexedThrough uint64, overlayDigest string) error {
+	return p.publishStateV1(ctx, indexedThrough, overlayDigest, nil)
+}
+
+func (p *VectorPartitionServingSnapshotPublisherV1) publishStateV1(ctx context.Context, indexedThrough uint64, overlayDigest string, commit func()) error {
+	if p == nil {
+		return ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if indexedThrough == 0 || !isVectorPartitionShardSearchDigestV1(overlayDigest) {
+		return ErrVectorPartitionShardSearchGenerationMismatch
+	}
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -148,11 +211,15 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		p.mu.Unlock()
 		return fmt.Errorf("%w: serving snapshot publisher closed", ErrVectorPartitionShardSearchAssetsUnavailable)
 	}
+	if indexedThrough < p.opts.IndexedThrough {
+		p.mu.Unlock()
+		return ErrVectorPartitionShardSearchGenerationMismatch
+	}
 	p.stats.Builds++
 	revision := p.revision
 	p.mu.Unlock()
 
-	next, counts, err := p.buildSnapshotV1(ctx)
+	next, counts, err := p.buildSnapshotV1(ctx, indexedThrough, overlayDigest)
 	p.mu.Lock()
 	p.stats.RouterPins += counts.routerPins
 	p.stats.GenerationPins += counts.generationPins
@@ -171,20 +238,34 @@ func (p *VectorPartitionServingSnapshotPublisherV1) PublishV1(ctx context.Contex
 		return errors.Join(ErrVectorPartitionShardSearchGenerationMismatch, next.close())
 	}
 	previous := p.current
+	if previous != nil && previous.refs != 0 && len(p.retired) >= p.opts.MaxRetainedSnapshots {
+		p.mu.Unlock()
+		return errors.Join(ErrVectorPartitionShardSearchAssetsUnavailable, next.close())
+	}
 	if err := vectorPartitionServingSnapshotAdvanceIdentityV1(next, previous); err != nil {
 		p.mu.Unlock()
 		return errors.Join(err, next.close())
 	}
+	if commit != nil {
+		commit()
+	}
 	p.current = next
+	p.opts.IndexedThrough = indexedThrough
+	p.opts.AuthorizationOverlayDigest = overlayDigest
 	p.stats.Publications++
 	p.stats.CurrentSnapshots++
 	if previous != nil {
 		p.stats.Replacements++
 		p.stats.CurrentSnapshots--
 		previous.retired = true
+		if previous.refs != 0 {
+			p.retired[previous] = struct{}{}
+			p.stats.RetainedSnapshots++
+		}
 	}
 	closePrevious := previous != nil && previous.refs == 0
 	p.startRefreshLoopV1()
+	p.notifyChangedLockedV1()
 	p.mu.Unlock()
 	if closePrevious {
 		p.recordSnapshotCloseV1(previous.close())
@@ -208,7 +289,7 @@ type vectorPartitionServingSnapshotBuildCountsV1 struct {
 	routerPins, generationPins, partitionOpens uint64
 }
 
-func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.Context) (_ *vectorPartitionServingSnapshotV1, counts vectorPartitionServingSnapshotBuildCountsV1, err error) {
+func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.Context, indexedThrough uint64, overlayDigest string) (_ *vectorPartitionServingSnapshotV1, counts vectorPartitionServingSnapshotBuildCountsV1, err error) {
 	placement := p.opts.Coordinator.placement
 	before, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
 		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceUnknownV1),
@@ -306,9 +387,13 @@ func (p *VectorPartitionServingSnapshotPublisherV1) buildSnapshotV1(ctx context.
 		ProofGroupID: after.read.GroupID, ProofLeaderTerm: after.read.LeaderTerm,
 		LifecycleRevision: after.authority.Record.Revision, ReadySetDigest: after.authority.Record.ReadySetDigest,
 		TopologyDigest: p.opts.TopologyDigest, ManifestIntegrityDigest: routerStatus.Manifest.IntegrityDigest,
-		RouterModelDigest: routerStatus.ModelDigest, AuthorizationOverlayDigest: p.opts.AuthorizationOverlayDigest,
-		IndexedThrough: p.opts.IndexedThrough, PublishedAtUnixNano: publishedAt.UnixNano(),
+		RouterModelDigest: routerStatus.ModelDigest, AuthorizationOverlayDigest: overlayDigest,
+		IndexedThrough: indexedThrough, PublishedAtUnixNano: publishedAt.UnixNano(),
 		ReadyGroups: slices.Clone(after.authority.Record.ReadyGroups), LocalGroups: slices.Clone(localGroups),
+	}
+	identity.ServingIdentityDigest, err = vectorPartitionServingIdentityDigestV1(identity)
+	if err != nil {
+		return fail(err)
 	}
 	identity.SnapshotDigest, err = vectorPartitionServingSnapshotDigestV1(identity)
 	if err != nil {
@@ -373,6 +458,28 @@ func vectorPartitionServingSnapshotDigestV1(identity VectorPartitionServingSnaps
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// vectorPartitionServingIdentityDigestV1 is common across processes serving
+// the same immutable generation. Process-local proof, publication, and asset
+// ownership fields are authenticated separately by the strict capability.
+func vectorPartitionServingIdentityDigestV1(identity VectorPartitionServingSnapshotIdentityV1) (string, error) {
+	identity.SnapshotDigest = ""
+	identity.ServingIdentityDigest = ""
+	identity.CatalogAppliedIndex = 0
+	identity.CatalogCommitIndex = 0
+	identity.CatalogRaftAppliedIndex = 0
+	identity.ProofNodeID = ""
+	identity.ProofGroupID = ""
+	identity.ProofLeaderTerm = 0
+	identity.PublishedAtUnixNano = 0
+	identity.LocalGroups = nil
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (p *VectorPartitionServingSnapshotPublisherV1) AcquireV1() (*VectorPartitionServingSnapshotLeaseV1, error) {
 	if p == nil {
 		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
@@ -390,7 +497,227 @@ func (p *VectorPartitionServingSnapshotPublisherV1) AcquireV1() (*VectorPartitio
 	p.current.refs++
 	p.stats.Acquisitions++
 	p.stats.CurrentPins++
-	return &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: p.current}, nil
+	return &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: p.current, proof: p.current.proof, revision: p.revision}, nil
+}
+
+// AcquireFastV1 waits only for a local publication watermark, then pins the
+// latest complete snapshot under its already-refreshed authority lease.
+func (p *VectorPartitionServingSnapshotPublisherV1) AcquireFastV1(ctx context.Context, maxAge time.Duration, minIndexedThrough uint64) (*VectorPartitionServingSnapshotLeaseV1, error) {
+	return p.acquireFastV1(ctx, maxAge, minIndexedThrough, true)
+}
+
+func (p *VectorPartitionServingSnapshotPublisherV1) acquireFastV1(ctx context.Context, maxAge time.Duration, minIndexedThrough uint64, recordFast bool) (*VectorPartitionServingSnapshotLeaseV1, error) {
+	if p == nil || maxAge <= 0 {
+		return nil, ErrVectorPartitionShardSearchInvalidRequest
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var waitTimer *time.Timer
+	defer func() {
+		if waitTimer != nil {
+			waitTimer.Stop()
+		}
+	}()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		p.mu.Lock()
+		if p.closed {
+			if recordFast {
+				p.stats.FastAcquisitionFailures++
+			}
+			p.mu.Unlock()
+			return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+		}
+		snapshot, changed := p.current, p.changed
+		if snapshot == nil || snapshot.identity.IndexedThrough < minIndexedThrough {
+			if waitTimer == nil {
+				waitTimer = time.NewTimer(p.opts.MaxWatermarkWait)
+			}
+			p.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-changed:
+				continue
+			case <-waitTimer.C:
+				if recordFast {
+					p.mu.Lock()
+					p.stats.FastAcquisitionFailures++
+					p.mu.Unlock()
+				}
+				return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+			}
+		}
+		age := time.Since(snapshot.publishedAt)
+		if age < 0 {
+			age = 0
+		}
+		if age > maxAge {
+			if recordFast {
+				p.stats.FastAcquisitionFailures++
+			}
+			p.mu.Unlock()
+			return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+		}
+		if err := p.opts.Authority.validateVectorPartitionServingAuthorityV1(snapshot.proof); err != nil {
+			if recordFast {
+				p.stats.FastAcquisitionFailures++
+			}
+			p.mu.Unlock()
+			return nil, err
+		}
+		snapshot.refs++
+		p.stats.Acquisitions++
+		if recordFast {
+			p.stats.FastAcquisitions++
+		}
+		p.stats.CurrentPins++
+		lease := &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: snapshot, proof: snapshot.proof, revision: p.revision}
+		p.mu.Unlock()
+		return lease, nil
+	}
+}
+
+// AcquirePinnedV1 pins one snapshot until close, invalidation, or its bounded expiry.
+func (p *VectorPartitionServingSnapshotPublisherV1) AcquirePinnedV1(ctx context.Context, maxAge time.Duration, minIndexedThrough uint64, maxSessionAge time.Duration) (*VectorPartitionServingSnapshotLeaseV1, error) {
+	if p == nil || maxSessionAge <= 0 {
+		return nil, ErrVectorPartitionShardSearchInvalidRequest
+	}
+	p.mu.Lock()
+	if maxSessionAge > p.opts.MaxPinnedSessionAge || p.stats.CurrentPinnedSessions >= uint64(p.opts.MaxPinnedSessions) {
+		p.stats.PinnedAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	p.mu.Unlock()
+	lease, err := p.acquireFastV1(ctx, maxAge, minIndexedThrough, false)
+	if err != nil {
+		p.mu.Lock()
+		p.stats.PinnedAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, err
+	}
+	now := time.Now()
+	expires := now.Add(maxSessionAge)
+	if freshnessExpiry := lease.snapshot.publishedAt.Add(maxAge); freshnessExpiry.Before(expires) {
+		expires = freshnessExpiry
+	}
+	if !expires.After(now) {
+		_ = lease.Close()
+		p.mu.Lock()
+		p.stats.PinnedAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	p.mu.Lock()
+	if p.closed || p.stats.CurrentPinnedSessions >= uint64(p.opts.MaxPinnedSessions) {
+		p.stats.PinnedAcquisitionFailures++
+		p.mu.Unlock()
+		_ = lease.Close()
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	lease.pinned = true
+	lease.expires = expires
+	lease.expiryDone = make(chan struct{})
+	p.stats.PinnedAcquisitions++
+	p.stats.CurrentPinnedSessions++
+	p.mu.Unlock()
+	go func() {
+		timer := time.NewTimer(time.Until(expires))
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			_ = lease.Close()
+		case <-lease.expiryDone:
+		}
+	}()
+	return lease, nil
+}
+
+func (l *VectorPartitionServingSnapshotLeaseV1) ValidatePinnedV1() error {
+	_, err := l.lockPinnedProofV1()
+	if err == nil {
+		l.useMu.RUnlock()
+	}
+	return err
+}
+
+func (l *VectorPartitionServingSnapshotLeaseV1) validatePinnedProofV1() (vectorPartitionServingAuthorityProofV1, error) {
+	proof, err := l.lockPinnedProofV1()
+	if err == nil {
+		l.useMu.RUnlock()
+	}
+	return proof, err
+}
+
+func (l *VectorPartitionServingSnapshotLeaseV1) lockPinnedProofV1() (vectorPartitionServingAuthorityProofV1, error) {
+	if l == nil || l.publisher == nil || l.snapshot == nil || !l.pinned {
+		return vectorPartitionServingAuthorityProofV1{}, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	l.useMu.RLock()
+	p := l.publisher
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed || p.revision != l.revision || !time.Now().Before(l.expires) {
+		l.useMu.RUnlock()
+		return vectorPartitionServingAuthorityProofV1{}, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	proof := l.snapshot.proof
+	if p.current != nil && sameVectorPartitionServingAuthorityProofV1(proof, p.current.proof) {
+		proof = p.current.proof
+	}
+	if err := p.opts.Authority.validateVectorPartitionServingAuthorityV1(proof); err != nil {
+		l.useMu.RUnlock()
+		return vectorPartitionServingAuthorityProofV1{}, err
+	}
+	return proof, nil
+}
+
+// AcquireStrictV1 pins the current immutable assets, then obtains exactly one
+// fresh current-term catalog proof for this request. It never rebuilds or
+// reopens router, generation, or partition assets.
+func (p *VectorPartitionServingSnapshotPublisherV1) AcquireStrictV1(ctx context.Context) (*VectorPartitionServingSnapshotLeaseV1, error) {
+	if p == nil {
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	p.mu.Lock()
+	if p.closed || p.current == nil {
+		p.stats.StrictAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	snapshot, revision := p.current, p.revision
+	snapshot.refs++
+	p.stats.Acquisitions++
+	p.stats.CurrentPins++
+	p.mu.Unlock()
+	lease := &VectorPartitionServingSnapshotLeaseV1{publisher: p, snapshot: snapshot, revision: revision}
+	placement := p.opts.Coordinator.placement
+	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceStrictSearchV1),
+		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
+		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
+	)
+	if err == nil {
+		err = p.installProofV1(snapshot, fresh, nil)
+	}
+	if err != nil {
+		p.mu.Lock()
+		p.stats.StrictAcquisitionFailures++
+		p.mu.Unlock()
+		return nil, errors.Join(err, lease.Close())
+	}
+	lease.proof = fresh
+	p.mu.Lock()
+	p.stats.StrictAcquisitions++
+	p.mu.Unlock()
+	return lease, nil
 }
 
 func (l *VectorPartitionServingSnapshotLeaseV1) IdentityV1() VectorPartitionServingSnapshotIdentityV1 {
@@ -407,11 +734,18 @@ func (l *VectorPartitionServingSnapshotLeaseV1) Close() error {
 	if l == nil || l.publisher == nil || l.snapshot == nil {
 		return nil
 	}
-	l.closeOnce.Do(func() { l.closeErr = l.publisher.releaseV1(l.snapshot) })
+	l.closeOnce.Do(func() {
+		l.useMu.Lock()
+		defer l.useMu.Unlock()
+		if l.expiryDone != nil {
+			close(l.expiryDone)
+		}
+		l.closeErr = l.publisher.releaseV1(l.snapshot, l.pinned)
+	})
 	return l.closeErr
 }
 
-func (p *VectorPartitionServingSnapshotPublisherV1) releaseV1(snapshot *vectorPartitionServingSnapshotV1) error {
+func (p *VectorPartitionServingSnapshotPublisherV1) releaseV1(snapshot *vectorPartitionServingSnapshotV1, pinned bool) error {
 	p.mu.Lock()
 	if snapshot.refs > 0 {
 		snapshot.refs--
@@ -420,7 +754,18 @@ func (p *VectorPartitionServingSnapshotPublisherV1) releaseV1(snapshot *vectorPa
 			p.stats.CurrentPins--
 		}
 	}
+	if pinned && p.stats.CurrentPinnedSessions > 0 {
+		p.stats.CurrentPinnedSessions--
+	}
 	closeSnapshot := snapshot.retired && snapshot.refs == 0
+	if closeSnapshot {
+		if _, ok := p.retired[snapshot]; ok {
+			delete(p.retired, snapshot)
+			if p.stats.RetainedSnapshots > 0 {
+				p.stats.RetainedSnapshots--
+			}
+		}
+	}
 	p.mu.Unlock()
 	if closeSnapshot {
 		err := snapshot.close()
@@ -443,7 +788,7 @@ func (p *VectorPartitionServingSnapshotPublisherV1) RefreshProofV1(ctx context.C
 	}
 	placement := p.opts.Coordinator.placement
 	fresh, err := p.opts.Authority.captureVectorPartitionServingAuthorityV1(
-		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceUnknownV1),
+		raftcluster.WithCatalogMetaReadSourceV1(ctx, raftcluster.CatalogMetaReadSourceServingRefreshV1),
 		placement.Collection, placement.IndexName, placement.PartitionGeneration, placement.IndexDefinitionDigest,
 		placement.SourceGeneration, placement.SourceChecksum, placement.SourceSchemaHash, placement.SourceRowCount,
 	)
@@ -486,8 +831,13 @@ func (p *VectorPartitionServingSnapshotPublisherV1) InvalidateV1() error {
 		if p.stats.CurrentSnapshots > 0 {
 			p.stats.CurrentSnapshots--
 		}
+		if current.refs != 0 {
+			p.retired[current] = struct{}{}
+			p.stats.RetainedSnapshots++
+		}
 	}
 	closeSnapshot := current != nil && current.refs == 0
+	p.notifyChangedLockedV1()
 	p.mu.Unlock()
 	p.wakeRefreshV1()
 	if closeSnapshot {
@@ -568,6 +918,11 @@ func (p *VectorPartitionServingSnapshotPublisherV1) wakeRefreshV1() {
 	}
 }
 
+func (p *VectorPartitionServingSnapshotPublisherV1) notifyChangedLockedV1() {
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+
 func (p *VectorPartitionServingSnapshotPublisherV1) recordSnapshotCloseV1(err error) {
 	p.mu.Lock()
 	p.stats.SnapshotCloses++
@@ -591,6 +946,11 @@ func (p *VectorPartitionServingSnapshotPublisherV1) Close() error {
 			}
 		}
 		closeSnapshot := current != nil && current.refs == 0
+		if current != nil && current.refs != 0 {
+			p.retired[current] = struct{}{}
+			p.stats.RetainedSnapshots++
+		}
+		p.notifyChangedLockedV1()
 		p.mu.Unlock()
 		p.cancel()
 		p.wg.Wait()

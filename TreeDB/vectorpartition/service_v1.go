@@ -72,9 +72,10 @@ type NeighborV1 struct {
 }
 
 type SearchCountersV1 struct {
-	SelectedPartitions, SelectedGroups                      uint64
-	Requests, RPCs, Retries, Redirects, Candidates, Edges   uint64
-	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes uint64
+	SelectedPartitions, SelectedGroups                       uint64
+	Requests, RPCs, Retries, Redirects, Candidates, Edges    uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens uint64
+	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes  uint64
 }
 
 // SearchTimingV1 retains exclusive public/coordinator stages plus per-shard
@@ -139,6 +140,8 @@ type CleanupEligibilityV1 struct {
 // stable public values; nativewire, Raft, listeners, and records stay behind it.
 type BackendV1 interface {
 	SearchVectorPartitionV1(context.Context, SearchRequestV1) (SearchResponseV1, error)
+	SearchVectorPartitionFastV1(context.Context, SearchRequestV1, FastSearchOptionsV1) (SearchResponseV1, FastSearchEvidenceV1, error)
+	PinVectorPartitionSearchSnapshotV1(context.Context, PinSearchSnapshotOptionsV1) (SearchSnapshotBackendV1, FastSearchEvidenceV1, error)
 	RegisterVectorPartitionV1(context.Context, GenerationRegistrationV1) (GenerationStatusV1, error)
 	GenerationStatusV1(context.Context, GenerationIDV1) (GenerationStatusV1, error)
 	PrepareVectorPartitionV1(context.Context, GenerationIDV1) (GenerationStatusV1, error)
@@ -166,11 +169,18 @@ func (s *ServiceV1) Search(ctx context.Context, request SearchRequestV1) (Search
 	if err != nil {
 		return SearchResponseV1{}, classifyErrorV1(ctx, err)
 	}
-	if response.Generation != request.Generation || len(response.Neighbors) > request.TopK {
-		return SearchResponseV1{}, &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid search response")}
+	if err := validateSearchResponseV1(request, response); err != nil {
+		return SearchResponseV1{}, err
 	}
 	response.Neighbors = slices.Clone(response.Neighbors)
 	return response, nil
+}
+
+func validateSearchResponseV1(request SearchRequestV1, response SearchResponseV1) error {
+	if response.Generation != request.Generation || len(response.Neighbors) > request.TopK {
+		return &ErrorV1{Code: ErrorFailedV1, Err: errors.New("backend returned invalid search response")}
+	}
+	return nil
 }
 
 func (s *ServiceV1) Register(ctx context.Context, registration GenerationRegistrationV1) (GenerationStatusV1, error) {

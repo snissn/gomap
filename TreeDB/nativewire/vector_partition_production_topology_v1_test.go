@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -544,5 +545,24 @@ func TestVectorPartitionProductionTopologyRejectsNonOwnerEndpointV1(t *testing.T
 	_, err := NewVectorPartitionProductionTopologyV1(VectorPartitionProductionTopologyOptionsV1{Endpoints: map[raftcluster.GroupID]string{"not-an-owner": "127.0.0.1:1"}, Shards: []VectorPartitionProductionShardV1{{GroupID: "not-an-owner"}}, RouterSource: &testVectorPartitionCoordinatorRouterSourceV1{}, ReplicatedLifecycle: &recordingVectorPartitionReplicatedLifecycleAuthorityV1{}})
 	if err == nil {
 		t.Fatal("invalid production topology succeeded")
+	}
+}
+
+func TestVectorPartitionProductionNodeUsesActiveReadySetDigestV1(t *testing.T) {
+	manifest := collections.VectorPartitionManifestV1{IndexName: "embedding", Generation: 1, IntegrityDigest: strings.Repeat("a", 64), ReadySetDigest: strings.Repeat("a", 64)}
+	want := strings.Repeat("b", 64)
+	logical := vectorPartitionProductionNodePinnedManifestV1(manifest, want)
+	logical.IntegrityDigest = strings.Repeat("c", 64)
+	logical.Placements = []collections.VectorPartitionPlacementV1{{PartitionID: 0, GroupID: "group-a"}}
+	physical := manifest
+	source := vectorPartitionProductionNodeGenerationSourceV1{source: &fakeVectorPartitionGenerationSourceV1{manifest: physical}, manifest: logical}
+	pinned, err := source.PinVectorPartitionGenerationV1(t.Context(), manifest.IndexName, manifest.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	got := pinned.Manifest()
+	if got.ReadySetDigest != want || got.IntegrityDigest != logical.IntegrityDigest || !slices.Equal(got.Placements, logical.Placements) {
+		t.Fatalf("pinned manifest = %+v, want ready=%q integrity=%q placements=%v", got, want, logical.IntegrityDigest, logical.Placements)
 	}
 }

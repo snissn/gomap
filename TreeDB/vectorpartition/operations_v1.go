@@ -34,6 +34,7 @@ type OperationsCountersV1 struct {
 	CapCandidateBytes, CapResponseBytes, CapTopK, CapProbes         uint64
 	CapEfSearch, CapMergeEntries                                    uint64
 	Failures, Requests, RPCs, Retries, Redirects, Candidates, Edges uint64
+	SnapshotPins, ReadProofs, GenerationPins, PartitionOpens        uint64
 	SelectedPartitions, SelectedGroups                              uint64
 	QueryBytes, RequestBytes, CandidateBytes, ResponseBytes         uint64
 }
@@ -90,32 +91,87 @@ func (o *OperationsV1) Status(ctx context.Context) (OperationsHealthV1, error) {
 }
 
 func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+	return o.searchV1(ctx, request, func() (SearchResponseV1, error) {
+		return o.service.Search(ctx, request)
+	})
+}
+
+// SearchFast applies Operations admission to the bounded local-snapshot path.
+func (o *OperationsV1) SearchFast(ctx context.Context, request SearchRequestV1, options FastSearchOptionsV1) (SearchResponseV1, FastSearchEvidenceV1, error) {
+	var evidence FastSearchEvidenceV1
+	response, err := o.searchV1(ctx, request, func() (SearchResponseV1, error) {
+		var err error
+		var response SearchResponseV1
+		response, evidence, err = o.service.SearchFast(ctx, request, options)
+		return response, err
+	})
+	if err != nil {
+		return SearchResponseV1{}, FastSearchEvidenceV1{}, err
+	}
+	return response, evidence, nil
+}
+
+// PinnedSearchSnapshotV1 reuses one bounded immutable serving snapshot.
+type PinnedSearchSnapshotV1 struct {
+	operations *OperationsV1
+	snapshot   *serviceSearchSnapshotV1
+}
+
+// PinSearchSnapshot pins one complete local snapshot for a bounded session.
+func (o *OperationsV1) PinSearchSnapshot(ctx context.Context, options PinSearchSnapshotOptionsV1) (*PinnedSearchSnapshotV1, error) {
+	if err := o.enabled(); err != nil {
+		return nil, err
+	}
+	snapshot, err := o.service.pinSearchSnapshotV1(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	return &PinnedSearchSnapshotV1{operations: o, snapshot: snapshot}, nil
+}
+
+// Evidence identifies the immutable snapshot retained by the session.
+func (s *PinnedSearchSnapshotV1) Evidence() FastSearchEvidenceV1 {
+	if s == nil || s.snapshot == nil {
+		return FastSearchEvidenceV1{}
+	}
+	return s.snapshot.evidence
+}
+
+// Search executes against the session's exact immutable snapshot.
+func (s *PinnedSearchSnapshotV1) Search(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+	if s == nil || s.operations == nil || s.snapshot == nil {
+		return SearchResponseV1{}, &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New("pinned search snapshot is unavailable")}
+	}
+	return s.operations.searchV1(ctx, request, func() (SearchResponseV1, error) {
+		return s.snapshot.Search(ctx, request)
+	})
+}
+
+// Close releases the session pin. It is safe to call more than once.
+func (s *PinnedSearchSnapshotV1) Close() error {
+	if s == nil || s.snapshot == nil {
+		return nil
+	}
+	return s.snapshot.Close()
+}
+
+func (o *OperationsV1) searchV1(ctx context.Context, request SearchRequestV1, search func() (SearchResponseV1, error)) (SearchResponseV1, error) {
 	started := time.Now()
 	admissionStarted := time.Now()
 	if err := o.admit(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
 	admissionElapsed := time.Since(admissionStarted)
-	healthStarted := time.Now()
-	health, err := o.Status(ctx)
-	healthElapsed := time.Since(healthStarted)
-	if err == nil && !health.Ready {
-		err = &ErrorV1{Code: ErrorUnavailableV1, Err: errors.New(health.Reason)}
-	}
-	var response SearchResponseV1
+	serviceStarted := time.Now()
+	response, err := search()
+	serviceElapsed := time.Since(serviceStarted)
 	if err == nil {
-		serviceStarted := time.Now()
-		response, err = o.service.Search(ctx, request)
-		serviceElapsed := time.Since(serviceStarted)
-		if err == nil {
-			response.Timing.Admission = admissionElapsed
-			response.Timing.OperationsHealth = healthElapsed
-			nested := response.Timing.PublicAdapter + response.Timing.CoordinatorTotal
-			if serviceElapsed >= nested {
-				response.Timing.ServiceAdapter = serviceElapsed - nested
-			}
-			response.Timing.Total = time.Since(started)
+		response.Timing.Admission = admissionElapsed
+		nested := response.Timing.PublicAdapter + response.Timing.CoordinatorTotal
+		if serviceElapsed >= nested {
+			response.Timing.ServiceAdapter = serviceElapsed - nested
 		}
+		response.Timing.Total = time.Since(started)
 	}
 	o.mu.Lock()
 	o.counts.Searches++
@@ -128,6 +184,10 @@ func (o *OperationsV1) Search(ctx context.Context, request SearchRequestV1) (Sea
 		o.counts.Redirects += response.Counters.Redirects
 		o.counts.Candidates += response.Counters.Candidates
 		o.counts.Edges += response.Counters.Edges
+		o.counts.SnapshotPins += response.Counters.SnapshotPins
+		o.counts.ReadProofs += response.Counters.ReadProofs
+		o.counts.GenerationPins += response.Counters.GenerationPins
+		o.counts.PartitionOpens += response.Counters.PartitionOpens
 		o.counts.SelectedPartitions += response.Counters.SelectedPartitions
 		o.counts.SelectedGroups += response.Counters.SelectedGroups
 		o.counts.QueryBytes += response.Counters.QueryBytes

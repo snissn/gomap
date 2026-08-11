@@ -6,6 +6,7 @@ package nativewire
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 type VectorPartitionProductionShardV1 struct {
@@ -28,6 +30,7 @@ type VectorPartitionProductionShardV1 struct {
 }
 
 type VectorPartitionProductionTopologyOptionsV1 struct {
+	ConstructionContext context.Context
 	Catalog             raftplacement.ResolvedCatalogV1
 	Placement           raftplacement.VectorPartitionPlacementRecordV1
 	RouterSource        VectorPartitionCoordinatorRouterSourceV1
@@ -38,6 +41,8 @@ type VectorPartitionProductionTopologyOptionsV1 struct {
 	CoordinatorLimits   VectorPartitionCoordinatorLimitsV1
 	ShardLimits         VectorPartitionShardSearchLimitsV1
 	ShardIdleTimeout    time.Duration
+	ServingSnapshot     *VectorPartitionServingSnapshotPublisherOptionsV1
+	StrictCapabilityKey []byte
 }
 
 type VectorPartitionProductionTopologyStatusV1 struct {
@@ -51,6 +56,10 @@ type VectorPartitionProductionTopologyStatusV1 struct {
 // Callers retain ownership of Raft, catalog, lifecycle, and local asset sources.
 type VectorPartitionProductionTopologyV1 struct {
 	coordinator       *VectorPartitionCoordinatorV1
+	servingSnapshot   *VectorPartitionServingSnapshotPublisherV1
+	authorization     *vectorPartitionAuthorizationOverlayV1
+	searchPublication sync.Mutex
+	strictKey         []byte
 	dispatcher        *VectorPartitionShardSearchTCPDispatcherV1
 	listeners         map[raftcluster.GroupID]net.Listener
 	endpoints         map[raftcluster.GroupID]string
@@ -238,6 +247,36 @@ func NewVectorPartitionProductionTopologyV1(opts VectorPartitionProductionTopolo
 	if err != nil {
 		return nil, err
 	}
+	if opts.ServingSnapshot != nil || len(opts.StrictCapabilityKey) != 0 {
+		if opts.ServingSnapshot == nil || len(opts.StrictCapabilityKey) != sha256.Size {
+			return nil, errors.New("nativewire: production vector topology strict serving options are incomplete")
+		}
+		snapshotOpts := *opts.ServingSnapshot
+		snapshotOpts.Coordinator = h.coordinator
+		h.servingSnapshot, err = NewVectorPartitionServingSnapshotPublisherV1(snapshotOpts)
+		if err != nil {
+			return nil, err
+		}
+		h.authorization, err = newVectorPartitionAuthorizationOverlayV1(snapshotOpts.AuthorizationOverlayDigest, nil, coordinatorLimits.MaxStableIDBytes)
+		if err != nil {
+			return nil, err
+		}
+		constructionContext := opts.ConstructionContext
+		if constructionContext == nil {
+			constructionContext = context.Background()
+		}
+		publishContext, cancel := context.WithTimeout(constructionContext, coordinatorLimits.MaxWallClock)
+		defer cancel()
+		if err = h.servingSnapshot.PublishV1(publishContext); err != nil {
+			return nil, err
+		}
+		h.strictKey = slices.Clone(opts.StrictCapabilityKey)
+		for _, service := range h.services {
+			if err = service.bindServingSnapshotV1(h.servingSnapshot, h.strictKey); err != nil {
+				return nil, err
+			}
+		}
+	}
 	for group, listener := range h.listeners {
 		// Keep accepted sockets bounded without letting one dispatcher pool consume
 		// the whole listener while its keep-alives are idle.
@@ -306,6 +345,133 @@ func (h *VectorPartitionProductionTopologyV1) Coordinator() *VectorPartitionCoor
 		return nil
 	}
 	return h.coordinator
+}
+
+func (h *VectorPartitionProductionTopologyV1) searchStrictV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1) (VectorPartitionCoordinatorResponseV1, error) {
+	if h == nil || h.coordinator == nil {
+		return VectorPartitionCoordinatorResponseV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	if h.servingSnapshot == nil {
+		return h.coordinator.Search(ctx, request)
+	}
+	snapshot, err := h.servingSnapshot.AcquireStrictV1(ctx)
+	if err != nil {
+		return VectorPartitionCoordinatorResponseV1{}, err
+	}
+	defer snapshot.Close()
+	response, err := h.coordinator.searchStrictV1(ctx, request, snapshot, snapshot.proof, h.strictKey)
+	if err == nil {
+		response.Counters.SnapshotPins = 1
+		err = h.authorization.filterV1(snapshot.IdentityV1().AuthorizationOverlayDigest, &response)
+	}
+	return response, err
+}
+
+type vectorPartitionFastSearchEvidenceV1 struct {
+	Identity VectorPartitionServingSnapshotIdentityV1
+	Age      time.Duration
+}
+
+func (h *VectorPartitionProductionTopologyV1) searchFastV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, maxAge time.Duration, minIndexedThrough uint64) (VectorPartitionCoordinatorResponseV1, vectorPartitionFastSearchEvidenceV1, error) {
+	if h == nil || h.coordinator == nil || h.servingSnapshot == nil {
+		return VectorPartitionCoordinatorResponseV1{}, vectorPartitionFastSearchEvidenceV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	snapshot, err := h.servingSnapshot.AcquireFastV1(ctx, maxAge, minIndexedThrough)
+	if err != nil {
+		return VectorPartitionCoordinatorResponseV1{}, vectorPartitionFastSearchEvidenceV1{}, err
+	}
+	defer snapshot.Close()
+	return h.searchSnapshotV1(ctx, request, snapshot, snapshot.proof, true)
+}
+
+func (h *VectorPartitionProductionTopologyV1) searchSnapshotV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1, snapshot *VectorPartitionServingSnapshotLeaseV1, proof vectorPartitionServingAuthorityProofV1, countPin bool) (VectorPartitionCoordinatorResponseV1, vectorPartitionFastSearchEvidenceV1, error) {
+	identity := snapshot.IdentityV1()
+	age := time.Since(time.Unix(0, identity.PublishedAtUnixNano))
+	if age < 0 {
+		age = 0
+	}
+	response, err := h.coordinator.searchStrictV1(ctx, request, snapshot, proof, h.strictKey)
+	if err == nil {
+		if countPin {
+			response.Counters.SnapshotPins = 1
+		}
+		err = h.authorization.filterV1(identity.AuthorizationOverlayDigest, &response)
+	}
+	return response, vectorPartitionFastSearchEvidenceV1{Identity: identity, Age: age}, err
+}
+
+type vectorPartitionPinnedTopologySearchV1 struct {
+	topology *VectorPartitionProductionTopologyV1
+	lease    *VectorPartitionServingSnapshotLeaseV1
+}
+
+func (h *VectorPartitionProductionTopologyV1) pinSearchSnapshotV1(ctx context.Context, maxAge time.Duration, minIndexedThrough uint64, maxSessionAge time.Duration) (*vectorPartitionPinnedTopologySearchV1, vectorPartitionFastSearchEvidenceV1, error) {
+	if h == nil || h.coordinator == nil || h.servingSnapshot == nil {
+		return nil, vectorPartitionFastSearchEvidenceV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	lease, err := h.servingSnapshot.AcquirePinnedV1(ctx, maxAge, minIndexedThrough, maxSessionAge)
+	if err != nil {
+		return nil, vectorPartitionFastSearchEvidenceV1{}, err
+	}
+	identity := lease.IdentityV1()
+	age := time.Since(time.Unix(0, identity.PublishedAtUnixNano))
+	if age < 0 {
+		age = 0
+	}
+	return &vectorPartitionPinnedTopologySearchV1{topology: h, lease: lease}, vectorPartitionFastSearchEvidenceV1{Identity: identity, Age: age}, nil
+}
+
+func (p *vectorPartitionPinnedTopologySearchV1) searchV1(ctx context.Context, request VectorPartitionCoordinatorRequestV1) (VectorPartitionCoordinatorResponseV1, error) {
+	if p == nil || p.topology == nil || p.lease == nil {
+		return VectorPartitionCoordinatorResponseV1{}, ErrVectorPartitionCoordinatorUnavailable
+	}
+	proof, err := p.lease.lockPinnedProofV1()
+	if err != nil {
+		return VectorPartitionCoordinatorResponseV1{}, err
+	}
+	defer p.lease.useMu.RUnlock()
+	response, _, err := p.topology.searchSnapshotV1(ctx, request, p.lease, proof, false)
+	return response, err
+}
+
+func (p *vectorPartitionPinnedTopologySearchV1) Close() error {
+	if p == nil || p.lease == nil {
+		return nil
+	}
+	return p.lease.Close()
+}
+
+// PublishSearchSnapshotV1 atomically advances the source watermark and current
+// authorization overlay before making the new immutable snapshot available.
+// Its token is the local read-your-writes floor accepted by SearchFast.
+func (h *VectorPartitionProductionTopologyV1) PublishSearchSnapshotV1(ctx context.Context, indexedThrough uint64, authorizationDigest string, deniedDocumentIDs []string) (public.IndexedWriteTokenV1, error) {
+	if h == nil || h.servingSnapshot == nil || h.authorization == nil {
+		return public.IndexedWriteTokenV1{}, ErrVectorPartitionShardSearchAssetsUnavailable
+	}
+	h.searchPublication.Lock()
+	defer h.searchPublication.Unlock()
+	nextAuthorization, err := newVectorPartitionAuthorizationOverlayStateV1(authorizationDigest, deniedDocumentIDs, h.coordinator.limits.MaxStableIDBytes)
+	if err != nil {
+		return public.IndexedWriteTokenV1{}, err
+	}
+	if err := h.servingSnapshot.publishStateV1(ctx, indexedThrough, authorizationDigest, func() { h.authorization.state.Store(nextAuthorization) }); err != nil {
+		return public.IndexedWriteTokenV1{}, err
+	}
+	return public.IndexedWriteTokenV1{Sequence: indexedThrough}, nil
+}
+
+func (h *VectorPartitionProductionTopologyV1) InvalidateServingSnapshotV1() error {
+	if h == nil || h.servingSnapshot == nil {
+		return nil
+	}
+	return h.servingSnapshot.InvalidateV1()
+}
+
+func (h *VectorPartitionProductionTopologyV1) PublishServingSnapshotV1(ctx context.Context) error {
+	if h == nil || h.servingSnapshot == nil {
+		return nil
+	}
+	return h.servingSnapshot.PublishV1(ctx)
 }
 
 func (h *VectorPartitionProductionTopologyV1) Status() VectorPartitionProductionTopologyStatusV1 {
@@ -539,6 +705,9 @@ func (h *VectorPartitionProductionTopologyV1) Close() error {
 		h.wg.Wait()
 		if h.dispatcher != nil {
 			errs = append(errs, h.dispatcher.Close())
+		}
+		if h.servingSnapshot != nil {
+			errs = append(errs, h.servingSnapshot.Close())
 		}
 		if h.coordinator != nil {
 			errs = append(errs, h.coordinator.Close())
