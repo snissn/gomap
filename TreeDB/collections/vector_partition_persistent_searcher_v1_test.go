@@ -467,7 +467,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	}
 }
 
-func TestVectorPartitionOfflineAuxiliaryEfConstructionVariantsV1(t *testing.T) {
+func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	rows := make([]columnGraphRebuildInputRowV2A, 8)
 	for i := range rows {
@@ -497,16 +497,19 @@ func TestVectorPartitionOfflineAuxiliaryEfConstructionVariantsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer canonicalResources.Release()
-	if got := col.Meta().VectorIndexes[0]; got.EfConstruction != 128 || VectorIndexDefinitionDigestV1(got) != m.IndexDefinitionDigest {
+	if got := col.Meta().VectorIndexes[0]; got.M != def.M || got.EfConstruction != 128 || VectorIndexDefinitionDigestV1(got) != m.IndexDefinitionDigest {
 		t.Fatalf("authoritative definition drifted: %+v", got)
 	}
 	for _, test := range []struct {
 		variant VectorPartitionLocalGraphVariantV1
+		m       int
 		ef      int
 		fileID  uint32
 	}{
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, 256, 987},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, 512, 988},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 989},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 990},
 	} {
 		assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, test.fileID, in, test.variant)
 		if err != nil {
@@ -525,7 +528,7 @@ func TestVectorPartitionOfflineAuxiliaryEfConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: digest})
-		if err != nil || pack.Header.EfConstruction != test.ef || !pack.Header.HasAuxiliaryNavigation || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
+		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || !pack.Header.HasAuxiliaryNavigation || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
 			t.Fatalf("variant=%s pack=%+v err=%v", test.variant, pack.Header, err)
 		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, assets[0])
