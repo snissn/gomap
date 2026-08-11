@@ -120,6 +120,12 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
     total = catalog["total"]
     strict, refresh, aggregate = total.get("strict_search"), total.get("serving_refresh"), total.get("total")
     _require(all(isinstance(value, dict) for value in (strict, refresh, aggregate)), "catalog proof attribution is invalid")
+    for name in ("total", "strict_search", "serving_refresh", "operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown"):
+        value = total.get(name)
+        _require(isinstance(value, dict) and
+                 value.get("reads") == value.get("successes") == value.get("verify_leader_calls") == value.get("no_log_proofs") and
+                 value.get("failures") == value.get("log_barriers") == 0,
+                 "catalog proof was unsuccessful or appended a log barrier")
     want = 1000 if mode == "strict" else 0
     _require(strict.get("reads") == want and aggregate.get("reads") == want + refresh.get("reads"), "catalog proof count changed")
     for name in ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown"):
@@ -142,6 +148,8 @@ def _validate_fast(cell: dict[str, Any], result: dict[str, Any], mode: str) -> N
     _require(isinstance(evidence.get("PublishedAt"), str) and evidence["PublishedAt"] and isinstance(evidence.get("TopologyDigest"), str) and evidence["TopologyDigest"] and isinstance(evidence.get("AuthorizationOverlayDigest"), str) and evidence["AuthorizationOverlayDigest"], "fast snapshot identity is invalid")
     minimum, maximum = cell.get("min_index_age_nanos"), cell.get("max_index_age_nanos")
     _require(_uint(minimum) and _uint(maximum) and minimum <= maximum <= result["max_index_age_nanos"], "fast snapshot age exceeded its bound")
+    age = evidence.get("IndexAge")
+    _require(_uint(age) and age <= minimum, "fast snapshot evidence age postdates its observed range")
 
 
 def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, concurrency: int, expected_ids: set[str]) -> dict[str, Any]:

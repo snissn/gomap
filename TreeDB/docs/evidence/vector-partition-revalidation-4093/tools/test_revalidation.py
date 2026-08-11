@@ -88,6 +88,13 @@ class RevalidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "log barrier"):
             reduce._validate_cell(value, result, "strict", 1, {"a" * 64})
 
+    def test_catalog_proof_must_succeed_without_a_log_entry(self) -> None:
+        for key in ("successes", "verify_leader_calls", "no_log_proofs"):
+            value, result = cell()
+            value["catalog_reads"]["total"]["strict_search"][key] = 0
+            with self.assertRaisesRegex(ValueError, "catalog proof"):
+                reduce._validate_cell(value, result, "strict", 1, {"a" * 64})
+
     def test_elapsed_must_cover_the_slowest_worker_lane(self) -> None:
         value, result = cell(concurrency=32)
         value["elapsed_nanos"] = 31_000_000
@@ -98,6 +105,12 @@ class RevalidationTest(unittest.TestCase):
         value, result = cell("fast")
         value["max_index_age_nanos"] = result["max_index_age_nanos"] + 1
         with self.assertRaisesRegex(ValueError, "age"):
+            reduce._validate_cell(value, result, "fast", 1, {"a" * 64})
+
+    def test_fast_evidence_age_must_not_postdate_the_observed_range(self) -> None:
+        value, result = cell("fast")
+        value["fast_evidence"]["IndexAge"] = 3
+        with self.assertRaisesRegex(ValueError, "evidence age"):
             reduce._validate_cell(value, result, "fast", 1, {"a" * 64})
 
     def test_retry_or_redirect_is_rejected(self) -> None:
