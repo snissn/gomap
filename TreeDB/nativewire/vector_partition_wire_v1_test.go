@@ -392,6 +392,27 @@ func TestVectorPartitionNativeWirePropagatesRequestDeadlineV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionNativeWireClientEnforcesRequestDeadlineV1(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	client := NewClient(left)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	request := public.SearchRequestV1{
+		Version: 1, Generation: public.GenerationIDV1{Index: "embedding", Generation: 1}, Query: []float32{1},
+		Metric: public.MetricCosineV1, TopK: 1, Probes: 1, EfSearch: 1, Consistency: public.ConsistencyGenerationSnapshotV1,
+		Deadline: time.Now().Add(20 * time.Millisecond),
+	}
+	started := time.Now()
+	if _, err := client.VectorSearchStrictV1(ctx, request); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked peer error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second/2 {
+		t.Fatalf("request deadline returned after %s", elapsed)
+	}
+}
+
 func TestVectorPartitionNativeWireWriteDeadlineV1(t *testing.T) {
 	server := NewServer(ServerOptions{ConnectionIdleTimeout: 20 * time.Millisecond})
 	left, right := net.Pipe()

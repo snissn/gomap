@@ -248,11 +248,19 @@ func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {
 }
 
 func (c *Client) errorOrCanceledOnWire(ctx context.Context, onWire bool, err error) error {
-	if ctx != nil && ctx.Err() != nil {
-		if onWire && c != nil && c.conn != nil {
-			_ = c.conn.Close()
+	if ctx != nil {
+		ctxErr := ctx.Err()
+		if ctxErr == nil {
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				ctxErr = context.DeadlineExceeded
+			}
 		}
-		return ctx.Err()
+		if ctxErr != nil {
+			if onWire && c != nil && c.conn != nil {
+				_ = c.conn.Close()
+			}
+			return ctxErr
+		}
 	}
 	return err
 }

@@ -153,6 +153,11 @@ func (c *Client) vectorCommandLockedV1(ctx context.Context, command iwire.Comman
 	if err != nil {
 		return nil, vectorPartitionClientErrorV1(err)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.requestBody = body[:0]
 	if err != nil {
