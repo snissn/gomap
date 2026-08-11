@@ -75,7 +75,7 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
         "generation": {"Index": "fixture", "Generation": 1},
         "metrics": {
             "queries": 1000, "completed_queries": 1000, "result_count": 10000,
-            "errors": 0, "timeouts": 0, "recall_at_10": .95, "qps": 1000.0,
+            "errors": 0, "timeouts": 0, "recall_at_10": reduce.EXPECTED_RECALL, "qps": 1000.0,
             "p50_nanos": 1_000_000, "p95_nanos": 1_000_000, "p99_nanos": 1_000_000,
         },
         "counters": counters, "timings": {key: 1_000_000_000 if key == "client_total" else 1 for key in reduce.TIMINGS},
@@ -115,6 +115,12 @@ class RevalidationTest(unittest.TestCase):
             value, result = cell(mode)
             validate_cell(value, result, mode, 1)
 
+    def test_recall_is_frozen_for_matched_comparisons(self) -> None:
+        value, result = cell()
+        value["metrics"]["recall_at_10"] = .90
+        with self.assertRaisesRegex(ValueError, "matched frozen value"):
+            validate_cell(value, result, "strict", 1)
+
     def test_runtime_budget_is_frozen(self) -> None:
         ownership = {"cpu_set": "0-11", "gomaxprocs": 12, "go_memory_limit_bytes": 24 << 30}
         nodes = [{"node_config_sha256": NODE, "runtime_ownership": ownership}]
@@ -138,6 +144,12 @@ class RevalidationTest(unittest.TestCase):
         second["counters"][reduce.SEMANTIC_COUNTERS[0]] += 1
         with self.assertRaisesRegex(ValueError, "across concurrency"):
             reduce._validate_logical_work(reference, second["counters"])
+
+    def test_generation_matches_the_retained_m3_snapshot(self) -> None:
+        expected = {"Index": "embedding_graph", "Generation": 1}
+        reduce._validate_generation(expected, expected)
+        with self.assertRaisesRegex(ValueError, "retained M3 snapshot"):
+            reduce._validate_generation({"Index": "embedding_graph", "Generation": 2}, expected)
 
     def test_fast_identity_is_bound_to_retained_inputs(self) -> None:
         for field, changed in (("IndexedThrough", 2), ("TopologyDigest", "other"),
@@ -350,6 +362,7 @@ class RevalidationTest(unittest.TestCase):
             descriptor = {
                 "base_sha": "base", "head_sha": "head", "executable_sha256": "b" * 64,
                 "artifact_sha256": "", "fixture_checksum": fixture["checksum"],
+                "partition_generation": 1,
             }
             (dataset / "fixture_manifest.json").write_text(json.dumps(fixture), encoding="utf-8")
             artifact = artifacts / "vector_partition_placeholder.json"
@@ -365,7 +378,10 @@ class RevalidationTest(unittest.TestCase):
                 "m3_database_directory": str(database), "dataset_directory": str(dataset),
                 "fixture_checksum": fixture["checksum"],
             }
-            reduce._validate_m3(root, provenance)
+            self.assertEqual(
+                reduce._validate_m3(root, provenance),
+                {"Index": "embedding_graph", "Generation": descriptor["partition_generation"]},
+            )
             runner.validate_m3(root, provenance)
             descriptor_path.write_text(json.dumps(descriptor, indent=2), encoding="utf-8")
             with self.assertRaisesRegex(RuntimeError, "M3 execution provenance"):

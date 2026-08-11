@@ -78,6 +78,7 @@ BASELINE = {
 }
 PROFILE_NAMES = ("allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof")
 EXPECTED_SOURCE_HEAD = "6e406e43ec2a6228e84d672a488768e32e6f0b53"
+EXPECTED_RECALL = 0.9358999999999934
 AUTHORIZATION_OVERLAY_DIGEST = hashlib.sha256(b"vector-partition-no-authorization-overlay-v1").hexdigest()
 RUNTIME_BUDGETS = {
     "single": (("0-11", 12, 24 << 30),),
@@ -214,7 +215,11 @@ def _validate_logical_work(reference: dict[str, int] | None,
     return logical
 
 
-def _validate_m3(root: Path, provenance: dict[str, Any]) -> None:
+def _validate_generation(generation: dict[str, Any], expected: dict[str, Any]) -> None:
+    _require(generation == expected, "benchmark generation changed from the retained M3 snapshot")
+
+
+def _validate_m3(root: Path, provenance: dict[str, Any]) -> dict[str, Any]:
     descriptor_path = Path(provenance["m3_database_directory"]) / "vector_partition_variant_v1.json"
     fixture_path = Path(provenance["dataset_directory"]) / "fixture_manifest.json"
     descriptor = _load(descriptor_path, 1 << 20)
@@ -228,9 +233,11 @@ def _validate_m3(root: Path, provenance: dict[str, Any]) -> None:
         descriptor.get("head_sha") == provenance["source_head"] and
         descriptor.get("executable_sha256") == provenance["binary_sha256"] and
         descriptor.get("artifact_sha256") == provenance["m3_artifact_sha256"] and
+        _uint(descriptor.get("partition_generation"), positive=True) and
         descriptor.get("fixture_checksum") == fixture.get("checksum") == provenance["fixture_checksum"],
         "M3 execution provenance changed",
     )
+    return {"Index": "embedding_graph", "Generation": descriptor["partition_generation"]}
 
 
 def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]], report: dict[str, Any]) -> dict[str, float | int]:
@@ -349,7 +356,9 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     metrics, counters, timings = cell.get("metrics"), cell.get("counters"), cell.get("timings")
     _require(isinstance(metrics, dict) and metrics.get("queries") == 1000 and metrics.get("completed_queries") == 1000 and metrics.get("result_count") == 10000 and metrics.get("errors") == 0 and metrics.get("timeouts") == 0, "benchmark cell is incomplete")
     recall = metrics.get("recall_at_10")
-    _require(isinstance(recall, (int, float)) and not isinstance(recall, bool) and math.isfinite(recall) and .90 <= recall <= 1, "recall is below the frozen floor")
+    _require(isinstance(recall, (int, float)) and not isinstance(recall, bool) and
+             math.isfinite(recall) and recall == EXPECTED_RECALL,
+             "recall changed from the matched frozen value")
     _require(isinstance(counters, dict) and set(counters) == set(COUNTERS) and all(_uint(counters[key]) for key in COUNTERS), "benchmark counters are invalid")
     _require(all(_uint(counters[key], positive=True) for key in POSITIVE_COUNTERS),
              "benchmark logical work counters are invalid")
@@ -504,7 +513,7 @@ def summarize(root: Path) -> dict[str, Any]:
     _require(_uint(fixture.get("vectors"), positive=True), "fixture vector count is invalid")
     truth_files = list(Path(provenance["truth_directory"]).glob("*.json"))
     _require(len(truth_files) == 1 and _sha256(truth_files[0]) == provenance["truth_sha256"], "truth artifact changed")
-    _validate_m3(root, provenance)
+    expected_generation = _validate_m3(root, provenance)
     cells: dict[tuple[str, int, str, int], dict[str, Any]] = {}
     inputs: list[dict[str, Any]] = []
     topology_ids: set[str] = set()
@@ -566,6 +575,7 @@ def summarize(root: Path) -> dict[str, Any]:
             for concurrency, cell in result_cells.items():
                 key = (topology, repetition, mode, concurrency)
                 cells[key] = cell
+                _validate_generation(cell["generation"], expected_generation)
                 generations.add(json.dumps(cell["generation"], sort_keys=True))
                 # request_bytes includes topology-specific wire identity and is itself topology tax.
                 logical_reference = _validate_logical_work(logical_reference, cell["counters"])
