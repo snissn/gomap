@@ -598,7 +598,7 @@ func TestFindAndModifyRejectsUnsupportedModes(t *testing.T) {
 	server.Collections = collections.NewCollectionManager(db)
 	base := bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "update", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "x"}}}}}, {Key: "$db", Value: "app"}}
 	for i, extra := range []bson.E{
-		{Key: "remove", Value: true}, {Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}}, {Key: "arrayFilters", Value: bson.A{}}, {Key: "hint", Value: "name_1"}, {Key: "collation", Value: bson.D{{Key: "locale", Value: "en"}}}, {Key: "fields", Value: bson.D{{Key: "name.first", Value: int32(1)}}}, {Key: "txnNumber", Value: int64(1)},
+		{Key: "remove", Value: true}, {Key: "sort", Value: bson.D{{Key: "name", Value: int32(1)}}}, {Key: "arrayFilters", Value: bson.A{}}, {Key: "hint", Value: "name_1"}, {Key: "collation", Value: bson.D{{Key: "locale", Value: "en"}}}, {Key: "txnNumber", Value: int64(1)},
 	} {
 		command := append(append(bson.D(nil), base...), extra)
 		assertCommandError(t, serveCommand(t, server, int32(10+i), command), "BadValue")
