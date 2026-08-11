@@ -3752,12 +3752,26 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 			maxUint64 := ^uint64(0)
 			if diagnostic.Rows == maxUint64 || diagnostic.Rows+1 > maxUint64/8 || diagnostic.AuxiliaryEdges > maxUint64/4 ||
 				diagnostic.TraversalRoots-1 > diagnostic.Rows-diagnostic.ReachableRows ||
-				diagnostic.TraversalRoots-1 > maxUint64/2 {
+				diagnostic.TraversalRoots-1 > maxUint64/2 || diagnostic.MaxLayer < 0 || len(diagnostic.RowsByLayer) == 0 ||
+				diagnostic.MaxLayer != len(diagnostic.RowsByLayer)-1 || diagnostic.RowsByLayer[0] != diagnostic.Rows {
 				return false
 			}
-			bridgeEdges, anchorRows := 2*(diagnostic.TraversalRoots-1), diagnostic.Rows-diagnostic.TraversalRoots
-			if anchorRows > maxUint64-bridgeEdges || diagnostic.AuxiliaryEdges < bridgeEdges ||
-				diagnostic.AuxiliaryEdges > bridgeEdges+anchorRows || diagnostic.AuxiliaryMaxDegree > diagnostic.AuxiliaryEdges ||
+			for layer := 1; layer < len(diagnostic.RowsByLayer); layer++ {
+				if diagnostic.RowsByLayer[layer] == 0 || diagnostic.RowsByLayer[layer] > diagnostic.RowsByLayer[layer-1] {
+					return false
+				}
+			}
+			upperRows := uint64(0)
+			if len(diagnostic.RowsByLayer) > 1 {
+				upperRows = diagnostic.RowsByLayer[1]
+			}
+			bridgeEdges := 2 * (diagnostic.TraversalRoots - 1)
+			minAnchorEdges, maxAnchorEdges := uint64(0), min(upperRows, diagnostic.Rows-diagnostic.TraversalRoots)
+			if upperRows > diagnostic.TraversalRoots {
+				minAnchorEdges = upperRows - diagnostic.TraversalRoots
+			}
+			if diagnostic.AuxiliaryEdges < bridgeEdges || diagnostic.AuxiliaryEdges-bridgeEdges < minAnchorEdges ||
+				diagnostic.AuxiliaryEdges-bridgeEdges > maxAnchorEdges || diagnostic.AuxiliaryMaxDegree > diagnostic.AuxiliaryEdges ||
 				(diagnostic.AuxiliaryMaxDegree != 0 && (diagnostic.Rows > maxUint64/diagnostic.AuxiliaryMaxDegree ||
 					diagnostic.AuxiliaryEdges > diagnostic.Rows*diagnostic.AuxiliaryMaxDegree)) {
 				return false
