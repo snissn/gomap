@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -267,16 +268,80 @@ func TestCollStatsExactLiveDocumentCapSucceeds(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsCountsChargePrimaryTombstones(t *testing.T) {
+func TestDiagnosticsCountsRejectPrimaryWorkBeforeLiveCap(t *testing.T) {
 	server := newMongoCompatibilityMatrixServer(t)
-	// The live-document limit rejects the first document beyond the cap. The
-	// collections iterator tests cover tombstone/shadow source work directly;
-	// diagnostics supplies their separate bounded physical-work budget.
-	server.MaxFindScanDocuments = 2
-	assertCommandError(t, serveCommand(t, server, 6281, bson.D{{Key: "collStats", Value: "users"}, {Key: "$db", Value: "app"}}), "BadValue")
-	assertOK(t, serveCommand(t, server, 6282, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "e1"}}}}, {Key: "$db", Value: "app"}}))
-	server.MaxFindScanDocuments = 2
-	assertCommandError(t, serveCommand(t, server, 6283, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "app"}}), "BadValue")
+	if _, err := server.Collections.CreateCollection(&collections.CollectionMeta{
+		Name: "work.items",
+		Options: collections.CollectionOptions{
+			DocumentFormat:                   collections.DocumentFormatBSON,
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 16,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []collections.IndexDefinition{{Name: "kind", Field: "kind", ValueType: collections.IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create overlay collection: %v", err)
+	}
+	// Leave exactly two live records while retaining three physical primary
+	// overlay tombstones. The public live-document cap alone permits this
+	// collection; its separate 2*N primary-source-work cap must still reject it.
+	col, err := server.Collections.OpenCollection("work.items")
+	if err != nil {
+		t.Fatalf("open work items: %v", err)
+	}
+	ids := make([][]byte, 0, 5)
+	documents := make([][]byte, 0, 5)
+	for _, id := range []string{"i1", "i2", "i3", "i4", "i5"} {
+		document, err := bson.Marshal(bson.D{{Key: "_id", Value: id}, {Key: "kind", Value: "diagnostic"}})
+		if err != nil {
+			t.Fatalf("marshal %s: %v", id, err)
+		}
+		ids = append(ids, []byte(id))
+		documents = append(documents, document)
+	}
+	if _, err := col.InsertBatch(ids, documents); err != nil {
+		t.Fatalf("insert work items: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush work-item inserts: %v", err)
+	}
+	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
+		t.Fatalf("compact work-item insert overlays: %v", err)
+	}
+	for _, id := range []string{"i1", "i2", "i3"} {
+		deleted, err := col.DeleteDocument([]byte(id))
+		if err != nil || !deleted {
+			t.Fatalf("delete %s deleted=%v err=%v", id, deleted, err)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush work-item tombstones: %v", err)
+	}
+	for _, id := range []string{"i1", "i2", "i3"} {
+		if value, err := col.Get([]byte(id)); err != nil || value != nil {
+			t.Fatalf("deleted %s value=%q err=%v", id, value, err)
+		}
+	}
+	for _, id := range []string{"i4", "i5"} {
+		if value, err := col.Get([]byte(id)); err != nil || value == nil {
+			t.Fatalf("live %s value=%q err=%v", id, value, err)
+		}
+	}
+
+	const liveCap = 2
+	physicalCap := diagnosticPhysicalWorkBudget(liveCap)
+	count, inspected, truncated, err := server.diagnosticCollectionCountWithin("work.items", liveCap, physicalCap*32)
+	if err != nil || truncated || count != liveCap || inspected <= physicalCap {
+		t.Fatalf("generous primary-work count=%d inspected=%d truncated=%v err=%v; want %d live and >%d physical work", count, inspected, truncated, err, liveCap, physicalCap)
+	}
+	count, inspected, truncated, err = server.diagnosticCollectionCountWithin("work.items", liveCap, physicalCap)
+	if err != nil || !truncated || count > liveCap || inspected > physicalCap {
+		t.Fatalf("capped primary-work count=%d inspected=%d truncated=%v err=%v", count, inspected, truncated, err)
+	}
+
+	server.MaxFindScanDocuments = liveCap
+	assertCommandError(t, serveCommand(t, server, 6285, bson.D{{Key: "collStats", Value: "items"}, {Key: "$db", Value: "work"}}), "BadValue")
+	assertCommandError(t, serveCommand(t, server, 6286, bson.D{{Key: "dbStats", Value: int32(1)}, {Key: "$db", Value: "work"}}), "BadValue")
 }
 
 func TestDiagnosticsAuthorizationScopes(t *testing.T) {
