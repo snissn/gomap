@@ -360,6 +360,9 @@ type columnVectorGraphNativeSearchStats struct {
 	CandidateRows                        uint64
 	Candidates                           uint64
 	Edges                                uint64
+	AuxiliaryEdges                       uint64
+	AuxiliaryCandidates                  uint64
+	AuxiliaryAdmissions                  uint64
 	VisitedNodes                         uint64
 	VisitedEdges                         uint64
 	VectorBytesRead                      uint64

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testing.T) {
@@ -407,6 +409,11 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer or.Release()
+	repaired, rr, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 985, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rr.Release()
 	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
 	if err != nil {
 		t.Fatal(err)
@@ -417,6 +424,11 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer o.Close()
+	r, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, repaired[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
 	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
 	if err != nil {
 		t.Fatal(err)
@@ -437,14 +449,60 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	repairedResults, repairedMetrics, repairedTrace, err := r.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(nativeResults) != 1 || nativeResults[0].ID != "v40" || len(overlayResults) != 1 || overlayResults[0].ID != "v0" {
 		t.Fatalf("native=%+v overlay=%+v", nativeResults, overlayResults)
+	}
+	if len(repairedResults) != 1 || repairedResults[0].ID != nativeResults[0].ID || repairedMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || !slices.Contains(repairedTrace.VisitedOrdinals, uint32(3)) {
+		t.Fatalf("repaired results/metrics/trace=%+v/%+v/%+v", repairedResults, repairedMetrics, repairedTrace)
 	}
 	if nativeMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || overlayMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || nativeTrace.VisitedOrdinalsSHA256 == overlayTrace.VisitedOrdinalsSHA256 {
 		t.Fatalf("native metrics/trace=%+v/%+v overlay=%+v/%+v", nativeMetrics, nativeTrace, overlayMetrics, overlayTrace)
 	}
 	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
 		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
+	}
+}
+
+func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing.T) {
+	input := testColumnHNSWSearchPackAuxiliaryInput4106()
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, raw, mappedresource.SourceHeapCopy, input.BaseIdentity)
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset:       VectorPartitionSearchAssetV1{Generation: 1, PartitionID: 0, Dimensions: 3},
+		prepared:    view,
+		opened:      1,
+		searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1,
+	}
+	defer searcher.Close()
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1}
+	ordinary, ordinaryMetrics, err := searcher.SearchWithOptionsV1(t.Context(), []float32{0, 0, 1}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributed, attributedMetrics, _, err := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 0, 1}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ordinary, attributed) || ordinaryMetrics != attributedMetrics || len(ordinary) != 1 || ordinary[0].ID != "doc-c" || ordinaryMetrics.AuxiliaryEdges == 0 || ordinaryMetrics.AuxiliaryCandidates == 0 || ordinaryMetrics.AuxiliaryAdmissions == 0 || ordinaryMetrics.AuxiliaryAdmissions > ordinaryMetrics.AuxiliaryCandidates {
+		t.Fatalf("ordinary=%+v/%+v attributed=%+v/%+v", ordinary, ordinaryMetrics, attributed, attributedMetrics)
+	}
+	diagnostics, err := searcher.PackDiagnosticsV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 {
+		t.Fatalf("diagnostics=%+v", diagnostics)
+	}
+	status := searcher.Status()
+	if status.AuxiliaryEdges != ordinaryMetrics.AuxiliaryEdges+attributedMetrics.AuxiliaryEdges || status.AuxiliaryCandidates != ordinaryMetrics.AuxiliaryCandidates+attributedMetrics.AuxiliaryCandidates || status.AuxiliaryAdmissions != ordinaryMetrics.AuxiliaryAdmissions+attributedMetrics.AuxiliaryAdmissions {
+		t.Fatalf("status=%+v ordinary=%+v attributed=%+v", status, ordinaryMetrics, attributedMetrics)
 	}
 }
 

@@ -64,6 +64,15 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
 	if err != nil || v2Pack.Header.HasAuxiliaryNavigation || len(v2Pack.AuxiliaryNavigation.Offsets) != 0 || len(v2Pack.AuxiliaryNavigation.Neighbors) != 0 {
 		t.Fatalf("digest-only v2 decode err=%v auxiliary=%+v", err, v2Pack.AuxiliaryNavigation)
 	}
+	v2View, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(t, v2Raw, mappedresource.SourceHeapCopy, v2.BaseIdentity)
+	var v2Scratch columnVectorGraphNativeSearchScratch
+	if _, v2Stats, err := v2View.searchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &v2Scratch); err != nil || v2Stats.AuxiliaryEdges != 0 || v2Stats.AuxiliaryCandidates != 0 || v2Stats.AuxiliaryAdmissions != 0 {
+		_ = v2View.Close()
+		t.Fatalf("v2 auxiliary stats=%+v err=%v", v2Stats, err)
+	}
+	if err := v2View.Close(); err != nil {
+		t.Fatalf("close v2 view: %v", err)
+	}
 
 	connected := testColumnHNSWSearchPackInput2312()
 	connected.MembershipDigest[0] = 1
@@ -96,6 +105,12 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationV3(t *testing.T) {
 	if !reflect.DeepEqual(view.AuxiliaryNavigation, columnHNSWSearchPackPreparedLayer{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}) {
 		_ = view.Close()
 		t.Fatalf("prepared auxiliary=%+v", view.AuxiliaryNavigation)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	results, stats, err := view.searchCosine([]float32{0, 0, 1}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1, StatsMode: columnVectorGraphNativeSearchStatsModeFullDiagnostics}, &scratch)
+	if err != nil || len(results) != 1 || results[0].Ordinal != 2 || stats.AuxiliaryEdges == 0 || stats.AuxiliaryCandidates == 0 || stats.AuxiliaryAdmissions == 0 || stats.AuxiliaryAdmissions > stats.AuxiliaryCandidates {
+		_ = view.Close()
+		t.Fatalf("auxiliary traversal results=%+v stats=%+v err=%v", results, stats, err)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("close v3 view: %v", err)
