@@ -16,6 +16,10 @@ reduce = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reduce)
 NODE = "a" * 64
 OWNERS = {NODE: {"cpu_set": "0-11", "gomaxprocs": 12, "go_memory_limit_bytes": 1}}
+PROOF_IDENTITY = {
+    "last_term": 1, "last_catalog_applied_index": 1,
+    "last_raft_applied_index": 1, "last_raft_log_index": 1,
+}
 
 
 def stage(reads: int = 0) -> dict[str, int]:
@@ -36,6 +40,13 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
         "operations_health": stage(), "coordinator_lifecycle": stage(),
         "shard_lifecycle": stage(), "unknown": stage(),
     }
+    catalog.update(PROOF_IDENTITY)
+    before = {name: stage() for name in reduce.CATALOG_STAGES}
+    before.update(PROOF_IDENTITY)
+
+    def retained_catalog() -> dict:
+        return {**{name: dict(catalog[name]) for name in reduce.CATALOG_STAGES}, **PROOF_IDENTITY}
+
     runtime = {key: 0 for key in reduce.RUNTIME_DELTAS}
     runtime.update({
         "sample_unix_nano": 1, "rss_bytes": 1, "peak_rss_bytes": 1,
@@ -64,9 +75,7 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
         "counters": counters, "timings": {key: 1_000_000_000 if key == "client_total" else 1 for key in reduce.TIMINGS},
         "catalog_reads": {"nodes": [{
             "node_config_sha256": NODE,
-            "before": {name: stage() for name in reduce.CATALOG_STAGES},
-            "after": {name: dict(catalog[name]) for name in reduce.CATALOG_STAGES},
-            "delta": {name: dict(catalog[name]) for name in reduce.CATALOG_STAGES},
+            "before": before, "after": retained_catalog(), "delta": retained_catalog(),
         }], "total": catalog},
         "runtime": [{"node_config_sha256": NODE, "before": runtime, "after": after}],
         "elapsed_nanos": 1_000_000_000, "total_nanos": samples, "search_mode": mode,
@@ -110,6 +119,24 @@ class RevalidationTest(unittest.TestCase):
         value["catalog_reads"]["nodes"][0]["delta"]["strict_search"]["log_barriers"] = 1
         with self.assertRaisesRegex(ValueError, "catalog node delta"):
             reduce._validate_cell(value, result, "strict", 1, OWNERS)
+
+    def test_catalog_proof_identity_is_required_and_consistent(self) -> None:
+        for mutation in ("missing", "contradictory"):
+            value, result = cell()
+            if mutation == "missing":
+                del value["catalog_reads"]["nodes"][0]["after"]["last_term"]
+            else:
+                value["catalog_reads"]["nodes"][0]["after"]["last_raft_log_index"] = 0
+            with self.assertRaisesRegex(ValueError, "catalog proof identity"):
+                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+
+    def test_benchmark_endpoint_must_belong_to_the_public_node(self) -> None:
+        specific = {"nodes": [{"public_listen": "127.0.0.1:10", "local_groups": [{"listen": "127.0.0.1:11"}]}]}
+        reduce._validate_public_endpoint(specific, {"endpoint": "127.0.0.1:10"})
+        wildcard = {"nodes": [{"public_listen": "0.0.0.0:10", "local_groups": [{"listen": "172.30.0.1:11"}]}]}
+        reduce._validate_public_endpoint(wildcard, {"endpoint": "172.30.0.1:10"})
+        with self.assertRaisesRegex(ValueError, "not owned"):
+            reduce._validate_public_endpoint(wildcard, {"endpoint": "172.30.0.2:10"})
 
     def test_elapsed_must_cover_the_slowest_worker_lane(self) -> None:
         value, result = cell(concurrency=32)

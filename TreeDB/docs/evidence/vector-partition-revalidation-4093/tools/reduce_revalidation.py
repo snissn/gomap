@@ -57,6 +57,9 @@ CATALOG_FIELDS = (
     "total_nanos", "admission_nanos", "verify_leader_nanos", "barrier_nanos",
     "current_term_nanos", "raft_apply_nanos", "applied_read_nanos",
 )
+CATALOG_IDENTITY_FIELDS = (
+    "last_term", "last_catalog_applied_index", "last_raft_applied_index", "last_raft_log_index",
+)
 BASELINE = {
     ("single", 1): (668.6856, 1_843_000),
     ("single", 32): (3043.812, 16_301_000),
@@ -88,6 +91,34 @@ def _time(value: Any) -> datetime:
 
 def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
+
+
+def _catalog_identity(value: dict[str, Any]) -> dict[str, int]:
+    _require(set(value) == set(CATALOG_STAGES) | set(CATALOG_IDENTITY_FIELDS), "catalog proof identity structure is invalid")
+    identity = {key: value[key] for key in CATALOG_IDENTITY_FIELDS}
+    _require(all(_uint(item, positive=True) for item in identity.values()) and
+             identity["last_raft_applied_index"] >= identity["last_catalog_applied_index"] and
+             identity["last_raft_log_index"] >= identity["last_raft_applied_index"],
+             "catalog proof identity is invalid")
+    return identity
+
+
+def _validate_public_endpoint(topology: dict[str, Any], result: dict[str, Any]) -> None:
+    public = [node for node in topology["nodes"] if "public_listen" in node]
+    _require(len(public) == 1, "retained topology public node is invalid")
+
+    def split(value: str) -> tuple[str, str]:
+        parts = value[1:].rsplit("]:", 1) if value.startswith("[") and "]:" in value else value.rsplit(":", 1)
+        _require(len(parts) == 2 and all(parts), "benchmark endpoint is invalid")
+        return parts[0], parts[1]
+
+    configured_host, configured_port = split(public[0]["public_listen"])
+    actual_host, actual_port = split(result.get("endpoint", ""))
+    if configured_host in ("0.0.0.0", "::"):
+        owned_hosts = {split(group["listen"])[0] for group in public[0]["local_groups"]}
+        _require(actual_port == configured_port and actual_host in owned_hosts, "benchmark endpoint is not owned by the retained public node")
+    else:
+        _require(result.get("endpoint") == public[0]["public_listen"], "benchmark endpoint is not owned by the retained public node")
 
 
 def _validate_capability_key(provenance: dict[str, Any]) -> None:
@@ -129,10 +160,16 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
     _require(isinstance(catalog, dict) and isinstance(catalog.get("nodes"), list) and isinstance(catalog.get("total"), dict), "catalog proof evidence is invalid")
     _require({node.get("node_config_sha256") for node in catalog["nodes"] if isinstance(node, dict)} == expected_ids and len(catalog["nodes"]) == len(expected_ids), "catalog proof nodes changed")
     total = catalog["total"]
+    total_identity = _catalog_identity(total)
     summed = {name: {key: 0 for key in CATALOG_FIELDS} for name in CATALOG_STAGES}
+    summed_identity = {key: 0 for key in CATALOG_IDENTITY_FIELDS}
     for node in catalog["nodes"]:
         before, after, delta = node.get("before"), node.get("after"), node.get("delta")
         _require(all(isinstance(value, dict) for value in (before, after, delta)), "catalog node evidence is invalid")
+        prior_identity, current_identity, retained_identity = (_catalog_identity(value) for value in (before, after, delta))
+        _require(retained_identity == current_identity and all(current_identity[key] >= prior_identity[key] for key in CATALOG_IDENTITY_FIELDS), "catalog proof identity changed")
+        for key in CATALOG_IDENTITY_FIELDS:
+            summed_identity[key] = max(summed_identity[key], retained_identity[key])
         for name in CATALOG_STAGES:
             prior, current, retained = before.get(name), after.get(name), delta.get(name)
             _require(all(isinstance(value, dict) and set(value) == set(CATALOG_FIELDS) for value in (prior, current, retained)) and
@@ -143,6 +180,7 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
             for key in CATALOG_FIELDS:
                 summed[name][key] += retained[key]
     _require(all(total.get(name) == summed[name] for name in CATALOG_STAGES), "catalog node totals disagree with the aggregate")
+    _require(total_identity == summed_identity, "catalog proof identity totals disagree with the aggregate")
     strict, refresh, aggregate = total.get("strict_search"), total.get("serving_refresh"), total.get("total")
     _require(all(isinstance(value, dict) for value in (strict, refresh, aggregate)), "catalog proof attribution is invalid")
     for name in CATALOG_STAGES:
@@ -336,6 +374,7 @@ def summarize(root: Path) -> dict[str, Any]:
         for mode in expected_modes:
             search_path = run_dir / f"search-{mode}.json"
             result, result_cells = _validate_result(search_path, topology, mode, provenance, expected_nodes)
+            _validate_public_endpoint(topology_value, result)
             _require(result["topology_identity_sha256"] == computed and started <= _time(result["started_at"]) < _time(result["completed_at"]) <= completed, "benchmark escaped its runner interval")
             search_started, search_completed = _time(result["started_at"]), _time(result["completed_at"])
             _require(prior_search_completed is None or prior_search_completed < search_started, "benchmark mode intervals overlap")
