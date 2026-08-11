@@ -221,6 +221,15 @@ func TestVectorPartitionNativeWireErrorMappingV1(t *testing.T) {
 	if err := vectorPartitionClientErrorV1(&WireError{Code: iwire.ErrResourceExhausted, Message: "busy"}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorUnavailableV1 {
 		t.Fatalf("resource exhaustion mapping = %v", err)
 	}
+	client := &Client{limits: iwire.DefaultLimits()}
+	if _, err := client.VectorStatusV1(context.Background()); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorInvalidRequestV1 {
+		t.Fatalf("missing local deadline mapping = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := client.VectorSearchStrictV1(ctx, public.SearchRequestV1{}); !errors.As(err, &publicErr) || publicErr.Code != public.ErrorInvalidRequestV1 {
+		t.Fatalf("local request validation mapping = %v", err)
+	}
 }
 
 func TestVectorPartitionNativeWirePinCleanupV1(t *testing.T) {
@@ -329,6 +338,24 @@ func TestVectorPartitionNativeWirePropagatesRequestDeadlineV1(t *testing.T) {
 	}
 	if _, err := server.registry.ValidateRequestSections(missingSections); err == nil {
 		t.Fatal("vector command without deadline was accepted")
+	}
+	zeroDeadline, err := appendCommandHeaderSection(nil, iwire.CommandVectorStatus)
+	if err == nil {
+		zeroDeadline, err = iwire.AppendSection(zeroDeadline, iwire.Section{ID: iwire.SectionDeadline, Bytes: []byte{0}})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroSections, err := iwire.DecodeSections(zeroDeadline, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroCommand, err := server.registry.ValidateRequestSections(zeroSections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.handleVectorPartitionCommandV1(context.Background(), nil, zeroCommand, nil); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("zero vector deadline = %v", err)
 	}
 	body, err := appendVectorPartitionCommandBodyV1(nil, iwire.CommandVectorStatus, nil, nil, nil, deadline, iwire.DefaultLimits())
 	if err != nil {

@@ -147,11 +147,11 @@ func (c *Client) vectorCommandLockedV1(ctx context.Context, command iwire.Comman
 		deadline = request.Deadline
 	}
 	if deadline.IsZero() {
-		return nil, protocolError(iwire.ErrInvalidCommand, "bounded vector command deadline is required")
+		return nil, vectorPartitionClientErrorV1(protocolError(iwire.ErrInvalidCommand, "bounded vector command deadline is required"))
 	}
 	body, err := appendVectorPartitionCommandBodyV1(c.requestBody[:0], command, request, fast, pin, deadline, c.limits)
 	if err != nil {
-		return nil, err
+		return nil, vectorPartitionClientErrorV1(err)
 	}
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
 	c.requestBody = body[:0]
@@ -183,14 +183,15 @@ func (s *Server) handleVectorPartitionCommandV1(ctx context.Context, state *conn
 	if err != nil {
 		return nil, err
 	}
-	if deadline > 0 {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, deadline))
-		defer cancel()
+	if deadline <= 0 {
+		return nil, protocolError(iwire.ErrInvalidCommand, "positive vector command deadline is required")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithDeadline(ctx, time.Unix(0, deadline))
+	defer cancel()
 	if state != nil && cmd.Header.ID != iwire.CommandVectorStatus {
 		state.mu.Lock()
 		defer state.mu.Unlock()
@@ -329,11 +330,16 @@ func vectorPartitionClientErrorV1(err error) error {
 		return &public.ErrorV1{Code: public.ErrorDeadlineExceededV1, Err: context.DeadlineExceeded}
 	}
 	var wire *WireError
-	if !errors.As(err, &wire) {
+	wireCode, cause := iwire.ErrorCode(0), err
+	if errors.As(err, &wire) {
+		wireCode, cause = wire.Code, errors.New(wire.Message)
+	} else if code, ok := iwire.ErrorCodeOf(err); ok {
+		wireCode = code
+	} else {
 		return err
 	}
-	code, cause := public.ErrorFailedV1, error(errors.New(wire.Message))
-	switch wire.Code {
+	code := public.ErrorFailedV1
+	switch wireCode {
 	case iwire.ErrInvalidCommand, iwire.ErrMalformedFrame:
 		code = public.ErrorInvalidRequestV1
 	case iwire.ErrResourceExhausted:
