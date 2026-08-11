@@ -44,6 +44,9 @@ TIMINGS = (
 REMOVABLE_TIMINGS = (
     "client_encode", "client_write", "client_decode", "public_adapter", "service_adapter",
 )
+SERVER_TIMINGS = (
+    "rpc", "network", "generation_open", "shard_search", "merge", "coordinator_total", "total",
+)
 COUNTERS = LOGICAL_COUNTERS + (
     "snapshot_pins", "session_pins", "read_proofs", "generation_pins",
     "partition_opens", "public_request_frame_bytes", "public_response_frame_bytes",
@@ -58,6 +61,10 @@ CATALOG_STAGES = ("total", "strict_search", "serving_refresh", "operations_healt
 CATALOG_FIELDS = (
     "reads", "successes", "failures", "verify_leader_calls", "log_barriers", "no_log_proofs",
     "total_nanos", "admission_nanos", "verify_leader_nanos", "barrier_nanos",
+    "current_term_nanos", "raft_apply_nanos", "applied_read_nanos",
+)
+CATALOG_COMPONENT_NANOS = (
+    "admission_nanos", "verify_leader_nanos", "barrier_nanos",
     "current_term_nanos", "raft_apply_nanos", "applied_read_nanos",
 )
 CATALOG_IDENTITY_FIELDS = (
@@ -291,8 +298,11 @@ def _validate_catalog(cell: dict[str, Any], mode: str, concurrency: int, expecte
         value = total.get(name)
         _require(isinstance(value, dict) and
                  value.get("reads") == value.get("successes") == value.get("verify_leader_calls") == value.get("no_log_proofs") and
-                 value.get("failures") == value.get("log_barriers") == 0,
+                 value.get("failures") == value.get("log_barriers") == value.get("barrier_nanos") == 0 and
+                 value.get("total_nanos", -1) >= sum(value.get(key, -1) for key in CATALOG_COMPONENT_NANOS),
                  "catalog proof was unsuccessful or appended a log barrier")
+    _require(all(aggregate[key] == sum(total[name][key] for name in CATALOG_STAGES[1:])
+                 for key in CATALOG_FIELDS), "catalog total stage disagrees with attributed stages")
     want = 1000 if mode == "strict" else 0
     _require(strict.get("reads") == want and aggregate.get("reads") == want + refresh.get("reads"), "catalog proof count changed")
     for name in ("operations_health", "coordinator_lifecycle", "shard_lifecycle", "unknown"):
@@ -349,6 +359,12 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     _require(isinstance(timings, dict) and set(timings) == set(TIMINGS) and all(_uint(timings[key]) for key in TIMINGS), "benchmark timings are invalid")
     _require(all(_uint(timings[key], positive=True) for key in REMOVABLE_TIMINGS),
              "benchmark on-ramp timings are invalid")
+    _require(all(_uint(timings[key], positive=True) for key in SERVER_TIMINGS) and
+             timings["total"] >= timings["public_adapter"] + timings["coordinator_total"] and
+             timings["rpc"] >= timings["network"] and
+             timings["rpc"] >= sum(timings[key] for key in
+                                    ("read_index_apply", "generation_open", "shard_search", "response")),
+             "benchmark server timings are invalid")
     samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
     _require(isinstance(samples, list) and len(samples) == 1000 and all(_uint(sample, positive=True) for sample in samples), "raw query timings are invalid")
     _require(timings["client_total"] == sum(samples), "client timing total changed")

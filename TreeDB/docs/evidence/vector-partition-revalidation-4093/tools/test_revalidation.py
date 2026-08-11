@@ -86,6 +86,7 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
         "runtime": [{"node_config_sha256": NODE, "before": runtime, "after": after}],
         "elapsed_nanos": 1_000_000_000, "total_nanos": samples, "search_mode": mode,
     }
+    value["timings"].update({"rpc": 4, "total": 2})
     result = {
         "max_index_age_nanos": 3_600_000_000_000,
         "started_at": "1970-01-01T00:00:01.000000000Z",
@@ -207,6 +208,32 @@ class RevalidationTest(unittest.TestCase):
             value["timings"][timing] = 0
             with self.assertRaisesRegex(ValueError, "on-ramp"):
                 validate_cell(value, result, "strict", 1)
+
+    def test_server_timings_are_positive_and_consistent(self) -> None:
+        for timing in reduce.SERVER_TIMINGS:
+            value, result = cell()
+            value["timings"][timing] = 0
+            with self.assertRaisesRegex(ValueError, "server timings"):
+                validate_cell(value, result, "strict", 1)
+        for timing, changed in (("total", 1), ("network", 5), ("shard_search", 2)):
+            value, result = cell()
+            value["timings"][timing] = changed
+            with self.assertRaisesRegex(ValueError, "server timings"):
+                validate_cell(value, result, "strict", 1)
+
+    def test_catalog_stage_timings_are_consistent(self) -> None:
+        for field, changed in (("barrier_nanos", 1), ("total_nanos", 0)):
+            value, result = cell()
+            for retained in (value["catalog_reads"]["total"], value["catalog_reads"]["nodes"][0]["after"], value["catalog_reads"]["nodes"][0]["delta"]):
+                retained["strict_search"][field] = changed
+                retained["total"][field] = changed
+            with self.assertRaisesRegex(ValueError, "catalog proof"):
+                validate_cell(value, result, "strict", 1)
+        value, result = cell()
+        for retained in (value["catalog_reads"]["total"], value["catalog_reads"]["nodes"][0]["after"], value["catalog_reads"]["nodes"][0]["delta"]):
+            retained["total"]["total_nanos"] += 1
+        with self.assertRaisesRegex(ValueError, "catalog total stage"):
+            validate_cell(value, result, "strict", 1)
 
     def test_fast_age_bound_is_fail_closed(self) -> None:
         value, result = cell("fast")
