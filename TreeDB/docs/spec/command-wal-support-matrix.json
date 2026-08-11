@@ -74,6 +74,12 @@
     {"surface":"nativewire","entry_point":"CommandCursorNext","command":"none","status":"read-only","first_pr":"PR8/#3038","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
     {"surface":"nativewire","entry_point":"CommandCursorClose","command":"none","status":"read-only","first_pr":"PR8/#3038","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
     {"surface":"nativewire","entry_point":"CommandExplain","command":"none","status":"read-only","first_pr":"PR8/#3038","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
-    {"surface":"nativewire","entry_point":"CommandStats","command":"none","status":"read-only","first_pr":"PR8/#3038","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]}
+    {"surface":"nativewire","entry_point":"CommandStats","command":"none","status":"read-only","first_pr":"PR8/#3038","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorStatus","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorSearchStrict","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorSearchFast","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorPinSearchSnapshot","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorSearchPinned","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]},
+    {"surface":"nativewire","entry_point":"CommandVectorClosePinnedSnapshot","command":"none","status":"read-only","first_pr":"#4097","tests":["TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands"]}
   ]
 }

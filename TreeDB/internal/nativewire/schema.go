@@ -636,5 +636,66 @@ func v1CommandSchemas() []CommandSchema {
 			Name:    "stats",
 			Kind:    CommandKindRead,
 		},
+		{
+			ID:        CommandVectorStatus,
+			Version:   1,
+			Name:      "vector_status",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
+		},
+		{
+			ID:        CommandVectorSearchStrict,
+			Version:   1,
+			Name:      "vector_search_strict",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
+			},
+		},
+		{
+			ID:        CommandVectorSearchFast,
+			Version:   1,
+			Name:      "vector_search_fast",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
+				{ID: SectionVectorFastOptions, Name: "vector_fast_options", Required: true},
+			},
+		},
+		{
+			ID:        CommandVectorPinSearchSnapshot,
+			Version:   1,
+			Name:      "vector_pin_search_snapshot",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionVectorPinOptions, Name: "vector_pin_options", Required: true},
+			},
+		},
+		{
+			ID:        CommandVectorSearchPinned,
+			Version:   1,
+			Name:      "vector_search_pinned",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections: []SectionRule{
+				{ID: SectionDeadline, Name: "deadline", Required: true},
+				{ID: SectionVectorSearchRequest, Name: "vector_search_request", Required: true},
+			},
+		},
+		{
+			ID:        CommandVectorClosePinnedSnapshot,
+			Version:   1,
+			Name:      "vector_close_pinned_snapshot",
+			Kind:      CommandKindRead,
+			LocalOnly: true,
+			Sections:  []SectionRule{{ID: SectionDeadline, Name: "deadline", Required: true}},
+		},
 	}
 }

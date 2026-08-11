@@ -23,9 +23,9 @@ This does not add a 1M or high-entropy claim.
 
 | Row | Headline client boundary | Topology |
 | --- | --- | --- |
-| TreeDB single daemon | bounded TCP client to `OperationsV1.Search` | one process owns four groups |
-| TreeDB native multi-daemon | bounded TCP client to `OperationsV1.Search` | four processes, ports, roots, identities, one group each |
-| TreeDB container multi-daemon | bounded TCP client over an isolated bridge | four pinned containers and volumes, one group each |
+| TreeDB single daemon | native-wire strict/fast/pinned vector commands | one process owns four groups |
+| TreeDB native multi-daemon | native-wire strict/fast/pinned vector commands | four processes, ports, roots, identities, one group each |
+| TreeDB container multi-daemon | native-wire client over an isolated bridge | four pinned containers and volumes, one group each |
 | Milvus Standalone | PyMilvus to official Standalone gRPC | pinned Milvus, etcd, and MinIO containers |
 | PostgreSQL + pgvector | Psycopg over the PostgreSQL wire protocol | one pinned PostgreSQL+pgvector container |
 
@@ -36,9 +36,12 @@ evidence; #3983 owns that qualification.
 ## TreeDB production topology adapter
 
 `treedb_vector_partition_bench system-node` consumes one bounded JSON config
-and exposes only `vectorpartition.OperationsV1.Search` over the framed TCP
-client boundary. The config must name `production_public_v1`; `m8_loopback`
-is rejected. `system-check-topology` validates the complete config set before
+and exposes the typed `treedb.nativewire.vector_search_v1` route over the
+existing bounded native-wire TCP connection. Its strict, fast, and pinned
+commands call the same `vectorpartition.OperationsV1` methods directly; JSON is
+only the operator config/result artifact format and is not the search transport.
+The config must name `production_public_v1`; `m8_loopback` is rejected.
+`system-check-topology` validates the complete config set before
 launch: one owner per group, exactly one public listener, a shared endpoint and
 applied-index identity, and distinct node IDs, ports, state roots, ready files,
 and persistent database roots. A native or container set has four configs and

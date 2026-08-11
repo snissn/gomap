@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -137,7 +135,8 @@ type vectorPartitionSystemNodeV1 struct {
 	assets         *m8ProductionMultiGroupAssetsV1
 	production     *nativewire.VectorPartitionProductionNodeV1
 	publicListener net.Listener
-	publicServer   *vectorPartitionOperationsTCPServerV1
+	publicServer   *nativewire.Server
+	publicDone     chan error
 	ready          vectorPartitionSystemNodeReadyV1
 }
 
@@ -324,7 +323,7 @@ func validateVectorPartitionSystemTopologyV1(configs []vectorPartitionSystemNode
 	evidence.DatasetDirectory = first.DatasetDirectory
 	evidence.Endpoints = maps.Clone(first.Endpoints)
 	evidence.GroupAppliedIndexes = maps.Clone(first.GroupAppliedIndexes)
-	evidence.PublicRoute = "vectorpartition.OperationsV1.Search"
+	evidence.PublicRoute = nativewire.VectorPartitionRouteV1
 	raw, err := json.Marshal(evidence)
 	if err != nil {
 		return evidence, err
@@ -343,7 +342,7 @@ func loadVectorPartitionSystemTopologyEvidenceV1(path, endpoint string) (vectorP
 	if err := json.Unmarshal(raw, &evidence); err != nil {
 		return evidence, fmt.Errorf("topology evidence JSON: %w", err)
 	}
-	if evidence.SchemaVersion != 1 || evidence.ResultKind != vectorPartitionSystemTopologyKindV1 || evidence.Assembly != vectorPartitionSystemAssemblyV1 || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback {
+	if evidence.SchemaVersion != 1 || evidence.ResultKind != vectorPartitionSystemTopologyKindV1 || evidence.Assembly != vectorPartitionSystemAssemblyV1 || evidence.PublicRoute != nativewire.VectorPartitionRouteV1 || evidence.M8Loopback {
 		return evidence, errors.New("topology evidence production identity is invalid")
 	}
 	wantNodes := 4
@@ -754,8 +753,15 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 		if operationsErr != nil {
 			return nil, operationsErr
 		}
-		node.publicServer = &vectorPartitionOperationsTCPServerV1{operations: operations, nodeConfigSHA256: configSHA, listener: node.publicListener, done: make(chan struct{})}
-		node.publicServer.start(ctx)
+		node.publicServer = nativewire.NewServer(nativewire.ServerOptions{
+			MaxFrameSize:                    vectorPartitionSystemWireMaxBytesV1,
+			MaxConnections:                  vectorPartitionSystemMaxConnectionsV1,
+			ConnectionIdleTimeout:           vectorPartitionSystemIdleTimeoutV1,
+			VectorPartitionOperations:       operations,
+			VectorPartitionNodeConfigSHA256: configSHA,
+		})
+		node.publicDone = make(chan error, 1)
+		go func() { node.publicDone <- node.publicServer.Serve(ctx, node.publicListener) }()
 		publicEndpoint = node.publicListener.Addr().String()
 	}
 	revision, modified := vectorPartitionSystemBuildVCSIdentityV1()
@@ -769,7 +775,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	}
 	node.ready = vectorPartitionSystemNodeReadyV1{
 		SchemaVersion: 1, ResultKind: vectorPartitionSystemNodeReadyKindV1, Assembly: config.Assembly, Topology: config.Topology, NodeID: config.NodeID,
-		PID: os.Getpid(), PublicEndpoint: publicEndpoint, PublicRoute: "vectorpartition.OperationsV1.Search", ProductionTopology: true, M8Loopback: false,
+		PID: os.Getpid(), PublicEndpoint: publicEndpoint, PublicRoute: nativewire.VectorPartitionRouteV1, ProductionTopology: true, M8Loopback: false,
 		DatabaseDirectory: config.DatabaseDirectory, StateDirectory: config.StateDirectory, SourceRevision: revision, VCSModified: modified,
 		ExecutableSHA256: executableSHA, NodeConfigSHA256: configSHA,
 		LogicalCPUs: runtime.NumCPU(), GOMAXPROCS: runtime.GOMAXPROCS(0), GoMemoryLimit: debug.SetMemoryLimit(-1), EffectiveCPUSet: vectorPartitionSystemEffectiveCPUSetV1(), ProfileDirectory: config.ProfileDirectory,
@@ -893,6 +899,12 @@ func (n *vectorPartitionSystemNodeV1) Close() error {
 	} else if n.publicListener != nil {
 		errs = append(errs, n.publicListener.Close())
 	}
+	if n.publicDone != nil {
+		if err := <-n.publicDone; err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+			errs = append(errs, err)
+		}
+		n.publicDone = nil
+	}
 	if n.production != nil {
 		errs = append(errs, n.production.Close())
 		n.production = nil
@@ -987,177 +999,9 @@ type vectorPartitionOperationsWireResponseV1 struct {
 	Error            string                       `json:"error,omitempty"`
 }
 
-func vectorPartitionOperationsWireErrorCodeV1(err error) public.ErrorCodeV1 {
-	var typed *public.ErrorV1
-	if errors.As(err, &typed) {
-		return typed.Code
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
-		return public.ErrorDeadlineExceededV1
-	}
-	if errors.Is(err, context.Canceled) {
-		return public.ErrorCanceledV1
-	}
-	return public.ErrorFailedV1
-}
-
-type vectorPartitionOperationsTCPServerV1 struct {
-	operations       *public.OperationsV1
-	nodeConfigSHA256 string
-	listener         net.Listener
-	done             chan struct{}
-	slots            chan struct{}
-	idleTimeout      time.Duration
-	connections      sync.Map
-	serving          sync.WaitGroup
-}
-
-func (s *vectorPartitionOperationsTCPServerV1) start(ctx context.Context) {
-	if s.slots == nil {
-		s.slots = make(chan struct{}, vectorPartitionSystemMaxConnectionsV1)
-	}
-	if s.idleTimeout <= 0 {
-		s.idleTimeout = vectorPartitionSystemIdleTimeoutV1
-	}
-	go func() {
-		defer close(s.done)
-		for {
-			conn, err := s.listener.Accept()
-			if err != nil {
-				return
-			}
-			select {
-			case s.slots <- struct{}{}:
-				s.connections.Store(conn, struct{}{})
-				s.serving.Add(1)
-				go func() {
-					defer s.serving.Done()
-					defer s.connections.Delete(conn)
-					defer func() { <-s.slots }()
-					s.serve(ctx, conn)
-				}()
-			default:
-				_ = conn.Close()
-			}
-		}
-	}()
-}
-
-func (s *vectorPartitionOperationsTCPServerV1) serve(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	var pinned *public.PinnedSearchSnapshotV1
-	defer func() {
-		if pinned != nil {
-			_ = pinned.Close()
-		}
-	}()
-	reader := bufio.NewReaderSize(conn, 64<<10)
-	for {
-		if err := conn.SetReadDeadline(time.Now().Add(s.idleTimeout)); err != nil {
-			return
-		}
-		var request vectorPartitionOperationsWireRequestV1
-		if err := readVectorPartitionSystemFrameV1(reader, &request); err != nil {
-			return
-		}
-		response := vectorPartitionOperationsWireResponseV1{SchemaVersion: 1}
-		if request.SchemaVersion != 1 {
-			response.Error = "unsupported system search protocol"
-		} else {
-			switch request.Operation {
-			case "status":
-				health, err := s.operations.Status(ctx)
-				if err != nil {
-					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-				} else {
-					response.Health = &health
-					response.NodeConfigSHA256 = s.nodeConfigSHA256
-				}
-			case "search":
-				result, err := s.operations.Search(ctx, request.Search)
-				if err != nil {
-					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-				} else {
-					response.Search = &result
-				}
-			case "search_fast":
-				if request.FastOptions == nil {
-					response.Error, response.ErrorCode = "fast search options are required", public.ErrorInvalidRequestV1
-					break
-				}
-				result, evidence, err := s.operations.SearchFast(ctx, request.Search, *request.FastOptions)
-				if err != nil {
-					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-				} else {
-					response.Search, response.FastEvidence = &result, &evidence
-				}
-			case "pin_search_snapshot":
-				if request.PinOptions == nil || pinned != nil {
-					response.Error, response.ErrorCode = "one pin options object and no existing pin are required", public.ErrorInvalidRequestV1
-					break
-				}
-				var err error
-				pinned, err = s.operations.PinSearchSnapshot(ctx, *request.PinOptions)
-				if err != nil {
-					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-					pinned = nil
-				} else {
-					evidence := pinned.Evidence()
-					response.FastEvidence = &evidence
-				}
-			case "search_pinned":
-				if pinned == nil {
-					response.Error, response.ErrorCode = "pinned search snapshot is unavailable", public.ErrorUnavailableV1
-					break
-				}
-				result, err := pinned.Search(ctx, request.Search)
-				if err != nil {
-					response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-				} else {
-					response.Search = &result
-				}
-			case "close_pinned_snapshot":
-				if pinned != nil {
-					err := pinned.Close()
-					pinned = nil
-					if err != nil {
-						response.Error, response.ErrorCode = err.Error(), vectorPartitionOperationsWireErrorCodeV1(err)
-					}
-				}
-			default:
-				response.Error = "unsupported system operation"
-			}
-		}
-		if err := conn.SetWriteDeadline(time.Now().Add(s.idleTimeout)); err != nil {
-			return
-		}
-		if err := writeVectorPartitionSystemFrameV1(conn, response); err != nil {
-			return
-		}
-	}
-}
-
-func (s *vectorPartitionOperationsTCPServerV1) Close() error {
-	if s == nil {
-		return nil
-	}
-	if s.listener != nil {
-		_ = s.listener.Close()
-	}
-	if s.done != nil {
-		<-s.done
-	}
-	s.connections.Range(func(key, _ any) bool {
-		_ = key.(net.Conn).Close()
-		return true
-	})
-	s.serving.Wait()
-	return nil
-}
-
 type vectorPartitionOperationsTCPClientV1 struct {
-	conn net.Conn
-	r    *bufio.Reader
+	client *nativewire.Client
+	conn   *vectorPartitionSystemMeasuredConnV1
 }
 
 type vectorPartitionSystemFrameTimingV1 struct {
@@ -1175,7 +1019,13 @@ func dialVectorPartitionOperationsV1(ctx context.Context, endpoint string) (*vec
 	if err != nil {
 		return nil, err
 	}
-	return &vectorPartitionOperationsTCPClientV1{conn: conn, r: bufio.NewReaderSize(conn, 64<<10)}, nil
+	measured := &vectorPartitionSystemMeasuredConnV1{Conn: conn}
+	client := nativewire.NewClientWithMaxFrameSize(measured, vectorPartitionSystemWireMaxBytesV1)
+	if err := client.Hello(ctx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return &vectorPartitionOperationsTCPClientV1{client: client, conn: measured}, nil
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOperationsWireRequestV1) (vectorPartitionOperationsWireResponseV1, error) {
@@ -1184,114 +1034,124 @@ func (c *vectorPartitionOperationsTCPClientV1) call(request vectorPartitionOpera
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) callWithTiming(request vectorPartitionOperationsWireRequestV1) (response vectorPartitionOperationsWireResponseV1, timing vectorPartitionSystemFrameTimingV1, err error) {
-	started := time.Now()
-	defer func() { timing.TotalNanos = uint64(time.Since(started)) }()
+	if c == nil || c.client == nil || c.conn == nil {
+		return response, timing, io.ErrClosedPipe
+	}
+	if request.SchemaVersion != 1 {
+		return response, timing, errors.New("unsupported system search protocol")
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	if !request.Search.Deadline.IsZero() && request.Search.Deadline.Before(deadline) {
 		deadline = request.Search.Deadline
 	}
-	if err := c.conn.SetDeadline(deadline); err != nil {
-		return response, timing, err
-	}
-	encodeNanos, writeNanos, requestBytes, err := writeVectorPartitionSystemFrameMeasuredV1(c.conn, request)
-	timing.EncodeNanos, timing.WriteNanos, timing.RequestBytes = encodeNanos, writeNanos, requestBytes
-	if err != nil {
-		return response, timing, err
-	}
-	readNanos, decodeNanos, responseBytes, err := readVectorPartitionSystemFrameMeasuredV1(c.r, &response)
-	timing.ReadNanos, timing.DecodeNanos, timing.ResponseBytes = readNanos, decodeNanos, responseBytes
-	if err != nil {
-		return response, timing, err
-	}
-	if response.SchemaVersion != 1 {
-		return response, timing, fmt.Errorf("system operations response schema %d", response.SchemaVersion)
-	}
-	if response.Error != "" {
-		cause := errors.New(response.Error)
-		switch response.ErrorCode {
-		case public.ErrorDeadlineExceededV1:
-			cause = fmt.Errorf("%w: %s", context.DeadlineExceeded, response.Error)
-		case public.ErrorCanceledV1:
-			cause = fmt.Errorf("%w: %s", context.Canceled, response.Error)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	c.conn.begin()
+	defer func() { timing = c.conn.finish(time.Now()) }()
+	response.SchemaVersion = 1
+	switch request.Operation {
+	case "status":
+		status, callErr := c.client.VectorStatusV1(ctx)
+		if callErr == nil {
+			response.NodeConfigSHA256, response.Health = status.NodeConfigSHA256, &status.Health
 		}
-		return response, timing, fmt.Errorf("system operations response: %w", &public.ErrorV1{Code: response.ErrorCode, Err: cause})
+		err = callErr
+	case "search":
+		result, callErr := c.client.VectorSearchStrictV1(ctx, request.Search)
+		if callErr == nil {
+			response.Search = &result
+		}
+		err = callErr
+	case "search_fast":
+		if request.FastOptions == nil {
+			return response, timing, errors.New("fast search options are required")
+		}
+		result, evidence, callErr := c.client.VectorSearchFastV1(ctx, request.Search, *request.FastOptions)
+		if callErr == nil {
+			response.Search, response.FastEvidence = &result, &evidence
+		}
+		err = callErr
+	case "pin_search_snapshot":
+		if request.PinOptions == nil {
+			return response, timing, errors.New("pin search options are required")
+		}
+		evidence, callErr := c.client.VectorPinSearchSnapshotV1(ctx, *request.PinOptions)
+		if callErr == nil {
+			response.FastEvidence = &evidence
+		}
+		err = callErr
+	case "search_pinned":
+		result, callErr := c.client.VectorSearchPinnedV1(ctx, request.Search)
+		if callErr == nil {
+			response.Search = &result
+		}
+		err = callErr
+	case "close_pinned_snapshot":
+		err = c.client.VectorClosePinnedSnapshotV1(ctx)
+	default:
+		err = errors.New("unsupported system operation")
 	}
-	return response, timing, nil
+	return response, timing, err
 }
 
 func (c *vectorPartitionOperationsTCPClientV1) Close() error {
-	if c == nil || c.conn == nil {
+	if c == nil || c.client == nil {
 		return nil
 	}
-	return c.conn.Close()
+	return c.client.Close()
 }
 
-func writeVectorPartitionSystemFrameV1(w io.Writer, value any) error {
-	_, _, _, err := writeVectorPartitionSystemFrameMeasuredV1(w, value)
-	return err
+type vectorPartitionSystemMeasuredConnV1 struct {
+	net.Conn
+	started, firstWrite, writeDone, firstRead, readDone time.Time
+	requestBytes, responseBytes                         uint64
+	measuring                                           bool
 }
 
-func writeVectorPartitionSystemFrameMeasuredV1(w io.Writer, value any) (encodeNanos, writeNanos, bytes uint64, err error) {
-	started := time.Now()
-	raw, err := json.Marshal(value)
-	encodeNanos = uint64(time.Since(started))
-	if err != nil {
-		return encodeNanos, 0, 0, err
-	}
-	if len(raw) == 0 || len(raw) > vectorPartitionSystemWireMaxBytesV1 {
-		return encodeNanos, 0, 0, errors.New("system operations frame exceeds bound")
-	}
-	var header [4]byte
-	binary.BigEndian.PutUint32(header[:], uint32(len(raw)))
-	started = time.Now()
-	if err := vectorPartitionSystemWriteAllV1(w, header[:]); err != nil {
-		return encodeNanos, uint64(time.Since(started)), 0, err
-	}
-	if err := vectorPartitionSystemWriteAllV1(w, raw); err != nil {
-		return encodeNanos, uint64(time.Since(started)), 0, err
-	}
-	return encodeNanos, uint64(time.Since(started)), uint64(len(raw) + len(header)), nil
+func (c *vectorPartitionSystemMeasuredConnV1) begin() {
+	c.started = time.Now()
+	c.firstWrite, c.writeDone, c.firstRead, c.readDone = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	c.requestBytes, c.responseBytes, c.measuring = 0, 0, true
 }
 
-func vectorPartitionSystemWriteAllV1(w io.Writer, raw []byte) error {
-	for len(raw) > 0 {
-		n, err := w.Write(raw)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		raw = raw[n:]
+func (c *vectorPartitionSystemMeasuredConnV1) Write(p []byte) (int, error) {
+	if c.measuring && c.firstWrite.IsZero() {
+		c.firstWrite = time.Now()
 	}
-	return nil
+	n, err := c.Conn.Write(p)
+	if c.measuring {
+		c.writeDone = time.Now()
+		c.requestBytes += uint64(n)
+	}
+	return n, err
 }
 
-func readVectorPartitionSystemFrameV1(r io.Reader, value any) error {
-	_, _, _, err := readVectorPartitionSystemFrameMeasuredV1(r, value)
-	return err
+func (c *vectorPartitionSystemMeasuredConnV1) Read(p []byte) (int, error) {
+	if c.measuring && c.firstRead.IsZero() {
+		c.firstRead = time.Now()
+	}
+	n, err := c.Conn.Read(p)
+	if c.measuring {
+		c.readDone = time.Now()
+		c.responseBytes += uint64(n)
+	}
+	return n, err
 }
 
-func readVectorPartitionSystemFrameMeasuredV1(r io.Reader, value any) (readNanos, decodeNanos, bytes uint64, err error) {
-	started := time.Now()
-	var header [4]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return uint64(time.Since(started)), 0, 0, err
+func (c *vectorPartitionSystemMeasuredConnV1) finish(done time.Time) vectorPartitionSystemFrameTimingV1 {
+	c.measuring = false
+	return vectorPartitionSystemFrameTimingV1{
+		EncodeNanos: durationBetweenV1(c.started, c.firstWrite), WriteNanos: durationBetweenV1(c.firstWrite, c.writeDone),
+		ReadNanos: durationBetweenV1(c.firstRead, c.readDone), DecodeNanos: durationBetweenV1(c.readDone, done), TotalNanos: durationBetweenV1(c.started, done),
+		RequestBytes: c.requestBytes, ResponseBytes: c.responseBytes,
 	}
-	size := binary.BigEndian.Uint32(header[:])
-	if size == 0 || size > vectorPartitionSystemWireMaxBytesV1 {
-		return uint64(time.Since(started)), 0, 0, errors.New("system operations frame exceeds bound")
+}
+
+func durationBetweenV1(start, end time.Time) uint64 {
+	if start.IsZero() || end.Before(start) {
+		return 0
 	}
-	raw := make([]byte, size)
-	if _, err := io.ReadFull(r, raw); err != nil {
-		return uint64(time.Since(started)), 0, 0, err
-	}
-	readNanos = uint64(time.Since(started))
-	started = time.Now()
-	if err := json.Unmarshal(raw, value); err != nil {
-		return readNanos, uint64(time.Since(started)), 0, err
-	}
-	return readNanos, uint64(time.Since(started)), uint64(size) + uint64(len(header)), nil
+	return uint64(end.Sub(start))
 }
 
 func runVectorPartitionSystemSearchV1(args []string, stdout io.Writer) error {

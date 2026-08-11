@@ -176,26 +176,43 @@ func TestServiceV1FastAndPinnedContract(t *testing.T) {
 	}
 }
 
-func TestServiceV1FastSearchAppliesRequestDeadlineBeforeBackendV1(t *testing.T) {
-	id := GenerationIDV1{Index: "embedding", Generation: 7}
-	backend := &serviceBackendV1{states: make(map[GenerationIDV1]GenerationStatusV1)}
-	backend.search = func(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
-		select {
-		case <-ctx.Done():
-			return SearchResponseV1{}, ctx.Err()
-		case <-time.After(time.Second):
-			t.Fatal("fast backend outlived request deadline")
-			return SearchResponseV1{}, nil
-		}
-	}
-	service, err := NewServiceV1(backend)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := validSearchRequestV1(id)
-	request.Deadline = time.Now().Add(20 * time.Millisecond)
-	if _, _, err := service.SearchFast(context.Background(), request, FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 1}); !hasCodeV1(err, ErrorDeadlineExceededV1) {
-		t.Fatalf("fast deadline error=%v", err)
+func TestServiceV1SearchPathsApplyRequestDeadlineBeforeBackendV1(t *testing.T) {
+	for _, path := range []string{"strict", "fast", "pinned"} {
+		t.Run(path, func(t *testing.T) {
+			id := GenerationIDV1{Index: "embedding", Generation: 7}
+			backend := &serviceBackendV1{states: make(map[GenerationIDV1]GenerationStatusV1)}
+			backend.search = func(ctx context.Context, request SearchRequestV1) (SearchResponseV1, error) {
+				select {
+				case <-ctx.Done():
+					return SearchResponseV1{}, ctx.Err()
+				case <-time.After(time.Second):
+					t.Fatalf("%s backend outlived request deadline", path)
+					return SearchResponseV1{}, nil
+				}
+			}
+			service, err := NewServiceV1(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := validSearchRequestV1(id)
+			request.Deadline = time.Now().Add(20 * time.Millisecond)
+			switch path {
+			case "strict":
+				_, err = service.Search(context.Background(), request)
+			case "fast":
+				_, _, err = service.SearchFast(context.Background(), request, FastSearchOptionsV1{MaxIndexAge: time.Second, MinIndexedThrough: 1})
+			case "pinned":
+				var pinned *serviceSearchSnapshotV1
+				pinned, err = service.pinSearchSnapshotV1(context.Background(), PinSearchSnapshotOptionsV1{FastSearchOptionsV1: FastSearchOptionsV1{MaxIndexAge: time.Second}, MaxSessionAge: time.Second})
+				if err == nil {
+					defer pinned.Close()
+					_, err = pinned.Search(context.Background(), request)
+				}
+			}
+			if !hasCodeV1(err, ErrorDeadlineExceededV1) {
+				t.Fatalf("%s deadline error=%v", path, err)
+			}
+		})
 	}
 }
 

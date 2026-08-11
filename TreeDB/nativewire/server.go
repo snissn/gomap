@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 var debugLogger *log.Logger
@@ -73,49 +74,56 @@ const (
 
 // ServerOptions configures a native-wire server.
 type ServerOptions struct {
-	Limits                        iwire.Limits
-	MaxInFlight                   int
-	MaxConnections                int
-	MaxCollectionHandles          int
-	MaxCachedCollections          int
-	MaxOpenCursors                int
-	MaxCursorRetainedBytes        int
-	MaxScanDocuments              int
-	DefaultCursorBatchSize        int
-	CursorIdleTimeout             time.Duration
-	DefaultAckPolicy              iwire.AckPolicy
-	MaxMetadataIdempotencyEntries int
-	InsertBatchCombineMaxBatch    int
-	InsertBatchCombineDrainYields int
-	Collections                   *collections.CollectionManager
-	Backend                       *backenddb.DB
-	ClusterSubmitter              ClusterSubmitter
-	ClusterReadCoordinator        ClusterReadCoordinator
+	Limits                          iwire.Limits
+	MaxFrameSize                    uint64
+	MaxInFlight                     int
+	MaxConnections                  int
+	MaxCollectionHandles            int
+	MaxCachedCollections            int
+	MaxOpenCursors                  int
+	MaxCursorRetainedBytes          int
+	MaxScanDocuments                int
+	DefaultCursorBatchSize          int
+	CursorIdleTimeout               time.Duration
+	DefaultAckPolicy                iwire.AckPolicy
+	MaxMetadataIdempotencyEntries   int
+	InsertBatchCombineMaxBatch      int
+	InsertBatchCombineDrainYields   int
+	Collections                     *collections.CollectionManager
+	Backend                         *backenddb.DB
+	ClusterSubmitter                ClusterSubmitter
+	ClusterReadCoordinator          ClusterReadCoordinator
+	VectorPartitionOperations       *public.OperationsV1
+	VectorPartitionNodeConfigSHA256 string
+	ConnectionIdleTimeout           time.Duration
 }
 
 // Server serves native-wire control and command frames for TreeDB.
 type Server struct {
-	limits                        iwire.Limits
-	maxInFlight                   int
-	maxConnections                int
-	maxCollectionHandles          int
-	maxCachedCollections          int
-	maxOpenCursors                int
-	maxCursorRetainedBytes        int
-	maxScanDocuments              int
-	defaultCursorBatchSize        int
-	cursorIdleTimeout             time.Duration
-	defaultAckPolicy              iwire.AckPolicy
-	maxMetadataIdempotencyEntries int
-	insertBatchCombineMaxBatch    int
-	insertBatchCombineDrainYields int
-	registry                      *iwire.Registry
-	collections                   *collections.CollectionManager
-	backend                       *backenddb.DB
-	clusterSubmitter              ClusterSubmitter
-	clusterReadCoordinator        ClusterReadCoordinator
-	catalogVersion                atomic.Uint64
-	insertBatchCombiner           nativewireInsertBatchCombiner
+	limits                          iwire.Limits
+	maxInFlight                     int
+	maxConnections                  int
+	maxCollectionHandles            int
+	maxCachedCollections            int
+	maxOpenCursors                  int
+	maxCursorRetainedBytes          int
+	maxScanDocuments                int
+	defaultCursorBatchSize          int
+	cursorIdleTimeout               time.Duration
+	defaultAckPolicy                iwire.AckPolicy
+	maxMetadataIdempotencyEntries   int
+	insertBatchCombineMaxBatch      int
+	insertBatchCombineDrainYields   int
+	registry                        *iwire.Registry
+	collections                     *collections.CollectionManager
+	backend                         *backenddb.DB
+	clusterSubmitter                ClusterSubmitter
+	clusterReadCoordinator          ClusterReadCoordinator
+	vectorPartitionOperations       *public.OperationsV1
+	vectorPartitionNodeConfigSHA256 string
+	connectionIdleTimeout           time.Duration
+	catalogVersion                  atomic.Uint64
+	insertBatchCombiner             nativewireInsertBatchCombiner
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
@@ -174,6 +182,26 @@ type connState struct {
 	updateNames     [][]byte
 	updateValues    [][]byte
 	updateFields    []collections.BSONSetField
+	vectorQuery     []float32
+	vectorPinned    *public.PinnedSearchSnapshotV1
+}
+
+func (s *connState) closeVectorPinned() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeVectorPinnedLocked()
+}
+
+func (s *connState) closeVectorPinnedLocked() error {
+	if s == nil || s.vectorPinned == nil {
+		return nil
+	}
+	err := s.vectorPinned.Close()
+	s.vectorPinned = nil
+	return err
 }
 
 func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
@@ -275,6 +303,9 @@ func (s *connState) responseScratch() []byte {
 // NewServer creates a native-wire server with defaulted limits and policies.
 func NewServer(opts ServerOptions) *Server {
 	limits := opts.Limits
+	if opts.MaxFrameSize != 0 {
+		limits.MaxFrameSize = opts.MaxFrameSize
+	}
 	defaultLimits := iwire.DefaultLimits()
 	if limits.MaxFrameSize == 0 {
 		limits.MaxFrameSize = defaultLimits.MaxFrameSize
@@ -350,26 +381,29 @@ func NewServer(opts ServerOptions) *Server {
 		insertBatchCombineDrainYields = defaultInsertBatchCombineDrainYields
 	}
 	server := &Server{
-		limits:                        limits,
-		maxInFlight:                   maxInFlight,
-		maxConnections:                maxConnections,
-		maxCollectionHandles:          maxCollectionHandles,
-		maxCachedCollections:          maxCachedCollections,
-		maxOpenCursors:                maxOpenCursors,
-		maxCursorRetainedBytes:        maxCursorRetainedBytes,
-		maxScanDocuments:              maxScanDocuments,
-		defaultCursorBatchSize:        cursorBatchSize,
-		cursorIdleTimeout:             cursorIdleTimeout,
-		defaultAckPolicy:              defaultAck,
-		maxMetadataIdempotencyEntries: maxMetadataIdempotencyEntries,
-		insertBatchCombineMaxBatch:    insertBatchCombineMaxBatch,
-		insertBatchCombineDrainYields: insertBatchCombineDrainYields,
-		registry:                      iwire.MustV1Registry(),
-		collections:                   opts.Collections,
-		backend:                       opts.Backend,
-		clusterSubmitter:              opts.ClusterSubmitter,
-		clusterReadCoordinator:        opts.ClusterReadCoordinator,
-		cursorReaperDone:              make(chan struct{}),
+		limits:                          limits,
+		maxInFlight:                     maxInFlight,
+		maxConnections:                  maxConnections,
+		maxCollectionHandles:            maxCollectionHandles,
+		maxCachedCollections:            maxCachedCollections,
+		maxOpenCursors:                  maxOpenCursors,
+		maxCursorRetainedBytes:          maxCursorRetainedBytes,
+		maxScanDocuments:                maxScanDocuments,
+		defaultCursorBatchSize:          cursorBatchSize,
+		cursorIdleTimeout:               cursorIdleTimeout,
+		defaultAckPolicy:                defaultAck,
+		maxMetadataIdempotencyEntries:   maxMetadataIdempotencyEntries,
+		insertBatchCombineMaxBatch:      insertBatchCombineMaxBatch,
+		insertBatchCombineDrainYields:   insertBatchCombineDrainYields,
+		registry:                        iwire.MustV1Registry(),
+		collections:                     opts.Collections,
+		backend:                         opts.Backend,
+		clusterSubmitter:                opts.ClusterSubmitter,
+		clusterReadCoordinator:          opts.ClusterReadCoordinator,
+		vectorPartitionOperations:       opts.VectorPartitionOperations,
+		vectorPartitionNodeConfigSHA256: opts.VectorPartitionNodeConfigSHA256,
+		connectionIdleTimeout:           max(opts.ConnectionIdleTimeout, 0),
+		cursorReaperDone:                make(chan struct{}),
 	}
 	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
 	return server
@@ -435,6 +469,7 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 
 	state := &connState{id: uint64(s.nextConn.Add(1))}
 	defer s.killCursorsForOwner(state.id)
+	defer state.closeVectorPinned()
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
@@ -449,6 +484,11 @@ func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
 	for {
 		if s.closed.Load() {
 			return ErrServerClosed
+		}
+		if s.connectionIdleTimeout > 0 {
+			if err := conn.SetReadDeadline(time.Now().Add(s.connectionIdleTimeout)); err != nil {
+				return err
+			}
 		}
 		header, body, err := readFrameInto(conn, s.limits, state.readBody)
 		if err != nil {
@@ -760,6 +800,14 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			responseSections, responseBody, responseBodySet, err = s.handleRead(ctx, header, state, cmd)
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
+		case iwire.CommandVectorStatus,
+			iwire.CommandVectorSearchStrict,
+			iwire.CommandVectorSearchFast,
+			iwire.CommandVectorPinSearchSnapshot,
+			iwire.CommandVectorSearchPinned,
+			iwire.CommandVectorClosePinnedSnapshot:
+			responseBody, err = s.handleVectorPartitionCommandV1(ctx, state, cmd, state.responseScratch())
+			responseBodySet = true
 		default:
 			err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented", cmd.Schema.Name)
 		}
@@ -916,6 +964,16 @@ func wireErrorMessage(code iwire.ErrorCode, err error) string {
 }
 
 func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte) error {
+	if err := s.validateFrameSize(body); err != nil {
+		return err
+	}
+	if s.connectionIdleTimeout > 0 {
+		if conn, ok := w.(net.Conn); ok {
+			if err := conn.SetWriteDeadline(time.Now().Add(s.connectionIdleTimeout)); err != nil {
+				return err
+			}
+		}
+	}
 	header.Version = iwire.Version{Major: iwire.ProtocolMajorV1, Minor: iwire.ProtocolMinorV0}
 	if err := writeFrame(w, header, body); err != nil {
 		return err
@@ -926,6 +984,16 @@ func (s *Server) writeSimpleFrame(w io.Writer, header iwire.Header, body []byte)
 }
 
 func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	if err := s.validateFrameSize(body); err != nil {
+		return err
+	}
+	if s.connectionIdleTimeout > 0 {
+		if conn, ok := w.(net.Conn); ok {
+			if err := conn.SetWriteDeadline(time.Now().Add(s.connectionIdleTimeout)); err != nil {
+				return err
+			}
+		}
+	}
 	var err error
 	if state != nil {
 		state.writeBody, err = writeFrameBuffered(w, header, body, state.writeBody)
@@ -937,6 +1005,14 @@ func (s *Server) writeSimpleFrameBuffered(w io.Writer, state *connState, header 
 	}
 	s.counters.incFramesOut()
 	s.counters.addBytesOut(uint64(iwire.FrameHeaderLenV1) + uint64(len(body)))
+	return nil
+}
+
+func (s *Server) validateFrameSize(body []byte) error {
+	frameSize := uint64(iwire.FrameHeaderLenV1) + uint64(len(body))
+	if frameSize > s.limits.MaxFrameSize {
+		return protocolError(iwire.ErrResourceExhausted, "frame length %d exceeds limit %d", frameSize, s.limits.MaxFrameSize)
+	}
 	return nil
 }
 
