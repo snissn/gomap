@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,6 +49,9 @@ func TestLocalHNSWRepairMCurveV1(t *testing.T) {
 			t.Fatalf("point[%d]=%+v", i, point)
 		}
 	}
+	if got := []int{points[0].M, points[1].M, points[2].M, points[3].M, points[4].M}; !slices.Equal(got, []int{16, 18, 20, 22, 24}) {
+		t.Fatalf("M point order=%v", got)
+	}
 	encoded, err := json.Marshal(points[0])
 	if err != nil || !strings.Contains(string(encoded), `"m":16`) {
 		t.Fatalf("M cell schema: %s err=%v", encoded, err)
@@ -56,12 +60,10 @@ func TestLocalHNSWRepairMCurveV1(t *testing.T) {
 		t.Fatalf("disposition=%q err=%v", disposition, err)
 	}
 	failed := append([]localHNSWRepairMCurveCellV1(nil), points...)
-	failed[0].Quality.P2Recall.Mean = .949
-	failed[0].Quality.P16Recall.Mean = .949
-	failed[1].Quality.P2Recall.Mean = .951
-	failed[1].Quality.P16Recall.Mean = .954
-	failed[2].Quality.P2Recall.Mean = .949
-	failed[2].Quality.P16Recall.Mean = .949
+	for i := range failed {
+		failed[i].Quality.P2Recall.Mean = .949
+		failed[i].Quality.P16Recall.Mean = .949
+	}
 	if disposition, err := localHNSWRepairMCurveDispositionV1(failed); err != nil || disposition != "no_point_passes_local_quality" {
 		t.Fatalf("failed disposition=%q err=%v", disposition, err)
 	}

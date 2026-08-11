@@ -330,7 +330,7 @@ func runLocalHNSWRepairConstructionCurveModeV1(args []string, stdout io.Writer, 
 		if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(stdout, "report=%s points=m16,m24,m32 disposition=%s\n", out, disposition)
+		_, err = fmt.Fprintf(stdout, "report=%s points=%v disposition=%s\n", out, localHNSWRepairMCurvePointsV1, disposition)
 		return err
 	}
 	report := localHNSWRepairConstructionCurveReportV1{Schema: localHNSWRepairConstructionCurveSchemaV1, ResultKind: "local_hnsw_repair_construction_curve_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: provenance, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: inputEvidence, Source: sourceEvidence, TopK: 10, M: 16, EFSearch: 128, ProbeCounts: []int{2, int(source.manifest.PartitionCount)}, Points: points, Disposition: disposition, Limitations: limitations}

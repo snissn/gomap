@@ -14,8 +14,10 @@ const localHNSWRepairMCurveSchemaV1 = "treedb_local_hnsw_repair_m_curve_v1"
 
 var localHNSWRepairMCurvePointsV1 = []localHNSWRepairConstructionPointV1{
 	{M: 16, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1},
+	{M: 18, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1},
+	{M: 20, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1},
+	{M: 22, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1},
 	{M: 24, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1},
-	{M: 32, EfConstruction: 256, Variant: collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1},
 }
 
 type localHNSWRepairMCurveReportV1 struct {
