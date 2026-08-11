@@ -192,6 +192,17 @@ class RevalidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "sample chronology"):
                 reduce._validate_cell(value, result, "strict", 1, OWNERS)
 
+    def test_runtime_cells_follow_the_declared_concurrency_order(self) -> None:
+        first, _ = cell(concurrency=1)
+        second, _ = cell(concurrency=32)
+        second["runtime"][0]["before"]["sample_unix_nano"] = 3
+        second["runtime"][0]["after"]["sample_unix_nano"] = 4
+        reduce._validate_runtime_cell_order([first, second], (1, 32))
+        with self.assertRaisesRegex(ValueError, "intervals overlap"):
+            reduce._validate_runtime_cell_order([first, first], (1, 1))
+        with self.assertRaisesRegex(ValueError, "concurrency order"):
+            reduce._validate_runtime_cell_order([second, first], (1, 32))
+
     def test_completed_public_queries_require_frame_bytes(self) -> None:
         for counter in ("public_request_frame_bytes", "public_response_frame_bytes"):
             value, result = cell()

@@ -313,7 +313,17 @@ def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology
     return {key: _sha256(path) for key, path in paths.items()}
 
 
-def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
+def _validate_runtime_cell_order(cells: list[dict[str, Any]], expected_order: tuple[int, ...]) -> None:
+    _require(tuple(cell["concurrency"] for cell in cells) == expected_order, "benchmark concurrency order changed")
+    previous_completed: int | None = None
+    for cell in cells:
+        started = min(node["before"]["sample_unix_nano"] for node in cell["runtime"])
+        completed = max(node["after"]["sample_unix_nano"] for node in cell["runtime"])
+        _require(previous_completed is None or previous_completed < started, "runtime cell intervals overlap or changed order")
+        previous_completed = completed
+
+
+def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str, Any], expected_nodes: dict[str, dict[str, Any]], expected_order: tuple[int, ...]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     result = _load(path, 32 << 20)
     _require(result.get("schema_version") == 1 and result.get("result_kind") == "vector_partition_system_bench_v1", "benchmark result identity changed")
     _require(result.get("topology") == TOPOLOGY_NAMES[topology] and _is_sha256(result.get("topology_identity_sha256")), "benchmark topology identity is invalid")
@@ -329,7 +339,9 @@ def _validate_result(path: Path, topology: str, mode: str, provenance: dict[str,
     _require(isinstance(cells, list) and len(cells) == 2, "benchmark must retain c1 and c32")
     by_concurrency = {cell.get("concurrency"): cell for cell in cells if isinstance(cell, dict)}
     _require(set(by_concurrency) == {1, 32}, "benchmark c1/c32 set changed")
-    return result, {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_nodes) for concurrency in (1, 32)}
+    validated = {concurrency: _validate_cell(by_concurrency[concurrency], result, mode, concurrency, expected_nodes) for concurrency in (1, 32)}
+    _validate_runtime_cell_order(cells, expected_order)
+    return result, validated
 
 
 def _mode_order(topology: str, repetition: int) -> tuple[str, ...]:
@@ -412,15 +424,18 @@ def summarize(root: Path) -> dict[str, Any]:
         prior_search_completed: datetime | None = None
         for mode in expected_modes:
             search_path = run_dir / f"search-{mode}.json"
-            result, result_cells = _validate_result(search_path, topology, mode, provenance, expected_nodes)
+            concurrency_order = _concurrency_order(topology, repetition, mode)
+            result, result_cells = _validate_result(
+                search_path, topology, mode, provenance, expected_nodes,
+                tuple(int(value) for value in concurrency_order.split(",")),
+            )
             _validate_public_endpoint(topology_value, result)
             _require(result["topology_identity_sha256"] == computed and started <= _time(result["started_at"]) < _time(result["completed_at"]) <= completed, "benchmark escaped its runner interval")
             search_started, search_completed = _time(result["started_at"]), _time(result["completed_at"])
             _require(prior_search_completed is None or prior_search_completed < search_started, "benchmark mode intervals overlap")
             prior_search_completed = search_completed
             command = _validate_command(
-                run_dir, result, mode, topology, provenance,
-                _concurrency_order(topology, repetition, mode),
+                run_dir, result, mode, topology, provenance, concurrency_order,
             )
             for concurrency, cell in result_cells.items():
                 key = (topology, repetition, mode, concurrency)
