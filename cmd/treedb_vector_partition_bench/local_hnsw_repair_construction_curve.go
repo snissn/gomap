@@ -134,7 +134,7 @@ func localHNSWRepairConstructionCurveDispositionV1(cells []localHNSWRepairConstr
 		return "", errors.New("invalid local HNSW repair construction cells")
 	}
 	for i, cell := range cells {
-		if cell.EfConstruction != localHNSWRepairConstructionCurvePointsV1[i] || cell.Quality.RoutingRecall.Mean < .998 || cell.Quality.P2Recall.Mean < 0 || cell.Quality.P16Recall.Mean < 0 {
+		if cell.EfConstruction != localHNSWRepairConstructionCurvePointsV1[i] || !localHNSWAttributionFiniteRecallV1(cell.Quality.RoutingRecall.Mean) || !localHNSWAttributionFiniteRecallV1(cell.Quality.P2Recall.Mean) || !localHNSWAttributionFiniteRecallV1(cell.Quality.P16Recall.Mean) {
 			return "", errors.New("invalid local HNSW repair construction cell")
 		}
 		if cell.Quality.P2Recall.Mean >= .95 && math.Abs(cell.Quality.P2Recall.Mean-cell.Quality.P16Recall.Mean) <= .002 && cell.Quality.RoutingRecall.Mean >= .998 {

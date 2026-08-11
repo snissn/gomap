@@ -50,6 +50,13 @@ func TestLocalHNSWRepairConstructionCurveV1(t *testing.T) {
 			t.Fatalf("point[%d]=%+v variant=%s err=%v", i, point, variant, err)
 		}
 	}
+	failedGate := append([]localHNSWRepairConstructionCurveCellV1(nil), points...)
+	for i := range failedGate {
+		failedGate[i].Quality.RoutingRecall.Mean = .997
+	}
+	if disposition, err := localHNSWRepairConstructionCurveDispositionV1(failedGate); err != nil || disposition != "no_point_passes" {
+		t.Fatalf("failed gate disposition=%q err=%v", disposition, err)
+	}
 	if _, err := localHNSWRepairConstructionCurveVariantV1(127); err == nil {
 		t.Fatal("expected invalid construction point")
 	}
