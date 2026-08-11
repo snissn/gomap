@@ -75,15 +75,11 @@ func (s *ServiceV1) SearchFast(ctx context.Context, request SearchRequestV1, opt
 	if err := validateFastSearchOptionsV1(options); err != nil {
 		return SearchResponseV1{}, FastSearchEvidenceV1{}, err
 	}
-	requestCtx, cancel := ctx, func() {}
-	ctxDeadline, hasCtxDeadline := ctx.Deadline()
-	if !request.Deadline.IsZero() && (!hasCtxDeadline || request.Deadline.Before(ctxDeadline)) {
-		requestCtx, cancel = context.WithDeadline(ctx, request.Deadline)
-	}
+	requestCtx, cancel := searchRequestContextV1(ctx, request.Deadline)
 	defer cancel()
 	response, evidence, err := s.backend.SearchVectorPartitionFastV1(requestCtx, cloneSearchRequestV1(request), options)
 	if err != nil {
-		return SearchResponseV1{}, FastSearchEvidenceV1{}, classifyErrorV1(ctx, err)
+		return SearchResponseV1{}, FastSearchEvidenceV1{}, classifyErrorV1(requestCtx, err)
 	}
 	if err := validateFastSearchResultV1(request, response, evidence, options); err != nil {
 		return SearchResponseV1{}, FastSearchEvidenceV1{}, err
@@ -116,6 +112,8 @@ func (s *serviceSearchSnapshotV1) Search(ctx context.Context, request SearchRequ
 	if err := validateSearchRequestV1(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
+	requestCtx, cancel := searchRequestContextV1(ctx, request.Deadline)
+	defer cancel()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.backend == nil || s.closed {
@@ -124,9 +122,9 @@ func (s *serviceSearchSnapshotV1) Search(ctx context.Context, request SearchRequ
 	if request.Generation != s.evidence.Generation {
 		return SearchResponseV1{}, &ErrorV1{Code: ErrorGenerationMismatchV1, Err: errors.New("request generation differs from pinned snapshot")}
 	}
-	response, err := s.backend.SearchVectorPartitionV1(ctx, cloneSearchRequestV1(request))
+	response, err := s.backend.SearchVectorPartitionV1(requestCtx, cloneSearchRequestV1(request))
 	if err != nil {
-		return SearchResponseV1{}, classifyErrorV1(ctx, err)
+		return SearchResponseV1{}, classifyErrorV1(requestCtx, err)
 	}
 	if err := validateSearchResponseV1(request, response); err != nil {
 		return SearchResponseV1{}, err

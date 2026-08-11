@@ -165,15 +165,27 @@ func (s *ServiceV1) Search(ctx context.Context, request SearchRequestV1) (Search
 	if err := validateSearchRequestV1(ctx, request); err != nil {
 		return SearchResponseV1{}, err
 	}
-	response, err := s.backend.SearchVectorPartitionV1(ctx, cloneSearchRequestV1(request))
+	requestCtx, cancel := searchRequestContextV1(ctx, request.Deadline)
+	defer cancel()
+	response, err := s.backend.SearchVectorPartitionV1(requestCtx, cloneSearchRequestV1(request))
 	if err != nil {
-		return SearchResponseV1{}, classifyErrorV1(ctx, err)
+		return SearchResponseV1{}, classifyErrorV1(requestCtx, err)
 	}
 	if err := validateSearchResponseV1(request, response); err != nil {
 		return SearchResponseV1{}, err
 	}
 	response.Neighbors = slices.Clone(response.Neighbors)
 	return response, nil
+}
+
+func searchRequestContextV1(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	if deadline.IsZero() {
+		return ctx, func() {}
+	}
+	if current, ok := ctx.Deadline(); ok && !deadline.Before(current) {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, deadline)
 }
 
 func validateSearchResponseV1(request SearchRequestV1, response SearchResponseV1) error {

@@ -27,11 +27,21 @@ type Client struct {
 	requestBody           []byte
 	writeBody             []byte
 	readBody              []byte
+	vectorSections        []iwire.Section
 }
 
 // NewClient returns a native-wire client that owns conn until Close.
 func NewClient(conn net.Conn) *Client {
 	return &Client{conn: conn, limits: iwire.DefaultLimits()}
+}
+
+// NewClientWithMaxFrameSize returns a native-wire client with an explicit frame bound.
+func NewClientWithMaxFrameSize(conn net.Conn, maxFrameSize uint64) *Client {
+	client := NewClient(conn)
+	if maxFrameSize != 0 {
+		client.limits.MaxFrameSize = maxFrameSize
+	}
+	return client
 }
 
 // Close closes the underlying client connection.
@@ -247,11 +257,19 @@ func (c *Client) interruptDeadlineOnContextCancel(ctx context.Context) func() {
 }
 
 func (c *Client) errorOrCanceledOnWire(ctx context.Context, onWire bool, err error) error {
-	if ctx != nil && ctx.Err() != nil {
-		if onWire && c != nil && c.conn != nil {
-			_ = c.conn.Close()
+	if ctx != nil {
+		ctxErr := ctx.Err()
+		if ctxErr == nil {
+			if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+				ctxErr = context.DeadlineExceeded
+			}
 		}
-		return ctx.Err()
+		if ctxErr != nil {
+			if onWire && c != nil && c.conn != nil {
+				_ = c.conn.Close()
+			}
+			return ctxErr
+		}
 	}
 	return err
 }

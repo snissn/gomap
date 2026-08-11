@@ -292,6 +292,78 @@
       "support_matrix_status": "read-only",
       "relationship": "read_rejected_v1",
       "notes": "Native-wire stats reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorStatus",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire vector status reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorSearchStrict",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire strict vector searches are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorSearchFast",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire fast vector searches are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorPinSearchSnapshot",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire vector snapshot pins are connection-local read state and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorSearchPinned",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire pinned vector searches are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandVectorClosePinnedSnapshot",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire vector snapshot close is connection-local read state and must not append a local command-WAL frame."
     }
   ]
 }

@@ -356,8 +356,7 @@ func TestClientClosesAfterProtocolReadError(t *testing.T) {
 	left, right := net.Pipe()
 	defer left.Close()
 	defer right.Close()
-	client := NewClient(left)
-	client.limits.MaxFrameSize = 64
+	client := NewClientWithMaxFrameSize(left, 64)
 	errCh := make(chan error, 1)
 	go func() {
 		header, _, err := readFrame(right, iwire.DefaultLimits())

@@ -762,6 +762,41 @@ return fewer results than requested. A response with
 `has_more=false` is terminal and releases the cursor. A `cursor_not_found` error
 is terminal for the named cursor but not for the connection.
 
+### 10.4 Vector Search Commands
+
+```text
+58 vector_status
+59 vector_search_strict
+60 vector_search_fast
+61 vector_pin_search_snapshot
+62 vector_search_pinned
+63 vector_close_pinned_snapshot
+```
+
+These are connection-local read commands and never deterministic mutation or
+command-WAL entries. Every command requires the generic `deadline` section and
+uses the existing native-wire framing, bounded operation context,
+connection limits, cancellation, and error frames. Their direct binary sections
+are:
+
+```text
+123 vector_search_request
+124 vector_fast_options
+125 vector_pin_options
+126 vector_search_response
+127 vector_fast_evidence
+128 vector_status
+```
+
+The request carries float32 query values, generation, metric, search budgets,
+limits, and deadline directly; the response carries ordered document IDs,
+float32 scores, counters, and stage timings directly. JSON, reflection, generic
+maps, and string-form float conversion are not part of this route. One
+`vector_pin_search_snapshot` is owned by its connection and MUST be released by
+the close command or by connection teardown. Strict, fast, and pinned searches
+retain their public `vectorpartition.OperationsV1` consistency and validation
+semantics; native wire changes only the transport representation.
+
 ## 11. Typed Scalars
 
 Index and query scalar codes:

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -81,8 +80,8 @@ func TestVectorPartitionSystemServerClosesIdleConnectionV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &vectorPartitionOperationsTCPServerV1{listener: listener, done: make(chan struct{}), idleTimeout: 20 * time.Millisecond}
-	server.start(t.Context())
+	server := nativewire.NewServer(nativewire.ServerOptions{ConnectionIdleTimeout: 20 * time.Millisecond})
+	go func() { _ = server.Serve(t.Context(), listener) }()
 	defer server.Close()
 	conn, err := net.Dial("tcp", listener.Addr().String())
 	if err != nil {
@@ -95,54 +94,6 @@ func TestVectorPartitionSystemServerClosesIdleConnectionV1(t *testing.T) {
 	var one [1]byte
 	if _, err := conn.Read(one[:]); err == nil {
 		t.Fatal("idle system connection remained open")
-	}
-}
-
-func TestVectorPartitionSystemServerClosesBlockedWriterV1(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
-	server := &vectorPartitionOperationsTCPServerV1{idleTimeout: 20 * time.Millisecond}
-	done := make(chan struct{})
-	go func() {
-		server.serve(t.Context(), serverConn)
-		close(done)
-	}()
-	if err := writeVectorPartitionSystemFrameV1(clientConn, vectorPartitionOperationsWireRequestV1{SchemaVersion: 2}); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("blocked system response occupied its connection slot")
-	}
-}
-
-func TestVectorPartitionSystemClientPreservesWireTimeoutV1(t *testing.T) {
-	server, client := net.Pipe()
-	defer client.Close()
-	done := make(chan error, 1)
-	go func() {
-		defer server.Close()
-		var request vectorPartitionOperationsWireRequestV1
-		if err := readVectorPartitionSystemFrameV1(server, &request); err != nil {
-			done <- err
-			return
-		}
-		done <- writeVectorPartitionSystemFrameV1(server, vectorPartitionOperationsWireResponseV1{
-			SchemaVersion: 1, ErrorCode: public.ErrorDeadlineExceededV1, Error: "shard deadline exceeded",
-		})
-	}()
-	wireClient := &vectorPartitionOperationsTCPClientV1{conn: client, r: bufio.NewReader(client)}
-	_, timing, err := wireClient.callWithTiming(vectorPartitionOperationsWireRequestV1{SchemaVersion: 1, Operation: "search"})
-	var typed *public.ErrorV1
-	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &typed) || typed.Code != public.ErrorDeadlineExceededV1 {
-		t.Fatalf("wire timeout = %v", err)
-	}
-	if timing.EncodeNanos == 0 || timing.WriteNanos == 0 || timing.ReadNanos == 0 || timing.DecodeNanos == 0 || timing.TotalNanos == 0 || timing.RequestBytes == 0 || timing.ResponseBytes == 0 {
-		t.Fatalf("wire timing = %+v", timing)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -213,7 +164,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 	if node.ready.NodeConfigSHA256 != configSHA {
 		t.Fatalf("ready node config SHA = %q, want %q", node.ready.NodeConfigSHA256, configSHA)
 	}
-	if node.ready.PublicRoute != "vectorpartition.OperationsV1.Search" || !node.ready.ProductionTopology || node.ready.M8Loopback || node.ready.LogicalCPUs < 1 || node.ready.GOMAXPROCS < 1 || node.ready.GoMemoryLimit < 1 || len(node.ready.Groups) != 4 {
+	if node.ready.PublicRoute != nativewire.VectorPartitionRouteV1 || !node.ready.ProductionTopology || node.ready.M8Loopback || node.ready.LogicalCPUs < 1 || node.ready.GOMAXPROCS < 1 || node.ready.GoMemoryLimit < 1 || len(node.ready.Groups) != 4 {
 		t.Fatalf("ready evidence = %+v", node.ready)
 	}
 	for _, group := range node.ready.Groups {
@@ -302,8 +253,7 @@ func TestVectorPartitionSystemNodeSingleDaemonUsesProductionPublicRouteV1(t *tes
 			t.Fatalf("revoked document %q remained visible", deniedID)
 		}
 	}
-	node.publicServer.nodeConfigSHA256 = strings.Repeat("f", 64)
-	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, configSHA, queries, truth, 4, 4, 128, 2, 0, vectorPartitionSystemSearchStrictV1, 0, 0, snapshot); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
+	if _, err := vectorPartitionSystemBenchCell(t.Context(), node.ready.PublicEndpoint, strings.Repeat("f", 64), queries, truth, 4, 4, 128, 2, 0, vectorPartitionSystemSearchStrictV1, 0, 0, snapshot); err == nil || !strings.Contains(err.Error(), "live node config identity does not match checked topology") {
 		t.Fatalf("mismatched live topology error = %v", err)
 	}
 	if err := node.Close(); err != nil {
@@ -416,7 +366,7 @@ func TestVectorPartitionSystemTopologyRequiresDistinctProductionRootsV1(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.TopologyIdentitySHA256 == "" || evidence.PublicRoute != "vectorpartition.OperationsV1.Search" || evidence.M8Loopback || len(evidence.Nodes) != 4 {
+	if evidence.TopologyIdentitySHA256 == "" || evidence.PublicRoute != nativewire.VectorPartitionRouteV1 || evidence.M8Loopback || len(evidence.Nodes) != 4 {
 		t.Fatalf("topology evidence = %+v", evidence)
 	}
 	for index, node := range evidence.Nodes {

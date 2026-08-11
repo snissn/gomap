@@ -336,6 +336,18 @@ func commandCounterName(id iwire.CommandID) string {
 		return "explain"
 	case iwire.CommandStats:
 		return "stats"
+	case iwire.CommandVectorStatus:
+		return "vector_status"
+	case iwire.CommandVectorSearchStrict:
+		return "vector_search_strict"
+	case iwire.CommandVectorSearchFast:
+		return "vector_search_fast"
+	case iwire.CommandVectorPinSearchSnapshot:
+		return "vector_pin_search_snapshot"
+	case iwire.CommandVectorSearchPinned:
+		return "vector_search_pinned"
+	case iwire.CommandVectorClosePinnedSnapshot:
+		return "vector_close_pinned_snapshot"
 	default:
 		return ""
 	}
