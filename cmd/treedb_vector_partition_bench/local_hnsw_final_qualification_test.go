@@ -4,9 +4,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
@@ -70,6 +73,61 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 	}, func(string) error { return nil }, io.Discard)
 	if err != nil || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
 		t.Fatalf("err=%v calls=%d", err, len(got))
+	}
+}
+
+func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	truth := make([][]m8CanonicalResultV1, localHNSWFinalQueryCountV1)
+	outcome := m8ProductionRowOutcomesV1{
+		Probes:                       2,
+		EfSearch:                     128,
+		Concurrency:                  1,
+		Status:                       "pass",
+		Samples:                      localHNSWFinalQueryCountV1,
+		TopKIDs:                      make([][]string, localHNSWFinalQueryCountV1),
+		TopKScoreBits:                make([][]uint32, localHNSWFinalQueryCountV1),
+		TotalNanos:                   make([]uint64, localHNSWFinalQueryCountV1),
+		ExactRepresentativeTruthHits: make([]uint8, localHNSWFinalQueryCountV1),
+	}
+	for query := range truth {
+		truth[query] = make([]m8CanonicalResultV1, localHNSWFinalTopKV1)
+		outcome.TopKIDs[query] = make([]string, localHNSWFinalTopKV1)
+		outcome.TopKScoreBits[query] = make([]uint32, localHNSWFinalTopKV1)
+		outcome.TotalNanos[query] = 1
+		outcome.ExactRepresentativeTruthHits[query] = localHNSWFinalTopKV1
+		for rank := range truth[query] {
+			id := "doc-" + strconv.Itoa(query) + "-" + strconv.Itoa(rank)
+			truth[query][rank].ID = id
+			outcome.TopKIDs[query][rank] = id
+		}
+	}
+	expected := localHNSWFinalQualificationRunV1{Corpus: localHNSWFinalQualificationCorpus250KV1, localHNSWFinalQualificationCellV1: localHNSWFinalQualificationCellV1{Variant: localHNSWFinalQualificationBaselineV1, Probes: 2, Concurrency: 1}}
+	report := m8ProductionReportV1{
+		ExecutionID:           "m8-production-test",
+		MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{SHA256: digest},
+		Variant:               &m3VariantDescriptorV1{PartitionHNSWM: 16, IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}},
+		Rows:                  []m8ProductionRowV1{{Probes: 2, EfSearch: 128, Concurrency: 1, Samples: localHNSWFinalQueryCountV1, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1}}},
+	}
+	transcript := m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{outcome}}
+	started := time.Unix(1, 0).UTC()
+	child, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, digest, truth, started, started.Add(time.Second))
+	if err != nil || child.Counts.P2HitSlots != 10000 || child.Counts.RoutingMissSlots != 0 || child.SourceIdentitySHA256 != digest || len(child.Timing.ResultSHA256) != localHNSWFinalQueryCountV1 {
+		t.Fatalf("child=%+v err=%v", child, err)
+	}
+
+	transcript.Outcomes[0].ExactRepresentativeTruthHits = nil
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, digest, truth, started, started.Add(time.Second)); err == nil {
+		t.Fatal("accepted missing routing outcomes")
+	}
+	transcript.Outcomes[0].ExactRepresentativeTruthHits = outcome.ExactRepresentativeTruthHits
+	transcript.Outcomes[0].ExactRepresentativeTruthHits[0] = localHNSWFinalTopKV1 + 1
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, digest, truth, started, started.Add(time.Second)); err == nil {
+		t.Fatal("accepted routing hit above top-k")
+	}
+	transcript.Outcomes[0].ExactRepresentativeTruthHits[0] = localHNSWFinalTopKV1 - 1
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, digest, truth, started, started.Add(time.Second)); err == nil {
+		t.Fatal("accepted routing aggregate mismatch")
 	}
 }
 

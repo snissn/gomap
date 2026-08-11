@@ -141,15 +141,16 @@ type m8ProductionMeasurementTranscriptV1 struct {
 // rather than another self-reported recall aggregate. Scores are deliberately
 // omitted: canonical recall is an ID-set metric.
 type m8ProductionRowOutcomesV1 struct {
-	Overlap       float64    `json:"overlap"`
-	Probes        int        `json:"probes"`
-	EfSearch      int        `json:"ef_search"`
-	Concurrency   int        `json:"concurrency"`
-	Status        string     `json:"status"`
-	Samples       int        `json:"samples"`
-	TopKIDs       [][]string `json:"top_k_document_ids"`
-	TopKScoreBits [][]uint32 `json:"top_k_score_bits"`
-	TotalNanos    []uint64   `json:"total_nanos"`
+	Overlap                      float64    `json:"overlap"`
+	Probes                       int        `json:"probes"`
+	EfSearch                     int        `json:"ef_search"`
+	Concurrency                  int        `json:"concurrency"`
+	Status                       string     `json:"status"`
+	Samples                      int        `json:"samples"`
+	TopKIDs                      [][]string `json:"top_k_document_ids"`
+	TopKScoreBits                [][]uint32 `json:"top_k_score_bits"`
+	TotalNanos                   []uint64   `json:"total_nanos"`
+	ExactRepresentativeTruthHits []uint8    `json:"exact_representative_truth_hits,omitempty"`
 }
 
 // m8ProductionAttributionV1 keeps each lossy boundary visible. Recall is
@@ -368,6 +369,7 @@ type m8MeasuredCellV1 struct {
 	probes, efSearch int
 	results          [][]m8CanonicalResultV1
 	durations        []uint64
+	routingHits      []uint8
 }
 
 type m8ProductionResourceObservedMaximaV1 struct {
@@ -616,11 +618,16 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 				attribution[m8AttributionKeyV1(probes, efSearch)] = cell
 			}
 		}
-		for _, measured := range measuredCells {
+		for i := range measuredCells {
+			measured := &measuredCells[i]
 			cell, ok := attribution[m8AttributionKeyV1(measured.probes, measured.efSearch)]
 			if !ok {
 				return fmt.Errorf("missing M8 attribution probes=%d ef=%d", measured.probes, measured.efSearch)
 			}
+			if len(cell.RoutingHits) != report.Rows[measured.rowIndex].Samples {
+				return fmt.Errorf("missing M8 routing outcomes probes=%d ef=%d", measured.probes, measured.efSearch)
+			}
+			measured.routingHits = append([]uint8(nil), cell.RoutingHits...)
 			if err := m8AttachAttributionV1(&report.Rows[measured.rowIndex], cell, measured.results); err != nil {
 				return fmt.Errorf("attach M8 attribution probes=%d ef=%d: %w", measured.probes, measured.efSearch, err)
 			}
@@ -874,7 +881,7 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 		outcome := m8ProductionRowOutcomeIdentityV1(row)
 		if row.Status == "pass" || row.Status == "fail" {
 			measured, ok := byRow[i]
-			if !ok || len(measured.results) != row.Samples || len(measured.durations) != row.Samples {
+			if !ok || len(measured.results) != row.Samples || len(measured.durations) != row.Samples || (measured.routingHits != nil && len(measured.routingHits) != row.Samples) {
 				return nil, errors.New("M8 measurement transcript has incomplete query outcomes")
 			}
 			outcome.TopKIDs = make([][]string, len(measured.results))
@@ -887,6 +894,9 @@ func m8ProductionMeasurementTranscriptOutcomesV1(report m8ProductionReportV1, me
 				}
 			}
 			outcome.TotalNanos = append([]uint64(nil), measured.durations...)
+			if measured.routingHits != nil {
+				outcome.ExactRepresentativeTruthHits = append([]uint8(nil), measured.routingHits...)
+			}
 		} else if _, ok := byRow[i]; ok && row.Status != "candidate_coverage_shortfall" {
 			return nil, errors.New("M8 measurement transcript has outcomes for unmeasured row")
 		} else {
@@ -999,6 +1009,21 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 					return errors.New("M8 measurement transcript has zero timing sample")
 				}
 			}
+			if len(outcome.ExactRepresentativeTruthHits) != 0 {
+				if len(outcome.ExactRepresentativeTruthHits) != row.Samples {
+					return errors.New("M8 measurement transcript routing hit sample count mismatch")
+				}
+				var hits uint64
+				for _, hit := range outcome.ExactRepresentativeTruthHits {
+					if int(hit) > report.Config.TopK {
+						return errors.New("M8 measurement transcript routing hit exceeds top-k")
+					}
+					hits += uint64(hit)
+				}
+				if math.Abs(row.Attribution.ExactRepresentativeRecallAtK-float64(hits)/float64(row.Samples*report.Config.TopK)) > 1e-12 {
+					return errors.New("M8 measurement transcript routing hits disagree with attribution")
+				}
+			}
 			p50, p95, p99 := m8PercentileV1(outcome.TotalNanos, 50), m8PercentileV1(outcome.TotalNanos, 95), m8PercentileV1(outcome.TotalNanos, 99)
 			var maximum uint64
 			for _, duration := range outcome.TotalNanos {
@@ -1014,7 +1039,7 @@ func m8ValidateProductionMeasurementTranscriptOutcomesV1(transcript m8Production
 			if row.ElapsedNanos < minimumElapsed {
 				return errors.New("M8 measurement transcript timings exceed retained elapsed time")
 			}
-		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TopKScoreBits == nil || len(outcome.TopKScoreBits) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 {
+		} else if outcome.TopKIDs == nil || len(outcome.TopKIDs) != 0 || outcome.TopKScoreBits == nil || len(outcome.TopKScoreBits) != 0 || outcome.TotalNanos == nil || len(outcome.TotalNanos) != 0 || len(outcome.ExactRepresentativeTruthHits) != 0 {
 			return errors.New("M8 measurement transcript has outcomes for shortfall or unsupported row")
 		}
 	}
@@ -2243,7 +2268,8 @@ type m8AttributionCellV1 struct {
 	Evidence m8ProductionAttributionV1
 	// Local is the approximate route's local-HNSW result, matching the measured
 	// coordinator request. Exact-local recall remains separately in Evidence.
-	Local [][]m8CanonicalResultV1
+	Local       [][]m8CanonicalResultV1
+	RoutingHits []uint8
 }
 
 type m8MembershipOracleRecallV1 struct {
@@ -2647,6 +2673,7 @@ func m8BuildAttributionV1(ctx context.Context, assets *m8ProductionMultiGroupAss
 		if err != nil {
 			return cell, err
 		}
+		cell.RoutingHits = append(cell.RoutingHits, uint8(m8IDHitCountV1(m8CanonicalIDsV1(truth[i]), m8CanonicalIDsV1(exactResults))))
 		var approximateResults []m8CanonicalResultV1
 		if cell.Evidence.ApproximateRouterPartitionCoverageComplete {
 			approximateResults, err = harness.search(ctx, query, approximatePartitions[i], topK, efSearch, true)
@@ -3777,6 +3804,10 @@ func m8IDRecallV1(want, got []string) float64 {
 	if len(want) == 0 {
 		return 0
 	}
+	return float64(m8IDHitCountV1(want, got)) / float64(len(want))
+}
+
+func m8IDHitCountV1(want, got []string) int {
 	seen := make(map[string]bool, len(got))
 	for _, id := range got {
 		seen[id] = true
@@ -3787,7 +3818,7 @@ func m8IDRecallV1(want, got []string) float64 {
 			found++
 		}
 	}
-	return float64(found) / float64(len(want))
+	return found
 }
 
 func m8EqualIDsV1(want, got []string) bool {

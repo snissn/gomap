@@ -245,6 +245,49 @@ func localHNSWFinalQualificationChildReportV1(dir string) (m8ProductionReportV1,
 	return report, hex.EncodeToString(digest[:]), nil
 }
 
+func localHNSWFinalQualificationChildFromTranscriptV1(expected localHNSWFinalQualificationRunV1, report m8ProductionReportV1, transcript m8ProductionMeasurementTranscriptV1, reportSHA256 string, truth [][]m8CanonicalResultV1, startedAt, endedAt time.Time) (localHNSWFinalQualificationChildV1, error) {
+	var out localHNSWFinalQualificationChildV1
+	if len(report.Rows) != 1 || len(transcript.Outcomes) != 1 || len(truth) != localHNSWFinalQueryCountV1 || !localHNSWAttributionSHA256V1(reportSHA256) || report.Variant == nil || startedAt.IsZero() || !endedAt.After(startedAt) {
+		return out, errors.New("invalid local HNSW final qualification child evidence")
+	}
+	row, outcome := report.Rows[0], transcript.Outcomes[0]
+	if row.Probes != expected.Probes || row.Concurrency != expected.Concurrency || row.EfSearch != 128 || row.Samples != localHNSWFinalQueryCountV1 || len(outcome.TopKIDs) != localHNSWFinalQueryCountV1 || len(outcome.TopKScoreBits) != localHNSWFinalQueryCountV1 || len(outcome.ExactRepresentativeTruthHits) != localHNSWFinalQueryCountV1 || transcript.ExecutionID != report.ExecutionID || !localHNSWAttributionSHA256V1(report.MeasurementTranscript.SHA256) {
+		return out, errors.New("invalid local HNSW final qualification child row")
+	}
+	var finalHits, routingHits uint64
+	digests := make([]string, len(outcome.TopKIDs))
+	for i, ids := range outcome.TopKIDs {
+		if len(ids) != localHNSWFinalTopKV1 || int(outcome.ExactRepresentativeTruthHits[i]) > localHNSWFinalTopKV1 {
+			return out, errors.New("invalid local HNSW final qualification child outcome")
+		}
+		if len(outcome.TopKScoreBits[i]) != len(ids) {
+			return out, errors.New("invalid local HNSW final qualification child score outcome")
+		}
+		finalHits += uint64(m8IDHitCountV1(m8CanonicalIDsV1(truth[i]), ids))
+		routingHits += uint64(outcome.ExactRepresentativeTruthHits[i])
+		raw, _ := json.Marshal(struct {
+			IDs    []string
+			Scores []uint32
+		}{ids, outcome.TopKScoreBits[i]})
+		sum := sha256.Sum256(raw)
+		digests[i] = hex.EncodeToString(sum[:])
+	}
+	if math.Abs(row.Attribution.ExactRepresentativeRecallAtK-float64(routingHits)/float64(localHNSWFinalQueryCountV1*localHNSWFinalTopKV1)) > 1e-12 {
+		return out, errors.New("local HNSW final qualification routing-hit mismatch")
+	}
+	variant := expected.Variant
+	if (variant == localHNSWFinalQualificationBaselineV1 && (report.Variant.PartitionHNSWM != 16)) || (variant == localHNSWFinalQualificationCandidateV1 && report.Variant.PartitionHNSWM != 18) {
+		return out, errors.New("local HNSW final qualification variant mismatch")
+	}
+	out = localHNSWFinalQualificationChildV1{localHNSWFinalQualificationRunV1: expected, ReportSHA256: reportSHA256, TranscriptSHA256: report.MeasurementTranscript.SHA256, SourceIdentitySHA256: report.Variant.Source.Checksum, VariantIdentitySHA256: report.Variant.IndexDefinitionDigest, M: report.Variant.PartitionHNSWM, EfConstruction: map[string]int{localHNSWFinalQualificationBaselineV1: 128, localHNSWFinalQualificationCandidateV1: 256}[variant], StartedAt: startedAt, EndedAt: endedAt, Counts: localHNSWFinalQualificationCountsV1{QueryCount: 1000, TopK: 10, RoutingMissSlots: uint64(10000) - routingHits}, Timing: localHNSWFinalQualificationTimingCellV1{localHNSWFinalQualificationCellV1: expected.localHNSWFinalQualificationCellV1, QPS: row.QPS, P95Nanos: row.P95Nanos, ResultSHA256: digests}}
+	if expected.Probes == 2 {
+		out.Counts.P2HitSlots = finalHits
+	} else {
+		out.Counts.P16HitSlots = finalHits
+	}
+	return out, nil
+}
+
 func localHNSWFinalQualificationReportValidV1(report localHNSWFinalQualificationReportV1) error {
 	expected := localHNSWFinalQualificationRunsV1()
 	if report.Schema != localHNSWFinalQualificationSchemaV1 || report.ResultKind != "local_hnsw_final_qualification_v1" || report.Status != "valid" || len(report.Children) != len(expected) {
