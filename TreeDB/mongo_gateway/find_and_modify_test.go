@@ -232,7 +232,7 @@ func TestFindAndModifyOversizedExactNewAndUpsertRejectBeforeMutationOrCreate(t *
 	}
 }
 
-func TestFindAndModifyNonExactOversizeOutcomeIsUncertainAfterPublication(t *testing.T) {
+func TestFindAndModifyNonExactOversizeResponseRejectsBeforePublication(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -244,14 +244,11 @@ func TestFindAndModifyNonExactOversizeOutcomeIsUncertainAfterPublication(t *test
 	assertOK(t, serveCommand(t, server, 1, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "n", Value: int32(0)}, {Key: "payload", Value: strings.Repeat("x", 1024)}}}}, {Key: "$db", Value: "app"}}))
 	server.MaxMessageLength = mongoWriteResponseMinimumBytes
 
-	// A filter selector cannot safely predict its final natural-order image.
-	// Its non-idempotent mutation publishes, but the handler must make that
-	// uncertainty explicit rather than fabricate BadValue/no-op.
+	// A filter selector cannot predict its final natural-order image before
+	// selection, so response admission runs in the selected document's
+	// conditional update callback and rejects before publication.
 	response := serveCommand(t, server, 2, bson.D{{Key: "findAndModify", Value: "users"}, {Key: "query", Value: bson.D{{Key: "n", Value: int32(0)}}}, {Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, response, "ShutdownInProgress")
-	if code, ok := bson.Raw(response).Lookup("code").Int32OK(); !ok || code != commandCodeShutdownInProgress {
-		t.Fatalf("code=%d ok=%v want %d", code, ok, commandCodeShutdownInProgress)
-	}
+	assertCommandError(t, response, "BadValue")
 	msg, err := wire.AppendMsgMessage(nil, 1, 0, 0, response)
 	if err != nil {
 		t.Fatal(err)
@@ -272,8 +269,8 @@ func TestFindAndModifyNonExactOversizeOutcomeIsUncertainAfterPublication(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || got != 1 {
-		t.Fatalf("uncertain response did not publish n=%d ok=%v", got, ok)
+	if got, ok := bson.Raw(stored).Lookup("n").Int32OK(); !ok || got != 0 {
+		t.Fatalf("oversize response published n=%d ok=%v", got, ok)
 	}
 }
 
