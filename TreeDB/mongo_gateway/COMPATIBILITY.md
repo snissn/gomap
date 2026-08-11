@@ -65,6 +65,7 @@ bridge-only regex/code limitations.
 | query | bounded BSON v2 compound and descending index planning | supported subset | `query.compound-descending-bson-v2-planner` |
 | query | top-level $or expressions | supported subset | `query.top-level-or-expressions` |
 | query | projection, sort, skip, and limit | supported subset | `query.projection-sort-skip-and-limit` |
+| query | bounded $ne/$nin/$exists, field $not, and top-level $nor | supported subset | `query.negative-existence-and-top-level-nor` |
 | cursor | getMore and killCursors | supported | `cursor.getmore-and-killcursors` |
 | read concern | local/available readConcern maps to local_stale | supported subset | `read-concern.local-available-readconcern-maps-to-local-stale` |
 | read concern gap | majority, linearizable, and snapshot readConcern | rejected | `read-concern-gap.majority-linearizable-and-snapshot-readconcern` |
@@ -78,7 +79,7 @@ bridge-only regex/code limitations.
 | session | logical session handshake and endSessions | supported subset | `session.logical-session-handshake-and-endsessions` |
 | metadata | createIndexes, listIndexes, and dropIndexes (ordered BSON scalar v2: one to four components, asc/desc) | supported subset | `metadata.createindexes-listindexes-and-dropindexes` |
 | document | native BSON storage mode | supported subset | `document.native-bson-storage-mode` |
-| query gap | dotted projection | rejected | `query-gap.dotted-projection` |
+| query | bounded document-only dotted projection and sort | supported subset | `query.bounded-document-only-dotted-projection-and-sort` |
 | update subset | natural-order arbitrary-filter update, delete, and findAndModify | supported subset | `update-subset.natural-order-arbitrary-filter-update-delete-and-findandmodify` |
 | update | exact _id upsert | supported subset | `update.exact-id-upsert` |
 | crud | bounded multi insert, update, and delete with ordered or unordered indexed batch errors | supported subset | `crud.bounded-multi-write-and-batch-ordering` |

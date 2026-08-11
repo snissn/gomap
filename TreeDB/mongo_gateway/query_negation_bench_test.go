@@ -9,8 +9,8 @@ import (
 )
 
 // BenchmarkMongoNegativeDottedQueryShapes records the four bounded #4066
-// shapes. Go reports ns/op, B/op and allocs/op; explain tests pin candidates
-// and materialized bytes independently of timing noise.
+// shapes. Each sub-benchmark first captures the exact explain counters it
+// asserts, then reports them beside Go's ns/op, B/op and allocs/op metrics.
 func BenchmarkMongoNegativeDottedQueryShapes(b *testing.B) {
 	server := newMongoCompatibilityMatrixServer(b)
 	server.MaxFindScanDocuments = 256
@@ -28,6 +28,7 @@ func BenchmarkMongoNegativeDottedQueryShapes(b *testing.B) {
 	}
 	for name, spec := range shapes {
 		b.Run(name, func(b *testing.B) {
+			metrics := benchmarkMongoExplainMetrics(b, server, spec)
 			cmd := mustDocument(b, spec)
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -39,6 +40,34 @@ func BenchmarkMongoNegativeDottedQueryShapes(b *testing.B) {
 				benchmarkMongoReadCommandSink = wire.Document(out)
 			}
 			b.ReportMetric(256, "fixture_docs")
+			b.ReportMetric(float64(metrics.returned), "returned_docs")
+			b.ReportMetric(float64(metrics.examined), "candidate_docs")
+			b.ReportMetric(float64(metrics.materialized), "materialized_docs")
+			b.ReportMetric(float64(metrics.materializedBytes), "materialized_bytes")
 		})
+	}
+}
+
+type mongoBenchmarkExplainMetrics struct {
+	returned, examined, materialized, materializedBytes int64
+}
+
+func benchmarkMongoExplainMetrics(b *testing.B, server *Server, command bson.D) mongoBenchmarkExplainMetrics {
+	b.Helper()
+	response := serveCommand(b, server, 3, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(b, response)
+	stats := bson.Raw(response).Lookup("executionStats").Document()
+	lookup := func(name string) int64 {
+		value, ok := stats.Lookup(name).Int64OK()
+		if !ok || value < 0 {
+			b.Fatalf("explain %s=%d ok=%v: %s", name, value, ok, response)
+		}
+		return value
+	}
+	return mongoBenchmarkExplainMetrics{
+		returned:          lookup("nReturned"),
+		examined:          lookup("candidateDocumentsExamined"),
+		materialized:      lookup("candidateDocumentsMaterialized"),
+		materializedBytes: lookup("candidateMaterializedBytes"),
 	}
 }

@@ -258,6 +258,23 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
+			capabilityID:   "query.negative-existence-and-top-level-nor",
+			expectedStatus: MongoCapabilitySupportedSubset,
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 62, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{
+						{Key: "active", Value: bson.D{{Key: "$exists", Value: true}}},
+						{Key: "age", Value: bson.D{{Key: "$ne", Value: nil}}},
+						{Key: "score", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$gt", Value: 3.0}}}}},
+						{Key: "$nor", Value: bson.A{bson.D{{Key: "city", Value: bson.D{{Key: "$nin", Value: bson.A{"hnl"}}}}}}},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, resp), []string{"u1", "u2"})
+			},
+		},
+		{
 			capabilityID:   "query.projection-sort-skip-and-limit",
 			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
@@ -556,15 +573,22 @@ func mongoCompatibilityMatrixProbes() []mongoCompatibilityMatrixProbe {
 			},
 		},
 		{
-			capabilityID:   "query-gap.dotted-projection",
-			expectedStatus: MongoCapabilityRejected,
+			capabilityID:   "query.bounded-document-only-dotted-projection-and-sort",
+			expectedStatus: MongoCapabilitySupportedSubset,
 			probe: func(t *testing.T, server *Server) {
+				assertOK(t, serveCommand(t, server, 17, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "dotted"}, {Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}, {Key: "age", Value: int32(37)}}}}}}, {Key: "$db", Value: "app"}}))
 				resp := serveCommand(t, server, 18, bson.D{
 					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "dotted"}}},
 					{Key: "projection", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
+					{Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
 					{Key: "$db", Value: "app"},
 				})
-				assertCommandError(t, resp, "BadValue")
+				assertOK(t, resp)
+				batch := cursorFirstBatch(t, resp)
+				if len(batch) != 1 || batch[0].Lookup("profile", "name").StringValue() != "Ada" || batch[0].Lookup("profile", "age").Type != 0 {
+					t.Fatalf("dotted projection result=%v want reconstructed profile.name only", batch)
+				}
 			},
 		},
 		{
