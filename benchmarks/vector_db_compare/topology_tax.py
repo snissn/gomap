@@ -88,9 +88,9 @@ def _node_config_identity(value: dict[str, Any], node: dict[str, Any]) -> str:
     return _go_json_sha256(config)
 
 
-def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) -> tuple[str, list[str]]:
+def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int, public_route: str = "vectorpartition.OperationsV1.Search") -> tuple[str, list[str]]:
     expected_keys = {"schema_version", "result_kind", "assembly", "topology", "nodes", "dataset_directory", "endpoints", "group_applied_indexes", "public_route", "m8_loopback", "topology_identity_sha256"}
-    _require(set(value) == expected_keys and value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_topology_v1" and value.get("assembly") == "production_public_v1" and value.get("topology") == topology and value.get("public_route") == "vectorpartition.OperationsV1.Search" and value.get("m8_loopback") is False, "system-bench topology artifact structure is invalid")
+    _require(set(value) == expected_keys and value.get("schema_version") == 1 and value.get("result_kind") == "vector_partition_system_topology_v1" and value.get("assembly") == "production_public_v1" and value.get("topology") == topology and value.get("public_route") == public_route and value.get("m8_loopback") is False, "system-bench topology artifact structure is invalid")
     endpoints, applied, nodes = value.get("endpoints"), value.get("group_applied_indexes"), value.get("nodes")
     _require(isinstance(value.get("dataset_directory"), str) and value["dataset_directory"], "system-bench topology dataset directory is invalid")
     _require(isinstance(endpoints, dict) and len(endpoints) == 4 and all(isinstance(key, str) and key and isinstance(endpoint, str) and endpoint for key, endpoint in endpoints.items()), "system-bench topology endpoints are invalid")
@@ -143,13 +143,13 @@ def _topology_identity(value: dict[str, Any], topology: str, want_nodes: int) ->
     canonical = {
         "schema_version": 1, "result_kind": "vector_partition_system_topology_v1", "assembly": "production_public_v1", "topology": topology,
         "nodes": canonical_nodes, "dataset_directory": value["dataset_directory"], "endpoints": {key: endpoints[key] for key in sorted(endpoints)},
-        "group_applied_indexes": {key: applied[key] for key in sorted(applied)}, "public_route": "vectorpartition.OperationsV1.Search", "m8_loopback": False,
+        "group_applied_indexes": {key: applied[key] for key in sorted(applied)}, "public_route": public_route, "m8_loopback": False,
         "topology_identity_sha256": "",
     }
     return _go_json_sha256(canonical), database_roots
 
 
-def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: dict[str, Any], source_revision: str, executable_sha256: str) -> str:
+def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: dict[str, Any], source_revision: str, executable_sha256: str, public_route: str = "vectorpartition.OperationsV1.Search") -> str:
     recorded = Path(node["ready_path"])
     _require(recorded.name == "ready.json" and recorded.parent == Path(node["state_directory"]), "system-bench readiness path is invalid")
     ready_path = topology_path.parent / Path(node["state_directory"]).name / recorded.name
@@ -174,7 +174,7 @@ def _ready_identity(topology_path: Path, topology_value: dict[str, Any], node: d
         "system-bench readiness identity is invalid",
     )
     _require(
-        ready.get("public_route") == "vectorpartition.OperationsV1.Search" and ready.get("production_topology") is True and
+        ready.get("public_route") == public_route and ready.get("production_topology") is True and
         ready.get("m8_loopback") is False and ready.get("lifecycle_state") == "active",
         "system-bench readiness production route is invalid",
     )
