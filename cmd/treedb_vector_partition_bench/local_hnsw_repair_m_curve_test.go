@@ -85,6 +85,14 @@ func TestLocalHNSWRepairMCurveV1(t *testing.T) {
 	if disposition, err := localHNSWRepairMCurveDispositionV1(accepted); err != nil || disposition != "no_point_passes_local_quality" {
 		t.Fatalf("hit-slot disposition=%q err=%v", disposition, err)
 	}
+	if !localHNSWRepairMCurveSlotMeansV1(points[0].Quality) {
+		t.Fatal("expected count-bound means")
+	}
+	malformed := points[0].Quality
+	malformed.P2Recall.Mean += .01
+	if localHNSWRepairMCurveSlotMeansV1(malformed) {
+		t.Fatal("accepted malformed count-bound mean")
+	}
 	if err := run([]string{"local-hnsw-repair-m-curve"}, &strings.Builder{}); err == nil {
 		t.Fatal("expected missing frozen inputs rejection")
 	}

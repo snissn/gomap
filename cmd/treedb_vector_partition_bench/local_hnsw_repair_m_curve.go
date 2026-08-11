@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -82,6 +83,19 @@ func localHNSWRepairMCurveHitSlotGapV1(left, right uint64) uint64 {
 	return right - left
 }
 
+func localHNSWRepairMCurveSlotMeansV1(cell localHNSWRepairEFCurveCellV1) bool {
+	if cell.QueryCount < 1 {
+		return false
+	}
+	slots := uint64(cell.QueryCount) * 10
+	if cell.RoutingMissSlots > slots || cell.P2HitSlots > slots || cell.P16HitSlots > slots {
+		return false
+	}
+	return math.Abs(cell.RoutingRecall.Mean-float64(slots-cell.RoutingMissSlots)/float64(slots)) <= 1e-12 &&
+		math.Abs(cell.P2Recall.Mean-float64(cell.P2HitSlots)/float64(slots)) <= 1e-12 &&
+		math.Abs(cell.P16Recall.Mean-float64(cell.P16HitSlots)/float64(slots)) <= 1e-12
+}
+
 func validateLocalHNSWRepairMCurveReportV1(report localHNSWRepairMCurveReportV1) error {
 	if report.Schema != localHNSWRepairMCurveSchemaV1 || report.ResultKind != "local_hnsw_repair_m_curve_v1" || report.Status != "valid" || report.Provenance.BaseSHA != localHNSWAttributionSourceLockV1 || report.Provenance.SourceDirty || !validLowerSHA(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.TopK != 10 || report.EFSearch != 128 || !slices.Equal(report.ProbeCounts, []int{2, 16}) || len(report.Points) != len(localHNSWRepairMCurvePointsV1) || !localHNSWAttributionFixtureV1(report.Inputs.Fixture) || report.Inputs.DatasetManifest.SHA256 != localHNSWAttributionFixtureManifestSHA256V1 || report.Inputs.Descriptor.SHA256 != localHNSWAttributionDescriptorSHA256V1 || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.HoldoutStatus != "manifest_validated_query_outcomes_unopened" || report.Inputs.TruthStatus != "sha256_only_not_decoded" || report.Source.Partitions != 16 || report.Source.SourceRows != 250000 || len(report.Source.PartitionLoads) != 16 {
 		return errors.New("invalid local HNSW repair M report")
@@ -96,7 +110,7 @@ func validateLocalHNSWRepairMCurveReportV1(report localHNSWRepairMCurveReportV1)
 	checksums := map[string]struct{}{}
 	for i, point := range report.Points {
 		want := localHNSWRepairMCurvePointsV1[i]
-		if point.M != want.M || point.EfConstruction != want.EfConstruction || point.Build.Variant != string(want.Variant) || point.Build.VariantIdentity == "" || point.Build.Partitions != 16 || point.Build.PackBytes == 0 || point.Graph.Rows != 300000 || point.Graph.CombinedReachableRows != 300000 || point.Graph.NativeTraversalRoots < 16 || point.Graph.AuxiliaryEdges < 2*(point.Graph.NativeTraversalRoots-16) || point.Graph.AuxiliaryCSRBytes != 8*(point.Graph.Rows+16)+4*point.Graph.AuxiliaryEdges || point.Graph.AuxiliaryMaxDegree > 9 || !localHNSWAttributionSHA256V1(point.DefinitionDigest) || !localHNSWAttributionSHA256V1(point.PackMembershipSHA256) || !localHNSWAttributionSHA256V1(point.PackChecksumsSHA256) || point.Quality.EFSearch != 128 || point.Quality.QueryCount != 806 || !localHNSWAttributionSHA256V1(point.Quality.RoutesSHA256) || point.Quality.P2Work.Candidates == 0 || point.Quality.P16Work.Candidates == 0 || point.Quality.P2Work.NativeEdges == 0 || point.Quality.P16Work.NativeEdges == 0 || !localHNSWAttributionFiniteRecallV1(point.Quality.P2Recall.Mean) || !localHNSWAttributionFiniteRecallV1(point.Quality.P16Recall.Mean) || !localHNSWAttributionFiniteRecallV1(point.Quality.RoutingRecall.Mean) || point.Quality.RoutingMissSlots > uint64(point.Quality.QueryCount*10) || point.Quality.P2HitSlots > uint64(point.Quality.QueryCount*10) || point.Quality.P16HitSlots > uint64(point.Quality.QueryCount*10) {
+		if point.M != want.M || point.EfConstruction != want.EfConstruction || point.Build.Variant != string(want.Variant) || point.Build.VariantIdentity == "" || point.Build.Partitions != 16 || point.Build.PackBytes == 0 || point.Graph.Rows != 300000 || point.Graph.CombinedReachableRows != 300000 || point.Graph.NativeTraversalRoots < 16 || point.Graph.AuxiliaryEdges < 2*(point.Graph.NativeTraversalRoots-16) || point.Graph.AuxiliaryCSRBytes != 8*(point.Graph.Rows+16)+4*point.Graph.AuxiliaryEdges || point.Graph.AuxiliaryMaxDegree > 9 || !localHNSWAttributionSHA256V1(point.DefinitionDigest) || !localHNSWAttributionSHA256V1(point.PackMembershipSHA256) || !localHNSWAttributionSHA256V1(point.PackChecksumsSHA256) || point.Quality.EFSearch != 128 || point.Quality.QueryCount != 806 || !localHNSWAttributionSHA256V1(point.Quality.RoutesSHA256) || point.Quality.P2Work.Candidates == 0 || point.Quality.P16Work.Candidates == 0 || point.Quality.P2Work.NativeEdges == 0 || point.Quality.P16Work.NativeEdges == 0 || !localHNSWAttributionFiniteRecallV1(point.Quality.P2Recall.Mean) || !localHNSWAttributionFiniteRecallV1(point.Quality.P16Recall.Mean) || !localHNSWAttributionFiniteRecallV1(point.Quality.RoutingRecall.Mean) || !localHNSWRepairMCurveSlotMeansV1(point.Quality) {
 			return errors.New("invalid local HNSW repair M point")
 		}
 		if routes != "" && routes != point.Quality.RoutesSHA256 {
