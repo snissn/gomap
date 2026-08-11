@@ -203,6 +203,45 @@ func TestDiagnosticsFastFindErrorCountsAsFailedWithoutNamespace(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsRejectedMoreToComeWriteCountsAsFailedWithoutNamespace(t *testing.T) {
+	server := NewServer()
+	request, err := wire.AppendMsgMessage(nil, 6245, 0, wire.MsgFlagMoreToCome, mustDocument(t, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "rejected"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := &readWriter{r: bytes.NewReader(request)}
+	if err := server.ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne rejected moreToCome write: %v", err)
+	}
+	if rw.w.Len() != 0 {
+		t.Fatalf("rejected moreToCome response bytes=%d want 0", rw.w.Len())
+	}
+	_, commands, namespaces, _, _ := server.diagnosticsSnapshot()
+	metric, ok := commands["insert"]
+	if !ok || metric.Count != 1 || metric.Errors != 1 {
+		t.Fatalf("insert metric=%+v present=%v", metric, ok)
+	}
+	if len(namespaces) != 0 {
+		t.Fatalf("rejected moreToCome write recorded namespace metrics: %+v", namespaces)
+	}
+}
+
+func TestDiagnosticCommandNamespaceExcludesUserManagementArguments(t *testing.T) {
+	for _, name := range []string{"createUser", "updateUser", "dropUser", "usersInfo"} {
+		command := mustDocument(t, bson.D{{Key: name, Value: "alice"}, {Key: "$db", Value: "admin"}})
+		if namespace := diagnosticCommandNamespace(name, command); namespace != "" {
+			t.Fatalf("%s namespace=%q want empty", name, namespace)
+		}
+	}
+	if namespace := diagnosticCommandNamespace("insert", mustDocument(t, bson.D{{Key: "insert", Value: "users"}, {Key: "$db", Value: "app"}})); namespace != "app.users" {
+		t.Fatalf("insert namespace=%q want app.users", namespace)
+	}
+}
+
 func TestDiagnosticsCommandArgumentValidation(t *testing.T) {
 	server := NewServer()
 	for requestID, command := range []bson.D{

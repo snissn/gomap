@@ -96,7 +96,10 @@ func diagnosticCommandAdmitted(name string) bool {
 }
 
 func diagnosticCommandNamespace(name string, command wire.Document) string {
-	if name == "top" || name == "serverStatus" || name == "dbStats" || name == "listDatabases" || name == "ping" || name == "hello" || name == "isMaster" || name == "ismaster" {
+	// Only commands whose primary argument is a collection name contribute to
+	// namespace totals. Several supported administrative commands use the
+	// command-name field for a username or another non-namespace argument.
+	if !diagnosticCollectionScopedCommand(name) {
 		return ""
 	}
 	db, ok := bson.Raw(command).Lookup("$db").StringValueOK()
@@ -112,6 +115,15 @@ func diagnosticCommandNamespace(name string, command wire.Document) string {
 		return ""
 	}
 	return db + "." + collection
+}
+
+func diagnosticCollectionScopedCommand(name string) bool {
+	switch name {
+	case "aggregate", "collStats", "count", "create", "createIndexes", "delete", "distinct", "dropIndexes", "find", "findAndModify", "getMore", "insert", "killCursors", "listIndexes", "update":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) diagnosticsSnapshot() (uptime int64, commands map[string]mongoCommandDiagnostic, namespaces map[string]mongoNamespaceDiagnostic, droppedCommands, droppedNamespaces int64) {
