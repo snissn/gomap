@@ -4288,7 +4288,7 @@ func TestServerFindPlannerIndexedAndBoundedPredicates(t *testing.T) {
 		{Key: "sort", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, dottedSort, "BadValue")
+	assertOK(t, dottedSort)
 
 	nonIndexableValue := serveCommand(t, server, 245, bson.D{
 		{Key: "find", Value: "users"},

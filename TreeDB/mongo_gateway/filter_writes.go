@@ -35,7 +35,9 @@ func reconcileMongoFindAndModifyOutcome(predicateMatched *bool, before, after *w
 }
 
 func validateMongoWritePlan(plan findPlan) error {
-	for _, predicates := range append([][]findPredicate{plan.predicates}, plan.orBranches...) {
+	branches := append([][]findPredicate{plan.predicates}, plan.orBranches...)
+	branches = append(branches, plan.norBranches...)
+	for _, predicates := range branches {
 		for _, predicate := range predicates {
 			for _, value := range predicate.values {
 				if value.Type == bson.TypeRegex {
@@ -352,7 +354,7 @@ func (s *Server) deleteMongoFilterOneWithBudget(col *collections.Collection, pla
 	return false, fmt.Errorf("Mongo gateway filter delete exceeded %d predicate-drift retries", mongoFilterWriteMaxAttempts)
 }
 
-func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item mongoUpdateItem) (before, after wire.Document, matched bool, err error) {
+func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item mongoUpdateItem, newImage bool, projection compiledProjection) (before, after wire.Document, matched bool, err error) {
 	for attempt := 0; attempt < mongoFilterWriteMaxAttempts; attempt++ {
 		key, found, err := s.selectMongoFilterWriteKey(col, item.plan)
 		if err != nil || !found {
@@ -398,6 +400,16 @@ func (s *Server) findAndModifyFilterExisting(col *collections.Collection, item m
 				return nil, false, errors.New("Mongo gateway update cannot modify _id")
 			}
 			after = append(after[:0], updated...)
+			value := before
+			if newImage {
+				value = after
+			}
+			// Keep response admission in this conditional callback. In particular,
+			// dotted projection can reject array traversal only after inspecting the
+			// selected document, and that rejection must precede publication.
+			if err := validateFindAndModifyResponse(value, true, false, bson.RawValue{}, projection, s.maxMessageLength()); err != nil {
+				return nil, false, err
+			}
 			if !changed {
 				return nil, false, nil
 			}

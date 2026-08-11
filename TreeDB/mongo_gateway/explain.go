@@ -248,7 +248,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	predicates, branches, err := parseFindFilter(filter)
+	predicates, branches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -256,7 +256,7 @@ func (s *Server) explainCountResponse(ctx context.Context, command wire.Document
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, norBranches: norBranches, skip: skip, limit: limit}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		return int64(len(result.docs)), err
 	})
@@ -288,11 +288,11 @@ func (s *Server) explainDistinctResponse(ctx context.Context, command wire.Docum
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	predicates, branches, err := parseFindFilter(filter)
+	predicates, branches, norBranches, err := parseFindFilter(filter)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
+	return s.explainCollectionRead(ctx, db, collection, finalizeFindPlan(findPlan{predicates: predicates, orBranches: branches, norBranches: norBranches}), verbosity, func(col *collections.Collection, plan findPlan) (int64, error) {
 		result, err := s.executeFind(col, plan)
 		if err != nil {
 			return 0, err
@@ -540,6 +540,10 @@ func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {
 }
 
 func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
+	// $or needs a union of branch candidate sets, which this metadata-only
+	// selector cannot represent. $nor is different: its sibling positive
+	// predicates remain safe index probes and the negative branches are
+	// rechecked as residual filters by the executor.
 	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
@@ -554,8 +558,8 @@ func explainPlannerSelection(col *collections.Collection, plan findPlan) findPla
 }
 
 func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bool {
-	if len(plan.orBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
-		return len(plan.predicates) != 0 || len(plan.orBranches) != 0
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || selection.stage == "bounded_scan" || selection.stage == "adaptive_candidate_selection" {
+		return len(plan.predicates) != 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0
 	}
 	if selection.stage == "primary_lookup" {
 		return len(plan.predicates) != 1
@@ -568,17 +572,21 @@ func findPlanHasResidualFilter(plan findPlan, selection findPlannerSelection) bo
 		if pred.field != selection.indexField {
 			return true
 		}
-		// A concrete probe only covers predicates of its own kind. For
-		// example, choosing a range probe still leaves an equality/$in
-		// predicate on that field to be filtered after materialization.
-		if selection.stage == "secondary_equality_lookup" && isRangePredicate(pred.op) {
-			return true
-		}
-		if selection.stage == "secondary_range_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
-			return true
-		}
-		if selection.stage == "secondary_equality_lookup" && (pred.op == findPredicateEq || pred.op == findPredicateIn) {
+		switch selection.stage {
+		case "secondary_equality_lookup":
+			// The equality probe supplies one equality/$in candidate set. Every
+			// other same-field predicate (including negative, existence, and
+			// negated predicates) is rechecked after materialization.
+			if pred.negate || (pred.op != findPredicateEq && pred.op != findPredicateIn) {
+				return true
+			}
 			equalityPredicates++
+		case "secondary_range_lookup":
+			// A range probe similarly cannot prove equality, membership, or a
+			// negative/existence condition on the same field.
+			if pred.negate || !isRangePredicate(pred.op) {
+				return true
+			}
 		}
 	}
 	// The executor probes same-kind equality/$in predicates independently and
