@@ -197,6 +197,41 @@ class RevalidationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "capability key"):
                 reduce._validate_capability_key(provenance)
 
+    def test_m3_descriptor_is_bound_to_execution_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset"
+            database = root / "database"
+            artifacts = root / "250k/graph-overlap-020-out"
+            dataset.mkdir()
+            database.mkdir()
+            artifacts.mkdir(parents=True)
+            fixture = {"checksum": "fixture"}
+            descriptor = {
+                "base_sha": "base", "head_sha": "head", "executable_sha256": "b" * 64,
+                "artifact_sha256": "", "fixture_checksum": fixture["checksum"],
+            }
+            (dataset / "fixture_manifest.json").write_text(json.dumps(fixture), encoding="utf-8")
+            artifact = artifacts / "vector_partition_placeholder.json"
+            artifact.write_bytes(b"artifact")
+            descriptor["artifact_sha256"] = reduce._sha256(artifact)
+            artifact.rename(artifacts / f"vector_partition_{descriptor['artifact_sha256'][:12]}_head.json")
+            descriptor_path = database / "vector_partition_variant_v1.json"
+            descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+            provenance = {
+                "base_sha": "base", "source_head": "head", "binary_sha256": "b" * 64,
+                "m3_artifact_sha256": descriptor["artifact_sha256"],
+                "m3_descriptor_sha256": reduce._sha256(descriptor_path),
+                "m3_database_directory": str(database), "dataset_directory": str(dataset),
+                "fixture_checksum": fixture["checksum"],
+            }
+            reduce._validate_m3(root, provenance)
+            descriptor["head_sha"] = "other"
+            descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
+            provenance["m3_descriptor_sha256"] = reduce._sha256(descriptor_path)
+            with self.assertRaisesRegex(ValueError, "M3 execution provenance"):
+                reduce._validate_m3(root, provenance)
+
     def test_command_requires_the_declared_concurrency_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "repeat-1"

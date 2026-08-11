@@ -127,6 +127,25 @@ def _validate_capability_key(provenance: dict[str, Any]) -> None:
              _sha256(path) == provenance["capability_key_sha256"], "capability key changed")
 
 
+def _validate_m3(root: Path, provenance: dict[str, Any]) -> None:
+    descriptor_path = Path(provenance["m3_database_directory"]) / "vector_partition_variant_v1.json"
+    fixture_path = Path(provenance["dataset_directory"]) / "fixture_manifest.json"
+    descriptor = _load(descriptor_path, 1 << 20)
+    fixture = _load(fixture_path, 1 << 20)
+    artifacts = list((root / "250k/graph-overlap-020-out").glob(
+        f"vector_partition_{provenance['m3_artifact_sha256'][:12]}_*.json"))
+    _require(
+        _sha256(descriptor_path) == provenance["m3_descriptor_sha256"] and
+        len(artifacts) == 1 and _sha256(artifacts[0]) == provenance["m3_artifact_sha256"] and
+        descriptor.get("base_sha") == provenance["base_sha"] and
+        descriptor.get("head_sha") == provenance["source_head"] and
+        descriptor.get("executable_sha256") == provenance["binary_sha256"] and
+        descriptor.get("artifact_sha256") == provenance["m3_artifact_sha256"] and
+        descriptor.get("fixture_checksum") == fixture.get("checksum") == provenance["fixture_checksum"],
+        "M3 execution provenance changed",
+    )
+
+
 def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) -> dict[str, float | int]:
     nodes = cell.get("runtime")
     _require(isinstance(nodes, list) and nodes, "runtime observations are missing")
@@ -340,7 +359,7 @@ def summarize(root: Path) -> dict[str, Any]:
     _require(_sha256(Path(provenance["dataset_directory"]) / "fixture_manifest.json") == provenance["fixture_manifest_sha256"], "fixture manifest changed")
     truth_files = list(Path(provenance["truth_directory"]).glob("*.json"))
     _require(len(truth_files) == 1 and _sha256(truth_files[0]) == provenance["truth_sha256"], "truth artifact changed")
-    _require(_sha256(Path(provenance["m3_database_directory"]) / "vector_partition_variant_v1.json") == provenance["m3_descriptor_sha256"], "M3 descriptor changed")
+    _validate_m3(root, provenance)
     cells: dict[tuple[str, int, str, int], dict[str, Any]] = {}
     inputs: list[dict[str, Any]] = []
     topology_ids: set[str] = set()

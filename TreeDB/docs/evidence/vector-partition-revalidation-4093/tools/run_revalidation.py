@@ -51,6 +51,21 @@ def write(path: Path, value: object) -> None:
     base.write_json(path, value)
 
 
+def validate_m3(root: Path, provenance: dict[str, object]) -> None:
+    descriptor = load(Path(str(provenance["m3_database_directory"])) / "vector_partition_variant_v1.json")
+    fixture = load(Path(str(provenance["dataset_directory"])) / "fixture_manifest.json")
+    artifacts = list((root / "250k/graph-overlap-020-out").glob(
+        f"vector_partition_{str(provenance['m3_artifact_sha256'])[:12]}_*.json"))
+    if (len(artifacts) != 1 or base.sha256(artifacts[0]) != provenance["m3_artifact_sha256"] or
+            descriptor.get("base_sha") != provenance["base_sha"] or
+            descriptor.get("head_sha") != provenance["source_head"] or
+            descriptor.get("executable_sha256") != provenance["binary_sha256"] or
+            descriptor.get("artifact_sha256") != provenance["m3_artifact_sha256"] or
+            descriptor.get("fixture_checksum") != fixture.get("checksum") or
+            fixture.get("checksum") != provenance["fixture_checksum"]):
+        raise RuntimeError("M3 execution provenance changed")
+
+
 def expected_runtime(topology: str, index: int) -> tuple[str, int, int]:
     if topology == "single":
         return "0-11", 12, SINGLE_MEMORY_BYTES
@@ -295,6 +310,7 @@ def main() -> None:
     args = parser.parse_args()
     provenance = load(args.root / "provenance.json")
     binary, rebinder = base.preflight(args.root, provenance)
+    validate_m3(args.root, provenance)
     capability_key = Path(str(provenance.get("capability_key_path", "")))
     if (not capability_key.is_file() or
             base.sha256(capability_key) != provenance.get("capability_key_sha256")):
