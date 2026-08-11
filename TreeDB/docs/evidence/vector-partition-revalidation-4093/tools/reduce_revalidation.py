@@ -84,6 +84,12 @@ def _uint(value: Any, *, positive: bool = False) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= (1 if positive else 0)
 
 
+def _validate_capability_key(provenance: dict[str, Any]) -> None:
+    path = Path(str(provenance.get("capability_key_path", "")))
+    _require(path.is_file() and _is_sha256(provenance.get("capability_key_sha256")) and
+             _sha256(path) == provenance["capability_key_sha256"], "capability key changed")
+
+
 def _runtime(cell: dict[str, Any]) -> dict[str, float | int]:
     nodes = cell.get("runtime")
     _require(isinstance(nodes, list) and nodes, "runtime observations are missing")
@@ -163,7 +169,8 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     }
 
 
-def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology: str, provenance: dict[str, Any]) -> dict[str, str]:
+def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology: str,
+                      provenance: dict[str, Any], concurrency_order: str) -> dict[str, str]:
     paths = {name: run_dir / f"bench-{mode}.{name}" for name in ("command.json", "time", "rc")}
     command = json.loads(_read(paths["command.json"], 1 << 20))
     _require(isinstance(command, list) and all(isinstance(part, str) and part for part in command), "benchmark command is invalid")
@@ -180,10 +187,10 @@ def _validate_command(run_dir: Path, result: dict[str, Any], mode: str, topology
         "-endpoint": result["endpoint"], "-topology": str(run_dir / "topology.json"),
         "-dataset": provenance["dataset_directory"], "-truth-cache": provenance["truth_directory"],
         "-truth-cache-sha256": provenance["truth_sha256"], "-probes": "2",
-        "-concurrency": flags["-concurrency"], "-top-k": "10", "-ef-search": "128",
+        "-concurrency": concurrency_order, "-top-k": "10", "-ef-search": "128",
         "-warmup": "1000", "-out": str(run_dir / f"search-{mode}.json"),
         "-search-mode": mode, "-max-index-age": "1h", "-max-session-age": "2m",
-    } and set(flags["-concurrency"].split(",")) == {"1", "32"}, "benchmark command changed")
+    }, "benchmark command changed")
     _require(_read(paths["rc"], 32) == b"0\n" and _read(paths["time"], 1 << 20), "benchmark process did not complete")
     if topology == "single":
         _require(command[4] == provenance["binary_path"], "single benchmark client changed")
@@ -249,6 +256,7 @@ def _tail_explained(native: dict[str, Any], container: dict[str, Any], p95_ratio
 def summarize(root: Path) -> dict[str, Any]:
     provenance = _load(root / "provenance.json", 1 << 20)
     _require(provenance.get("source_head") and provenance.get("vcs_modified") is False and _is_sha256(provenance.get("binary_sha256")), "execution provenance is invalid")
+    _validate_capability_key(provenance)
     _require(_sha256(Path(provenance["binary_path"])) == provenance["binary_sha256"], "benchmark binary changed")
     _require(_sha256(Path(provenance["dataset_directory"]) / "fixture_manifest.json") == provenance["fixture_manifest_sha256"], "fixture manifest changed")
     truth_files = list(Path(provenance["truth_directory"]).glob("*.json"))
@@ -291,7 +299,10 @@ def summarize(root: Path) -> dict[str, Any]:
             search_started, search_completed = _time(result["started_at"]), _time(result["completed_at"])
             _require(prior_search_completed is None or prior_search_completed < search_started, "benchmark mode intervals overlap")
             prior_search_completed = search_completed
-            command = _validate_command(run_dir, result, mode, topology, provenance)
+            command = _validate_command(
+                run_dir, result, mode, topology, provenance,
+                _concurrency_order(topology, repetition, mode),
+            )
             for concurrency, cell in result_cells.items():
                 key = (topology, repetition, mode, concurrency)
                 cells[key] = cell

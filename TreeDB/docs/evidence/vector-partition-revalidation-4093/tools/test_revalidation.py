@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -106,6 +108,48 @@ class RevalidationTest(unittest.TestCase):
         container = {"p95_nanos_min": 2, "p95_nanos_max": 4}
         self.assertTrue(reduce._tail_explained(native, container, 1.14, 1.06))
         self.assertFalse(reduce._tail_explained(native, container, 1.05, 1.06))
+
+    def test_capability_key_digest_is_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "capability.key"
+            path.write_bytes(b"expected")
+            provenance = {
+                "capability_key_path": str(path),
+                "capability_key_sha256": reduce._sha256(path),
+            }
+            reduce._validate_capability_key(provenance)
+            path.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "capability key"):
+                reduce._validate_capability_key(provenance)
+
+    def test_command_requires_the_declared_concurrency_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "repeat-1"
+            run_dir.mkdir()
+            result = {"endpoint": "127.0.0.1:1"}
+            provenance = {
+                "binary_path": "/bench", "dataset_directory": "/dataset",
+                "truth_directory": "/truth", "truth_sha256": "a" * 64,
+            }
+            time_path = run_dir / "bench-strict.time"
+            command_path = run_dir / "bench-strict.command.json"
+            command = [
+                "/usr/bin/time", "-v", "-o", str(time_path), "/bench", "system-bench",
+                "-endpoint", result["endpoint"], "-topology", str(run_dir / "topology.json"),
+                "-dataset", provenance["dataset_directory"], "-truth-cache", provenance["truth_directory"],
+                "-truth-cache-sha256", provenance["truth_sha256"], "-probes", "2",
+                "-concurrency", "1,32", "-top-k", "10", "-ef-search", "128", "-warmup", "1000",
+                "-out", str(run_dir / "search-strict.json"), "-search-mode", "strict",
+                "-max-index-age", "1h", "-max-session-age", "2m",
+            ]
+            command_path.write_text(json.dumps(command), encoding="utf-8")
+            time_path.write_text("ok", encoding="utf-8")
+            (run_dir / "bench-strict.rc").write_text("0\n", encoding="utf-8")
+            reduce._validate_command(run_dir, result, "strict", "single", provenance, "1,32")
+            command[command.index("-concurrency") + 1] = "32,1"
+            command_path.write_text(json.dumps(command), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "benchmark command changed"):
+                reduce._validate_command(run_dir, result, "strict", "single", provenance, "1,32")
 
 
 if __name__ == "__main__":

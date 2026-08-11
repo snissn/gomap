@@ -295,6 +295,10 @@ def main() -> None:
     args = parser.parse_args()
     provenance = load(args.root / "provenance.json")
     binary, rebinder = base.preflight(args.root, provenance)
+    capability_key = Path(str(provenance.get("capability_key_path", "")))
+    if (not capability_key.is_file() or
+            base.sha256(capability_key) != provenance.get("capability_key_sha256")):
+        raise RuntimeError("capability key changed")
     expected_sequence = SEQUENCE.index((args.topology, args.repetition)) + 1
     run_dir = args.root / "runs" / args.topology / f"repeat-{args.repetition}"
     run_dir.mkdir(parents=True)
