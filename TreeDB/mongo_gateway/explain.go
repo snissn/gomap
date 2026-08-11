@@ -540,7 +540,11 @@ func explainPlannerWithoutCandidatePlans(planner bson.D) bson.D {
 }
 
 func explainPlannerSelection(col *collections.Collection, plan findPlan) findPlannerSelection {
-	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 {
+	// $or needs a union of branch candidate sets, which this metadata-only
+	// selector cannot represent. $nor is different: its sibling positive
+	// predicates remain safe index probes and the negative branches are
+	// rechecked as residual filters by the executor.
+	if len(plan.orBranches) != 0 {
 		return findPlannerSelection{stage: "bounded_scan"}
 	}
 	candidatePlans := explainCandidatePlans(col, plan)

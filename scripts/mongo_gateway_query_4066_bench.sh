@@ -12,8 +12,9 @@ for shape in indexed_positive_residual bounded_negative_scan dotted_projection d
 done
 {
   echo "# #4066 query benchmark"
+  echo
   echo "- source: $sha"
-  echo "- host: $(uname -a)"
+  echo "- platform: os=$(uname -s) arch=$(uname -m)"
   echo "- go: $(go version)"
   echo "- command: \`$cmd\`"
   echo "- percentile method: nearest rank, rank=ceil(p*n), n=10"
@@ -30,7 +31,7 @@ done
       if ($i == "returned_docs") rd=$(i-1)
     }
     if (ns == "" || b == "" || al == "" || cd == "" || md == "" || mb == "" || rd == "") bad=1
-    if (n == "indexed_positive_residual" && !(cd == 256 && md == 256 && rd == 20 && mb > 0)) bad=1
+    if (n == "indexed_positive_residual" && !(cd == 192 && md == 192 && rd == 20 && mb > 0)) bad=1
     if (n == "bounded_negative_scan" && !(cd == 256 && md == 86 && rd == 86 && mb == 0)) bad=1
     if (n == "dotted_projection" && !(cd == 256 && md == 256 && rd == 256 && mb == 0)) bad=1
     if (n == "dotted_sort_materialized" && !(cd == 256 && md == 256 && rd == 256 && mb == 0)) bad=1

@@ -16,7 +16,11 @@ func BenchmarkMongoNegativeDottedQueryShapes(b *testing.B) {
 	server.MaxFindScanDocuments = 256
 	docs := make(bson.A, 256)
 	for i := range docs {
-		docs[i] = bson.D{{Key: "_id", Value: i}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(i % 3)}, {Key: "profile", Value: bson.D{{Key: "name", Value: string(rune('a' + i%26))}}}}
+		tenant := "a"
+		if i%4 == 0 {
+			tenant = "b"
+		}
+		docs[i] = bson.D{{Key: "_id", Value: i}, {Key: "tenant", Value: tenant}, {Key: "score", Value: int32(i % 3)}, {Key: "profile", Value: bson.D{{Key: "name", Value: string(rune('a' + i%26))}}}}
 	}
 	assertOK(b, serveCommand(b, server, 1, bson.D{{Key: "insert", Value: "bench_negative"}, {Key: "documents", Value: docs}, {Key: "$db", Value: "app"}}))
 	assertOK(b, serveCommand(b, server, 2, bson.D{{Key: "createIndexes", Value: "bench_negative"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}}}, {Key: "name", Value: "tenant_1"}}}}, {Key: "$db", Value: "app"}}))

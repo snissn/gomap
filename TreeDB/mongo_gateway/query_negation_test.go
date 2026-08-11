@@ -117,8 +117,11 @@ func TestMongoDottedProjectionArrayFailureDoesNotPublishCursor(t *testing.T) {
 	}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 406605, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{}}, {Key: "projection", Value: bson.D{{Key: "profile.name", Value: int32(1)}}}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, response, "BadValue")
-	if len(server.cursors) != 0 {
-		t.Fatalf("published cursor despite dotted projection rejection: %d", len(server.cursors))
+	server.cursorMu.Lock()
+	cursors := len(server.cursors)
+	server.cursorMu.Unlock()
+	if cursors != 0 {
+		t.Fatalf("published cursor despite dotted projection rejection: %d", cursors)
 	}
 }
 
@@ -142,8 +145,11 @@ func TestMongoFilterFindAndModifyProjectionRejectsBeforeMutation(t *testing.T) {
 			if !bson.Raw(response).Lookup("value").IsZero() || !bson.Raw(response).Lookup("lastErrorObject").IsZero() {
 				t.Fatalf("findAndModify emitted partial success response: %s", response)
 			}
-			if len(server.cursors) != 0 {
-				t.Fatalf("findAndModify published cursor despite response rejection: %d", len(server.cursors))
+			server.cursorMu.Lock()
+			cursors := len(server.cursors)
+			server.cursorMu.Unlock()
+			if cursors != 0 {
+				t.Fatalf("findAndModify published cursor despite response rejection: %d", cursors)
 			}
 			check := serveCommand(t, server, 406642, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "array-path"}}}, {Key: "$db", Value: "app"}})
 			assertOK(t, check)
@@ -315,9 +321,9 @@ func TestMongoQuerySortAndProjectionPathsRejectMalformedOrOverDepth(t *testing.T
 }
 
 func TestMongoNegativeQueryWorkCapsRejectBeforeCursorOrMutation(t *testing.T) {
-	choices := make(bson.A, mongoQueryMaxNegativeChoices)
-	for i := range choices {
-		choices[i] = int32(i)
+	choices := make(bson.A, 0, mongoQueryMaxNegativeChoices+1)
+	for i := 0; i < mongoQueryMaxNegativeChoices; i++ {
+		choices = append(choices, int32(i))
 	}
 	nearCap, err := bson.Marshal(bson.D{{Key: "score", Value: bson.D{{Key: "$nin", Value: choices}}}})
 	if err != nil {
@@ -351,8 +357,11 @@ func TestMongoNegativeQueryWorkCapsRejectBeforeCursorOrMutation(t *testing.T) {
 	assertOK(t, serveCommand(t, server, 406628, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score", Value: int32(7)}}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 406629, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: overCap}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, response, "BadValue")
-	if len(server.cursors) != 0 {
-		t.Fatalf("published cursor for over-cap filter: %d", len(server.cursors))
+	server.cursorMu.Lock()
+	cursors := len(server.cursors)
+	server.cursorMu.Unlock()
+	if cursors != 0 {
+		t.Fatalf("published cursor for over-cap filter: %d", cursors)
 	}
 	write := serveCommand(t, server, 406630, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{
 		{Key: "q", Value: overCap}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}},
@@ -402,8 +411,11 @@ func TestMongoNegativeQueryRawArrayCapsRejectBeforeFullMaterialization(t *testin
 	assertOK(t, serveCommand(t, server, 406650, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score", Value: int32(7)}}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 406651, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, response, "BadValue")
-	if len(server.cursors) != 0 {
-		t.Fatalf("published cursor for duplicate-heavy over-cap filter: %d", len(server.cursors))
+	server.cursorMu.Lock()
+	cursors := len(server.cursors)
+	server.cursorMu.Unlock()
+	if cursors != 0 {
+		t.Fatalf("published cursor for duplicate-heavy over-cap filter: %d", cursors)
 	}
 	write := serveCommand(t, server, 406652, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, write, "BadValue")
@@ -456,8 +468,11 @@ func TestMongoWideNorBranchRejectsBeforeDocumentMaterializationOrMutation(t *tes
 	assertOK(t, serveCommand(t, server, 406654, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score_000", Value: int32(0)}}}}, {Key: "$db", Value: "app"}}))
 	response := serveCommand(t, server, 406655, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, response, "BadValue")
-	if len(server.cursors) != 0 {
-		t.Fatalf("published cursor for wide $nor branch: %d", len(server.cursors))
+	server.cursorMu.Lock()
+	cursors := len(server.cursors)
+	server.cursorMu.Unlock()
+	if cursors != 0 {
+		t.Fatalf("published cursor for wide $nor branch: %d", cursors)
 	}
 	write := serveCommand(t, server, 406656, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
 	assertCommandError(t, write, "BadValue")
@@ -513,6 +528,42 @@ func TestMongoNegativeExplainReportsResidualCandidatesAndMaterialization(t *test
 	}
 	if got, ok := stats.Lookup("candidateMaterializedBytes").Int64OK(); !ok || got <= 0 {
 		t.Fatalf("candidateMaterializedBytes=%d ok=%v want >0: %s", got, ok, response)
+	}
+}
+
+func TestMongoSortedNorExplainPreservesPositiveIndexedResidualWinner(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406636, bson.D{{Key: "createIndexes", Value: "events"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "tenant", Value: int32(1)}}}, {Key: "name", Value: "tenant_1"}}}}, {Key: "$db", Value: "app"}}))
+	assertOK(t, serveCommand(t, server, 406637, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "a1"}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(1)}, {Key: "rank", Value: int32(2)}},
+		bson.D{{Key: "_id", Value: "a2"}, {Key: "tenant", Value: "a"}, {Key: "score", Value: int32(2)}, {Key: "rank", Value: int32(1)}},
+		bson.D{{Key: "_id", Value: "b1"}, {Key: "tenant", Value: "b"}, {Key: "score", Value: int32(2)}, {Key: "rank", Value: int32(0)}},
+	}}, {Key: "$db", Value: "app"}}))
+	command := bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "tenant", Value: "a"}, {Key: "$nor", Value: bson.A{bson.D{{Key: "score", Value: int32(1)}}}}}}, {Key: "sort", Value: bson.D{{Key: "rank", Value: int32(1)}}}, {Key: "$db", Value: "app"}}
+	for _, verbosity := range []string{"queryPlanner", "executionStats"} {
+		t.Run(verbosity, func(t *testing.T) {
+			response := serveCommand(t, server, 406638, bson.D{{Key: "explain", Value: command}, {Key: "verbosity", Value: verbosity}, {Key: "$db", Value: "app"}})
+			assertOK(t, response)
+			winning := bson.Raw(response).Lookup("queryPlanner", "winningPlan").Document()
+			if stage, ok := winning.Lookup("stage").StringValueOK(); !ok || stage != "secondary_equality_lookup" {
+				t.Fatalf("%s stage=%q ok=%v want secondary_equality_lookup: %s", verbosity, stage, ok, response)
+			}
+			if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+				t.Fatalf("%s residualFilter=%v ok=%v want true: %s", verbosity, residual, ok, response)
+			}
+			if inMemory, ok := winning.Lookup("inMemorySort").BooleanOK(); !ok || !inMemory {
+				t.Fatalf("%s inMemorySort=%v ok=%v want true: %s", verbosity, inMemory, ok, response)
+			}
+			if verbosity == "executionStats" {
+				stats := bson.Raw(response).Lookup("executionStats").Document()
+				if got, ok := stats.Lookup("nReturned").Int64OK(); !ok || got != 1 {
+					t.Fatalf("nReturned=%d ok=%v want 1: %s", got, ok, response)
+				}
+				if got, ok := stats.Lookup("candidateDocumentsExamined").Int64OK(); !ok || got != 2 {
+					t.Fatalf("candidateDocumentsExamined=%d ok=%v want 2: %s", got, ok, response)
+				}
+			}
+		})
 	}
 }
 

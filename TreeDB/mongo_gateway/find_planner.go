@@ -1943,7 +1943,7 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 			case "$in", "$nin":
 				array, ok := opValue.ArrayOK()
 				if !ok {
-					return fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
+					return fmt.Errorf("Mongo gateway find field %q %s must be an array", field, op)
 				}
 				var values []bson.RawValue
 				if op == "$nin" {
