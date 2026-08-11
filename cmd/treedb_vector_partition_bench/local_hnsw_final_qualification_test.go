@@ -181,7 +181,7 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
 		exhaustive := run.Probes == 16
 		reportPath, transcriptPath := filepath.Join(dir, "vector_partition_m8_test.json"), filepath.Join(dir, "vector_partition_m8_measurements_test.json")
-		report := m8ProductionReportV1{Status: "pass", ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
+		report := m8ProductionReportV1{Status: "pass", ExecutionID: "m8-production-test", GateLedger: m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", OverlapStorage: "pass", ResourceBounds: "pass", ExistingBehavior: "pass"}, MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
 	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
@@ -219,6 +219,7 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	report := m8ProductionReportV1{
 		Status:                "pass",
 		ExecutionID:           "m8-production-test",
+		GateLedger:            m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", OverlapStorage: "pass", ResourceBounds: "pass", ExistingBehavior: "pass"},
 		MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: "/transcript", SHA256: digest},
 		Variant:               &m3VariantDescriptorV1{PartitionHNSWM: 16, IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}},
 		Rows:                  []m8ProductionRowV1{{Status: "pass", Probes: 2, EfSearch: 128, Concurrency: 1, Samples: localHNSWFinalQueryCountV1, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true}}},
@@ -230,14 +231,31 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 		t.Fatalf("child=%+v err=%v", child, err)
 	}
 	report.Status = "experimental_gate_failures"
+	report.GateLedger = m8ProductionGateLedgerV1{ExhaustiveParity: "not_run", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "fail", TailLatency: "fail", Balance: "pass", OverlapStorage: "fail", ResourceBounds: "pass", ExistingBehavior: "pending_full_required_suites"}
 	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err != nil {
 		t.Fatal(err)
 	}
+	report.GateLedger.ResourceBounds = "fail"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted child report with failed resource gate")
+	}
+	report.GateLedger.ResourceBounds = "pass"
+	report.Rows[0].Status = "fail"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted failed child row")
+	}
+	report.Rows[0].Status = "pass"
+	transcript.Outcomes[0].Status = "fail"
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted failed child outcome")
+	}
+	transcript.Outcomes[0].Status = "pass"
 	report.Status = "invalid"
 	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
 		t.Fatal("accepted invalid child report status")
 	}
 	report.Status = "pass"
+	report.GateLedger = m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", OverlapStorage: "pass", ResourceBounds: "pass", ExistingBehavior: "pass"}
 
 	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 16, 16, 16
 	report.Rows[0].Attribution.ExhaustivePartitionRecallAtK = 1

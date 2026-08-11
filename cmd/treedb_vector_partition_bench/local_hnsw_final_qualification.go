@@ -352,7 +352,7 @@ func localHNSWFinalQualificationChildFromTranscriptV1(expected localHNSWFinalQua
 		return out, errors.New("invalid local HNSW final qualification child evidence")
 	}
 	row, outcome := report.Rows[0], transcript.Outcomes[0]
-	if report.Status != "pass" && report.Status != "experimental_gate_failures" || row.Status != "pass" || outcome.Status != "pass" || row.Probes != expected.Probes || row.Concurrency != expected.Concurrency || row.EfSearch != 128 || row.Samples != localHNSWFinalQueryCountV1 || len(outcome.TopKIDs) != localHNSWFinalQueryCountV1 || len(outcome.TopKScoreBits) != localHNSWFinalQueryCountV1 || len(outcome.ExactRepresentativeTruthHits) != localHNSWFinalQueryCountV1 || transcript.ExecutionID != report.ExecutionID || !localHNSWAttributionSHA256V1(report.MeasurementTranscript.SHA256) || !row.Attribution.ApproximateRouterPartitionCoverageComplete || !row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || expected.Probes == 16 && (!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1) {
+	if !localHNSWFinalQualificationChildGateLedgerValidV1(expected.Probes, report.Status, report.GateLedger) || row.Status != "pass" || outcome.Status != "pass" || row.Probes != expected.Probes || row.Concurrency != expected.Concurrency || row.EfSearch != 128 || row.Samples != localHNSWFinalQueryCountV1 || len(outcome.TopKIDs) != localHNSWFinalQueryCountV1 || len(outcome.TopKScoreBits) != localHNSWFinalQueryCountV1 || len(outcome.ExactRepresentativeTruthHits) != localHNSWFinalQueryCountV1 || transcript.ExecutionID != report.ExecutionID || !localHNSWAttributionSHA256V1(report.MeasurementTranscript.SHA256) || !row.Attribution.ApproximateRouterPartitionCoverageComplete || !row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || expected.Probes == 16 && (!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1) {
 		return out, errors.New("invalid local HNSW final qualification child row")
 	}
 	var finalHits, routingHits uint64
@@ -388,6 +388,22 @@ func localHNSWFinalQualificationChildFromTranscriptV1(expected localHNSWFinalQua
 		out.Counts.P16HitSlots = finalHits
 	}
 	return out, nil
+}
+
+func localHNSWFinalQualificationChildGateLedgerValidV1(probes int, status string, ledger m8ProductionGateLedgerV1) bool {
+	if status == "pass" {
+		return m8ProductionAllGatesPassV1(ledger)
+	}
+	exhaustive, reduction := "not_run", "pass"
+	if probes == 16 {
+		exhaustive, reduction = "pass", "fail"
+	}
+	return status == "experimental_gate_failures" && ledger.ExhaustiveParity == exhaustive &&
+		ledger.FailureHonesty == "pass" && ledger.PartitionPackReachability == "pass" &&
+		ledger.Recall == "pass" && ledger.ProbeReduction == reduction &&
+		ledger.EndToEndQPS == "fail" && ledger.TailLatency == "fail" && ledger.Balance == "pass" &&
+		ledger.OverlapStorage == "fail" && ledger.ResourceBounds == "pass" &&
+		ledger.ExistingBehavior == "pending_full_required_suites"
 }
 
 func localHNSWFinalQualificationReportValidV1(report localHNSWFinalQualificationReportV1) error {
