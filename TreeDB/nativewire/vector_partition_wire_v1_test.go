@@ -282,6 +282,7 @@ func TestVectorPartitionNativeWirePinCleanupV1(t *testing.T) {
 		blocked  bool
 	}{
 		{name: "encode_failure", evidence: public.FastSearchEvidenceV1{Generation: public.GenerationIDV1{Index: "embedding", Generation: 1}, PublishedAt: time.Unix(-1, 0), IndexAge: time.Nanosecond, TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay"}},
+		{name: "rejected_evidence", evidence: public.FastSearchEvidenceV1{Generation: public.GenerationIDV1{Index: "embedding", Generation: 1}, PublishedAt: time.Now(), IndexAge: 2 * time.Second, TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay"}},
 		{name: "concurrent_close", evidence: public.FastSearchEvidenceV1{Generation: public.GenerationIDV1{Index: "embedding", Generation: 1}, PublishedAt: time.Now(), IndexAge: time.Nanosecond, TopologyDigest: "topology", AuthorizationOverlayDigest: "overlay"}, blocked: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

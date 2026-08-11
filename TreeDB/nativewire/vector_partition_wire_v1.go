@@ -77,7 +77,11 @@ func (c *Client) VectorPinSearchSnapshotV1(ctx context.Context, options public.P
 	if err == nil {
 		err = validateVectorPartitionFastEvidenceV1(evidence, public.GenerationIDV1{}, options.FastSearchOptionsV1)
 	}
-	return evidence, err
+	if err != nil {
+		_ = c.Close()
+		return public.FastSearchEvidenceV1{}, err
+	}
+	return evidence, nil
 }
 
 // VectorSearchPinnedV1 searches the snapshot pinned on this connection.
