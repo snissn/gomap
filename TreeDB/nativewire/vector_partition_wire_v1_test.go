@@ -325,13 +325,55 @@ func TestVectorPartitionNativeWirePinCleanupV1(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := <-pinDone; err == nil {
-				t.Fatal("failed pin publication succeeded")
+			if err := <-pinDone; (test.blocked && err != nil) || (!test.blocked && err == nil) {
+				t.Fatalf("pin publication error=%v blocked=%v", err, test.blocked)
 			}
 			if backend.snapshot == nil || !backend.snapshot.closed {
-				t.Fatal("failed pin publication retained the snapshot")
+				t.Fatal("connection cleanup retained the pinned snapshot")
 			}
 		})
+	}
+}
+
+func TestVectorPartitionNativeWireLocalCloseWaitsForAdmittedRequestV1(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	config := public.ConservativeOperationsConfigV1()
+	config.Enabled = true
+	operations, err := public.NewOperationsV1(new(public.ServiceV1), config, func(context.Context) (public.OperationsHealthV1, error) {
+		close(started)
+		<-release
+		return public.OperationsHealthV1{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(ServerOptions{VectorPartitionOperations: operations})
+	defer server.Close()
+	client, _, err := NewInProcessClient(t.Context(), server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := client.VectorStatusV1(ctx)
+		requestDone <- err
+	}()
+	<-started
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- client.Close() }()
+	select {
+	case <-closeDone:
+		t.Fatal("local endpoint closed while an admitted request was in flight")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(release)
+	if err := <-requestDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

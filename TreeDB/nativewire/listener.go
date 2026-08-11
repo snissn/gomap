@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -110,6 +111,7 @@ type localEndpoint struct {
 	state  *connState
 	done   chan struct{}
 	closed atomic.Bool
+	mu     sync.Mutex
 	frame  []byte
 }
 
@@ -130,6 +132,12 @@ func (e *localEndpoint) close() error {
 	if e == nil {
 		return nil
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.closeLocked()
+}
+
+func (e *localEndpoint) closeLocked() error {
 	if !e.closed.CompareAndSwap(false, true) {
 		return nil
 	}
@@ -153,7 +161,12 @@ func (e *localEndpoint) Write(p []byte) (int, error) {
 }
 
 func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwire.FrameType, requestID uint64, body []byte, want iwire.FrameType, limits iwire.Limits, responseDst []byte, copyResponse bool) (iwire.Header, []byte, error) {
-	if e == nil || e.server == nil || e.closed.Load() || e.server.closed.Load() {
+	if e == nil {
+		return iwire.Header{}, nil, io.ErrClosedPipe
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.server == nil || e.closed.Load() || e.server.closed.Load() {
 		return iwire.Header{}, nil, io.ErrClosedPipe
 	}
 	if ctx == nil {
@@ -178,7 +191,7 @@ func (e *localEndpoint) roundTrip(ctx context.Context, streamID uint64, typ iwir
 	}
 	err := e.server.handleFrame(ctx, e, e.state, request, body)
 	if errors.Is(err, errGoaway) {
-		_ = e.close()
+		_ = e.closeLocked()
 		err = nil
 	}
 	if err != nil {
