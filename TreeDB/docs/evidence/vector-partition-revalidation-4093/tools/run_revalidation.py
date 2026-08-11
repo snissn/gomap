@@ -52,11 +52,13 @@ def write(path: Path, value: object) -> None:
 
 
 def validate_m3(root: Path, provenance: dict[str, object]) -> None:
-    descriptor = load(Path(str(provenance["m3_database_directory"])) / "vector_partition_variant_v1.json")
+    descriptor_path = Path(str(provenance["m3_database_directory"])) / "vector_partition_variant_v1.json"
+    descriptor = load(descriptor_path)
     fixture = load(Path(str(provenance["dataset_directory"])) / "fixture_manifest.json")
     artifacts = list((root / "250k/graph-overlap-020-out").glob(
         f"vector_partition_{str(provenance['m3_artifact_sha256'])[:12]}_*.json"))
-    if (len(artifacts) != 1 or base.sha256(artifacts[0]) != provenance["m3_artifact_sha256"] or
+    if (base.sha256(descriptor_path) != provenance["m3_descriptor_sha256"] or
+            len(artifacts) != 1 or base.sha256(artifacts[0]) != provenance["m3_artifact_sha256"] or
             descriptor.get("base_sha") != provenance["base_sha"] or
             descriptor.get("head_sha") != provenance["source_head"] or
             descriptor.get("executable_sha256") != provenance["binary_sha256"] or

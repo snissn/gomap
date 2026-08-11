@@ -14,6 +14,11 @@ SPEC = importlib.util.spec_from_file_location("reduce_revalidation", PATH)
 assert SPEC is not None and SPEC.loader is not None
 reduce = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(reduce)
+RUNNER_PATH = Path(__file__).with_name("run_revalidation.py")
+RUNNER_SPEC = importlib.util.spec_from_file_location("run_revalidation", RUNNER_PATH)
+assert RUNNER_SPEC is not None and RUNNER_SPEC.loader is not None
+runner = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(runner)
 NODE = "a" * 64
 OWNERS = {NODE: {"cpu_set": "0-11", "gomaxprocs": 12, "go_memory_limit_bytes": 1}}
 PROOF_IDENTITY = {
@@ -80,7 +85,11 @@ def cell(mode: str = "strict", concurrency: int = 1) -> tuple[dict, dict]:
         "runtime": [{"node_config_sha256": NODE, "before": runtime, "after": after}],
         "elapsed_nanos": 1_000_000_000, "total_nanos": samples, "search_mode": mode,
     }
-    result = {"max_index_age_nanos": 3_600_000_000_000}
+    result = {
+        "max_index_age_nanos": 3_600_000_000_000,
+        "started_at": "1970-01-01T00:00:00.000000000Z",
+        "completed_at": "1970-01-01T00:00:00.000000003Z",
+    }
     if mode != "strict":
         value.update({
             "fast_evidence": {
@@ -175,6 +184,32 @@ class RevalidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "runtime ownership"):
             reduce._validate_cell(value, result, "strict", 1, OWNERS)
 
+    def test_runtime_samples_must_be_ordered_inside_the_result_interval(self) -> None:
+        for before, after in ((1, 1), (2, 1), (0, 2), (1, 4)):
+            value, result = cell()
+            value["runtime"][0]["before"]["sample_unix_nano"] = before
+            value["runtime"][0]["after"]["sample_unix_nano"] = after
+            with self.assertRaisesRegex(ValueError, "sample chronology"):
+                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+
+    def test_completed_public_queries_require_frame_bytes(self) -> None:
+        for counter in ("public_request_frame_bytes", "public_response_frame_bytes"):
+            value, result = cell()
+            value["counters"][counter] = 0
+            with self.assertRaisesRegex(ValueError, "public frame"):
+                reduce._validate_cell(value, result, "strict", 1, OWNERS)
+
+    def test_execution_head_is_frozen(self) -> None:
+        provenance = {
+            "source_head": reduce.EXPECTED_SOURCE_HEAD,
+            "vcs_modified": False,
+            "binary_sha256": "a" * 64,
+        }
+        reduce._validate_provenance(provenance)
+        provenance["source_head"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "execution provenance"):
+            reduce._validate_provenance(provenance)
+
     def test_only_physical_request_bytes_are_excluded_from_semantic_work(self) -> None:
         self.assertEqual(set(reduce.LOGICAL_COUNTERS) - set(reduce.SEMANTIC_COUNTERS), {"request_bytes"})
 
@@ -226,6 +261,11 @@ class RevalidationTest(unittest.TestCase):
                 "fixture_checksum": fixture["checksum"],
             }
             reduce._validate_m3(root, provenance)
+            runner.validate_m3(root, provenance)
+            descriptor_path.write_text(json.dumps(descriptor, indent=2), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "M3 execution provenance"):
+                runner.validate_m3(root, provenance)
+            provenance["m3_descriptor_sha256"] = reduce._sha256(descriptor_path)
             descriptor["head_sha"] = "other"
             descriptor_path.write_text(json.dumps(descriptor), encoding="utf-8")
             provenance["m3_descriptor_sha256"] = reduce._sha256(descriptor_path)

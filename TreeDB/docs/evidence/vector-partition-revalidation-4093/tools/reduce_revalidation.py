@@ -67,6 +67,7 @@ BASELINE = {
     ("container", 32): (1615.483, 30_206_000),
 }
 PROFILE_NAMES = ("allocs_baseline.pprof", "cpu.pprof", "trace.out", "heap.pprof", "allocs.pprof", "block.pprof", "mutex.pprof")
+EXPECTED_SOURCE_HEAD = "6e406e43ec2a6228e84d672a488768e32e6f0b53"
 
 
 def _read(path: Path, limit: int = 16 << 20) -> bytes:
@@ -87,6 +88,13 @@ def _time(value: Any) -> datetime:
         return datetime.fromisoformat(body + "+00:00")
     except ValueError as exc:
         raise ContractError("retained timestamp is invalid") from exc
+
+
+def _time_ns(value: Any) -> int:
+    moment = _time(value)
+    fraction = value[:-1].partition(".")[2]
+    _require(len(fraction) <= 9 and (not fraction or fraction.isdigit()), "retained timestamp is invalid")
+    return int(moment.replace(microsecond=0).timestamp()) * 1_000_000_000 + int(fraction.ljust(9, "0") or "0")
 
 
 def _uint(value: Any, *, positive: bool = False) -> bool:
@@ -146,9 +154,10 @@ def _validate_m3(root: Path, provenance: dict[str, Any]) -> None:
     )
 
 
-def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) -> dict[str, float | int]:
+def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]], report: dict[str, Any]) -> dict[str, float | int]:
     nodes = cell.get("runtime")
     _require(isinstance(nodes, list) and nodes, "runtime observations are missing")
+    started, completed = _time_ns(report.get("started_at")), _time_ns(report.get("completed_at"))
     result: dict[str, float | int] = {key: 0 for key in RUNTIME_DELTAS}
     result.update({"peak_rss_bytes": 0, "heap_alloc_bytes_after": 0, "heap_objects_after": 0, "goroutines_after": 0})
     identities: set[str] = set()
@@ -158,6 +167,10 @@ def _runtime(cell: dict[str, Any], expected_nodes: dict[str, dict[str, Any]]) ->
         identities.add(node["node_config_sha256"])
         before, after = node.get("before"), node.get("after")
         _require(isinstance(before, dict) and isinstance(after, dict), "runtime observation is invalid")
+        before_sample, after_sample = before.get("sample_unix_nano"), after.get("sample_unix_nano")
+        _require(_uint(before_sample, positive=True) and _uint(after_sample, positive=True) and
+                 started <= before_sample < after_sample <= completed,
+                 "runtime sample chronology is invalid")
         owner = expected_nodes.get(node["node_config_sha256"])
         _require(isinstance(owner, dict) and all(
             before.get(observed) == after.get(observed) == owner.get(configured)
@@ -242,6 +255,8 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     recall = metrics.get("recall_at_10")
     _require(isinstance(recall, (int, float)) and not isinstance(recall, bool) and math.isfinite(recall) and .90 <= recall <= 1, "recall is below the frozen floor")
     _require(isinstance(counters, dict) and set(counters) == set(COUNTERS) and all(_uint(counters[key]) for key in COUNTERS), "benchmark counters are invalid")
+    _require(counters["public_request_frame_bytes"] > 0 and counters["public_response_frame_bytes"] > 0,
+             "benchmark public frame counters are invalid")
     _require(counters["retries"] == 0 and counters["redirects"] == 0, "benchmark cell retried or followed a redirect")
     _require(isinstance(timings, dict) and set(timings) == set(TIMINGS) and all(_uint(timings[key]) for key in TIMINGS), "benchmark timings are invalid")
     samples, elapsed = cell.get("total_nanos"), cell.get("elapsed_nanos")
@@ -255,7 +270,7 @@ def _validate_cell(cell: dict[str, Any], result: dict[str, Any], mode: str, conc
     expected_ids = set(expected_nodes)
     catalog_proof_reads = _validate_catalog(cell, mode, concurrency, expected_ids)
     _validate_fast(cell, result, mode)
-    runtime = _runtime(cell, expected_nodes)
+    runtime = _runtime(cell, expected_nodes, result)
     _require({node.get("node_config_sha256") for node in cell["runtime"] if isinstance(node, dict)} == expected_ids and len(cell["runtime"]) == len(expected_ids), "runtime observation nodes changed")
     return {
         "recall": recall, "qps": metrics["qps"], "p95_nanos": metrics["p95_nanos"],
@@ -351,9 +366,14 @@ def _tail_explained(native: dict[str, Any], container: dict[str, Any], p95_ratio
             container["p95_nanos_min"] <= native["p95_nanos_max"])
 
 
+def _validate_provenance(provenance: dict[str, Any]) -> None:
+    _require(provenance.get("source_head") == EXPECTED_SOURCE_HEAD and provenance.get("vcs_modified") is False and
+             _is_sha256(provenance.get("binary_sha256")), "execution provenance is invalid")
+
+
 def summarize(root: Path) -> dict[str, Any]:
     provenance = _load(root / "provenance.json", 1 << 20)
-    _require(provenance.get("source_head") and provenance.get("vcs_modified") is False and _is_sha256(provenance.get("binary_sha256")), "execution provenance is invalid")
+    _validate_provenance(provenance)
     _validate_capability_key(provenance)
     _require(_sha256(Path(provenance["binary_path"])) == provenance["binary_sha256"], "benchmark binary changed")
     _require(_sha256(Path(provenance["dataset_directory"]) / "fixture_manifest.json") == provenance["fixture_manifest_sha256"], "fixture manifest changed")
