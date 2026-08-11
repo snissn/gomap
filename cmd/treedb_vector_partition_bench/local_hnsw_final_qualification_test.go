@@ -96,9 +96,9 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		call++
 		rowOutcome := outcome
 		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
-		parity := run.Probes == 16
+		exhaustive := run.Probes == 16
 		reportPath, transcriptPath := filepath.Join(dir, "vector_partition_m8_test.json"), filepath.Join(dir, "vector_partition_m8_measurements_test.json")
-		report := m8ProductionReportV1{Status: "pass", ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, ExactParityChecked: parity, ExactParityPassed: parity, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true}}}}
+		report := m8ProductionReportV1{Status: "pass", ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
 	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
@@ -142,10 +142,24 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	}
 	transcript := m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{outcome}}
 	started := time.Unix(1, 0).UTC()
-	child, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started.Add(time.Second))
-	if err != nil || child.Counts.P2HitSlots != 10000 || child.Counts.RoutingMissSlots != 0 || child.SourceIdentitySHA256 != digest || !localHNSWAttributionSHA256V1(child.Timing.ResultSHA256) {
+	child, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started)
+	if err != nil || !localHNSWFinalQualificationChildValidV1(child, expected) || child.Counts.P2HitSlots != 10000 || child.Counts.RoutingMissSlots != 0 || child.SourceIdentitySHA256 != digest || !localHNSWAttributionSHA256V1(child.Timing.ResultSHA256) {
 		t.Fatalf("child=%+v err=%v", child, err)
 	}
+
+	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 16, 16, 16
+	report.Rows[0].Attribution.ExhaustivePartitionRecallAtK = 1
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
+	report.Rows[0].Attribution.ExhaustivePartitionScoreParity = true
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err != nil {
+		t.Fatal(err)
+	}
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = false
+	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started); err == nil {
+		t.Fatal("accepted missing exhaustive parity")
+	}
+	report.Rows[0].Attribution.ExhaustivePartitionIDParity = true
+	expected.Probes, report.Rows[0].Probes, transcript.Outcomes[0].Probes = 2, 2, 2
 
 	transcript.Outcomes[0].ExactRepresentativeTruthHits = nil
 	if _, err := localHNSWFinalQualificationChildFromTranscriptV1(expected, report, transcript, "/report", digest, truth, started, started.Add(time.Second)); err == nil {
@@ -180,6 +194,7 @@ func TestLocalHNSWFinalQualificationReportV1(t *testing.T) {
 		} else {
 			childCounts.P2HitSlots = 0
 			childCounts.P16HitSlots = 9520
+			childCounts.RoutingMissSlots = 0
 		}
 		children = append(children, localHNSWFinalQualificationChildV1{
 			localHNSWFinalQualificationRunV1: run,
@@ -210,6 +225,19 @@ func TestLocalHNSWFinalQualificationReportV1(t *testing.T) {
 	report := localHNSWFinalQualificationReportV1{Schema: localHNSWFinalQualificationSchemaV1, ResultKind: "local_hnsw_final_qualification_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: []string{"local-hnsw-final-qualification"}, BaseSHA: localHNSWAttributionSourceLockV1, HeadSHA: strings.Repeat("d", 40), SourceCheckout: "/source", Executable: "/bench", ExecutableSHA256: digest}, Inputs: localHNSWFinalQualificationInputsEvidenceV1{Corpora: corpora, Calibration: localHNSWAttributionFileInputV1{Path: "/calibration", SHA256: localHNSWAttributionCalibrationSHA256V1}, CalibrationRows: 806, Holdout: localHNSWAttributionFileInputV1{Path: "/holdout", SHA256: localHNSWAttributionHoldoutSHA256V1}, HoldoutRows: 194, QueryUnionRows: 1000, ApprovalSHA: strings.Repeat("e", 40), Artifacts: "/artifacts"}, Children: children, Disposition: "pass", Limitations: []string{"test"}}
 	if err := localHNSWFinalQualificationReportValidV1(report); err != nil {
 		t.Fatal(err)
+	}
+	for i := range report.Children {
+		if report.Children[i].Corpus == localHNSWFinalQualificationCorpus250KV1 && report.Children[i].Variant == localHNSWFinalQualificationCandidateV1 && report.Children[i].Probes == 2 {
+			report.Children[i].Counts.RoutingMissSlots--
+		}
+	}
+	if err := localHNSWFinalQualificationReportValidV1(report); err == nil {
+		t.Fatal("accepted routing drift within p2")
+	}
+	for i := range report.Children {
+		if report.Children[i].Corpus == localHNSWFinalQualificationCorpus250KV1 && report.Children[i].Variant == localHNSWFinalQualificationCandidateV1 && report.Children[i].Probes == 2 {
+			report.Children[i].Counts.RoutingMissSlots++
+		}
 	}
 	report.Children[1].SourceIdentitySHA256 = strings.Repeat("c", 64)
 	if err := localHNSWFinalQualificationReportValidV1(report); err == nil {
