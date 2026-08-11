@@ -1001,7 +1001,20 @@ func m8QualificationRouterMaxVectorsV1(source int) (int, bool) {
 
 func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
 	partitionConfig, routerConfig, visits, ok := m8QualificationM3BuildConfigV1(fixture)
-	return ok && variant.PartitionHNSWM == partitionConfig.Degree && variant.PartitionMaxDistanceWork == partitionConfig.MaxDistanceWork && variant.RouterMaxScalarWork == routerConfig.MaxScalarWork && variant.M3MaxBenchmarkVisits == visits && variant.PartitionConfig == partitionConfig && variant.RouterConfig == routerConfig
+	if !ok || variant.PartitionMaxDistanceWork != partitionConfig.MaxDistanceWork || variant.RouterMaxScalarWork != routerConfig.MaxScalarWork || variant.M3MaxBenchmarkVisits != visits || variant.PartitionConfig != partitionConfig || variant.RouterConfig != routerConfig {
+		return false
+	}
+	switch variant.PartitionHNSWM {
+	case partitionConfig.Degree:
+	case 18:
+	default:
+		return false
+	}
+	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, variant.PartitionHNSWM).VectorIndexes[0]
+	if variant.PartitionHNSWM == 18 {
+		definition.EfConstruction = 256
+	}
+	return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
 }
 
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {

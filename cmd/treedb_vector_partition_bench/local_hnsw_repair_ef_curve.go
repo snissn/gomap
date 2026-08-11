@@ -32,6 +32,9 @@ type localHNSWRepairEFCurveCellV1 struct {
 	RoutingRecall    localHNSWAttributionRecallAggregateV1 `json:"routing_recall"`
 	P2Recall         localHNSWAttributionRecallAggregateV1 `json:"p2_recall"`
 	P16Recall        localHNSWAttributionRecallAggregateV1 `json:"p16_recall"`
+	RoutingMissSlots uint64                                `json:"routing_miss_slots"`
+	P2HitSlots       uint64                                `json:"p2_hit_slots"`
+	P16HitSlots      uint64                                `json:"p16_hit_slots"`
 	P2Work           localHNSWRepairCalibrationWorkV1      `json:"p2_work"`
 	P16Work          localHNSWRepairCalibrationWorkV1      `json:"p16_work"`
 	TerminationCount map[string]uint64                     `json:"termination_counts"`
@@ -177,6 +180,15 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 				return nil, err
 			}
 			cell := &out[cellIndex]
+			routingHits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, exactLocal)
+			p2Hits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, p2Results)
+			p16Hits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, p16Results)
+			if routingHits > uint64(len(canonicalTruth)) || math.MaxUint64-cell.RoutingMissSlots < uint64(len(canonicalTruth))-routingHits || math.MaxUint64-cell.P2HitSlots < p2Hits || math.MaxUint64-cell.P16HitSlots < p16Hits {
+				return nil, errors.New("invalid local HNSW repair EF curve slots")
+			}
+			cell.RoutingMissSlots += uint64(len(canonicalTruth)) - routingHits
+			cell.P2HitSlots += p2Hits
+			cell.P16HitSlots += p16Hits
 			count := cell.QueryCount
 			if err := localHNSWAttributionRecallAddV1(&cell.RoutingRecall, m8CanonicalRecallV1(canonicalTruth, exactLocal), count); err != nil {
 				return nil, err
@@ -211,6 +223,20 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 		}
 	}
 	return out, nil
+}
+
+func localHNSWRepairEFCurveHitSlotsV1(want, got []m8CanonicalResultV1) uint64 {
+	wantIDs := make(map[string]struct{}, len(want))
+	for _, result := range want {
+		wantIDs[result.ID] = struct{}{}
+	}
+	var hits uint64
+	for _, result := range got {
+		if _, ok := wantIDs[result.ID]; ok {
+			hits++
+		}
+	}
+	return hits
 }
 
 func localHNSWRepairEFCurveTimingV1Build(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, repair *localHNSWVariantHarnessV1, ordinals []int, queries [][]float32) (localHNSWRepairEFCurveTimingV1, error) {

@@ -52,6 +52,9 @@ const (
 	partitionHNSWIndex                      = "embedding_graph"
 	partitionHNSWDegree                     = 16
 	maxSourceHNSWDegree                     = partitionHNSWDegree
+	maxPartitionLocalHNSWM                  = 32
+	partitionHNSWDefaultEfC                 = 128
+	maxPartitionHNSWEfC                     = 4_096
 	fixtureGenerator                        = "treedb_vector_partition_fixture_v2"
 	qualificationSyntheticGeneratorV1       = "treedb_vector_partition_high_entropy_synthetic_v1"
 	qualificationEmbeddingGeneratorV1       = "treedb_vector_partition_embedding_mixture_v1"
@@ -110,6 +113,7 @@ type config struct {
 	kahipTimeout          time.Duration
 	partition             vectorpartition.Config
 	partitionHNSWM        int
+	partitionHNSWEfC      int
 	router                *treeDBRepresentativeRouter
 	coordinator           *m6CoordinatorHarnessV1
 	routerConfig          vectorpartition.RouterConfigV1
@@ -456,6 +460,9 @@ func run(args []string, stdout io.Writer) error {
 	}
 	if len(args) > 0 && args[0] == "local-hnsw-repair-m-curve" {
 		return runLocalHNSWRepairMCurveV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "local-hnsw-repair-m-timing" {
+		return runLocalHNSWRepairMTimingV1(args[1:], stdout)
 	}
 	if len(args) > 0 && args[0] == "system-node" {
 		return runVectorPartitionSystemNodeV1(args[1:], stdout)
@@ -913,6 +920,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
 	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits -partition-degree")
+	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "persistent partition-local HNSW efConstruction for M3; zero inherits 128")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
 	fs.IntVar(&cfg.routerConfig.LeafSize, "router-leaf-size", cfg.routerConfig.LeafSize, "router leaf stop size")
@@ -1139,15 +1147,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("stable_id_hash M3 materialization requires exactly zero overlap")
 	}
 	if cfg.stage == "overlap,partition_index" {
-		effectivePartitionHNSWM := cfg.partitionHNSWM
-		if effectivePartitionHNSWM == 0 {
-			effectivePartitionHNSWM = cfg.partition.Degree
+		if _, _, err := m3PartitionLocalHNSWConfigV1(cfg); err != nil {
+			return config{}, err
 		}
-		if effectivePartitionHNSWM < 2 || effectivePartitionHNSWM > partitionHNSWDegree {
-			return config{}, fmt.Errorf("effective partition HNSW M must be in [2,%d]", partitionHNSWDegree)
-		}
-	} else if cfg.partitionHNSWM != 0 {
-		return config{}, errors.New("-partition-hnsw-m applies only to M3")
+	} else if cfg.partitionHNSWM != 0 || cfg.partitionHNSWEfC != 0 {
+		return config{}, errors.New("-partition-hnsw-m and -partition-hnsw-ef-construction apply only to M3")
 	}
 	if cfg.stage == "router" && stages == "all" {
 		stages = "exact_representative_routing,approximate_representative_routing"
@@ -1196,6 +1200,24 @@ func parseConfig(args []string) (config, error) {
 		cfg.partition.MaxEdges = int(maxEdgesForInput)
 	}
 	return cfg, nil
+}
+
+func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
+	m := cfg.partitionHNSWM
+	if m == 0 {
+		m = cfg.partition.Degree
+	}
+	if m < 2 || m > maxPartitionLocalHNSWM {
+		return 0, 0, fmt.Errorf("effective partition HNSW M must be in [2,%d]", maxPartitionLocalHNSWM)
+	}
+	efConstruction := cfg.partitionHNSWEfC
+	if efConstruction == 0 {
+		efConstruction = partitionHNSWDefaultEfC
+	}
+	if efConstruction < m || efConstruction > maxPartitionHNSWEfC {
+		return 0, 0, fmt.Errorf("effective partition HNSW efConstruction must be in [%d,%d]", m, maxPartitionHNSWEfC)
+	}
+	return m, efConstruction, nil
 }
 
 func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {

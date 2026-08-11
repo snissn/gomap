@@ -34,6 +34,13 @@ const (
 	m3RouterAssetFileIDBase uint64 = 50_000
 )
 
+func m3RouterBuildOptionsV1(config vectorpartition.RouterConfigV1, fileID uint32, partID uint64) collections.VectorPartitionRouterBuildOptionsV1 {
+	return collections.VectorPartitionRouterBuildOptionsV1{
+		Config: config, AssetFileID: fileID, AssetPartID: partID,
+		M: partitionHNSWDegree, EfConstruction: partitionHNSWDefaultEfC, EfSearch: 128,
+	}
+}
+
 type m3PartitionIndexReport struct {
 	SchemaVersion       int                   `json:"schema_version"`
 	ResultKind          string                `json:"result_kind"`
@@ -279,17 +286,15 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}()
 	manager := collections.NewCollectionManager(db)
 	meta := partitionCollectionMeta(m3BenchmarkCollection, len(vectors[0]))
-	partitionHNSWM := cfg.partitionHNSWM
-	if partitionHNSWM == 0 {
-		partitionHNSWM = cfg.partition.Degree
-	}
-	if partitionHNSWM < 2 {
-		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW degree must be at least 2")
+	partitionHNSWM, partitionHNSWEfConstruction, err := m3PartitionLocalHNSWConfigV1(cfg)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
 	}
 	foundIndex := false
 	for i := range meta.VectorIndexes {
 		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
 			meta.VectorIndexes[i].M = partitionHNSWM
+			meta.VectorIndexes[i].EfConstruction = partitionHNSWEfConstruction
 			foundIndex = true
 			break
 		}
@@ -433,19 +438,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(
-		context.Background(),
-		manifest,
-		routerPartitions,
-		collections.VectorPartitionRouterBuildOptionsV1{
-			Config:         cfg.routerConfig,
-			AssetFileID:    routerFileID,
-			AssetPartID:    uint64(manifest.PartitionCount) + 1,
-			M:              partitionHNSWM,
-			EfConstruction: 128,
-			EfSearch:       128,
-		},
-	)
+	routerStatus, err := col.BuildAndPublishVectorPartitionRouterV1(context.Background(), manifest, routerPartitions, m3RouterBuildOptionsV1(cfg.routerConfig, routerFileID, uint64(manifest.PartitionCount)+1))
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}

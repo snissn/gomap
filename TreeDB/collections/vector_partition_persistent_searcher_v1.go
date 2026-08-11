@@ -265,6 +265,15 @@ const (
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m24_ef_construction_256"
+	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
+	// is an offline-only auxiliary-navigation construction candidate.
+	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256"
+	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
+	// is an offline-only auxiliary-navigation construction candidate.
+	VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m20_ef_construction_256"
+	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1
+	// is an offline-only auxiliary-navigation construction candidate.
+	VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m22_ef_construction_256"
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m32_ef_construction_256"
@@ -272,7 +281,7 @@ const (
 
 func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
 	switch variant {
-	case VectorPartitionLocalGraphVariantNativeV1, VectorPartitionLocalGraphVariantOverlayCurrentV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+	case VectorPartitionLocalGraphVariantNativeV1, VectorPartitionLocalGraphVariantOverlayCurrentV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
 		return "partition_local_graph_delta_v1:" + string(variant), nil
 	default:
 		return "", fmt.Errorf("partition-local graph variant=%q", variant)
@@ -305,6 +314,15 @@ func vectorPartitionLocalGraphVariantDefinitionV1(def VectorIndexDefinition, var
 		return def, true, nil
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1:
 		def.EfConstruction = 512
+		return def, true, nil
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
+		def.M, def.EfConstruction = 18, 256
+		return def, true, nil
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1:
+		def.M, def.EfConstruction = 20, 256
+		return def, true, nil
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1:
+		def.M, def.EfConstruction = 22, 256
 		return def, true, nil
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1:
 		def.M, def.EfConstruction = 24, 256
@@ -432,7 +450,7 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows []column
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
-	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
 		return buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
 	default:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, fmt.Errorf("partition-local graph variant=%q", variant)
@@ -1540,6 +1558,27 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1) == expectedMembershipDigest:
 			var definitionErr error
 			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1)
+			if definitionErr != nil {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			offlineV3 = true
+		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expectedMembershipDigest:
+			var definitionErr error
+			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+			if definitionErr != nil {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			offlineV3 = true
+		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1) == expectedMembershipDigest:
+			var definitionErr error
+			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)
+			if definitionErr != nil {
+				return nil, ErrVectorPartitionSearchUnavailable
+			}
+			offlineV3 = true
+		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1) == expectedMembershipDigest:
+			var definitionErr error
+			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)
 			if definitionErr != nil {
 				return nil, ErrVectorPartitionSearchUnavailable
 			}
