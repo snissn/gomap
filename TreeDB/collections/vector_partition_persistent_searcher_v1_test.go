@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -361,6 +362,43 @@ func TestValidVectorPartitionLocalGraphL0V1RejectsFutureOffset(t *testing.T) {
 	}
 	if validVectorPartitionLocalGraphL0V1(3, columnHNSWSearchPackPreparedLayer{Offsets: []uint64{0, 1, 3, 2}, Neighbors: []uint32{2, 0}}) {
 		t.Fatal("decreasing future offset accepted")
+	}
+}
+
+func TestVectorPartitionLocalGraphStableIDHashInsertionOrderV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{{ID: []byte("cluster-c")}, {ID: []byte("cluster-a")}, {ID: []byte("cluster-b")}}
+	control := append([]columnVectorGraphAssetRow(nil), rows...)
+	if err := vectorPartitionLocalGraphApplyInsertionOrderV1(control, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(control, rows) {
+		t.Fatalf("source order changed: %+v", control)
+	}
+	first := append([]columnVectorGraphAssetRow(nil), rows...)
+	second := append([]columnVectorGraphAssetRow(nil), rows...)
+	if err := vectorPartitionLocalGraphApplyInsertionOrderV1(first, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1); err != nil {
+		t.Fatal(err)
+	}
+	if err := vectorPartitionLocalGraphApplyInsertionOrderV1(second, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("hash order is not deterministic: first=%+v second=%+v", first, second)
+	}
+	for i, row := range first {
+		hash := sha256.Sum256(append([]byte(vectorPartitionLocalGraphStableIDHashInsertionOrderDomainV1), row.ID...))
+		if row.ID == nil || (i > 0 && bytes.Compare(first[i-1].ID, row.ID) == 0) {
+			t.Fatalf("hash order IDs=%+v", first)
+		}
+		if i > 0 {
+			previous := sha256.Sum256(append([]byte(vectorPartitionLocalGraphStableIDHashInsertionOrderDomainV1), first[i-1].ID...))
+			if bytes.Compare(previous[:], hash[:]) > 0 {
+				t.Fatalf("hash order=%+v", first)
+			}
+		}
+	}
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1); err != nil {
+		t.Fatal(err)
 	}
 }
 
