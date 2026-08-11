@@ -31,3 +31,20 @@ func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
 		t.Fatal("expected missing frozen inputs rejection")
 	}
 }
+
+func TestLocalHNSWRepairMTimingRoutesSHA256V1(t *testing.T) {
+	ordinal := 0
+	for !localHNSWCalibrationOrdinalV1(ordinal) {
+		ordinal++
+	}
+	rows := []localHNSWRepairCalibrationQueryV1{{Ordinal: ordinal, QueryFP32SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", P2Route: []uint32{0, 1}, P16Route: []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}}}
+	first, err := localHNSWRepairMTimingRoutesSHA256V1(rows)
+	if err != nil || !localHNSWAttributionSHA256V1(first) {
+		t.Fatalf("first=%q err=%v", first, err)
+	}
+	rows[0].P2Route, rows[0].P16Route = []uint32{1, 0}, []uint32{1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	second, err := localHNSWRepairMTimingRoutesSHA256V1(rows)
+	if err != nil || second == first {
+		t.Fatalf("second=%q first=%q err=%v", second, first, err)
+	}
+}

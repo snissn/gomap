@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,30 +30,33 @@ type localHNSWRepairMTimingGateV1 struct {
 }
 
 type localHNSWRepairMTimingReportV1 struct {
-	Schema        string                               `json:"schema"`
-	ResultKind    string                               `json:"result_kind"`
-	Status        string                               `json:"status"`
-	GeneratedAt   string                               `json:"generated_at"`
-	Provenance    localHNSWAttributionProvenanceV1     `json:"provenance"`
-	Host          m8ProductionHostEvidenceV1           `json:"host"`
-	Inputs        localHNSWAttributionInputsEvidenceV1 `json:"inputs"`
-	Source        localHNSWAttributionSourceEvidenceV1 `json:"source"`
-	TopK          int                                  `json:"top_k"`
-	EFSearch      int                                  `json:"ef_search"`
-	ProbeCounts   []int                                `json:"probe_counts"`
-	BaselineBuild localHNSWAttributionBuildEvidenceV1  `json:"m16_efc128_build"`
-	Candidate     localHNSWRepairMCurveCellV1          `json:"m18_efc256_candidate"`
-	Quality       localHNSWRepairEFCurveCellV1         `json:"quality"`
-	Calibration   localHNSWRepairMTimingSummaryV1      `json:"calibration"`
-	Timing        localHNSWRepairCalibrationTimingV1   `json:"timing"`
-	Gate          localHNSWRepairMTimingGateV1         `json:"gate"`
-	Profiles      m8ProductionProfileEvidenceV1        `json:"profiles"`
-	Limitations   []string                             `json:"limitations"`
+	Schema             string                               `json:"schema"`
+	ResultKind         string                               `json:"result_kind"`
+	Status             string                               `json:"status"`
+	GeneratedAt        string                               `json:"generated_at"`
+	Provenance         localHNSWAttributionProvenanceV1     `json:"provenance"`
+	Host               m8ProductionHostEvidenceV1           `json:"host"`
+	Inputs             localHNSWAttributionInputsEvidenceV1 `json:"inputs"`
+	Source             localHNSWAttributionSourceEvidenceV1 `json:"source"`
+	TopK               int                                  `json:"top_k"`
+	EFSearch           int                                  `json:"ef_search"`
+	ProbeCounts        []int                                `json:"probe_counts"`
+	BaselineBuild      localHNSWAttributionBuildEvidenceV1  `json:"m16_efc128_build"`
+	Candidate          localHNSWRepairMCurveCellV1          `json:"m18_efc256_candidate"`
+	Quality            localHNSWRepairEFCurveCellV1         `json:"quality"`
+	Calibration        localHNSWRepairMTimingSummaryV1      `json:"calibration"`
+	Timing             localHNSWRepairCalibrationTimingV1   `json:"timing"`
+	TimingRoutesSHA256 string                               `json:"timing_routes_sha256"`
+	Gate               localHNSWRepairMTimingGateV1         `json:"gate"`
+	Profiles           m8ProductionProfileEvidenceV1        `json:"profiles"`
+	Limitations        []string                             `json:"limitations"`
 }
 
 type localHNSWRepairMTimingSummaryV1 struct {
-	Baseline  localHNSWRepairCalibrationAggregateV1 `json:"m16_efc128"`
-	Candidate localHNSWRepairCalibrationAggregateV1 `json:"m18_efc256"`
+	BaselineRoutesSHA256  string                                `json:"m16_efc128_routes_sha256"`
+	CandidateRoutesSHA256 string                                `json:"m18_efc256_routes_sha256"`
+	Baseline              localHNSWRepairCalibrationAggregateV1 `json:"m16_efc128"`
+	Candidate             localHNSWRepairCalibrationAggregateV1 `json:"m18_efc256"`
 }
 
 func localHNSWRepairMTimingGateV1Build(cells []localHNSWRepairCalibrationTimingCellV1) (localHNSWRepairMTimingGateV1, error) {
@@ -116,7 +121,7 @@ func validateLocalHNSWRepairMTimingReportV1(report localHNSWRepairMTimingReportV
 	if report.Schema != localHNSWRepairMTimingSchemaV1 || report.ResultKind != "local_hnsw_repair_m18_timing_v1" || report.Status != "valid" || report.Provenance.BaseSHA != localHNSWAttributionSourceLockV1 || report.Provenance.SourceDirty || !validLowerSHA(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.TopK != 10 || report.EFSearch != 128 || !slices.Equal(report.ProbeCounts, []int{2, 16}) || !localHNSWAttributionFixtureV1(report.Inputs.Fixture) || report.Inputs.DatasetManifest.SHA256 != localHNSWAttributionFixtureManifestSHA256V1 || report.Inputs.Descriptor.SHA256 != localHNSWAttributionDescriptorSHA256V1 || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.HoldoutStatus != "manifest_validated_query_outcomes_unopened" || report.Inputs.TruthStatus != "sha256_only_not_decoded" || report.Source.Partitions != 16 || report.Source.SourceRows != 250000 || len(report.Source.PartitionLoads) != 16 || report.Source.ManifestIntegrity == "" || report.Source.ReadySetDigest == "" || report.Source.RouterModelDigest == "" || report.BaselineBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.Candidate.M != 18 || report.Candidate.EfConstruction != 256 || report.Candidate.Build.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || report.Candidate.Graph.Rows != 300000 || report.Candidate.Graph.CombinedReachableRows != 300000 || report.Calibration.Baseline.QueryCount != 806 || report.Calibration.Candidate.QueryCount != 806 || report.Profiles.Status != "complete" {
 		return errors.New("invalid local HNSW repair M timing report")
 	}
-	if report.Quality.QueryCount != 806 || report.Quality.EFSearch != 128 || report.Quality.P2Recall.Mean < .95 || report.Quality.RoutingMissSlots > 20 || !localHNSWRepairMCurveSlotMeansV1(report.Quality) || localHNSWRepairMCurveHitSlotGapV1(report.Quality.P2HitSlots, report.Quality.P16HitSlots) > 20 || !reflect.DeepEqual(report.Candidate.Quality, report.Quality) {
+	if report.Quality.QueryCount != 806 || report.Quality.EFSearch != 128 || report.Quality.P2Recall.Mean < .95 || report.Quality.RoutingMissSlots > 20 || !localHNSWAttributionSHA256V1(report.Quality.RoutesSHA256) || report.Quality.RoutesSHA256 != report.Calibration.BaselineRoutesSHA256 || report.Quality.RoutesSHA256 != report.Calibration.CandidateRoutesSHA256 || report.Quality.RoutesSHA256 != report.TimingRoutesSHA256 || !localHNSWRepairMCurveSlotMeansV1(report.Quality) || localHNSWRepairMCurveHitSlotGapV1(report.Quality.P2HitSlots, report.Quality.P16HitSlots) > 20 || !reflect.DeepEqual(report.Candidate.Quality, report.Quality) {
 		return errors.New("invalid local HNSW repair M timing quality")
 	}
 	want, err := localHNSWRepairMTimingGateV1Build(report.Timing.Cells)
@@ -289,9 +294,13 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	candidateInfo := localHNSWRepairMCurveCellV1{M: 18, EfConstruction: 256, DefinitionDigest: collections.VectorIndexDefinitionDigestV1(definition), PackMembershipSHA256: membershipSHA, PackChecksumsSHA256: checksumSHA, Build: candidateBuild, Graph: graph}
 	quality := localHNSWRepairEFCurveCellV1{EFSearch: 128, QueryCount: len(rows), RoutingRecall: summary.Repair.RoutingRecall, P2Recall: summary.Repair.P2Recall, P16Recall: summary.Repair.P16Recall}
 	quality.RoutingMissSlots, quality.P2HitSlots, quality.P16HitSlots = localHNSWRepairMTimingHitSlotsV1(rows)
+	quality.RoutesSHA256, err = localHNSWRepairMTimingRoutesSHA256V1(rows)
+	if err != nil {
+		return err
+	}
 	candidateInfo.Quality = quality
 	inputsEvidence := localHNSWAttributionInputsEvidenceV1{DatasetManifest: localHNSWAttributionFileInputV1{Path: filepath.Join(dataset, "fixture_manifest.json"), SHA256: localHNSWAttributionFixtureManifestSHA256V1}, Fixture: fixture, RetainedDB: retainedDB, Descriptor: localHNSWAttributionFileInputV1{Path: inputConfig.Descriptor, SHA256: inputConfig.DescriptorSHA256}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationSplit, SHA256: inputConfig.CalibrationSplitSHA256}, CalibrationRows: len(inputs.Calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutSplit, SHA256: inputConfig.HoldoutSplitSHA256}, HoldoutRows: len(inputs.Holdout.Ordinals), HoldoutStatus: "manifest_validated_query_outcomes_unopened", Truth: localHNSWAttributionFileInputV1{Path: truthArtifact, SHA256: inputConfig.TruthArtifactSHA256}, TruthStatus: "sha256_only_not_decoded", Historical: historical}
-	report := localHNSWRepairMTimingReportV1{Schema: localHNSWRepairMTimingSchemaV1, ResultKind: "local_hnsw_repair_m18_timing_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-repair-m-timing", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: inputsEvidence, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, TopK: 10, EFSearch: 128, ProbeCounts: []int{2, 16}, BaselineBuild: overlayBuild, Candidate: candidateInfo, Quality: quality, Calibration: localHNSWRepairMTimingSummaryV1{Baseline: summary.Overlay, Candidate: summary.Repair}, Timing: timing, Gate: gate, Profiles: m8ProductionProfileEvidenceV1{Directory: profiles, Captured: profilePaths, Artifacts: profileArtifacts, Status: "complete", Scope: "ordinary m16_efc128 versus m18_efc256 auxiliary-navigation local search; top_k=10 ef_search=128 probes=2,all concurrency=1 four order-balanced repetitions"}, Limitations: []string{"offline calibration-only timing pre-gate; not product qualification", "holdout query outcomes and trusted truth contents remained unopened"}}
+	report := localHNSWRepairMTimingReportV1{Schema: localHNSWRepairMTimingSchemaV1, ResultKind: "local_hnsw_repair_m18_timing_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-repair-m-timing", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: inputsEvidence, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, TopK: 10, EFSearch: 128, ProbeCounts: []int{2, 16}, BaselineBuild: overlayBuild, Candidate: candidateInfo, Quality: quality, Calibration: localHNSWRepairMTimingSummaryV1{BaselineRoutesSHA256: quality.RoutesSHA256, CandidateRoutesSHA256: quality.RoutesSHA256, Baseline: summary.Overlay, Candidate: summary.Repair}, Timing: timing, TimingRoutesSHA256: quality.RoutesSHA256, Gate: gate, Profiles: m8ProductionProfileEvidenceV1{Directory: profiles, Captured: profilePaths, Artifacts: profileArtifacts, Status: "complete", Scope: "ordinary m16_efc128 versus m18_efc256 auxiliary-navigation local search; top_k=10 ef_search=128 probes=2,all concurrency=1 four order-balanced repetitions"}, Limitations: []string{"offline calibration-only timing pre-gate; not product qualification", "holdout query outcomes and trusted truth contents remained unopened"}}
 	if err := validateLocalHNSWRepairMTimingReportV1(report); err != nil {
 		return err
 	}
@@ -343,4 +352,29 @@ func localHNSWRepairMTimingHitSlotsV1(rows []localHNSWRepairCalibrationQueryV1) 
 		}
 	}
 	return
+}
+
+func localHNSWRepairMTimingRoutesSHA256V1(rows []localHNSWRepairCalibrationQueryV1) (string, error) {
+	h := sha256.New()
+	h.Write([]byte("treedb-4106-local-hnsw-repair-ef-curve-routes-v1/"))
+	var raw [4]byte
+	for i, row := range rows {
+		if row.Ordinal < 0 || !localHNSWCalibrationOrdinalV1(row.Ordinal) || i > 0 && rows[i-1].Ordinal >= row.Ordinal || !localHNSWAttributionSHA256V1(row.QueryFP32SHA256) || len(row.P2Route) != 2 || len(row.P16Route) != 16 || !localHNSWAttributionRoutePrefixV1(row.P2Route, row.P16Route) || !localHNSWAttributionRoutePermutationV1(row.P16Route, 16) {
+			return "", errors.New("invalid local HNSW repair M timing routes")
+		}
+		binary.LittleEndian.PutUint32(raw[:], uint32(row.Ordinal))
+		h.Write(raw[:])
+		h.Write([]byte(row.QueryFP32SHA256))
+		for _, route := range [][]uint32{row.P2Route, row.P16Route} {
+			for _, partition := range route {
+				binary.LittleEndian.PutUint32(raw[:], partition)
+				h.Write(raw[:])
+			}
+		}
+	}
+	digest := fmt.Sprintf("%x", h.Sum(nil))
+	if !localHNSWAttributionSHA256V1(digest) {
+		return "", errors.New("invalid local HNSW repair M timing route digest")
+	}
+	return digest, nil
 }
