@@ -1231,6 +1231,13 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 		if !m8QualificationM3BuildCapsV1(variant, fixture) {
 			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
 		}
+		defaultCandidate := variant
+		definition.EfConstruction = 256
+		defaultCandidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
+		if m8QualificationM3BuildCapsV1(defaultCandidate, fixture) {
+			t.Fatalf("fixture=%d accepted M16/eFC256 local definition", fixture.Vectors)
+		}
+		definition.EfConstruction = 128
 		candidate := variant
 		candidate.PartitionHNSWM = 18
 		definition.M, definition.EfConstruction = 18, 256
@@ -2966,6 +2973,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	descriptor.BaseSHA, descriptor.HeadSHA = head, head
 	descriptor.PartitionConfig, descriptor.PartitionMaxDistanceWork = partitionConfig, partitionConfig.MaxDistanceWork
 	descriptor.RouterConfig, descriptor.RouterMaxScalarWork, descriptor.M3MaxBenchmarkVisits = routerConfig, routerConfig.MaxScalarWork, visits
+	descriptor.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, descriptor.PartitionHNSWM).VectorIndexes[0])
 	descriptor.PartitionLoads = make([]int, len(loads))
 	for i, load := range loads {
 		descriptor.PartitionLoads[i] = int(load)

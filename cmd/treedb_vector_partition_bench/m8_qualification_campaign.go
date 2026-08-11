@@ -1006,14 +1006,15 @@ func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixture
 	}
 	switch variant.PartitionHNSWM {
 	case partitionConfig.Degree:
-		return true
 	case 18:
-		definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, 18).VectorIndexes[0]
-		definition.EfConstruction = 256
-		return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
 	default:
 		return false
 	}
+	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, variant.PartitionHNSWM).VectorIndexes[0]
+	if variant.PartitionHNSWM == 18 {
+		definition.EfConstruction = 256
+	}
+	return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
 }
 
 func m8QualificationVariantBackendV1(variant m3VariantDescriptorV1, fixture fixtureManifest) bool {
