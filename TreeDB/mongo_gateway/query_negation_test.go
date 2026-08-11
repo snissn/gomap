@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -67,6 +68,7 @@ func TestMongoDottedProjectionRebuildsParentsAndFailsClosedOnArrays(t *testing.T
 		want       bson.D
 	}{
 		{"include nested", bson.D{{Key: "profile.name", Value: int32(1)}, {Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+		{"include nested id", bson.D{{Key: "profile._id", Value: int32(1)}, {Key: "_id", Value: int32(0)}}, bson.D{{Key: "profile", Value: bson.D{{Key: "_id", Value: "nested"}}}}},
 		{"exclude nested", bson.D{{Key: "profile.age", Value: int32(0)}}, bson.D{{Key: "_id", Value: "x"}, {Key: "profile", Value: bson.D{{Key: "_id", Value: "nested"}, {Key: "name", Value: "Ada"}}}, {Key: "state", Value: "active"}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -117,6 +119,84 @@ func TestMongoDottedProjectionArrayFailureDoesNotPublishCursor(t *testing.T) {
 	assertCommandError(t, response, "BadValue")
 	if len(server.cursors) != 0 {
 		t.Fatalf("published cursor despite dotted projection rejection: %d", len(server.cursors))
+	}
+}
+
+func TestMongoFilterFindAndModifyProjectionRejectsBeforeMutation(t *testing.T) {
+	for _, newImage := range []bool{false, true} {
+		t.Run(fmt.Sprintf("new=%v", newImage), func(t *testing.T) {
+			server := newMongoCompatibilityMatrixServer(t)
+			assertOK(t, serveCommand(t, server, 406640, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+				bson.D{{Key: "_id", Value: "array-path"}, {Key: "active", Value: true}, {Key: "n", Value: int32(0)}, {Key: "profile", Value: bson.A{bson.D{{Key: "name", Value: "Ada"}}}}},
+			}}, {Key: "$db", Value: "app"}}))
+
+			response := serveCommand(t, server, 406641, bson.D{
+				{Key: "findAndModify", Value: "events"},
+				{Key: "query", Value: bson.D{{Key: "active", Value: true}}},
+				{Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "n", Value: int32(1)}}}}},
+				{Key: "new", Value: newImage},
+				{Key: "fields", Value: bson.D{{Key: "profile.name", Value: int32(1)}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, response, "BadValue")
+			if !bson.Raw(response).Lookup("value").IsZero() || !bson.Raw(response).Lookup("lastErrorObject").IsZero() {
+				t.Fatalf("findAndModify emitted partial success response: %s", response)
+			}
+			if len(server.cursors) != 0 {
+				t.Fatalf("findAndModify published cursor despite response rejection: %d", len(server.cursors))
+			}
+			check := serveCommand(t, server, 406642, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "array-path"}}}, {Key: "$db", Value: "app"}})
+			assertOK(t, check)
+			doc := bson.Raw(cursorFirstBatch(t, check)[0])
+			if got, ok := doc.Lookup("n").Int32OK(); !ok || got != 0 {
+				t.Fatalf("array-rejected filter findAndModify mutated n=%d ok=%v want 0", got, ok)
+			}
+		})
+	}
+}
+
+func TestMongoNorResidualBypassesDirectPrimaryProjectionShortcut(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406643, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "rejected"}, {Key: "state", Value: "disabled"}},
+	}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406644, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{
+		{Key: "_id", Value: "rejected"},
+		{Key: "$nor", Value: bson.A{bson.D{{Key: "state", Value: "disabled"}}}},
+	}}, {Key: "projection", Value: bson.D{{Key: "_id", Value: int32(1)}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, response)
+	if batch := cursorFirstBatch(t, response); len(batch) != 0 {
+		t.Fatalf("$nor-rejected primary document escaped projected shortcut: %v", batch)
+	}
+}
+
+func TestMongoNorResidualGuardsFindWritesAndExplain(t *testing.T) {
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406645, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{
+		bson.D{{Key: "_id", Value: "rejected"}, {Key: "state", Value: "disabled"}, {Key: "n", Value: int32(0)}},
+	}}, {Key: "$db", Value: "app"}}))
+	filter := bson.D{{Key: "_id", Value: "rejected"}, {Key: "$nor", Value: bson.A{bson.D{{Key: "state", Value: "disabled"}}}}}
+	update := serveCommand(t, server, 406646, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{
+		{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "n", Value: int32(1)}}}}},
+	}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, update)
+	assertInt32(t, update, "n", 0)
+	deleted := serveCommand(t, server, 406647, bson.D{{Key: "delete", Value: "events"}, {Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "limit", Value: int32(1)}}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, deleted)
+	assertInt32(t, deleted, "n", 0)
+	check := serveCommand(t, server, 406648, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "rejected"}}}, {Key: "$db", Value: "app"}})
+	assertOK(t, check)
+	if batch := cursorFirstBatch(t, check); len(batch) != 1 || batch[0].Lookup("n").Int32() != 0 {
+		t.Fatalf("$nor residual write changed document: %v", batch)
+	}
+	explain := serveCommand(t, server, 406649, bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "$db", Value: "app"}}}, {Key: "verbosity", Value: "executionStats"}, {Key: "$db", Value: "app"}})
+	assertOK(t, explain)
+	winning := bson.Raw(explain).Lookup("queryPlanner", "winningPlan").Document()
+	if residual, ok := winning.Lookup("residualFilter").BooleanOK(); !ok || !residual {
+		t.Fatalf("$nor explain residualFilter=%v ok=%v: %s", residual, ok, explain)
+	}
+	if returned, ok := bson.Raw(explain).Lookup("executionStats", "nReturned").Int64OK(); !ok || returned != 0 {
+		t.Fatalf("$nor explain nReturned=%d ok=%v want 0: %s", returned, ok, explain)
 	}
 }
 
@@ -282,6 +362,54 @@ func TestMongoNegativeQueryWorkCapsRejectBeforeCursorOrMutation(t *testing.T) {
 	assertOK(t, check)
 	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 {
 		t.Fatal("over-cap filter write mutated document")
+	}
+}
+
+func TestMongoNegativeQueryRawArrayCapsRejectBeforeFullMaterialization(t *testing.T) {
+	choices := make(bson.A, mongoQueryMaxNegativeChoices*16)
+	for i := range choices {
+		choices[i] = int32(7)
+	}
+	filter := bson.D{{Key: "score", Value: bson.D{{Key: "$nin", Value: choices}}}}
+	raw, err := bson.Marshal(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(raw)); err == nil || !strings.Contains(err.Error(), "$nin exceeds") {
+		t.Fatalf("duplicate-heavy $nin error=%v want bounded rejection", err)
+	}
+	raw, err = bson.Marshal(bson.D{{Key: "score", Value: bson.D{{Key: "$not", Value: bson.D{{Key: "$in", Value: choices}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFindPredicates(wire.Document(raw)); err == nil || !strings.Contains(err.Error(), "$in exceeds") {
+		t.Fatalf("duplicate-heavy $not:$in error=%v want bounded rejection", err)
+	}
+	branches := make(bson.A, mongoQueryMaxBooleanBranches*16)
+	for i := range branches {
+		branches[i] = bson.D{{Key: "score", Value: int32(7)}}
+	}
+	for _, operator := range []string{"$or", "$nor"} {
+		raw, err := bson.Marshal(bson.D{{Key: operator, Value: branches}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseFindPredicates(wire.Document(raw)); err == nil || !strings.Contains(err.Error(), operator+" exceeds") {
+			t.Fatalf("duplicate-heavy %s error=%v want bounded rejection", operator, err)
+		}
+	}
+	server := newMongoCompatibilityMatrixServer(t)
+	assertOK(t, serveCommand(t, server, 406650, bson.D{{Key: "insert", Value: "events"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "x"}, {Key: "score", Value: int32(7)}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 406651, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: filter}, {Key: "batchSize", Value: int32(0)}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "BadValue")
+	if len(server.cursors) != 0 {
+		t.Fatalf("published cursor for duplicate-heavy over-cap filter: %d", len(server.cursors))
+	}
+	write := serveCommand(t, server, 406652, bson.D{{Key: "update", Value: "events"}, {Key: "updates", Value: bson.A{bson.D{{Key: "q", Value: filter}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "mutated", Value: true}}}}}}}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, write, "BadValue")
+	check := serveCommand(t, server, 406653, bson.D{{Key: "find", Value: "events"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: "x"}}}, {Key: "$db", Value: "app"}})
+	if bson.Raw(cursorFirstBatch(t, check)[0]).Lookup("mutated").Type != 0 {
+		t.Fatal("duplicate-heavy over-cap filter mutated document")
 	}
 }
 

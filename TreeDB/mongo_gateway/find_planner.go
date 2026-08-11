@@ -548,7 +548,7 @@ func (s *Server) findPureIndexedRangeLimitDocuments(col *collections.Collection,
 }
 
 func pureIndexedRangeLimitPlan(meta collections.CollectionMeta, plan findPlan, maxDocuments int) (collections.IndexDefinition, collections.IndexRangeOptions, int, bool, bool, error) {
-	if len(plan.orBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.limit <= 0 || plan.skip != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return collections.IndexDefinition{}, collections.IndexRangeOptions{}, 0, false, false, nil
 	}
 	if int64(plan.limit) > int64(maxInt) {
@@ -1200,7 +1200,7 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 }
 
 func simplePrimaryEqualityFindValue(plan findPlan) (bson.RawValue, bool) {
-	if len(plan.orBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
+	if len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.sort.field != "" || plan.skip != 0 || plan.limit > 1 {
 		return bson.RawValue{}, false
 	}
 	if len(plan.predicates) != 1 {
@@ -1350,7 +1350,7 @@ func documentsForIndexedFieldPredicates(col *collections.Collection, materialize
 }
 
 func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
-	if plan.limit <= 0 || len(plan.orBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0 || plan.sort.field != "" || len(plan.predicates) != 1 {
 		return 0, false
 	}
 	pred := plan.predicates[0]
@@ -1372,7 +1372,7 @@ func indexedEqualityCandidateLimit(plan findPlan, idx collections.IndexDefinitio
 }
 
 func indexedRangeCandidateLimit(plan findPlan, idx collections.IndexDefinition, maxDocuments int) (int, bool) {
-	if plan.limit <= 0 {
+	if plan.limit <= 0 || len(plan.orBranches) != 0 || len(plan.norBranches) != 0 {
 		return 0, false
 	}
 	if plan.sort.field != "" && (len(findSortTerms(plan.sort)) != 1 || plan.sort.field != idx.Field || plan.sort.desc) {
@@ -1765,7 +1765,7 @@ func parseAndPredicates(value bson.RawValue) ([]findPredicate, error) {
 	if !ok {
 		return nil, errors.New("Mongo gateway $and must be an array")
 	}
-	values, err := array.Values()
+	values, err := boundedBSONArrayValues(array, mongoQueryMaxBooleanPredicates, "$and")
 	if err != nil {
 		return nil, err
 	}
@@ -1799,15 +1799,12 @@ func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredica
 	if !ok {
 		return nil, fmt.Errorf("Mongo gateway %s must be an array", operator)
 	}
-	values, err := array.Values()
+	values, err := boundedBSONArrayValues(array, mongoQueryMaxBooleanBranches, operator)
 	if err != nil {
 		return nil, err
 	}
 	if len(values) == 0 {
 		return nil, fmt.Errorf("Mongo gateway %s must contain at least one expression", operator)
-	}
-	if len(values) > mongoQueryMaxBooleanBranches {
-		return nil, fmt.Errorf("Mongo gateway %s exceeds %d branches", operator, mongoQueryMaxBooleanBranches)
 	}
 	branches := make([][]findPredicate, 0, len(values))
 	for i, value := range values {
@@ -1822,6 +1819,41 @@ func parseBooleanBranches(value bson.RawValue, operator string) ([][]findPredica
 		branches = append(branches, predicates)
 	}
 	return branches, nil
+}
+
+// boundedBSONArrayValues walks the raw BSON array without first materializing
+// every element. Query operands are client-controlled, so discovering the
+// first over-cap element must reject before a max-wire array can allocate a
+// proportional []RawValue backing slice.
+func boundedBSONArrayValues(array bson.RawArray, max int, operator string) ([]bson.RawValue, error) {
+	length, remaining, ok := bsoncore.ReadLength(array)
+	if !ok || length < 5 || int(length) != len(array) || len(remaining) == 0 || remaining[len(remaining)-1] != 0 {
+		return nil, errors.New("Mongo gateway invalid BSON array")
+	}
+	remaining = remaining[:len(remaining)-1]
+	values := make([]bson.RawValue, 0, min(max, 8))
+	for len(remaining) != 0 {
+		element, next, ok := bsoncore.ReadElement(remaining)
+		if !ok {
+			return nil, errors.New("Mongo gateway invalid BSON array")
+		}
+		value, err := bson.RawElement(element).ValueErr()
+		if err != nil {
+			return nil, err
+		}
+		if len(values) == max {
+			if operator == "$or" || operator == "$nor" {
+				return nil, fmt.Errorf("Mongo gateway %s exceeds %d branches", operator, max)
+			}
+			if operator == "$and" {
+				return nil, fmt.Errorf("Mongo gateway $and exceeds %d predicates", max)
+			}
+			return nil, fmt.Errorf("Mongo gateway %s exceeds %d choices", operator, max)
+		}
+		values = append(values, value)
+		remaining = next
+	}
+	return values, nil
 }
 
 func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, error) {
@@ -1858,7 +1890,12 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 				if !ok {
 					return nil, fmt.Errorf("Mongo gateway find field %q $in must be an array", field)
 				}
-				values, err := array.Values()
+				var values []bson.RawValue
+				if op == "$nin" {
+					values, err = boundedBSONArrayValues(array, mongoQueryMaxNegativeChoices, op)
+				} else {
+					values, err = array.Values()
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -1884,6 +1921,9 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 				if !ok {
 					return nil, fmt.Errorf("Mongo gateway find field %q $not must be an operator document", field)
 				}
+				if err := validateNotOperandWork(notDoc); err != nil {
+					return nil, err
+				}
 				inner, err := parseFieldPredicate(field, bson.RawValue{Type: bson.TypeEmbeddedDocument, Value: notDoc})
 				if err != nil || len(inner) != 1 || inner[0].negate || !findPredicateSupportsNot(inner[0].op) {
 					if err != nil {
@@ -1902,6 +1942,31 @@ func parseFieldPredicate(field string, value bson.RawValue) ([]findPredicate, er
 		return out, nil
 	}
 	return []findPredicate{{field: field, op: findPredicateEq, values: []bson.RawValue{value}}}, nil
+}
+
+// validateNotOperandWork admits the raw array before the recursive parser can
+// call RawArray.Values for the only supported $not inner predicate.
+func validateNotOperandWork(doc bson.Raw) error {
+	elements, err := doc.Elements()
+	if err != nil {
+		return err
+	}
+	if len(elements) != 1 {
+		return errors.New("Mongo gateway $not requires one supported operator")
+	}
+	op, err := elements[0].KeyErr()
+	if err != nil {
+		return err
+	}
+	if op != "$in" && op != "$nin" {
+		return nil
+	}
+	array, ok := elements[0].Value().ArrayOK()
+	if !ok {
+		return errors.New("Mongo gateway $not array operand must be an array")
+	}
+	_, err = boundedBSONArrayValues(array, mongoQueryMaxNegativeChoices, op)
+	return err
 }
 
 func findPredicateSupportsNot(op findPredicateOp) bool {
@@ -2375,7 +2440,7 @@ func projectDocumentWithEffectiveProjection(doc wire.Document, projection compil
 		return nil, err
 	}
 	if mode == projectionInclude {
-		out, _, err := projectIncludedDocument(bson.Raw(doc), tree, projection.includeID)
+		out, _, err := projectIncludedDocument(bson.Raw(doc), tree, projection.includeID, true)
 		return wire.Document(out), err
 	}
 	return projectExcludedDocument(bson.Raw(doc), tree, projection.includeID)
@@ -2414,7 +2479,7 @@ func projectionTree(fields map[string]struct{}) (*projectionNode, error) {
 	return root, nil
 }
 
-func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID bool) ([]byte, bool, error) {
+func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID, root bool) ([]byte, bool, error) {
 	elements, err := bson.Raw(doc).Elements()
 	if err != nil {
 		return nil, false, err
@@ -2425,7 +2490,7 @@ func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID bool)
 		if err != nil {
 			return nil, false, err
 		}
-		if key == "_id" {
+		if root && key == "_id" {
 			if includeID {
 				out = appendRawValueElement(out, key, elem.Value())
 			}
@@ -2446,7 +2511,7 @@ func projectIncludedDocument(doc bson.Raw, node *projectionNode, includeID bool)
 			}
 			continue
 		}
-		projected, present, err := projectIncludedDocument(nested, child, false)
+		projected, present, err := projectIncludedDocument(nested, child, false, false)
 		if err != nil {
 			return nil, false, err
 		}
