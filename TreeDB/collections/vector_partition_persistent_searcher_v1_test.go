@@ -452,6 +452,30 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer rr.Release()
+	hashOrdered, hr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 986, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hr.Release()
+	hashAgain, hr2, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 987, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationStableIDHashV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hr2.Release()
+	hashRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), hashOrdered[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashAgainRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), hashAgain[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(hashRaw, hashAgainRaw) {
+		t.Fatal("hash-order rebuild bytes differ")
+	}
+	if hashOrdered[0].MembershipDigest == repaired[0].MembershipDigest {
+		t.Fatal("hash-order candidate did not bind offline identity")
+	}
 	n, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, native[0])
 	if err != nil {
 		t.Fatal(err)
@@ -467,6 +491,20 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer r.Close()
+	h, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, hashOrdered[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	h2, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, hashAgain[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2.Close()
+	members := vectorPartitionMembershipsForPartitionV1(m, 0)
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &hashOrdered[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("production open accepted hash-order candidate: %v", err)
+	}
 	comparison, err := CompareVectorPartitionLocalGraphPacksV1(n, o)
 	if err != nil {
 		t.Fatal(err)
@@ -502,6 +540,17 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	}
 	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
 		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
+	}
+	hashResults, hashMetrics, hashTrace, err := h.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashAgainResults, hashAgainMetrics, err := h2.SearchWithOptionsV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hashResults) != 1 || hashResults[0].ID != "v0" || !slices.Equal(hashResults, hashAgainResults) || hashMetrics != hashAgainMetrics || hashMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || hashTrace.VisitedOrdinalsSHA256 == repairedTrace.VisitedOrdinalsSHA256 {
+		t.Fatalf("source/hash fixed-EF counterexample source=%+v/%+v hash=%+v/%+v/%+v reopen=%+v/%+v", repairedResults, repairedMetrics, hashResults, hashMetrics, hashTrace, hashAgainResults, hashAgainMetrics)
 	}
 }
 
