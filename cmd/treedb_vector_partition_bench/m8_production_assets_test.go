@@ -583,18 +583,29 @@ func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEviden
 
 func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 	valid := []m8PartitionPackDiagnosticsV1{
-		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1},
-		{PartitionID: 1, Rows: 2, ReachableRows: 2, TraversalRoots: 1},
+		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 3},
+		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2},
 	}
 	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
-		t.Fatal("rejected complete reachable diagnostics")
+		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
 	}
 	for name, diagnostics := range map[string][]m8PartitionPackDiagnosticsV1{
-		"missing":      valid[:1],
-		"duplicate":    {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
-		"disconnected": {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
-		"empty":        {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
-		"row_mismatch": {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
+		"missing":                 valid[:1],
+		"duplicate":               {valid[0], {PartitionID: 0, Rows: 2, ReachableRows: 2, TraversalRoots: 1}},
+		"disconnected":            {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2}},
+		"aux_disconnected":        {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 1}},
+		"aux_bad_csr":             {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 31, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_too_few_edges":       {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 1, AuxiliaryCSRBytes: 28, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_bad_roots":           {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 2, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2}},
+		"aux_too_many_edges":      {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 4, AuxiliaryCSRBytes: 40, AuxiliaryMaxDegree: 2, CombinedReachableRows: 2}},
+		"aux_edges_over_degree":   {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 3, MaxLayer: 1, RowsByLayer: []uint64{3, 1}, AuxiliaryEdges: 4, AuxiliaryCSRBytes: 48, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
+		"aux_degree_over_edges":   {valid[0], {PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 3, CombinedReachableRows: 2}},
+		"aux_incomplete_one_root": {{PartitionID: 0, Rows: 3, ReachableRows: 2, TraversalRoots: 1, MaxLayer: 1, RowsByLayer: []uint64{3, 2}, AuxiliaryEdges: 1, AuxiliaryCSRBytes: 36, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
+		"aux_entry_root_anchor":   {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{3, 1}, AuxiliaryEdges: 3, AuxiliaryCSRBytes: 44, AuxiliaryMaxDegree: 1, CombinedReachableRows: 3}, valid[1]},
+		"aux_without_anchor_rows": {{PartitionID: 0, Rows: 3, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 0, RowsByLayer: []uint64{3}, AuxiliaryEdges: 3, AuxiliaryCSRBytes: 44, AuxiliaryMaxDegree: 2, CombinedReachableRows: 3}, valid[1]},
+		"native_bad_combined":     {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 2}, valid[1]},
+		"empty":                   {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
+		"row_mismatch":            {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
