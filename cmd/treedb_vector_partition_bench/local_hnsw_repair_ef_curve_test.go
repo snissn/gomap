@@ -10,6 +10,21 @@ import (
 )
 
 func TestLocalHNSWRepairEFCurveV1(t *testing.T) {
+	for _, test := range []struct {
+		points []int
+		valid  bool
+	}{
+		{localHNSWRepairEFCurvePointsV1, true},
+		{[]int{64, 128, 256}, true},
+		{[]int{128, 64}, false},
+		{[]int{64, 64}, false},
+		{[]int{9}, false},
+		{[]int{4097}, false},
+	} {
+		if got := localHNSWRepairEFCurvePointsValidV1(test.points); got != test.valid {
+			t.Fatalf("points=%v valid=%v", test.points, got)
+		}
+	}
 	requireM8PersistentAssetSupportV1(t)
 	vectors := make([][]float64, 16)
 	for i := range vectors {

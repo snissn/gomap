@@ -54,7 +54,15 @@ type localHNSWRepairEFCurveReportV1 struct {
 }
 
 func localHNSWRepairEFCurvePointsValidV1(points []int) bool {
-	return slices.Equal(points, localHNSWRepairEFCurvePointsV1)
+	if len(points) == 0 || len(points) > 8 {
+		return false
+	}
+	for i, point := range points {
+		if point < 10 || point > 4096 || i > 0 && points[i-1] >= point {
+			return false
+		}
+	}
+	return true
 }
 
 func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, repair *localHNSWVariantHarnessV1, points, ordinals []int, queries [][]float32, truth [][]m8CanonicalResultV1) ([]localHNSWRepairEFCurveCellV1, error) {
@@ -154,7 +162,11 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 }
 
 func localHNSWRepairEFCurveDispositionV1(cells []localHNSWRepairEFCurveCellV1) (string, error) {
-	if len(cells) != len(localHNSWRepairEFCurvePointsV1) {
+	points := make([]int, len(cells))
+	for i, cell := range cells {
+		points[i] = cell.EFSearch
+	}
+	if !localHNSWRepairEFCurvePointsValidV1(points) {
 		return "", errors.New("invalid local HNSW repair EF curve")
 	}
 	for _, cell := range cells {
@@ -168,7 +180,7 @@ func localHNSWRepairEFCurveDispositionV1(cells []localHNSWRepairEFCurveCellV1) (
 func runLocalHNSWRepairEFCurveV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-repair-ef-curve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationSplit, holdoutSplit, truthArtifact, historicalCSV, tempRoot, out, baseSHA, headSHA, sourceCheckout string
+	var dataset, retainedDB, calibrationSplit, holdoutSplit, truthArtifact, historicalCSV, tempRoot, out, efSearch, baseSHA, headSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal retained 250k database")
 	fs.StringVar(&calibrationSplit, "calibration-split", "", "frozen calibration manifest")
@@ -177,6 +189,7 @@ func runLocalHNSWRepairEFCurveV1(args []string, stdout io.Writer) (runErr error)
 	fs.StringVar(&historicalCSV, "historical-search", "", "three comma-separated retained search reports")
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
 	fs.StringVar(&out, "out", "", "fresh report path")
+	fs.StringVar(&efSearch, "ef-search", "64,128,512,4096", "comma-separated calibration EF points")
 	fs.StringVar(&baseSHA, "base-sha", "", "source-lock base SHA")
 	fs.StringVar(&headSHA, "head-sha", "", "exact implementation head SHA")
 	fs.StringVar(&sourceCheckout, "source-checkout", "", "clean exact-head checkout")
@@ -184,6 +197,10 @@ func runLocalHNSWRepairEFCurveV1(args []string, stdout io.Writer) (runErr error)
 		return errors.New("local-hnsw-repair-ef-curve requires all frozen inputs, paths, provenance, and no positional arguments")
 	}
 	var err error
+	points, err := parseInts(efSearch)
+	if err != nil || !localHNSWRepairEFCurvePointsValidV1(points) {
+		return errors.New("invalid local HNSW repair EF curve points")
+	}
 	for destination, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationSplit: calibrationSplit, &holdoutSplit: holdoutSplit, &truthArtifact: truthArtifact, &tempRoot: tempRoot, &out: out, &sourceCheckout: sourceCheckout} {
 		*destination, err = m8CanonicalPathV1(value)
 		if err != nil {
@@ -266,7 +283,7 @@ func runLocalHNSWRepairEFCurveV1(args []string, stdout io.Writer) (runErr error)
 	if err != nil {
 		return err
 	}
-	cells, err := localHNSWRepairEFCurveV1Build(context.Background(), source, repair, localHNSWRepairEFCurvePointsV1, calibration.Ordinals, calibration.Queries, calibration.Truth)
+	cells, err := localHNSWRepairEFCurveV1Build(context.Background(), source, repair, points, calibration.Ordinals, calibration.Queries, calibration.Truth)
 	if err != nil {
 		return err
 	}
@@ -287,14 +304,14 @@ func runLocalHNSWRepairEFCurveV1(args []string, stdout io.Writer) (runErr error)
 	if err != nil {
 		return err
 	}
-	report := localHNSWRepairEFCurveReportV1{Schema: localHNSWRepairEFCurveSchemaV1, ResultKind: "local_hnsw_repair_ef_curve_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-repair-ef-curve", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: localHNSWAttributionInputsEvidenceV1{DatasetManifest: localHNSWAttributionFileInputV1{Path: datasetManifest, SHA256: localHNSWAttributionFixtureManifestSHA256V1}, Fixture: fixture, RetainedDB: retainedDB, Descriptor: localHNSWAttributionFileInputV1{Path: inputConfig.Descriptor, SHA256: inputConfig.DescriptorSHA256}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationSplit, SHA256: inputConfig.CalibrationSplitSHA256}, CalibrationRows: len(inputs.Calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutSplit, SHA256: inputConfig.HoldoutSplitSHA256}, HoldoutRows: len(inputs.Holdout.Ordinals), HoldoutStatus: "manifest_validated_query_outcomes_unopened", Truth: localHNSWAttributionFileInputV1{Path: truthArtifact, SHA256: inputConfig.TruthArtifactSHA256}, TruthStatus: "sha256_only_not_decoded", Historical: historical}, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, TopK: 10, EFSearch: append([]int(nil), localHNSWRepairEFCurvePointsV1...), ProbeCounts: []int{2, int(source.manifest.PartitionCount)}, RepairBuild: build, Graph: graph, Cells: cells, Disposition: disposition, Limitations: []string{"offline calibration-only fixed-asset EF quality/work pre-gate; not product qualification", "holdout query outcomes and trusted truth contents remained unopened", "profiles and repeated timing are deferred until a curve point clears quality"}}
+	report := localHNSWRepairEFCurveReportV1{Schema: localHNSWRepairEFCurveSchemaV1, ResultKind: "local_hnsw_repair_ef_curve_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-repair-ef-curve", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: localHNSWAttributionInputsEvidenceV1{DatasetManifest: localHNSWAttributionFileInputV1{Path: datasetManifest, SHA256: localHNSWAttributionFixtureManifestSHA256V1}, Fixture: fixture, RetainedDB: retainedDB, Descriptor: localHNSWAttributionFileInputV1{Path: inputConfig.Descriptor, SHA256: inputConfig.DescriptorSHA256}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationSplit, SHA256: inputConfig.CalibrationSplitSHA256}, CalibrationRows: len(inputs.Calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutSplit, SHA256: inputConfig.HoldoutSplitSHA256}, HoldoutRows: len(inputs.Holdout.Ordinals), HoldoutStatus: "manifest_validated_query_outcomes_unopened", Truth: localHNSWAttributionFileInputV1{Path: truthArtifact, SHA256: inputConfig.TruthArtifactSHA256}, TruthStatus: "sha256_only_not_decoded", Historical: historical}, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, TopK: 10, EFSearch: append([]int(nil), points...), ProbeCounts: []int{2, int(source.manifest.PartitionCount)}, RepairBuild: build, Graph: graph, Cells: cells, Disposition: disposition, Limitations: []string{"offline calibration-only fixed-asset EF quality/work pre-gate; not product qualification", "holdout query outcomes and trusted truth contents remained unopened", "profiles and repeated timing are deferred until a curve point clears quality"}}
 	if err := validateLocalHNSWRepairEFCurveReportV1(report); err != nil {
 		return err
 	}
 	if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "report=%s p2_64=%.6f p2_128=%.6f disposition=%s\n", out, cells[0].P2Recall.Mean, cells[1].P2Recall.Mean, disposition)
+	_, err = fmt.Fprintf(stdout, "report=%s ef_points=%v disposition=%s\n", out, points, disposition)
 	return err
 }
 
@@ -313,12 +330,12 @@ func validateLocalHNSWRepairEFCurveReportV1(report localHNSWRepairEFCurveReportV
 	if report.RepairBuild.Schema != localHNSWAttributionBuildSchemaV1 || report.RepairBuild.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1) || report.RepairBuild.Partitions != 16 || report.RepairBuild.PackBytes == 0 || report.Graph.Rows != 300000 || report.Graph.NativeReachableRows != 299968 || report.Graph.CombinedReachableRows != 300000 || report.Graph.NativeTraversalRoots != 48 || report.Graph.AuxiliaryEdges != 64 || report.Graph.AuxiliaryCSRBytes != 2400384 || report.Graph.AuxiliaryMaxDegree != 4 {
 		return errors.New("invalid local HNSW repair EF curve graph")
 	}
-	if len(report.Cells) != len(localHNSWRepairEFCurvePointsV1) {
+	if len(report.Cells) != len(report.EFSearch) {
 		return errors.New("invalid local HNSW repair EF curve cells")
 	}
 	routes := ""
 	for i, cell := range report.Cells {
-		if cell.EFSearch != localHNSWRepairEFCurvePointsV1[i] || cell.QueryCount != 806 || !localHNSWAttributionSHA256V1(cell.RoutesSHA256) || cell.P2Work.Candidates == 0 || cell.P2Work.NativeEdges == 0 || cell.P16Work.Candidates == 0 || cell.P16Work.NativeEdges == 0 {
+		if cell.EFSearch != report.EFSearch[i] || cell.QueryCount != 806 || !localHNSWAttributionSHA256V1(cell.RoutesSHA256) || cell.P2Work.Candidates == 0 || cell.P2Work.NativeEdges == 0 || cell.P16Work.Candidates == 0 || cell.P16Work.NativeEdges == 0 {
 			return errors.New("invalid local HNSW repair EF curve cell")
 		}
 		if routes != "" && routes != cell.RoutesSHA256 {
