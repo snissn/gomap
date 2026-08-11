@@ -213,35 +213,35 @@ jobs:
             run_vet: true
           - name: windows-core-1
             os: windows-latest
-            timeout: 30
+            timeout: 40
             shard_kind: windows-core
             package_shard_index: 0
             package_shard_count: 5
             run_vet: true
           - name: windows-core-2
             os: windows-latest
-            timeout: 30
+            timeout: 40
             shard_kind: windows-core
             package_shard_index: 1
             package_shard_count: 5
             run_vet: false
           - name: windows-core-3
             os: windows-latest
-            timeout: 30
+            timeout: 40
             shard_kind: windows-core
             package_shard_index: 2
             package_shard_count: 5
             run_vet: false
           - name: windows-core-4
             os: windows-latest
-            timeout: 30
+            timeout: 40
             shard_kind: windows-core
             package_shard_index: 3
             package_shard_count: 5
             run_vet: false
           - name: windows-core-5
             os: windows-latest
-            timeout: 30
+            timeout: 40
             shard_kind: windows-core
             package_shard_index: 4
             package_shard_count: 5

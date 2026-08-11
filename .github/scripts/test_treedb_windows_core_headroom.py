@@ -52,9 +52,8 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
     def test_core_shards_use_equal_bounded_five_way_partition(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
-        # Four deterministic shards passed exact-head proof but a later
-        # exact-PR run still exhausted this bounded cap with healthy tests
-        # incomplete. Five shards restore tail headroom without raising it.
+        # Five deterministic shards twice exhausted 30 minutes with healthy
+        # tests incomplete. Keep bounded hosted-runner variability headroom.
         self.assertEqual(
             len(
                 re.findall(
@@ -68,7 +67,7 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
         for shard in range(5):
             job_name = f"windows-core-{shard + 1}"
             with self.subTest(job_name=job_name):
-                self.assertEqual(matrix_timeout(workflow, job_name), 30)
+                self.assertEqual(matrix_timeout(workflow, job_name), 40)
                 self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 5))
         self.assertIn("timeout-minutes: ${{ matrix.timeout }}", workflow)
 
