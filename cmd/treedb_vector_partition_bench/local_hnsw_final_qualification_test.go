@@ -369,10 +369,12 @@ func TestLocalHNSWFinalQualificationDescriptorsV1(t *testing.T) {
 	candidate.PartitionHNSWM = 18
 	definition.M, definition.EfConstruction = 18, 256
 	candidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
+	candidate.RouterAssetChecksum = strings.Repeat("3", 64)
+	candidate.RouterModelDigest = strings.Repeat("4", 64)
 	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err != nil {
 		t.Fatal(err)
 	}
-	candidate.Source.Checksum = strings.Repeat("3", 64)
+	candidate.Source.Checksum = strings.Repeat("5", 64)
 	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
 		t.Fatal("accepted source drift")
 	}

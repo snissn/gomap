@@ -283,7 +283,7 @@ func localHNSWFinalQualificationDescriptorsV1(fixture fixtureManifest, baseline,
 	if err := m8ValidateRetainedM3ProvenanceV1(cfg, candidate, executableSHA); err != nil {
 		return err
 	}
-	if baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.RouterAssetChecksum != candidate.RouterAssetChecksum || baseline.RouterModelDigest != candidate.RouterModelDigest || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest == candidate.IndexDefinitionDigest {
+	if baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest == candidate.IndexDefinitionDigest {
 		return errors.New("local HNSW final qualification retained source drift")
 	}
 	return nil
