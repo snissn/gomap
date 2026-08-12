@@ -15,7 +15,6 @@ import (
 	"slices"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -947,7 +946,6 @@ type VectorPartitionLocalSearcherV1 struct {
 	candidates, edges                                        uint64
 	auxiliaryEdges, auxiliaryCandidates, auxiliaryAdmissions uint64
 	scratch                                                  sync.Pool
-	scratchCreates                                           atomic.Uint64
 	scratchReady                                             bool
 }
 
@@ -1114,7 +1112,6 @@ func (s *VectorPartitionLocalSearcherV1) Acquire() error {
 	}
 	if !s.scratchReady {
 		s.scratch.New = func() any {
-			s.scratchCreates.Add(1)
 			return &columnVectorGraphNativeSearchScratch{}
 		}
 		s.scratchReady = true

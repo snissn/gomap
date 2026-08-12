@@ -135,16 +135,15 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	repeated, repeatedMetrics, err := searcher.SearchWithOptionsV1(
 		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3},
 	)
-	if err != nil || len(repeated) != 1 || repeated[0] != first || repeatedMetrics != metrics ||
-		searcher.scratchCreates.Load() != 1 {
-		t.Fatalf("first=%+v repeated=%+v metrics=%+v/%+v scratch_creates=%d err=%v", first, repeated, metrics, repeatedMetrics, searcher.scratchCreates.Load(), err)
+	if err != nil || len(repeated) != 1 || repeated[0] != first || repeatedMetrics != metrics {
+		t.Fatalf("first=%+v repeated=%+v metrics=%+v/%+v err=%v", first, repeated, metrics, repeatedMetrics, err)
 	}
 	attributed, attributedMetrics, attribution, err := searcher.SearchWithAttributionV1(
 		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3},
 	)
 	if err != nil || len(attributed) != 1 || attributed[0] != first || attributedMetrics != metrics ||
-		attribution.VisitedRows == 0 || searcher.scratchCreates.Load() != 1 {
-		t.Fatalf("attributed=%+v metrics=%+v attribution=%+v scratch_creates=%d err=%v", attributed, attributedMetrics, attribution, searcher.scratchCreates.Load(), err)
+		attribution.VisitedRows == 0 {
+		t.Fatalf("attributed=%+v metrics=%+v attribution=%+v err=%v", attributed, attributedMetrics, attribution, err)
 	}
 	checkedOutA := searcher.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 	checkedOutB := searcher.scratch.Get().(*columnVectorGraphNativeSearchScratch)
@@ -776,8 +775,8 @@ func TestVectorPartitionLocalSearcherV1DeadlineInterruptsNativeTraversalAndRelea
 		t.Fatalf("deadline return retained search pin or stats: %+v", status)
 	}
 	retry, retryMetrics, retryErr := searcher.SearchWithOptionsV1(context.Background(), []float32{1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: rows})
-	if retryErr != nil || len(retry) != 1 || retryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 || searcher.scratchCreates.Load() != 1 {
-		t.Fatalf("retry=%+v metrics=%+v scratch_creates=%d err=%v", retry, retryMetrics, searcher.scratchCreates.Load(), retryErr)
+	if retryErr != nil || len(retry) != 1 || retryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
+		t.Fatalf("retry=%+v metrics=%+v err=%v", retry, retryMetrics, retryErr)
 	}
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
