@@ -3,12 +3,42 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestLocalHNSWRepairM18EFCurveBindsExecutableHeadV1(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headRaw, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	path := filepath.Join(root, "bin", "local-hnsw-repair-m18-ef-curve-test")
+	build := exec.Command("go", "build", "-buildvcs=true", "-o", path, "./cmd/treedb_vector_partition_bench")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, output)
+	}
+	digest, err := m8BenchmarkExecutableSHA256V1(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m8QualificationBenchmarkExecutableV1(root, path, head, digest) {
+		t.Fatal("rejected exact-head executable")
+	}
+	if m8QualificationBenchmarkExecutableV1(root, path, strings.Repeat("0", 40), digest) {
+		t.Fatal("accepted stale executable head")
+	}
+}
 
 func TestLocalHNSWRepairM18EFCurveV1(t *testing.T) {
 	if !localHNSWRepairM18EFCurveDescriptorV1(localHNSWRepairM18EFCurveDescriptorSHA256V1) || localHNSWRepairM18EFCurveDescriptorV1(localHNSWAttributionDescriptorSHA256V1) {

@@ -181,6 +181,9 @@ func runLocalHNSWRepairM18EFCurveV1(args []string, stdout io.Writer) (runErr err
 	if err != nil {
 		return err
 	}
+	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("local HNSW repair M18 EF executable identity")
+	}
 	source, err := openM8ProductionExistingAssetSetV1(retainedDB)
 	if err != nil {
 		return err
@@ -214,6 +217,9 @@ func runLocalHNSWRepairM18EFCurveV1(args []string, stdout io.Writer) (runErr err
 	}
 	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA {
 		return errors.New("local HNSW repair M18 EF executable changed")
+	}
+	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("local HNSW repair M18 EF executable identity changed")
 	}
 	loads, err := m8PartitionLoadsV1(source.manifest)
 	if err != nil || source.descriptor == nil {
