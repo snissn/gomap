@@ -841,6 +841,26 @@ func TestColumnHNSWPreparedTraversalScorePlaneSeam2585(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pack searchCosine exact: %v", err)
 	}
+	var ordinalScratch columnVectorGraphNativeSearchScratch
+	ordinalOpts := nativeOpts
+	ordinalOpts.OmitResultMaterialization = true
+	ordinalOpts.SuppressOmittedResultMaterialization = true
+	ordinalResults, ordinalStats, err := pack.searchCosine(query, ordinalOpts, &ordinalScratch)
+	if err != nil {
+		t.Fatalf("pack searchCosine ordinal handoff: %v", err)
+	}
+	if len(ordinalResults) != 0 || len(ordinalScratch.top) != len(rows) || ordinalStats.ResultFetches != 0 {
+		t.Fatalf("ordinal handoff results=%d retained=%d stats=%+v", len(ordinalResults), len(ordinalScratch.top), ordinalStats)
+	}
+	for i := range ordinalScratch.resultIDViews {
+		if ordinalScratch.resultIDViews[i] != nil || ordinalScratch.resultHasRefs[i] || !reflect.DeepEqual(ordinalScratch.resultRowRefs[i], DocumentRowRef{}) {
+			t.Fatalf("ordinal handoff materialized result[%d]: id=%q has_ref=%v ref=%+v", i, ordinalScratch.resultIDViews[i], ordinalScratch.resultHasRefs[i], ordinalScratch.resultRowRefs[i])
+		}
+	}
+	canonical, err := canonicalizeVectorPartitionNativeResultsV1(t.Context(), pack, query, ordinalScratch.top, nativeOpts.TopK)
+	if err != nil || len(canonical) != nativeOpts.TopK {
+		t.Fatalf("canonical ordinal handoff results=%+v err=%v", canonical, err)
+	}
 	var tracedScratch columnVectorGraphNativeSearchScratch
 	trace := columnHNSWSearchPackAttributionTrace{Termination: "stale"}
 	tracedResults, _, err := pack.searchCosineWithContextTrace(t.Context(), query, nativeOpts, &tracedScratch, &trace)

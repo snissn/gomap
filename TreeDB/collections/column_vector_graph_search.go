@@ -252,11 +252,12 @@ type columnVectorGraphNativeSearchOptions struct {
 	// per-edge/per-candidate diagnostics on the healthy combined prepared path.
 	StatsMode columnVectorGraphNativeSearchStatsMode
 
-	// OmitResultMaterialization is an internal benchmark/profiling hook for the
-	// graph-only boundary. It preserves traversal/scoring/top-k work but skips
-	// final result-ID and row-ref materialization; public search paths must leave
-	// this false so returned IDs and row refs are populated and counted.
+	// OmitResultMaterialization preserves traversal/scoring/top-k work while
+	// skipping final result-ID and row-ref materialization.
 	OmitResultMaterialization bool
+	// SuppressOmittedResultMaterialization leaves retained ordinal/score
+	// candidates in scratch.top instead of copying them into scratch.results.
+	SuppressOmittedResultMaterialization bool
 
 	// CandidateRows is an optional pre-composed row-domain filter over graph
 	// ordinals. It is intentionally internal until public metadata predicate

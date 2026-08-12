@@ -405,6 +405,78 @@ type vectorPartitionSearchRefResultV1 struct {
 
 type vectorPartitionSearchRefResultMaxHeapV1 []vectorPartitionSearchRefResultV1
 
+type vectorPartitionSearchOrdinalResultMaxHeapV1 []columnVectorGraphSearchCandidate
+
+func vectorPartitionSearchOrdinalResultBetterV1(prepared *columnHNSWSearchPackPreparedView, left, right columnVectorGraphSearchCandidate) bool {
+	if left.score != right.score {
+		return left.score > right.score
+	}
+	leftStart, leftEnd := prepared.DocumentIDOffsets[left.ordinal], prepared.DocumentIDOffsets[left.ordinal+1]
+	rightStart, rightEnd := prepared.DocumentIDOffsets[right.ordinal], prepared.DocumentIDOffsets[right.ordinal+1]
+	return bytes.Compare(prepared.DocumentIDBytes[leftStart:leftEnd], prepared.DocumentIDBytes[rightStart:rightEnd]) < 0
+}
+
+func vectorPartitionSearchOrdinalResultWorseV1(prepared *columnHNSWSearchPackPreparedView, left, right columnVectorGraphSearchCandidate) bool {
+	return vectorPartitionSearchOrdinalResultBetterV1(prepared, right, left)
+}
+
+func (h *vectorPartitionSearchOrdinalResultMaxHeapV1) pushBounded(prepared *columnHNSWSearchPackPreparedView, limit int, candidate columnVectorGraphSearchCandidate) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.up(prepared, len(*h)-1)
+		return
+	}
+	if !vectorPartitionSearchOrdinalResultBetterV1(prepared, candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.down(prepared, 0)
+}
+
+func (h *vectorPartitionSearchOrdinalResultMaxHeapV1) popWorst(prepared *columnHNSWSearchPackPreparedView) columnVectorGraphSearchCandidate {
+	out := (*h)[0]
+	last := len(*h) - 1
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	if len(*h) > 0 {
+		h.down(prepared, 0)
+	}
+	return out
+}
+
+func (h *vectorPartitionSearchOrdinalResultMaxHeapV1) up(prepared *columnHNSWSearchPackPreparedView, child int) {
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !vectorPartitionSearchOrdinalResultWorseV1(prepared, (*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h *vectorPartitionSearchOrdinalResultMaxHeapV1) down(prepared *columnHNSWSearchPackPreparedView, parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(*h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(*h) && vectorPartitionSearchOrdinalResultWorseV1(prepared, (*h)[right], (*h)[left]) {
+			child = right
+		}
+		if !vectorPartitionSearchOrdinalResultWorseV1(prepared, (*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		parent = child
+	}
+}
+
 func vectorPartitionSearchRefResultBetterV1(left, right vectorPartitionSearchRefResultV1) bool {
 	if left.Score != right.Score {
 		return left.Score > right.Score
@@ -806,9 +878,7 @@ func vectorPartitionSearchScratchBytesV1(opts VectorPartitionSearchOptionsV1, pr
 	if err != nil {
 		return 0, ErrVectorPartitionSearchUnavailable
 	}
-	// Native traversal must materialize every retained ef_search candidate so
-	// the public stable-ID tie-break runs before final top-k truncation.
-	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, efSearch, topK, efSearch)
+	return vectorPartitionHNSWSearchScratchBytesV1(rowCount, header.Dimensions, header.VectorStride, degree, topK, topK, efSearch)
 }
 
 func vectorPartitionExactSearchScratchBytesV1(rows, dimensions, topK int) (uint64, error) {
@@ -862,7 +932,7 @@ func VectorPartitionConservativeSearchScratchBytesV1(rows, dimensions int, opts 
 	}
 	// Search caps the doubled HNSW degree at row count. Using row count here
 	// therefore covers every persisted M without requiring shard-local headers.
-	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, dimensions, vectorStride, rows, efSearch, topK, efSearch)
+	hnswBytes, err := vectorPartitionHNSWSearchScratchBytesV1(rows, dimensions, vectorStride, rows, topK, topK, efSearch)
 	if err != nil {
 		return 0, err
 	}
@@ -895,9 +965,7 @@ func vectorPartitionHNSWSearchScratchBytesV1(rowCount, dimensions, vectorStride,
 		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{nativeTopK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},
-		// Native results remain live while a bounded borrowed-ID heap applies the
-		// public FP32/stable-ID order and materializes the final owned results.
-		{publicTopK, unsafe.Sizeof(vectorPartitionSearchRefResultV1{})},
+		{publicTopK, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{publicTopK, unsafe.Sizeof(VectorPartitionSearchResultV1{})},
 		{nativeTopK, unsafe.Sizeof([]byte(nil))},
 		{nativeTopK, unsafe.Sizeof(int(0))},
@@ -1243,33 +1311,27 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		return nil, VectorPartitionSearchMetricsV1{}, fmt.Errorf("%w: zero query", ErrVectorPartitionSearchUnavailable)
 	}
 	if s.prepared != nil {
-		nativeTopK := opts.EfSearch
-		if nativeTopK == 0 {
-			nativeTopK = s.prepared.Header.EfSearch
-		}
-		if nativeTopK < opts.TopK {
-			nativeTopK = opts.TopK
-		}
-		if nativeTopK > s.prepared.Header.Rows {
-			nativeTopK = s.prepared.Header.Rows
-		}
 		scratch := s.scratch.Get().(*columnVectorGraphNativeSearchScratch)
 		defer func() {
 			resetVectorPartitionNativeSearchScratchV1(scratch)
 			s.scratch.Put(scratch)
 		}()
-		nativeOpts := columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}
+		nativeOpts := columnVectorGraphNativeSearchOptions{
+			TopK:                                 opts.TopK,
+			EfSearch:                             opts.EfSearch,
+			OmitResultMaterialization:            true,
+			SuppressOmittedResultMaterialization: true,
+		}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {
 			nativeOpts.StatsMode = columnVectorGraphNativeSearchStatsModeWorkAccounting
 		}
-		var results []columnVectorGraphNativeSearchResult
 		var stats columnVectorGraphNativeSearchStats
 		var err error
 		if attribution != nil {
-			results, stats, err = s.prepared.searchCosineWithContextTrace(ctx, query, nativeOpts, scratch, &trace)
+			_, stats, err = s.prepared.searchCosineWithContextTrace(ctx, query, nativeOpts, scratch, &trace)
 		} else {
-			results, stats, err = s.prepared.searchCosineWithContext(ctx, query, nativeOpts, scratch)
+			_, stats, err = s.prepared.searchCosineWithContext(ctx, query, nativeOpts, scratch)
 		}
 		if err != nil {
 			s.recordFailure()
@@ -1282,7 +1344,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
 		}
-		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, s.prepared, query, results, opts.TopK)
+		out, err := canonicalizeVectorPartitionNativeResultsV1(ctx, s.prepared, query, scratch.top, opts.TopK)
 		if err != nil {
 			s.recordFailure()
 			return nil, VectorPartitionSearchMetricsV1{}, err
@@ -1451,7 +1513,7 @@ func (s *VectorPartitionLocalSearcherV1) SearchExactWithOptionsV1(ctx context.Co
 	return out, VectorPartitionSearchMetricsV1{Candidates: uint64(rows), Route: VectorPartitionSearchRouteExactFP32ScanV1}, nil
 }
 
-func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, results []columnVectorGraphNativeSearchResult, topK int) ([]VectorPartitionSearchResultV1, error) {
+func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *columnHNSWSearchPackPreparedView, query []float32, candidates []columnVectorGraphSearchCandidate, topK int) ([]VectorPartitionSearchResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1465,27 +1527,23 @@ func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *c
 	if err != nil {
 		return nil, err
 	}
-	limit := min(topK, len(results))
-	top := make(vectorPartitionSearchRefResultMaxHeapV1, 0, limit)
-	for i, result := range results {
+	limit := min(topK, len(candidates))
+	top := make(vectorPartitionSearchOrdinalResultMaxHeapV1, 0, limit)
+	for i, candidate := range candidates {
 		if i&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
 		}
-		if result.Ordinal < 0 || result.Ordinal >= prepared.Header.Rows {
+		if candidate.ordinal < 0 || candidate.ordinal >= prepared.Header.Rows {
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
-		base := result.Ordinal * prepared.Header.VectorStride
-		idStart, idEnd := prepared.DocumentIDOffsets[result.Ordinal], prepared.DocumentIDOffsets[result.Ordinal+1]
-		if !bytes.Equal(result.ID, prepared.DocumentIDBytes[idStart:idEnd]) {
-			return nil, ErrVectorPartitionSearchUnavailable
-		}
+		base := candidate.ordinal * prepared.Header.VectorStride
 		score, err := canonicalVectorPartitionNormalizedScoreV1(normalizedQuery, prepared.NormalizedVectors[base:base+prepared.Header.Dimensions])
 		if err != nil {
 			return nil, err
 		}
-		top.pushBounded(limit, vectorPartitionSearchRefResultV1{ID: prepared.DocumentIDBytes[idStart:idEnd], Score: score})
+		top.pushBounded(prepared, limit, columnVectorGraphSearchCandidate{ordinal: candidate.ordinal, score: float64(score)})
 	}
 	out := make([]VectorPartitionSearchResultV1, len(top))
 	for completed, target := 0, len(out)-1; target >= 0; completed, target = completed+1, target-1 {
@@ -1494,8 +1552,9 @@ func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *c
 				return nil, err
 			}
 		}
-		candidate := top.popWorst()
-		out[target] = VectorPartitionSearchResultV1{ID: string(candidate.ID), Score: candidate.Score}
+		candidate := top.popWorst(prepared)
+		idStart, idEnd := prepared.DocumentIDOffsets[candidate.ordinal], prepared.DocumentIDOffsets[candidate.ordinal+1]
+		out[target] = VectorPartitionSearchResultV1{ID: string(prepared.DocumentIDBytes[idStart:idEnd]), Score: float32(candidate.score)}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

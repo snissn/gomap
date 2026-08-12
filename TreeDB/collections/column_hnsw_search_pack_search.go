@@ -102,6 +102,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if queryMode != columnVectorGraphNativeSearchQueryModeExact || opts.QuantizedIndexName != "" || opts.QuantizedRerankCandidates != 0 {
 		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
 	}
+	if opts.SuppressOmittedResultMaterialization && !opts.OmitResultMaterialization {
+		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
+	}
 	if opts.HasCandidateRows {
 		return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
 	}
@@ -340,6 +343,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	}
 	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
 	if len(scratch.top) == 0 {
+		return scratch.results, stats, nil
+	}
+	if opts.SuppressOmittedResultMaterialization {
 		return scratch.results, stats, nil
 	}
 	if len(scratch.top) > topK {
