@@ -251,7 +251,7 @@ func addColumnVectorGraphNativeSearchDebugStats1979(dst *columnVectorGraphNative
 	dst.TopKInsertAttempts += src.TopKInsertAttempts
 	dst.TopKInsertSuccesses += src.TopKInsertSuccesses
 	dst.TopKInsertRejections += src.TopKInsertRejections
-	dst.TopKShiftSteps += src.TopKShiftSteps
+	dst.TopKHeapSiftSteps += src.TopKHeapSiftSteps
 	dst.VisitedMarkChecks += src.VisitedMarkChecks
 	dst.VisitedMarkHits += src.VisitedMarkHits
 	dst.VisitedMarkMisses += src.VisitedMarkMisses
@@ -336,7 +336,7 @@ func reportColumnVectorGraphNativeSearchDebugMetrics1979(b *testing.B, n int, st
 	b.ReportMetric(float64(stats.TopKInsertAttempts)/denom, "top_k_insert_attempts/search")
 	b.ReportMetric(float64(stats.TopKInsertSuccesses)/denom, "top_k_insert_successes/search")
 	b.ReportMetric(float64(stats.TopKInsertRejections)/denom, "top_k_insert_rejections/search")
-	b.ReportMetric(float64(stats.TopKShiftSteps)/denom, "top_k_shift_steps/search")
+	b.ReportMetric(float64(stats.TopKHeapSiftSteps)/denom, "top_k_heap_sift_steps/search")
 	b.ReportMetric(float64(stats.VisitedMarkChecks)/denom, "visited_mark_checks/search")
 	b.ReportMetric(float64(stats.VisitedMarkHits)/denom, "visited_mark_hits/search")
 	b.ReportMetric(float64(stats.VisitedMarkMisses)/denom, "visited_mark_misses/search")

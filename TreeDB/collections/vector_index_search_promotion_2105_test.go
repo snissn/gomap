@@ -483,7 +483,7 @@ func reportVectorIndexSearchBenchmarkDebugMetrics2105(b *testing.B, stats Vector
 	b.ReportMetric(float64(stats.TopKInsertAttempts), "top_k_insert_attempts/search")
 	b.ReportMetric(float64(stats.TopKInsertSuccesses), "top_k_insert_successes/search")
 	b.ReportMetric(float64(stats.TopKInsertRejections), "top_k_insert_rejections/search")
-	b.ReportMetric(float64(stats.TopKShiftSteps), "top_k_shift_steps/search")
+	b.ReportMetric(float64(stats.TopKHeapSiftSteps), "top_k_heap_sift_steps/search")
 	b.ReportMetric(float64(stats.VisitedMarkChecks), "visited_mark_checks/search")
 	b.ReportMetric(float64(stats.VisitedMarkHits), "visited_mark_hits/search")
 	b.ReportMetric(float64(stats.VisitedMarkMisses), "visited_mark_misses/search")

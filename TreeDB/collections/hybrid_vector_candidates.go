@@ -308,6 +308,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
+	scratch.retainTopBestFirst(topK)
 	if err := v.fetchTopSearchResults(scratch, &stats); err != nil {
 		return nil, stats, err
 	}

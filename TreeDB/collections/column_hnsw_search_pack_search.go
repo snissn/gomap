@@ -348,9 +348,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if opts.SuppressOmittedResultMaterialization {
 		return scratch.results, stats, nil
 	}
-	if len(scratch.top) > topK {
-		scratch.top = scratch.top[:topK]
-	}
+	scratch.retainTopBestFirst(topK)
 	if opts.OmitResultMaterialization {
 		for _, candidate := range scratch.top {
 			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
