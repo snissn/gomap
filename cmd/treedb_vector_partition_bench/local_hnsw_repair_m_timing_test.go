@@ -1,8 +1,135 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestLocalHNSWRepairMTimingPhaseBarrierV1(t *testing.T) {
+	dir := t.TempDir()
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "start"), []byte("wrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err == nil {
+		t.Fatal("expected nonempty gate directory rejection")
+	}
+	if err := localHNSWRepairMTimingWaitForStartV1(context.Background(), dir); err == nil {
+		t.Fatal("expected invalid start marker rejection")
+	}
+
+	dir = t.TempDir()
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		ready := filepath.Join(dir, "ready")
+		for {
+			if _, err := os.Lstat(ready); err == nil {
+				start := filepath.Join(dir, "start")
+				_ = os.WriteFile(start, []byte(localHNSWRepairMTimingGateStartV1[:8]), 0o644)
+				time.Sleep(2 * time.Millisecond)
+				_ = os.WriteFile(start, []byte(localHNSWRepairMTimingGateStartV1), 0o644)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := localHNSWRepairMTimingWaitForStartV1(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingGateMarkerV1(filepath.Join(dir, "ready"), localHNSWRepairMTimingGateReadyV1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLocalHNSWRepairMTimingStartMarkerV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "start")
+	if err := os.WriteFile(path, []byte(localHNSWRepairMTimingGateStartV1[:8]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := localHNSWRepairMTimingStartMarkerV1(path); err != nil || complete {
+		t.Fatalf("partial marker complete=%v err=%v", complete, err)
+	}
+	if err := os.WriteFile(path, []byte(localHNSWRepairMTimingGateStartV1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := localHNSWRepairMTimingStartMarkerV1(path); err != nil || !complete {
+		t.Fatalf("complete marker complete=%v err=%v", complete, err)
+	}
+	if err := os.WriteFile(path, []byte("wrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localHNSWRepairMTimingStartMarkerV1(path); err == nil {
+		t.Fatal("accepted malformed marker")
+	}
+}
+
+func TestLocalHNSWRepairMTimingSelectedCurveUnchangedV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "curve.json")
+	if err := os.WriteFile(path, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := localHNSWAttributionRegularFileSHA256V1(path, m8QualificationMatrixMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(path, sha); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(path, sha); err == nil {
+		t.Fatal("accepted replaced selected curve")
+	}
+}
+
+func TestLocalHNSWRepairMTimingBindsExecutableHeadV1(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	headRaw, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(headRaw))
+	path := filepath.Join(root, "bin", "local-hnsw-repair-m-timing-test")
+	defer os.Remove(path)
+	build := exec.Command("go", "build", "-buildvcs=true", "-o", path, "./cmd/treedb_vector_partition_bench")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, output)
+	}
+	digest, err := m8BenchmarkExecutableSHA256V1(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m8QualificationBenchmarkExecutableV1(root, path, head, digest) {
+		t.Fatal("rejected exact-head executable")
+	}
+	if m8QualificationBenchmarkExecutableV1(root, path, strings.Repeat("0", 40), digest) {
+		t.Fatal("accepted stale executable head")
+	}
+}
 
 func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
+	if !localHNSWRepairMTimingEFsV1(128, 120) || localHNSWRepairMTimingEFsV1(128, 128) || localHNSWRepairMTimingEFsV1(120, 120) {
+		t.Fatal("timing EF identity")
+	}
+	if !localHNSWAttributionSHA256V1(localHNSWRepairMTimingSelectedCurveSHA256V1) {
+		t.Fatal("selected curve digest")
+	}
 	var cells []localHNSWRepairCalibrationTimingCellV1
 	for repetition := 0; repetition < 4; repetition++ {
 		for _, item := range []struct {
@@ -46,5 +173,25 @@ func TestLocalHNSWRepairMTimingRoutesSHA256V1(t *testing.T) {
 	second, err := localHNSWRepairMTimingRoutesSHA256V1(rows)
 	if err != nil || second == first {
 		t.Fatalf("second=%q first=%q err=%v", second, first, err)
+	}
+}
+
+func TestLocalHNSWRepairMTimingQualityMatchesCurveV1(t *testing.T) {
+	quality := localHNSWRepairEFCurveCellV1{
+		EFSearch: 120, QueryCount: 806,
+		RoutesSHA256:     strings.Repeat("a", 64),
+		P2ResultsSHA256:  strings.Repeat("b", 64),
+		P16ResultsSHA256: strings.Repeat("c", 64),
+		RoutingMissSlots: 19, P2HitSlots: 7657, P16HitSlots: 7650,
+		P2Recall:  localHNSWAttributionRecallAggregateV1{Mean: 0.95},
+		P16Recall: localHNSWAttributionRecallAggregateV1{Mean: 0.9491315136476427},
+	}
+	curve := []localHNSWRepairEFCurveCellV1{quality}
+	if !localHNSWRepairMTimingQualityMatchesCurveV1(quality, curve) {
+		t.Fatal("rejected matching selected curve cell")
+	}
+	curve[0].P2ResultsSHA256 = strings.Repeat("d", 64)
+	if localHNSWRepairMTimingQualityMatchesCurveV1(quality, curve) {
+		t.Fatal("accepted selected curve with changed p2 results digest")
 	}
 }

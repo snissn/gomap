@@ -98,7 +98,7 @@ func TestLocalHNSWFinalQualificationApprovalV1(t *testing.T) {
 
 func TestLocalHNSWFinalQualificationScheduleAndGatesV1(t *testing.T) {
 	schedule := localHNSWFinalQualificationScheduleV1()
-	if len(schedule) != 24 || schedule[0].Variant != "m16_efc128" || schedule[2].Variant != "m18_efc256" || schedule[8].Variant != "m18_efc256" || schedule[16].Variant != "m16_efc128" {
+	if len(schedule) != 24 || schedule[0].Variant != "m16_efc128" || schedule[0].EFSearch != 128 || schedule[2].Variant != "m18_efc256" || schedule[2].EFSearch != 120 || schedule[8].Variant != "m18_efc256" || schedule[16].Variant != "m16_efc128" {
 		t.Fatalf("schedule=%+v", schedule)
 	}
 	if runs := localHNSWFinalQualificationRunsV1(); len(runs) != 48 || runs[0].Corpus != localHNSWFinalQualificationCorpus250KV1 || runs[24].Corpus != localHNSWFinalQualificationCorpus100KV1 {
@@ -151,6 +151,31 @@ func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWFinalQualificationM18EvidenceV1UsesMatrixCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "curve.json")
+	raw := []byte(strings.Repeat("x", localHNSWQuerySplitMaxBytesV1+1))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := localHNSWAttributionRegularFileSHA256V1(path, m8QualificationMatrixMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := localHNSWAttributionFileInputV1{Path: path, SHA256: sha}
+	if err := localHNSWFinalQualificationM18EvidenceV1(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionMatchFileSHA256V1(path, localHNSWQuerySplitMaxBytesV1, sha); err == nil {
+		t.Fatal("split cap accepted report-sized M18 evidence")
+	}
+}
+
+func TestLocalHNSWFinalQualificationM18TimingSHA256V1(t *testing.T) {
+	if localHNSWFinalQualificationM18TimingSHA256V1 != "b89f6e8dfb04406c916eb8243cb3e9f7905d0977f4ca5f7f35bf2a39e2a2f655" {
+		t.Fatalf("unexpected M18 timing SHA %q", localHNSWFinalQualificationM18TimingSHA256V1)
+	}
+}
+
 func localHNSWFinalQualificationTestGateEvidenceV1(report *m8ProductionReportV1) {
 	report.Status = "experimental_gate_failures"
 	report.Config.Partitions, report.Config.RecallTarget = 16, 0.95
@@ -195,14 +220,14 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		run := localHNSWFinalQualificationRunsV1()[call]
 		call++
 		rowOutcome := outcome
-		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
+		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, run.EFSearch, run.Concurrency
 		exhaustive := run.Probes == 16
 		reportPath, transcriptPath := filepath.Join(dir, "vector_partition_m8_test.json"), filepath.Join(dir, "vector_partition_m8_measurements_test.json")
-		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], PartitionHNSWEfC: map[string]int{localHNSWFinalQualificationBaselineV1: 128, localHNSWFinalQualificationCandidateV1: 256}[run.Variant], IndexDefinitionDigest: digest, BuildIdentityDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
+		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], PartitionHNSWEfC: map[string]int{localHNSWFinalQualificationBaselineV1: 128, localHNSWFinalQualificationCandidateV1: 256}[run.Variant], IndexDefinitionDigest: digest, BuildIdentityDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: run.EFSearch, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
 		localHNSWFinalQualificationTestGateEvidenceV1(&report)
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
-	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 {
+	if err != nil || len(children) != 48 || len(got) != 48 || got[0].m8ExistingDB != "a" || got[1].m8ExistingDB != "b" || got[24].m8ExistingDB != "c" || got[25].m8ExistingDB != "d" || got[0].probes[0] != 2 || got[0].efSearch[0] != 128 || got[1].efSearch[0] != 120 {
 		t.Fatalf("err=%v calls=%d", err, len(got))
 	}
 }
@@ -233,7 +258,7 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 			outcome.TopKIDs[query][rank] = id
 		}
 	}
-	expected := localHNSWFinalQualificationRunV1{Corpus: localHNSWFinalQualificationCorpus250KV1, localHNSWFinalQualificationCellV1: localHNSWFinalQualificationCellV1{Variant: localHNSWFinalQualificationBaselineV1, Probes: 2, Concurrency: 1}}
+	expected := localHNSWFinalQualificationRunV1{Corpus: localHNSWFinalQualificationCorpus250KV1, localHNSWFinalQualificationCellV1: localHNSWFinalQualificationCellV1{Variant: localHNSWFinalQualificationBaselineV1, Probes: 2, Concurrency: 1, EFSearch: 128}}
 	report := m8ProductionReportV1{
 		ExecutionID:           "m8-production-test",
 		MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: "/transcript", SHA256: digest},
@@ -345,10 +370,15 @@ func TestLocalHNSWFinalQualificationReportV1(t *testing.T) {
 		baselineDB, candidateDB := "/"+corpus+"-baseline", "/"+corpus+"-candidate"
 		corpora = append(corpora, localHNSWFinalQualificationCorpusEvidenceV1{Corpus: corpus, Fixture: fixture, DatasetManifest: localHNSWAttributionFileInputV1{Path: "/" + corpus + "-manifest", SHA256: digest}, TruthCache: localHNSWAttributionFileInputV1{Path: "/" + corpus + "-truth", SHA256: anchor.ArtifactSHA256}, TruthSHA256: anchor.TruthSHA256, BaselineDB: baselineDB, CandidateDB: candidateDB, BaselineDescriptor: localHNSWAttributionFileInputV1{Path: filepath.Join(baselineDB, m3VariantDescriptorFileV1), SHA256: digest}, CandidateDescriptor: localHNSWAttributionFileInputV1{Path: filepath.Join(candidateDB, m3VariantDescriptorFileV1), SHA256: digest}})
 	}
-	report := localHNSWFinalQualificationReportV1{Schema: localHNSWFinalQualificationSchemaV1, ResultKind: "local_hnsw_final_qualification_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: []string{"local-hnsw-final-qualification"}, BaseSHA: localHNSWAttributionSourceLockV1, HeadSHA: strings.Repeat("d", 40), SourceCheckout: "/source", Executable: "/bench", ExecutableSHA256: digest}, Inputs: localHNSWFinalQualificationInputsEvidenceV1{Corpora: corpora, Calibration: localHNSWAttributionFileInputV1{Path: "/calibration", SHA256: localHNSWAttributionCalibrationSHA256V1}, CalibrationRows: 806, Holdout: localHNSWAttributionFileInputV1{Path: "/holdout", SHA256: localHNSWAttributionHoldoutSHA256V1}, HoldoutRows: 194, QueryUnionRows: 1000, ApprovalSHA: strings.Repeat("e", 40), Artifacts: "/artifacts"}, Children: children, Disposition: "pass", Limitations: []string{"test"}}
+	report := localHNSWFinalQualificationReportV1{Schema: localHNSWFinalQualificationSchemaV1, ResultKind: "local_hnsw_final_qualification_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: []string{"local-hnsw-final-qualification"}, BaseSHA: localHNSWAttributionSourceLockV1, HeadSHA: strings.Repeat("d", 40), SourceCheckout: "/source", Executable: "/bench", ExecutableSHA256: digest}, Inputs: localHNSWFinalQualificationInputsEvidenceV1{Corpora: corpora, Calibration: localHNSWAttributionFileInputV1{Path: "/calibration", SHA256: localHNSWAttributionCalibrationSHA256V1}, CalibrationRows: 806, Holdout: localHNSWAttributionFileInputV1{Path: "/holdout", SHA256: localHNSWAttributionHoldoutSHA256V1}, HoldoutRows: 194, QueryUnionRows: 1000, ApprovalSHA: strings.Repeat("e", 40), Artifacts: "/artifacts", M18Curve: localHNSWAttributionFileInputV1{Path: "/curve", SHA256: localHNSWRepairMTimingSelectedCurveSHA256V1}, M18Timing: localHNSWAttributionFileInputV1{Path: "/timing", SHA256: localHNSWFinalQualificationM18TimingSHA256V1}}, Children: children, Disposition: "pass", Limitations: []string{"test"}}
 	if err := localHNSWFinalQualificationReportValidV1(report); err != nil {
 		t.Fatal(err)
 	}
+	report.Inputs.M18Timing.SHA256 = digest
+	if err := localHNSWFinalQualificationReportValidV1(report); err == nil {
+		t.Fatal("accepted M18 timing provenance drift")
+	}
+	report.Inputs.M18Timing.SHA256 = localHNSWFinalQualificationM18TimingSHA256V1
 	for i := range report.Children {
 		if report.Children[i].Corpus == localHNSWFinalQualificationCorpus250KV1 && report.Children[i].Variant == localHNSWFinalQualificationCandidateV1 && report.Children[i].Probes == 2 {
 			report.Children[i].Counts.RoutingMissSlots--
