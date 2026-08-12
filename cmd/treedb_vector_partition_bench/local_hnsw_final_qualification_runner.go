@@ -239,9 +239,14 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	for _, file := range []localHNSWAttributionFileInputV1{{Path: calibrationPath, SHA256: calibrationSHA}, {Path: holdoutPath, SHA256: holdoutSHA}, {Path: m18Curve, SHA256: curveSHA}, {Path: m18Timing, SHA256: localHNSWFinalQualificationM18TimingSHA256V1}} {
+	for _, file := range []localHNSWAttributionFileInputV1{{Path: calibrationPath, SHA256: calibrationSHA}, {Path: holdoutPath, SHA256: holdoutSHA}} {
 		if err := localHNSWAttributionMatchFileSHA256V1(file.Path, localHNSWQuerySplitMaxBytesV1, file.SHA256); err != nil {
 			return fmt.Errorf("local HNSW final qualification split changed: %w", err)
+		}
+	}
+	for _, file := range []localHNSWAttributionFileInputV1{{Path: m18Curve, SHA256: curveSHA}, {Path: m18Timing, SHA256: localHNSWFinalQualificationM18TimingSHA256V1}} {
+		if err := localHNSWFinalQualificationM18EvidenceV1(file); err != nil {
+			return err
 		}
 	}
 	report := localHNSWFinalQualificationReportV1{
@@ -258,6 +263,13 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "report=%s children=%d disposition=%s\n", out, len(children), report.Disposition)
 	return err
+}
+
+func localHNSWFinalQualificationM18EvidenceV1(file localHNSWAttributionFileInputV1) error {
+	if err := localHNSWAttributionMatchFileSHA256V1(file.Path, m8QualificationMatrixMaxBytesV1, file.SHA256); err != nil {
+		return fmt.Errorf("local HNSW final qualification M18 evidence changed: %w", err)
+	}
+	return nil
 }
 
 func localHNSWFinalQualificationApprovalV1(checkout, approvalSHA, headSHA string) error {

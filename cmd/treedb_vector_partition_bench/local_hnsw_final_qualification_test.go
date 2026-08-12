@@ -151,6 +151,25 @@ func TestLocalHNSWFinalQualificationChildReportDiscoveryV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWFinalQualificationM18EvidenceV1UsesMatrixCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "curve.json")
+	raw := []byte(strings.Repeat("x", localHNSWQuerySplitMaxBytesV1+1))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := localHNSWAttributionRegularFileSHA256V1(path, m8QualificationMatrixMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := localHNSWAttributionFileInputV1{Path: path, SHA256: sha}
+	if err := localHNSWFinalQualificationM18EvidenceV1(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionMatchFileSHA256V1(path, localHNSWQuerySplitMaxBytesV1, sha); err == nil {
+		t.Fatal("split cap accepted report-sized M18 evidence")
+	}
+}
+
 func localHNSWFinalQualificationTestGateEvidenceV1(report *m8ProductionReportV1) {
 	report.Status = "experimental_gate_failures"
 	report.Config.Partitions, report.Config.RecallTarget = 16, 0.95

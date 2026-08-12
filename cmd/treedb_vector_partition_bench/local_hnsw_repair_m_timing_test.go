@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,5 +98,25 @@ func TestLocalHNSWRepairMTimingRoutesSHA256V1(t *testing.T) {
 	second, err := localHNSWRepairMTimingRoutesSHA256V1(rows)
 	if err != nil || second == first {
 		t.Fatalf("second=%q first=%q err=%v", second, first, err)
+	}
+}
+
+func TestLocalHNSWRepairMTimingQualityMatchesCurveV1(t *testing.T) {
+	quality := localHNSWRepairEFCurveCellV1{
+		EFSearch: 120, QueryCount: 806,
+		RoutesSHA256:     strings.Repeat("a", 64),
+		P2ResultsSHA256:  strings.Repeat("b", 64),
+		P16ResultsSHA256: strings.Repeat("c", 64),
+		RoutingMissSlots: 19, P2HitSlots: 7657, P16HitSlots: 7650,
+		P2Recall:  localHNSWAttributionRecallAggregateV1{Mean: 0.95},
+		P16Recall: localHNSWAttributionRecallAggregateV1{Mean: 0.9491315136476427},
+	}
+	curve := []localHNSWRepairEFCurveCellV1{quality}
+	if !localHNSWRepairMTimingQualityMatchesCurveV1(quality, curve) {
+		t.Fatal("rejected matching selected curve cell")
+	}
+	curve[0].P2ResultsSHA256 = strings.Repeat("d", 64)
+	if localHNSWRepairMTimingQualityMatchesCurveV1(quality, curve) {
+		t.Fatal("accepted selected curve with changed p2 results digest")
 	}
 }
