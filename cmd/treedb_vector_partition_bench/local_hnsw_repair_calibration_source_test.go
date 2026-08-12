@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,5 +26,20 @@ func TestLocalHNSWRepairCalibrationBindDescriptorV1(t *testing.T) {
 	}
 	if err := m8BindRetainedM3DescriptorV1(assets, fixture); err != nil {
 		t.Fatalf("production descriptor binder regressed: %v", err)
+	}
+	descriptor, err := m3ReadVariantDescriptorV1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor.SourceOrdinalDigest = ""
+	raw, err := json.Marshal(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, m3VariantDescriptorFileV1), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m8BindRetainedM3DescriptorV1(assets, fixture); err == nil {
+		t.Fatal("retained binder accepted missing source ordinal digest")
 	}
 }

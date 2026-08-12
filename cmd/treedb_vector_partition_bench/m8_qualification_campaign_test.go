@@ -1232,22 +1232,19 @@ func TestM8QualificationM3BuildCapsV1(t *testing.T) {
 			t.Fatalf("fixture=%d rejected expected config", fixture.Vectors)
 		}
 		defaultCandidate := variant
-		definition.EfConstruction = 256
-		defaultCandidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
+		defaultCandidate.PartitionHNSWEfC = 256
 		if m8QualificationM3BuildCapsV1(defaultCandidate, fixture) {
 			t.Fatalf("fixture=%d accepted M16/eFC256 local definition", fixture.Vectors)
 		}
 		definition.EfConstruction = 128
 		candidate := variant
-		candidate.PartitionHNSWM = 18
-		definition.M, definition.EfConstruction = 18, 256
-		candidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
+		candidate.PartitionHNSWM, candidate.PartitionHNSWEfC = 18, 256
 		if !m8QualificationM3BuildCapsV1(candidate, fixture) {
 			t.Fatalf("fixture=%d rejected M18/eFC256 local candidate", fixture.Vectors)
 		}
-		candidate.IndexDefinitionDigest = variant.IndexDefinitionDigest
+		candidate.PartitionHNSWEfC = 128
 		if m8QualificationM3BuildCapsV1(candidate, fixture) {
-			t.Fatalf("fixture=%d accepted M18 with the default local definition", fixture.Vectors)
+			t.Fatalf("fixture=%d accepted M18/eFC128 local definition", fixture.Vectors)
 		}
 		wantRouterMaxVectors, ok := m8QualificationRouterMaxVectorsV1(fixture.Vectors)
 		if !ok || routerConfig.MaxVectors != wantRouterMaxVectors {
@@ -2205,6 +2202,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourceOrdinalDigest, err := m3SourceOrdinalDigestV1(sourceRows)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, sourceRows)
 	if err != nil {
 		t.Fatal(err)
@@ -2217,6 +2218,7 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
 		descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
 	}
+	descriptor.SourceOrdinalDigest = sourceOrdinalDigest
 	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -2973,7 +2975,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	descriptor.BaseSHA, descriptor.HeadSHA = head, head
 	descriptor.PartitionConfig, descriptor.PartitionMaxDistanceWork = partitionConfig, partitionConfig.MaxDistanceWork
 	descriptor.RouterConfig, descriptor.RouterMaxScalarWork, descriptor.M3MaxBenchmarkVisits = routerConfig, routerConfig.MaxScalarWork, visits
-	descriptor.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, descriptor.PartitionHNSWM).VectorIndexes[0])
+	descriptor.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, partitionHNSWDegree).VectorIndexes[0])
 	descriptor.PartitionLoads = make([]int, len(loads))
 	for i, load := range loads {
 		descriptor.PartitionLoads[i] = int(load)

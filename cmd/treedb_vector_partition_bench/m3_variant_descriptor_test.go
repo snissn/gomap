@@ -23,7 +23,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 		BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("c", 40),
 		FixtureChecksum: hash, ExecutableSHA256: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, GraphBuildSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
 		DatabaseDirectory: dir, ManifestIntegrity: hash, ReadySetDigest: hash, RouterAssetChecksum: hash, RouterModelDigest: hash,
-		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, PartitionGeneration: 4, RouterGeneration: 4,
+		SourceGeneration: 1, SourceChecksum: 2, SourceSchemaHash: 3, SourceRows: 8, SourceOrdinalDigest: hash, PartitionGeneration: 4, RouterGeneration: 4,
 		Partitions: 4, IndexDefinitionDigest: hash, PartitionHNSWM: 16, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: 20_000_000_000, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, RouterRepresentatives: 4, Capacity: 3, OverlapRequested: 1, OverlapRealized: 1, OverlapRejected: 0, OverlapUseful: 1, OverlapUnusedCapacity: 3, EdgeCutBefore: 2, EdgeCutAfter: 1, PartitionLoads: []int{3, 2, 2, 2}, OverlapMemberships: 1, PersistentAssetBytes: 1024,
 	}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
@@ -52,6 +52,14 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 	if _, err := m3ReadVariantDescriptorV1(dir); err == nil {
 		t.Fatal("accepted trailing or malformed descriptor JSON")
+	}
+}
+
+func TestM3VariantDescriptorRejectsMissingSourceOrdinalDigestV1(t *testing.T) {
+	descriptor := testM3VariantDescriptorV1(t.TempDir())
+	descriptor.SourceOrdinalDigest = ""
+	if err := validateM3VariantDescriptorV1(descriptor); err == nil {
+		t.Fatal("accepted missing source ordinal digest")
 	}
 }
 

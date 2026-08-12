@@ -301,6 +301,19 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 	return out
 }
 
+// vectorPartitionLocalProductionGraphVariantV1 permits the selected M18
+// production pack while keeping every other domain-bound construction variant
+// offline-only. The canonical source definition remains the manifest identity.
+func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
+	if membership == expected {
+		return VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, true
+	}
+	if vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expected {
+		return VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, true
+	}
+	return "", false
+}
+
 // vectorPartitionLocalGraphVariantDefinitionV1 keeps the authoritative source
 // definition unchanged while selecting the local offline builder parameters.
 func vectorPartitionLocalGraphVariantDefinitionV1(def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (VectorIndexDefinition, bool, error) {
@@ -893,6 +906,10 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 	if !hasNative {
 		return nil
 	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, manifest.IndexName)
+	if !ok {
+		return ErrVectorPartitionSearchUnavailable
+	}
 	reader, err := c.openColumnVectorGraphPhysicalRowReader(manifest.IndexName, columnVectorGraphPhysicalRowReaderOptions{})
 	if err != nil {
 		return fmt.Errorf("%w: membership source reader: %v", ErrVectorPartitionSearchUnavailable, err)
@@ -910,7 +927,8 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 		if err != nil {
 			return err
 		}
-		if got != want {
+		variant, ok := vectorPartitionLocalProductionGraphVariantV1(want, got)
+		if !ok {
 			return fmt.Errorf("%w: descriptor membership digest mismatch partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
 		}
 		if asset.Ref.Kind != ColumnAssetKindTCS1HNSWSearchPack || asset.Ref.Length <= 0 || asset.Ref.Length > vectorPartitionSearchAssetMaxBytesV1 {
@@ -926,9 +944,10 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 				ManifestChecksum:   manifest.SourceChecksum,
 				SchemaHash:         manifest.SourceSchemaHash,
 			},
-			ExpectedMembershipDigest: want,
+			ExpectedMembershipDigest: got,
 		})
-		if err != nil || pack.Header.MembershipDigest != want || !pack.Header.HasAuxiliaryNavigation {
+		packDef, _, definitionErr := vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
+		if err != nil || definitionErr != nil || pack.Header.MembershipDigest != got || !pack.Header.HasAuxiliaryNavigation || pack.Header.M != packDef.M || pack.Header.EfConstruction != packDef.EfConstruction || pack.Header.EfSearch != packDef.EfSearch {
 			return fmt.Errorf("%w: native membership header partition=%d: %v", ErrVectorPartitionSearchUnavailable, asset.PartitionID, err)
 		}
 	}
@@ -942,10 +961,9 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 }
 
-// MaterializeVectorPartitionLocalSearchAssetsVariantV1 is the offline A/B
-// constructor for #4105. Native assets are intentionally not publishable as a
-// production replacement: callers must retain their own variant-bound manifest
-// and diagnostics while determining whether reachability is preserved.
+// MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
+// graph variants. Native and experimental variants remain offline-only; the
+// selected M18/eFC256 auxiliary V3 variant is production-openable.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant)
 }
@@ -1543,62 +1561,71 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	expectAuxiliaryNavigation := false
 	offlineV3 := false
 	if recomputedMembershipDigest != expectedMembershipDigest {
-		if !allowOfflineNative {
-			return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
-		}
-		switch {
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) == expectedMembershipDigest:
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1) == expectedMembershipDigest:
+		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); production {
 			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1)
+			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
 			if definitionErr != nil {
 				return nil, ErrVectorPartitionSearchUnavailable
 			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
+			offlineV3 = variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+		} else {
+			if !allowOfflineNative {
+				return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
+			switch {
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) == expectedMembershipDigest:
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1) == expectedMembershipDigest:
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1)
+				if definitionErr != nil {
+					return nil, ErrVectorPartitionSearchUnavailable
+				}
+				offlineV3 = true
+			default:
+				return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
-			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
-			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
-			}
-			offlineV3 = true
-		case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1) == expectedMembershipDigest:
-			var definitionErr error
-			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1)
-			if definitionErr != nil {
-				return nil, ErrVectorPartitionSearchUnavailable
-			}
-			offlineV3 = true
-		default:
-			return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 		}
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace

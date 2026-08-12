@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -290,17 +291,9 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	foundIndex := false
-	for i := range meta.VectorIndexes {
-		if meta.VectorIndexes[i].Name == partitionHNSWIndex {
-			meta.VectorIndexes[i].M = partitionHNSWM
-			meta.VectorIndexes[i].EfConstruction = partitionHNSWEfConstruction
-			foundIndex = true
-			break
-		}
-	}
-	if !foundIndex {
-		return m3PartitionIndexRow{}, errors.New("M3 persistent HNSW index definition missing")
+	localVariant, err := m3PartitionLocalGraphVariantV1(partitionHNSWM, partitionHNSWEfConstruction)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
 	}
 	variantID, err := m3VariantIDV1(cfg.partitionAssignment, ratio)
 	if err != nil {
@@ -313,7 +306,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	identityDescriptor := m3VariantDescriptorV1{
 		FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ExecutableSHA256: executableSHA256, VariantID: variantID, AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio,
 		ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, KaHIPPythonSHA256: cfg.kahipPythonSHA256, KaHIPAdapterSHA256: cfg.kahipAdapterSHA256,
-		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM, PartitionConfig: cfg.partition,
+		Source: artifact.Source, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWM, PartitionHNSWEfC: partitionHNSWEfConstruction, PartitionConfig: cfg.partition,
 		PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork, RouterMaxScalarWork: cfg.routerConfig.MaxScalarWork, RouterConfig: cfg.routerConfig, M3MaxBenchmarkVisits: cfg.m3MaxBenchmarkVisits,
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
 		OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler,
@@ -381,6 +374,10 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
+	sourceOrdinalDigest, err := m3SourceOrdinalDigestV1(sourceRows)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
 	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, sourceRows)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -419,7 +416,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
-	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(partitionHNSWIndex, manifest, assetFileID, inputs)
+	assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, assetFileID, inputs, localVariant)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
 	}
@@ -677,13 +674,14 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			BuildIdentityDigest: buildIdentityDigest,
 			DatabaseDirectory:   dir, ManifestIntegrity: manifest.IntegrityDigest, ReadySetDigest: manifest.ReadySetDigest,
 			RouterAssetChecksum: manifest.RouterAsset.Checksum, RouterModelDigest: routerRuntime.ModelDigest,
-			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount,
+			SourceGeneration: manifest.SourceGeneration, SourceChecksum: manifest.SourceChecksum, SourceSchemaHash: manifest.SourceSchemaHash, SourceRows: manifest.SourceRowCount, SourceOrdinalDigest: sourceOrdinalDigest,
 			PartitionGeneration: manifest.Generation, RouterGeneration: manifest.RouterGeneration, Partitions: manifest.PartitionCount, IndexDefinitionDigest: manifest.IndexDefinitionDigest,
 			Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapRealized: overlap.Used, OverlapRejected: overlap.Unspent,
 			OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, OverlapUnusedCapacity: unusedCapacity,
 			EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
 			PartitionLoads: append([]int(nil), overlap.Loads...), OverlapMemberships: len(manifest.OverlapMemberships),
 			PartitionHNSWM:           partitionHNSWM,
+			PartitionHNSWEfC:         partitionHNSWEfConstruction,
 			PartitionConfig:          cfg.partition,
 			PartitionMaxDistanceWork: cfg.partition.MaxDistanceWork,
 			RouterMaxScalarWork:      cfg.routerConfig.MaxScalarWork,
@@ -779,6 +777,15 @@ func m3SourceOrdinalsByArtifactID(artifact vectorpartition.Artifact, rows []coll
 		}
 	}
 	return sourceOrdinals, nil
+}
+
+func m3SourceOrdinalDigestV1(rows []collections.VectorPartitionSourceOrdinalV1) (string, error) {
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 func m3RouterPartitions(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, vectors [][]float64) ([]vectorpartition.RouterPartitionV1, error) {
