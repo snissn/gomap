@@ -1167,6 +1167,17 @@ func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3(b *
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
 }
 
+func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnEFScale4136(b *testing.B) {
+	for _, efSearch := range []int{32, 64, 128, 256} {
+		shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
+		shape.typedColumnVector = true
+		shape.efSearch = efSearch
+		b.Run(fmt.Sprintf("ef=%d", efSearch), func(b *testing.B) {
+			benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+		})
+	}
+}
+
 func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnStatsMode2042(b *testing.B) {
 	for _, tc := range []struct {
 		name string
