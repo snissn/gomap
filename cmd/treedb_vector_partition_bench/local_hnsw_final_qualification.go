@@ -27,13 +27,16 @@ type localHNSWFinalQualificationCellV1 struct {
 	Variant     string `json:"variant"`
 	Probes      int    `json:"probes"`
 	Concurrency int    `json:"concurrency"`
+	EFSearch    int    `json:"ef_search"`
 }
 
 const (
-	localHNSWFinalQualificationCorpus250KV1 = "250k"
-	localHNSWFinalQualificationCorpus100KV1 = "100k"
-	localHNSWFinalQualificationBaselineV1   = "m16_efc128"
-	localHNSWFinalQualificationCandidateV1  = "m18_efc256"
+	localHNSWFinalQualificationCorpus250KV1  = "250k"
+	localHNSWFinalQualificationCorpus100KV1  = "100k"
+	localHNSWFinalQualificationBaselineV1    = "m16_efc128"
+	localHNSWFinalQualificationCandidateV1   = "m18_efc256"
+	localHNSWFinalQualificationBaselineEFV1  = 128
+	localHNSWFinalQualificationCandidateEFV1 = 120
 )
 
 // localHNSWFinalQualificationScheduleV1 returns the three serialized,
@@ -49,7 +52,11 @@ func localHNSWFinalQualificationScheduleV1() []localHNSWFinalQualificationCellV1
 					variants[0], variants[1] = variants[1], variants[0]
 				}
 				for _, variant := range variants {
-					cells = append(cells, localHNSWFinalQualificationCellV1{Repetition: repetition, Variant: variant, Probes: probes, Concurrency: concurrency})
+					ef := localHNSWFinalQualificationBaselineEFV1
+					if variant == localHNSWFinalQualificationCandidateV1 {
+						ef = localHNSWFinalQualificationCandidateEFV1
+					}
+					cells = append(cells, localHNSWFinalQualificationCellV1{Repetition: repetition, Variant: variant, Probes: probes, Concurrency: concurrency, EFSearch: ef})
 				}
 				pair++
 			}
@@ -174,6 +181,8 @@ type localHNSWFinalQualificationInputsEvidenceV1 struct {
 	QueryUnionRows  int                                           `json:"query_union_rows"`
 	ApprovalSHA     string                                        `json:"approval_sha"`
 	Artifacts       string                                        `json:"child_artifacts"`
+	M18Curve        localHNSWAttributionFileInputV1               `json:"m18_ef_curve"`
+	M18Timing       localHNSWAttributionFileInputV1               `json:"m18_timing"`
 }
 
 type localHNSWFinalQualificationRootsV1 struct {
@@ -281,7 +290,7 @@ func localHNSWFinalQualificationChildConfigV1(base config, input localHNSWFinalQ
 		"-m8-truth-cache", input.TruthCache,
 		"-m8-truth-cache-sha256", input.TruthCacheSHA256,
 		"-router-candidates", strconv.Itoa(m8QualificationRouterCandidatesV1),
-		"-ef-search", "128",
+		"-ef-search", strconv.Itoa(run.EFSearch),
 	}
 	child, err := parseConfig(args)
 	if err != nil {
@@ -296,9 +305,9 @@ func localHNSWFinalQualificationChildValidV1(child localHNSWFinalQualificationCh
 		return false
 	}
 	if child.Variant == localHNSWFinalQualificationBaselineV1 {
-		return child.M == 16 && child.EfConstruction == 128
+		return child.M == 16 && child.EfConstruction == 128 && child.EFSearch == localHNSWFinalQualificationBaselineEFV1
 	}
-	return child.Variant == localHNSWFinalQualificationCandidateV1 && child.M == 18 && child.EfConstruction == 256
+	return child.Variant == localHNSWFinalQualificationCandidateV1 && child.M == 18 && child.EfConstruction == 256 && child.EFSearch == localHNSWFinalQualificationCandidateEFV1
 }
 
 // localHNSWFinalQualificationChildReportV1 reads exactly the one report
@@ -352,7 +361,7 @@ func localHNSWFinalQualificationChildFromTranscriptV1(expected localHNSWFinalQua
 		return out, errors.New("invalid local HNSW final qualification child evidence")
 	}
 	row, outcome := report.Rows[0], transcript.Outcomes[0]
-	if !localHNSWFinalQualificationChildGateLedgerValidV1(expected.Probes, report) || row.Status != "pass" || outcome.Status != "pass" || row.Probes != expected.Probes || row.Concurrency != expected.Concurrency || row.EfSearch != 128 || row.Samples != localHNSWFinalQueryCountV1 || len(outcome.TopKIDs) != localHNSWFinalQueryCountV1 || len(outcome.TopKScoreBits) != localHNSWFinalQueryCountV1 || len(outcome.ExactRepresentativeTruthHits) != localHNSWFinalQueryCountV1 || transcript.ExecutionID != report.ExecutionID || !localHNSWAttributionSHA256V1(report.MeasurementTranscript.SHA256) || !row.Attribution.ApproximateRouterPartitionCoverageComplete || !row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || expected.Probes == 16 && (!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1) {
+	if !localHNSWFinalQualificationChildGateLedgerValidV1(expected.Probes, report) || row.Status != "pass" || outcome.Status != "pass" || row.Probes != expected.Probes || row.Concurrency != expected.Concurrency || row.EfSearch != expected.EFSearch || row.Samples != localHNSWFinalQueryCountV1 || len(outcome.TopKIDs) != localHNSWFinalQueryCountV1 || len(outcome.TopKScoreBits) != localHNSWFinalQueryCountV1 || len(outcome.ExactRepresentativeTruthHits) != localHNSWFinalQueryCountV1 || transcript.ExecutionID != report.ExecutionID || !localHNSWAttributionSHA256V1(report.MeasurementTranscript.SHA256) || !row.Attribution.ApproximateRouterPartitionCoverageComplete || !row.Attribution.CoordinatorMergeIDParity || !row.Attribution.CoordinatorMergeScoreParity || expected.Probes == 16 && (!row.Attribution.ExhaustivePartitionIDParity || !row.Attribution.ExhaustivePartitionScoreParity || row.Attribution.ExhaustivePartitionRecallAtK != 1) {
 		return out, errors.New("invalid local HNSW final qualification child row")
 	}
 	var finalHits, routingHits uint64
@@ -409,7 +418,7 @@ func localHNSWFinalQualificationChildGateLedgerValidV1(probes int, report m8Prod
 
 func localHNSWFinalQualificationReportValidV1(report localHNSWFinalQualificationReportV1) error {
 	expected := localHNSWFinalQualificationRunsV1()
-	if report.Schema != localHNSWFinalQualificationSchemaV1 || report.ResultKind != "local_hnsw_final_qualification_v1" || report.Status != "valid" || report.Disposition != "pass" || len(report.Limitations) == 0 || len(report.Children) != len(expected) || len(report.Provenance.Command) == 0 || report.Provenance.BaseSHA != localHNSWAttributionSourceLockV1 || !validLowerSHA(report.Provenance.HeadSHA) || report.Provenance.SourceDirty || !filepath.IsAbs(report.Provenance.SourceCheckout) || !filepath.IsAbs(report.Provenance.Executable) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || !validLowerSHA(report.Inputs.ApprovalSHA) || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.QueryUnionRows != localHNSWFinalQueryCountV1 || !filepath.IsAbs(report.Inputs.Artifacts) || len(report.Inputs.Corpora) != 2 {
+	if report.Schema != localHNSWFinalQualificationSchemaV1 || report.ResultKind != "local_hnsw_final_qualification_v1" || report.Status != "valid" || report.Disposition != "pass" || len(report.Limitations) == 0 || len(report.Children) != len(expected) || len(report.Provenance.Command) == 0 || report.Provenance.BaseSHA != localHNSWAttributionSourceLockV1 || !validLowerSHA(report.Provenance.HeadSHA) || report.Provenance.SourceDirty || !filepath.IsAbs(report.Provenance.SourceCheckout) || !filepath.IsAbs(report.Provenance.Executable) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || !validLowerSHA(report.Inputs.ApprovalSHA) || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.QueryUnionRows != localHNSWFinalQueryCountV1 || !filepath.IsAbs(report.Inputs.Artifacts) || report.Inputs.M18Curve.Path == "" || report.Inputs.M18Curve.SHA256 != localHNSWRepairMTimingSelectedCurveSHA256V1 || report.Inputs.M18Timing.Path == "" || report.Inputs.M18Timing.SHA256 != localHNSWFinalQualificationM18TimingSHA256V1 || len(report.Inputs.Corpora) != 2 {
 		return errors.New("invalid local HNSW final qualification report")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, report.GeneratedAt); err != nil {

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,14 +18,15 @@ import (
 )
 
 const (
-	localHNSWFinalApprovalEvidencePathV1 = "TreeDB/docs/evidence/vector-partition-revalidation-4093"
-	localHNSWFinalApprovalPullRequestV1  = 4115
+	localHNSWFinalApprovalEvidencePathV1         = "TreeDB/docs/evidence/vector-partition-revalidation-4093"
+	localHNSWFinalApprovalPullRequestV1          = 4115
+	localHNSWFinalQualificationM18TimingSHA256V1 = "8c5ccef9fe77446c99fbc0688be9727ee2de244721a36eafdf2c675a6a31fc5b"
 )
 
 func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-final-qualification", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset250, dataset100, truth250, truth100, calibrationPath, holdoutPath string
+	var dataset250, dataset100, truth250, truth100, calibrationPath, holdoutPath, m18Curve, m18Timing string
 	var baseline250, candidate250, baseline100, candidate100, artifacts, out string
 	var baseSHA, headSHA, approvalSHA, sourceCheckout string
 	fs.StringVar(&dataset250, "dataset-250k", "", "frozen 250k fixture directory")
@@ -30,6 +35,8 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&truth100, "truth-cache-100k", "", "frozen 100k truth-cache directory")
 	fs.StringVar(&calibrationPath, "calibration-split", "", "frozen 250k calibration manifest")
 	fs.StringVar(&holdoutPath, "holdout-split", "", "sealed 250k holdout manifest")
+	fs.StringVar(&m18Curve, "m18-ef-curve", "", "selected M18/eFC256 lower-EF calibration curve")
+	fs.StringVar(&m18Timing, "m18-timing", "", "selected M18/eFC256 lower-EF calibration timing report")
 	fs.StringVar(&baseline250, "baseline-db-250k", "", "retained 250k M16/eFC128 database")
 	fs.StringVar(&candidate250, "candidate-db-250k", "", "retained 250k M18/eFC256 database")
 	fs.StringVar(&baseline100, "baseline-db-100k", "", "retained 100k M16/eFC128 database")
@@ -43,7 +50,7 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	paths := []*string{&dataset250, &dataset100, &truth250, &truth100, &calibrationPath, &holdoutPath, &baseline250, &candidate250, &baseline100, &candidate100, &artifacts, &out, &sourceCheckout}
+	paths := []*string{&dataset250, &dataset100, &truth250, &truth100, &calibrationPath, &holdoutPath, &m18Curve, &m18Timing, &baseline250, &candidate250, &baseline100, &candidate100, &artifacts, &out, &sourceCheckout}
 	if fs.NArg() != 0 || baseSHA == "" || headSHA == "" || approvalSHA == "" {
 		return errors.New("local-hnsw-final-qualification requires all frozen inputs, retained databases, outputs, provenance, and no positional arguments")
 	}
@@ -96,6 +103,24 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	}
 	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
 		return errors.New("local HNSW final qualification executable does not bind the exact clean head")
+	}
+	curve, curveSHA, err := loadLocalHNSWRepairM18EFCurveV1(m18Curve)
+	if err != nil || curveSHA != localHNSWRepairMTimingSelectedCurveSHA256V1 || curve.Disposition != "smallest_point_passes_ef_120" {
+		return errors.New("local HNSW final qualification M18 curve provenance")
+	}
+	rawTiming, err := readBoundedRegularFileV1(m18Timing, m8QualificationMatrixMaxBytesV1)
+	if err != nil {
+		return err
+	}
+	var timing localHNSWRepairMTimingReportV1
+	decoder := json.NewDecoder(bytes.NewReader(rawTiming))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&timing); err != nil || decoder.Decode(&struct{}{}) != io.EOF || validateLocalHNSWRepairMTimingReportV1(timing) != nil {
+		return errors.New("local HNSW final qualification M18 timing provenance")
+	}
+	timingDigest := sha256.Sum256(rawTiming)
+	if hex.EncodeToString(timingDigest[:]) != localHNSWFinalQualificationM18TimingSHA256V1 || timing.SelectedCurve.SHA256 != curveSHA || timing.BaselineEFSearch != localHNSWFinalQualificationBaselineEFV1 || timing.CandidateEFSearch != localHNSWFinalQualificationCandidateEFV1 {
+		return errors.New("local HNSW final qualification M18 timing identity")
 	}
 
 	fixtures := map[string]fixtureManifest{}
@@ -214,7 +239,7 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 			}
 		}
 	}
-	for _, file := range []localHNSWAttributionFileInputV1{{Path: calibrationPath, SHA256: calibrationSHA}, {Path: holdoutPath, SHA256: holdoutSHA}} {
+	for _, file := range []localHNSWAttributionFileInputV1{{Path: calibrationPath, SHA256: calibrationSHA}, {Path: holdoutPath, SHA256: holdoutSHA}, {Path: m18Curve, SHA256: curveSHA}, {Path: m18Timing, SHA256: localHNSWFinalQualificationM18TimingSHA256V1}} {
 		if err := localHNSWAttributionMatchFileSHA256V1(file.Path, localHNSWQuerySplitMaxBytesV1, file.SHA256); err != nil {
 			return fmt.Errorf("local HNSW final qualification split changed: %w", err)
 		}
@@ -222,7 +247,7 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 	report := localHNSWFinalQualificationReportV1{
 		Schema: localHNSWFinalQualificationSchemaV1, ResultKind: "local_hnsw_final_qualification_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-final-qualification", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA},
-		Inputs:     localHNSWFinalQualificationInputsEvidenceV1{Corpora: corpusEvidence, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, CalibrationRows: len(calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutPath, SHA256: holdoutSHA}, HoldoutRows: len(holdout.Ordinals), QueryUnionRows: localHNSWFinalQueryCountV1, ApprovalSHA: approvalSHA, Artifacts: artifacts},
+		Inputs:     localHNSWFinalQualificationInputsEvidenceV1{Corpora: corpusEvidence, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, CalibrationRows: len(calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutPath, SHA256: holdoutSHA}, HoldoutRows: len(holdout.Ordinals), QueryUnionRows: localHNSWFinalQueryCountV1, ApprovalSHA: approvalSHA, Artifacts: artifacts, M18Curve: localHNSWAttributionFileInputV1{Path: m18Curve, SHA256: curveSHA}, M18Timing: localHNSWAttributionFileInputV1{Path: m18Timing, SHA256: localHNSWFinalQualificationM18TimingSHA256V1}},
 		Children:   children, Disposition: "pass", Limitations: []string{"single-host loopback production topology", "final 250k holdout and independent 100k control only; no external-system comparison"},
 	}
 	if err := localHNSWFinalQualificationReportValidV1(report); err != nil {
