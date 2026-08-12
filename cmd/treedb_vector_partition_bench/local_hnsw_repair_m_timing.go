@@ -68,6 +68,32 @@ func localHNSWRepairMTimingGateMarkerV1(path, want string) error {
 	return nil
 }
 
+func localHNSWRepairMTimingStartMarkerV1(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("invalid local HNSW repair M timing gate marker")
+	}
+	if info.Size() > int64(len(localHNSWRepairMTimingGateStartV1)) {
+		return false, errors.New("invalid local HNSW repair M timing gate marker")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, int64(len(localHNSWRepairMTimingGateStartV1)+1)))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil || len(raw) > len(localHNSWRepairMTimingGateStartV1) {
+		return false, errors.New("invalid local HNSW repair M timing gate marker")
+	}
+	if string(raw) == localHNSWRepairMTimingGateStartV1 {
+		return true, nil
+	}
+	if strings.HasPrefix(localHNSWRepairMTimingGateStartV1, string(raw)) {
+		return false, nil
+	}
+	return false, errors.New("invalid local HNSW repair M timing gate marker")
+}
+
 func localHNSWRepairMTimingWaitForStartV1(ctx context.Context, dir string) error {
 	ready := filepath.Join(dir, "ready")
 	file, err := os.OpenFile(ready, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -101,7 +127,13 @@ func localHNSWRepairMTimingWaitForStartV1(ctx context.Context, dir string) error
 		}
 		start := filepath.Join(dir, "start")
 		if _, err := os.Lstat(start); err == nil {
-			return localHNSWRepairMTimingGateMarkerV1(start, localHNSWRepairMTimingGateStartV1)
+			complete, markerErr := localHNSWRepairMTimingStartMarkerV1(start)
+			if markerErr != nil {
+				return markerErr
+			}
+			if complete {
+				return nil
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -169,6 +201,13 @@ func loadLocalHNSWRepairM18EFCurveV1(path string) (localHNSWRepairM18EFCurveRepo
 	}
 	digest := sha256.Sum256(raw)
 	return report, fmt.Sprintf("%x", digest[:]), nil
+}
+
+func localHNSWRepairMTimingSelectedCurveUnchangedV1(path, wantSHA string) error {
+	if err := localHNSWAttributionMatchFileSHA256V1(path, m8QualificationMatrixMaxBytesV1, wantSHA); err != nil {
+		return fmt.Errorf("local HNSW repair M timing selected curve changed: %w", err)
+	}
+	return nil
 }
 
 func localHNSWRepairMTimingGateV1Build(cells []localHNSWRepairCalibrationTimingCellV1) (localHNSWRepairMTimingGateV1, error) {
@@ -383,6 +422,9 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	}
 	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA {
 		return errors.New("local HNSW repair M timing executable changed")
+	}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(selectedCurve, curveSHA); err != nil {
+		return err
 	}
 	capture, err := startM8ProfileCaptureV1(profiles)
 	if err != nil {

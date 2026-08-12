@@ -32,7 +32,10 @@ func TestLocalHNSWRepairMTimingPhaseBarrierV1(t *testing.T) {
 		ready := filepath.Join(dir, "ready")
 		for {
 			if _, err := os.Lstat(ready); err == nil {
-				_ = os.WriteFile(filepath.Join(dir, "start"), []byte(localHNSWRepairMTimingGateStartV1), 0o644)
+				start := filepath.Join(dir, "start")
+				_ = os.WriteFile(start, []byte(localHNSWRepairMTimingGateStartV1[:8]), 0o644)
+				time.Sleep(2 * time.Millisecond)
+				_ = os.WriteFile(start, []byte(localHNSWRepairMTimingGateStartV1), 0o644)
 				return
 			}
 			time.Sleep(time.Millisecond)
@@ -45,6 +48,48 @@ func TestLocalHNSWRepairMTimingPhaseBarrierV1(t *testing.T) {
 	}
 	if err := localHNSWRepairMTimingGateMarkerV1(filepath.Join(dir, "ready"), localHNSWRepairMTimingGateReadyV1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLocalHNSWRepairMTimingStartMarkerV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "start")
+	if err := os.WriteFile(path, []byte(localHNSWRepairMTimingGateStartV1[:8]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := localHNSWRepairMTimingStartMarkerV1(path); err != nil || complete {
+		t.Fatalf("partial marker complete=%v err=%v", complete, err)
+	}
+	if err := os.WriteFile(path, []byte(localHNSWRepairMTimingGateStartV1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if complete, err := localHNSWRepairMTimingStartMarkerV1(path); err != nil || !complete {
+		t.Fatalf("complete marker complete=%v err=%v", complete, err)
+	}
+	if err := os.WriteFile(path, []byte("wrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localHNSWRepairMTimingStartMarkerV1(path); err == nil {
+		t.Fatal("accepted malformed marker")
+	}
+}
+
+func TestLocalHNSWRepairMTimingSelectedCurveUnchangedV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "curve.json")
+	if err := os.WriteFile(path, []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha, err := localHNSWAttributionRegularFileSHA256V1(path, m8QualificationMatrixMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(path, sha); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(path, sha); err == nil {
+		t.Fatal("accepted replaced selected curve")
 	}
 }
 
