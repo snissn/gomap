@@ -3,6 +3,12 @@ package main
 import "testing"
 
 func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
+	if !localHNSWRepairMTimingEFsV1(128, 120) || localHNSWRepairMTimingEFsV1(128, 128) || localHNSWRepairMTimingEFsV1(120, 120) {
+		t.Fatal("timing EF identity")
+	}
+	if !localHNSWAttributionSHA256V1(localHNSWRepairMTimingSelectedCurveSHA256V1) {
+		t.Fatal("selected curve digest")
+	}
 	var cells []localHNSWRepairCalibrationTimingCellV1
 	for repetition := 0; repetition < 4; repetition++ {
 		for _, item := range []struct {
