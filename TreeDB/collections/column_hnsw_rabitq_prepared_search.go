@@ -107,7 +107,9 @@ func (r *columnVectorGraphPhysicalRowReader) searchRabitQCosinePreparedHNSWPack(
 	if queryMode != columnVectorGraphNativeSearchQueryModeQuantizedRerank {
 		return results, searchStats, nil
 	}
-	scratch.retainTopBestFirst(rerankCandidateLimit)
+	if rerankCandidateLimit > 0 {
+		scratch.retainTopBestFirst(rerankCandidateLimit)
+	}
 	if err := pack.exactRerankPreparedTraversalCandidates(query, opts.TopK, opts.ScoreBatchMode, scratch, &searchStats); err != nil {
 		return nil, searchStats, err
 	}
