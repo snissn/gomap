@@ -954,6 +954,8 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		"-partition-pivots", "2",
 		"-partition-max-leaf-bucket", "8",
 		"-partition-degree", "4",
+		"-partition-hnsw-m", "16",
+		"-partition-hnsw-ef-construction", "128",
 		"-router-max-scalar-work", "50000000000",
 	}
 	var stdout bytes.Buffer
@@ -983,7 +985,7 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		})
 	}
 	for _, row := range report.Rows {
-		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != 4 || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
+		if row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionHNSWDegree || row.LocalSearches != 8*4 || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {
 			t.Fatalf("M3 row=%+v", row)
 		}
 	}
@@ -1000,12 +1002,11 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsProductionV3Packs(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("durable M1 lifecycle publication is unsupported; native pack codec coverage remains platform-neutral in TreeDB/collections")
 	}
-	persist := filepath.Join(t.TempDir(), "m3")
+	dataset := writeFixtureForTest(t, 64, 8, 8)
 	args := []string{
-		"-dataset", writeFixtureForTest(t, 64, 8, 8),
+		"-dataset", dataset,
 		"-out", t.TempDir(),
-		"-m3-persist-db", persist,
-		"-partitions", "4",
+		"-partitions", "16",
 		"-probes", "1",
 		"-overlap", "0",
 		"-top-k", "4",
@@ -1014,39 +1015,100 @@ func TestM3ConfiguredPartitionLocalHNSWBuildsProductionV3Packs(t *testing.T) {
 		"-partition-pivots", "2",
 		"-partition-max-leaf-bucket", "8",
 		"-partition-degree", "4",
-		"-partition-hnsw-m", "18",
-		"-partition-hnsw-ef-construction", "256",
+		"-partition-hnsw-m", "16",
+		"-partition-hnsw-ef-construction", "128",
 		"-router-max-scalar-work", "50000000000",
 	}
-	if err := runWithHermeticProvenance(t, args, io.Discard); err != nil {
-		t.Fatal(err)
+	type builtM3 struct {
+		descriptor m3VariantDescriptorV1
+		source     collections.VectorPartitionSourceIdentityV1
+		rows       []collections.VectorPartitionSourceOrdinalV1
+		manifest   collections.VectorPartitionManifestV1
+		routes     [][]uint32
 	}
-	db, err := backenddb.Open(backenddb.Options{Dir: persist, DisableBackgroundPrune: true})
-	if err != nil {
-		t.Fatal(err)
+	queries := [][]float32{make([]float32, 8), make([]float32, 8)}
+	queries[0][0], queries[1][1] = 1, 1
+	build := func(name string, localArgs ...string) builtM3 {
+		persist := filepath.Join(t.TempDir(), name)
+		runArgs := append(append([]string(nil), args...), "-m3-persist-db", persist)
+		runArgs = append(runArgs, localArgs...)
+		if err := runWithHermeticProvenance(t, runArgs, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		db, err := backenddb.Open(backenddb.Options{Dir: persist, DisableBackgroundPrune: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		col, err := collections.NewCollectionManager(db).OpenCollection(m3BenchmarkCollection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta := col.Meta()
+		if len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].M != partitionHNSWDegree || meta.VectorIndexes[0].EfConstruction != partitionHNSWDefaultEfC {
+			t.Fatalf("source index definition=%+v", meta.VectorIndexes)
+		}
+		descriptor, err := m3ReadVariantDescriptorV1(persist)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if descriptor.IndexDefinitionDigest != collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]) {
+			t.Fatalf("descriptor source index digest=%s", descriptor.IndexDefinitionDigest)
+		}
+		searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, descriptor.PartitionGeneration, 0)
+		if err != nil {
+			t.Fatalf("production-open configured V3 pack: %v", err)
+		}
+		if err := searcher.Close(); err != nil {
+			t.Fatal(err)
+		}
+		source, rows, err := col.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		router, _, err := col.OpenVectorPartitionRouterV1(partitionHNSWIndex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		routerStatus := router.Status()
+		routes := make([][]uint32, 0, len(queries)*4)
+		for _, query := range queries {
+			for _, options := range []collections.VectorPartitionRouterSearchOptionsV1{
+				{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 2},
+				{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 16},
+				{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: int(routerStatus.Representatives), PartitionProbes: 16},
+			} {
+				result, err := router.Search(query, options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				route := make([]uint32, len(result.Partitions))
+				for i := range result.Partitions {
+					route[i] = result.Partitions[i].PartitionID
+				}
+				routes = append(routes, route)
+			}
+		}
+		if err := router.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return builtM3{descriptor: descriptor, source: source, rows: rows, manifest: routerStatus.Manifest, routes: routes}
 	}
-	defer db.Close()
-	col, err := collections.NewCollectionManager(db).OpenCollection(m3BenchmarkCollection)
-	if err != nil {
-		t.Fatal(err)
+	baseline := build("m16")
+	candidate := build("m18", "-partition-hnsw-m", "18", "-partition-hnsw-ef-construction", "256")
+	if baseline.descriptor.PartitionHNSWM != 16 || m3DescriptorPartitionHNSWEfCV1(baseline.descriptor) != 128 || candidate.descriptor.PartitionHNSWM != 18 || m3DescriptorPartitionHNSWEfCV1(candidate.descriptor) != 256 || baseline.descriptor.IndexDefinitionDigest != candidate.descriptor.IndexDefinitionDigest || baseline.descriptor.Source != candidate.descriptor.Source || !m8SHA256V1(baseline.descriptor.SourceOrdinalDigest) || baseline.descriptor.SourceOrdinalDigest != candidate.descriptor.SourceOrdinalDigest || baseline.descriptor.RouterAssetChecksum != candidate.descriptor.RouterAssetChecksum || baseline.descriptor.RouterModelDigest != candidate.descriptor.RouterModelDigest || baseline.descriptor.BuildIdentityDigest == candidate.descriptor.BuildIdentityDigest || baseline.source != candidate.source || !slices.Equal(baseline.rows, candidate.rows) || !slices.Equal(baseline.manifest.Memberships, candidate.manifest.Memberships) || !slices.Equal(baseline.manifest.OverlapMemberships, candidate.manifest.OverlapMemberships) || !slices.Equal(baseline.manifest.Placements, candidate.manifest.Placements) || !slices.Equal(baseline.manifest.Representatives, candidate.manifest.Representatives) || !slices.EqualFunc(baseline.routes, candidate.routes, slices.Equal[[]uint32]) {
+		t.Fatalf("source/router/local construction drift baseline=%+v candidate=%+v", baseline.descriptor, candidate.descriptor)
 	}
-	meta := col.Meta()
-	if len(meta.VectorIndexes) != 1 || meta.VectorIndexes[0].M != 18 || meta.VectorIndexes[0].EfConstruction != 256 {
-		t.Fatalf("local index definition=%+v", meta.VectorIndexes)
+	packChecksumChanged := false
+	for i := range baseline.manifest.Assets {
+		if baseline.manifest.Assets[i].MembershipDigest == candidate.manifest.Assets[i].MembershipDigest {
+			t.Fatalf("partition=%d retained canonical local membership identity", i)
+		}
+		packChecksumChanged = packChecksumChanged || baseline.manifest.Assets[i].Checksum != candidate.manifest.Assets[i].Checksum
 	}
-	descriptor, err := m3ReadVariantDescriptorV1(persist)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if descriptor.IndexDefinitionDigest != collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]) {
-		t.Fatalf("descriptor index digest=%s", descriptor.IndexDefinitionDigest)
-	}
-	searcher, err := col.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, descriptor.PartitionGeneration, 0)
-	if err != nil {
-		t.Fatalf("production-open configured V3 pack: %v", err)
-	}
-	if err := searcher.Close(); err != nil {
-		t.Fatal(err)
+	if !packChecksumChanged {
+		t.Fatal("local pack checksums did not change")
 	}
 }
 
@@ -1872,6 +1934,12 @@ func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
 	}
 	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(defaultCfg); err != nil || m != partitionHNSWDegree || efConstruction != partitionHNSWDefaultEfC {
 		t.Fatalf("default local HNSW M/eFC=%d/%d err=%v", m, efConstruction, err)
+	}
+	if variant, err := m3PartitionLocalGraphVariantV1(18, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		t.Fatalf("M18/eFC256 local variant=%q err=%v", variant, err)
+	}
+	if _, err := m3PartitionLocalGraphVariantV1(20, 256); err == nil {
+		t.Fatal("accepted unselected local construction variant")
 	}
 	router := m3RouterBuildOptionsV1(cfg.routerConfig, 1, 2)
 	if router.M != partitionHNSWDegree || router.EfConstruction != partitionHNSWDefaultEfC || router.EfSearch != 128 {
@@ -3010,10 +3078,14 @@ func TestM8PartitionLoadsIncludeOverlapMembershipsV1(t *testing.T) {
 	}
 }
 
-func TestM3InheritedPartitionHNSWMFailsBeforeMaterializationV1(t *testing.T) {
+func TestM3DefaultPartitionHNSWMIsIndependentOfGraphDegreeV1(t *testing.T) {
 	args := []string{"-stage", "overlap,partition_index", "-dataset", fixturePath(t), "-out", t.TempDir(), "-partitions", "4", "-overlap", "0", "-partition-degree", "33", "-m3-persist-db", t.TempDir()}
-	if _, err := parseConfig(args); err == nil || !strings.Contains(err.Error(), "effective partition HNSW M") {
-		t.Fatalf("parseConfig inherited M error=%v", err)
+	cfg, err := parseConfig(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, efConstruction, err := m3PartitionLocalHNSWConfigV1(cfg); err != nil || m != partitionHNSWDegree || efConstruction != partitionHNSWDefaultEfC {
+		t.Fatalf("default local M/eFC=%d/%d err=%v", m, efConstruction, err)
 	}
 }
 

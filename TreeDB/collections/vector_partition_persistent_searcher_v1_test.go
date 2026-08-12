@@ -547,8 +547,16 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
-			t.Fatalf("variant=%s production open err=%v", test.variant, err)
+		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false)
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+			if productionErr != nil {
+				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
+			}
+			if err := production.Close(); err != nil {
+				t.Fatal(err)
+			}
+		} else if !errors.Is(productionErr, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
 		}
 	}
 }
