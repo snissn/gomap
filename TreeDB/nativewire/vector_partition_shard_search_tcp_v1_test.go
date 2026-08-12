@@ -1,12 +1,15 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +18,226 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
+
+var (
+	vectorPartitionShardSearchTCPBenchmarkRawSinkV1   []byte
+	vectorPartitionShardSearchTCPBenchmarkFrameSinkV1 vectorPartitionShardSearchTCPFrameV1
+)
+
+func TestVectorPartitionShardSearchTCPBinaryFrameRoundTripV1(t *testing.T) {
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1, 3})
+	request.DeadlineUnixNano = 123
+	request.StrictCapability = &vectorPartitionStrictSearchCapabilityV1{
+		Version: 1, ServingIdentityDigest: "serving", CatalogEpoch: 2, CatalogDigest: "catalog",
+		ProofNodeID: "node-a", ProofGroupID: "meta", ProofLeaderTerm: 3,
+		CatalogAppliedIndex: 4, CatalogCommitIndex: 5, CatalogRaftAppliedIndex: 6,
+		ValidThroughUnixNano: 7, TargetGroupID: "group-a", GroupAppliedIndex: 8, MAC: "mac",
+	}
+	response := VectorPartitionShardSearchResponseV1{
+		Version: 1, RequestID: request.RequestID,
+		Proof:      VectorPartitionShardSearchProofV1{Kind: "read_index", ServingNode: "node-a", LeaderNode: "node-b", GroupID: "group-a", ReadySetDigest: "ready", ServingIdentityDigest: "identity", ReadTerm: 1, ReadIndex: 2, AppliedTerm: 3, AppliedIndex: 4, CatalogAppliedIndex: 5, GroupAppliedIndex: 6, SourceGeneration: 7, SourceChecksum: 8, SourceSchemaHash: 9, SourceRowCount: 10, PartitionGeneration: 11, RouterGeneration: 12},
+		Partials:   []VectorPartitionShardSearchPartialV1{{PartitionID: 3, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "doc", Score: 0.5}}, Candidates: 13, Edges: 14, SearchRoute: "hnsw", PackBytes: 15, MappedBytes: 16, HeapBytes: 17, OpenNanos: 18}},
+		Partitions: 1, ReadProofs: 2, GenerationPins: 3, PartitionOpens: 4, Candidates: 5, Edges: 6, ResponseBytes: 7,
+		Timing: VectorPartitionShardSearchTimingV1{RouteOwnerNanos: 8, ReadIndexApplyNanos: 9, GenerationOpenNanos: 10, SearchNanos: 11, ResponseCopyNanos: 12, TotalNanos: 13},
+	}
+	stage := func(base uint64) VectorPartitionCatalogMetaLinearizableReadStageStatsV1 {
+		return VectorPartitionCatalogMetaLinearizableReadStageStatsV1{
+			Reads: base, Successes: base + 1, Failures: base + 2, VerifyLeaderCalls: base + 3,
+			LogBarriers: base + 4, NoLogProofs: base + 5, TotalNanos: base + 6,
+			AdmissionNanos: base + 7, VerifyLeaderNanos: base + 8, BarrierNanos: base + 9,
+			CurrentTermNanos: base + 10, RaftApplyNanos: base + 11, AppliedReadNanos: base + 12,
+		}
+	}
+	identity := VectorPartitionShardEndpointIdentityV1{
+		Version: 1, GroupID: "group-a", InstanceIdentity: "instance",
+		CatalogMetaReadStats: VectorPartitionCatalogMetaLinearizableReadStatsV1{
+			Total: stage(1), OperationsHealth: stage(20), StrictSearch: stage(40), ServingRefresh: stage(60),
+			CoordinatorLifecycle: stage(80), ShardLifecycle: stage(100), Unknown: stage(120),
+			LastTerm: 140, LastCatalogApplied: 141, LastRaftApplied: 142, LastRaftLog: 143,
+		},
+		ProcessRuntimeStats: VectorPartitionProcessRuntimeStatsV1{
+			SampleUnixNano: 150, CPUTimeNanos: 151, RunQueueDelayNanos: 152, Timeslices: 153,
+			VoluntaryContextSwitches: 154, NonvoluntaryContextSwitches: 155,
+			RSSBytes: 156, PeakRSSBytes: 157, HeapAllocBytes: 158, HeapObjects: 159,
+			TotalAllocBytes: 160, Mallocs: 161, Frees: 162, NumGC: 163, PauseTotalNanos: 164,
+			Goroutines: 165, LogicalCPUs: 4, GOMAXPROCS: 3, GoMemoryLimitBytes: 166, EffectiveCPUSet: "0-3",
+		},
+	}
+	frames := []vectorPartitionShardSearchTCPFrameV1{
+		{Request: &request}, {Response: &response}, {Error: &vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Message: "moved"}}, {Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}, {ProbeResponse: &identity},
+	}
+	wantBytes := []int{470, 368, 37, 10, 952}
+	for i, frame := range frames {
+		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(raw)
+		if err != nil || !reflect.DeepEqual(decoded, frame) {
+			t.Fatalf("decoded=%+v want=%+v err=%v", decoded, frame, err)
+		}
+		if frame.Request != nil {
+			requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(*frame.Request)
+			if err != nil || requestBytes != uint64(len(raw)) {
+				t.Fatalf("request bytes=%d wire=%d err=%v", requestBytes, len(raw), err)
+			}
+		}
+		if len(raw) != wantBytes[i] {
+			t.Fatalf("frame[%d] bytes=%d want=%d", i, len(raw), wantBytes[i])
+		}
+	}
+	probe, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frames[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantProbe := []byte{1, 4, 0, 0, 0, 0, 1, 0, 0, 0}
+	if !bytes.Equal(probe, wantProbe) {
+		t.Fatalf("probe=%x want=%x", probe, wantProbe)
+	}
+}
+
+func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T) {
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1})
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{}); err == nil {
+		t.Fatal("encoded empty frame")
+	}
+	invalid := request
+	invalid.Metric = "invalid"
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Request: &invalid}); err == nil {
+		t.Fatal("encoded invalid request enum")
+	}
+	invalid = request
+	invalid.Query = []float32{float32(math.NaN())}
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Request: &invalid}); err == nil {
+		t.Fatal("encoded nonfinite query")
+	}
+	invalidError := vectorPartitionShardSearchTCPErrorV1{}
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Error: &invalidError}); err == nil {
+		t.Fatal("encoded invalid error code")
+	}
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Request: &request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range [][]byte{nil, raw[:len(raw)-1], append(append([]byte(nil), raw...), 0), append([]byte{2}, raw[1:]...), append([]byte{1, 99, 0, 0, 0, 0}, raw[6:]...)} {
+		if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(malformed); err == nil {
+			t.Fatalf("accepted malformed body %x", malformed)
+		}
+	}
+	badRequestVersion := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint32(badRequestVersion[6:10], 2)
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(badRequestVersion); err == nil {
+		t.Fatal("accepted unsupported request version")
+	}
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1([]byte{1, 4, 0, 0, 0, 0, 2, 0, 0, 0}); err == nil {
+		t.Fatal("accepted unsupported probe version")
+	}
+	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "request"}
+	responseRaw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Response: &response})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(responseRaw[6:10], 2)
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(responseRaw); err == nil {
+		t.Fatal("accepted unsupported response version")
+	}
+	w := vectorPartitionShardSearchTCPBodyWriterV1{}
+	w.u8(vectorPartitionShardSearchTCPFrameVersionV1)
+	w.u8(vectorPartitionShardSearchTCPFrameResponseV1)
+	w.u32(0)
+	w.u32(response.Version)
+	w.string(response.RequestID)
+	appendVectorPartitionShardSearchTCPProofV1(&w, response.Proof)
+	w.u32(math.MaxUint32)
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(w.body); err == nil {
+		t.Fatal("accepted response count that exceeds the remaining body")
+	}
+}
+
+func BenchmarkVectorPartitionShardSearchTCPBinaryRequestCodecV1(b *testing.B) {
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1, 3})
+	benchmarkVectorPartitionShardSearchTCPBinaryCodecV1(b, vectorPartitionShardSearchTCPFrameV1{Request: &request})
+}
+
+func TestVectorPartitionShardSearchTCPBinaryBenchmarkWireSizesV1(t *testing.T) {
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1, 3})
+	partials := make([]VectorPartitionShardSearchPartialV1, 2)
+	for i := range partials {
+		partials[i] = VectorPartitionShardSearchPartialV1{PartitionID: uint32(i), SearchRoute: "hnsw"}
+		for neighbor := range 10 {
+			partials[i].Neighbors = append(partials[i].Neighbors, VectorPartitionShardSearchNeighborV1{ID: fmt.Sprintf("doc-%06d", i*10+neighbor), Score: float32(neighbor) / 10})
+		}
+	}
+	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "benchmark", Partials: partials}
+	want := []int{352, 739}
+	for i, frame := range []vectorPartitionShardSearchTCPFrameV1{{Request: &request}, {Response: &response}} {
+		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(raw) != want[i] {
+			t.Fatalf("frame[%d] bytes=%d want=%d", i, len(raw), want[i])
+		}
+	}
+}
+
+func BenchmarkVectorPartitionShardSearchTCPBinaryResponseCodecV1(b *testing.B) {
+	partials := make([]VectorPartitionShardSearchPartialV1, 2)
+	for i := range partials {
+		partials[i] = VectorPartitionShardSearchPartialV1{PartitionID: uint32(i), SearchRoute: "hnsw"}
+		for neighbor := range 10 {
+			partials[i].Neighbors = append(partials[i].Neighbors, VectorPartitionShardSearchNeighborV1{ID: fmt.Sprintf("doc-%06d", i*10+neighbor), Score: float32(neighbor) / 10})
+		}
+	}
+	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, RequestID: "benchmark", Partials: partials}
+	benchmarkVectorPartitionShardSearchTCPBinaryCodecV1(b, vectorPartitionShardSearchTCPFrameV1{Response: &response})
+}
+
+func BenchmarkVectorPartitionShardSearchTCPBinaryControlCodecV1(b *testing.B) {
+	errorFrame := vectorPartitionShardSearchTCPErrorV1{Code: VectorPartitionShardSearchErrorNotLeaderV1, GroupID: "group-a", LeaderHint: "node-b", Message: "moved"}
+	identity := VectorPartitionShardEndpointIdentityV1{Version: 1, GroupID: "group-a", InstanceIdentity: "node-a"}
+	for _, test := range []struct {
+		name  string
+		frame vectorPartitionShardSearchTCPFrameV1
+	}{
+		{name: "error", frame: vectorPartitionShardSearchTCPFrameV1{Error: &errorFrame}},
+		{name: "probe", frame: vectorPartitionShardSearchTCPFrameV1{Probe: &vectorPartitionShardEndpointProbeV1{Version: 1}}},
+		{name: "probe_response", frame: vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			benchmarkVectorPartitionShardSearchTCPBinaryCodecV1(b, test.frame)
+		})
+	}
+}
+
+func benchmarkVectorPartitionShardSearchTCPBinaryCodecV1(b *testing.B, frame vectorPartitionShardSearchTCPFrameV1) {
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("encode", func(b *testing.B) {
+		var encoded []byte
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(raw)), "wire-B/op")
+		for b.Loop() {
+			encoded, err = appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		vectorPartitionShardSearchTCPBenchmarkRawSinkV1 = encoded
+	})
+	b.Run("decode", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ReportMetric(float64(len(raw)), "wire-B/op")
+		for b.Loop() {
+			vectorPartitionShardSearchTCPBenchmarkFrameSinkV1, err = decodeVectorPartitionShardSearchTCPFrameBodyV1(raw)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
 
 func TestVectorPartitionShardSearchTCPDispatcherReusesConnectionV1(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -57,10 +280,10 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 		t.Fatal(err)
 	}
 	defer dispatcher.Close()
-	if got, want := dispatcher.maxRequestFrame, uint32(limits.MaxRequestBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+	if got, want := dispatcher.maxRequestFrame, uint32(limits.MaxRequestBytes); got != want {
 		t.Fatalf("request frame=%d want=%d", got, want)
 	}
-	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes); got != want {
 		t.Fatalf("response frame=%d want=%d", got, want)
 	}
 	limits.MaxResponseBytes = 128 << 20
@@ -69,10 +292,10 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 		t.Fatal(err)
 	}
 	defer dispatcher.Close()
-	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes*vectorPartitionShardSearchTCPJSONExpansionBoundV1); got != want {
+	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes); got != want {
 		t.Fatalf("custom response frame=%d want=%d", got, want)
 	}
-	limits.MaxResponseBytes = uint64(^uint32(0))/vectorPartitionShardSearchTCPJSONExpansionBoundV1 + 1
+	limits.MaxResponseBytes = uint64(^uint32(0)) + 1
 	if _, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, limits); err == nil {
 		t.Fatal("unencodable response limit succeeded")
 	}

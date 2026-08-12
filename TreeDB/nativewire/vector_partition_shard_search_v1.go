@@ -854,25 +854,8 @@ func (s *VectorPartitionShardSearchServiceV1) validateRequest(r VectorPartitionS
 			return fmt.Errorf("%w: partition ids must be strictly increasing", ErrVectorPartitionShardSearchInvalidRequest)
 		}
 	}
-	requestBytes, ok := addUint64V1(uint64(256), queryBytes)
-	if ok {
-		requestBytes, ok = addUint64V1(requestBytes, uint64(len(r.PartitionIDs))*4)
-	}
-	if !ok {
-		return fmt.Errorf("%w: request byte overflow", ErrVectorPartitionShardSearchInvalidRequest)
-	}
-	for _, identity := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, r.ReadySetDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
-		requestBytes, ok = addUint64V1(requestBytes, uint64(len(identity)))
-		if !ok {
-			return fmt.Errorf("%w: request byte overflow", ErrVectorPartitionShardSearchInvalidRequest)
-		}
-	}
-	capabilityBytes, capabilityErr := vectorPartitionStrictSearchCapabilityBytesV1(r.StrictCapability)
-	if capabilityErr != nil {
-		return capabilityErr
-	}
-	requestBytes, ok = addUint64V1(requestBytes, capabilityBytes)
-	if !ok || r.RequestBytesLimit == 0 || r.RequestBytesLimit > l.MaxRequestBytes || requestBytes > r.RequestBytesLimit {
+	requestBytes, requestBytesErr := vectorPartitionCoordinatorShardRequestBytesV1(r)
+	if requestBytesErr != nil || r.RequestBytesLimit == 0 || r.RequestBytesLimit > l.MaxRequestBytes || requestBytes > r.RequestBytesLimit {
 		return fmt.Errorf("%w: request bytes=%d limit=%d", ErrVectorPartitionShardSearchInvalidRequest, requestBytes, r.RequestBytesLimit)
 	}
 	candidateBytes, ok := mulUint64V1(uint64(len(r.PartitionIDs)), uint64(r.EfSearch))

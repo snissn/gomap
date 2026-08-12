@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
@@ -40,6 +39,24 @@ func newVectorPartitionStrictSearchCapabilityV1(
 	groupApplied uint64,
 	key []byte,
 ) (*vectorPartitionStrictSearchCapabilityV1, error) {
+	capability, err := prepareVectorPartitionStrictSearchCapabilityV1(request, identity, proof, groupApplied, key)
+	if err != nil {
+		return nil, err
+	}
+	capability.MAC, err = vectorPartitionStrictSearchCapabilityMACV1(request, *capability, key)
+	if err != nil {
+		return nil, err
+	}
+	return capability, nil
+}
+
+func prepareVectorPartitionStrictSearchCapabilityV1(
+	request VectorPartitionShardSearchRequestV1,
+	identity VectorPartitionServingSnapshotIdentityV1,
+	proof raftcluster.CatalogMetaReadProofV1,
+	groupApplied uint64,
+	key []byte,
+) (*vectorPartitionStrictSearchCapabilityV1, error) {
 	if len(key) != sha256.Size || !proof.QuorumVerified || proof.LeaderTerm == 0 || proof.CatalogAppliedIndex == 0 ||
 		proof.CommitIndex < proof.CatalogAppliedIndex || proof.RaftAppliedIndex < proof.CatalogAppliedIndex ||
 		request.TargetGroupID == "" || groupApplied == 0 || !isVectorPartitionShardSearchDigestV1(identity.ServingIdentityDigest) ||
@@ -62,11 +79,6 @@ func newVectorPartitionStrictSearchCapabilityV1(
 		TargetGroupID: request.TargetGroupID, GroupAppliedIndex: groupApplied,
 		MAC: string(make([]byte, sha256.Size*2)),
 	}
-	mac, err := vectorPartitionStrictSearchCapabilityMACV1(request, *capability, key)
-	if err != nil {
-		return nil, err
-	}
-	capability.MAC = mac
 	return capability, nil
 }
 
@@ -99,17 +111,19 @@ func vectorPartitionStrictSearchCapabilityMACV1(request VectorPartitionShardSear
 		return "", ErrVectorPartitionShardSearchInvalidRequest
 	}
 	request.TargetNodeID = ""
-	request.StrictCapability = nil
 	capability.MAC = ""
-	raw, err := json.Marshal(struct {
-		Request    VectorPartitionShardSearchRequestV1
-		Capability vectorPartitionStrictSearchCapabilityV1
-	}{request, capability})
-	if err != nil {
-		return "", err
+	request.StrictCapability = &capability
+	requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(request)
+	if err != nil || requestBytes > uint64(maxInt) {
+		return "", ErrVectorPartitionShardSearchInvalidRequest
+	}
+	w := vectorPartitionShardSearchTCPBodyWriterV1{body: make([]byte, 0, int(requestBytes))}
+	appendVectorPartitionShardSearchTCPRequestV1(&w, request)
+	if w.err != nil {
+		return "", w.err
 	}
 	mac := hmac.New(sha256.New, key)
-	_, _ = mac.Write(raw)
+	_, _ = mac.Write(w.body)
 	return hex.EncodeToString(mac.Sum(nil)), nil
 }
 
@@ -117,7 +131,7 @@ func vectorPartitionStrictSearchCapabilityBytesV1(capability *vectorPartitionStr
 	if capability == nil {
 		return 0, nil
 	}
-	size := uint64(128)
+	size := vectorPartitionStrictCapabilityFixedBytesV1
 	for _, value := range []string{
 		capability.ServingIdentityDigest, capability.CatalogDigest, string(capability.ProofNodeID),
 		string(capability.ProofGroupID), string(capability.TargetGroupID), capability.MAC,
