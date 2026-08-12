@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -25,6 +26,11 @@ const localHNSWRepairMTimingSchemaV1 = "treedb_local_hnsw_repair_m18_timing_v2"
 const localHNSWRepairMTimingSelectedCurveSHA256V1 = "e5481418f41c7af33448bb35a9077a53e3fbb05d358023c0cce4a3f8fddda19d"
 const localHNSWRepairMTimingSelectedCurveHeadV1 = "28319a231a9666956c37500acd00cc871eb067bd"
 
+const (
+	localHNSWRepairMTimingGateReadyV1 = "treedb-local-hnsw-repair-m-timing-ready-v1\n"
+	localHNSWRepairMTimingGateStartV1 = "treedb-local-hnsw-repair-m-timing-start-v1\n"
+)
+
 type localHNSWRepairMTimingCurveV1 struct {
 	Path        string `json:"path"`
 	SHA256      string `json:"sha256"`
@@ -33,6 +39,78 @@ type localHNSWRepairMTimingCurveV1 struct {
 
 func localHNSWRepairMTimingEFsV1(baseline, candidate int) bool {
 	return baseline == 128 && candidate == 120
+}
+
+func localHNSWRepairMTimingGateDirectoryV1(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("invalid local HNSW repair M timing gate directory")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		return errors.New("local HNSW repair M timing gate directory must be empty")
+	}
+	return nil
+}
+
+func localHNSWRepairMTimingGateMarkerV1(path, want string) error {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("invalid local HNSW repair M timing gate marker")
+	}
+	raw, err := readBoundedRegularFileV1(path, int64(len(want)))
+	if err != nil {
+		return fmt.Errorf("invalid local HNSW repair M timing gate marker: %w", err)
+	}
+	if string(raw) != want {
+		return errors.New("invalid local HNSW repair M timing gate marker")
+	}
+	return nil
+}
+
+func localHNSWRepairMTimingWaitForStartV1(ctx context.Context, dir string) error {
+	ready := filepath.Join(dir, "ready")
+	file, err := os.OpenFile(ready, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.WriteString(localHNSWRepairMTimingGateReadyV1)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	if err := localHNSWRepairMTimingGateMarkerV1(ready, localHNSWRepairMTimingGateReadyV1); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if entry.Name() != "ready" && entry.Name() != "start" {
+				return errors.New("invalid local HNSW repair M timing gate entry")
+			}
+		}
+		if err := localHNSWRepairMTimingGateMarkerV1(ready, localHNSWRepairMTimingGateReadyV1); err != nil {
+			return err
+		}
+		start := filepath.Join(dir, "start")
+		if _, err := os.Lstat(start); err == nil {
+			return localHNSWRepairMTimingGateMarkerV1(start, localHNSWRepairMTimingGateStartV1)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 type localHNSWRepairMTimingGateV1 struct {
@@ -168,7 +246,7 @@ func validateLocalHNSWRepairMTimingReportV1(report localHNSWRepairMTimingReportV
 func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-repair-m-timing", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationSplit, holdoutSplit, truthArtifact, historicalCSV, tempRoot, out, profiles, selectedCurve, baseSHA, headSHA, sourceCheckout string
+	var dataset, retainedDB, calibrationSplit, holdoutSplit, truthArtifact, historicalCSV, tempRoot, out, profiles, timingGateDir, selectedCurve, baseSHA, headSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal retained 250k database")
 	fs.StringVar(&calibrationSplit, "calibration-split", "", "frozen calibration manifest")
@@ -178,6 +256,7 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
 	fs.StringVar(&out, "out", "", "fresh report path")
 	fs.StringVar(&profiles, "profiles", "", "fresh existing profile directory")
+	fs.StringVar(&timingGateDir, "timing-gate-dir", "", "empty directory requiring ready/start timing release markers")
 	fs.StringVar(&selectedCurve, "selected-curve", "", "frozen M18 lower-EF curve report")
 	fs.StringVar(&baseSHA, "base-sha", "", "source-lock base SHA")
 	fs.StringVar(&headSHA, "head-sha", "", "exact implementation head SHA")
@@ -185,11 +264,11 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationSplit == "" || holdoutSplit == "" || truthArtifact == "" || historicalCSV == "" || tempRoot == "" || out == "" || profiles == "" || selectedCurve == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
+	if fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationSplit == "" || holdoutSplit == "" || truthArtifact == "" || historicalCSV == "" || tempRoot == "" || out == "" || profiles == "" || timingGateDir == "" || selectedCurve == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
 		return errors.New("local-hnsw-repair-m-timing requires all frozen inputs")
 	}
 	var err error
-	for destination, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationSplit: calibrationSplit, &holdoutSplit: holdoutSplit, &truthArtifact: truthArtifact, &tempRoot: tempRoot, &out: out, &profiles: profiles, &selectedCurve: selectedCurve, &sourceCheckout: sourceCheckout} {
+	for destination, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationSplit: calibrationSplit, &holdoutSplit: holdoutSplit, &truthArtifact: truthArtifact, &tempRoot: tempRoot, &out: out, &profiles: profiles, &timingGateDir: timingGateDir, &selectedCurve: selectedCurve, &sourceCheckout: sourceCheckout} {
 		if *destination, err = m8CanonicalPathV1(value); err != nil {
 			return err
 		}
@@ -216,6 +295,9 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	}
 	if entries, readErr := os.ReadDir(profiles); readErr != nil || len(entries) != 0 {
 		return errors.New("local HNSW repair M timing profile directory must be empty")
+	}
+	if err := localHNSWRepairMTimingGateDirectoryV1(timingGateDir); err != nil {
+		return err
 	}
 	for _, path := range []string{out} {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
@@ -286,6 +368,21 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	rows, summary, err := localHNSWRepairMTimingRowsAtEFV1Build(context.Background(), source, overlay, candidate, calibration.Ordinals, calibration.Queries, calibration.Truth, 128, 120)
 	if err != nil {
 		return err
+	}
+	gateContext, stopGate := signal.NotifyContext(context.Background(), os.Interrupt)
+	err = localHNSWRepairMTimingWaitForStartV1(gateContext, timingGateDir)
+	stopGate()
+	if err != nil {
+		return err
+	}
+	if _, err := localHNSWAttributionInputsV1(inputConfig); err != nil {
+		return fmt.Errorf("local HNSW repair M timing inputs changed: %w", err)
+	}
+	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil || m8GitDirtyInV1(sourceCheckout) {
+		return errors.New("local HNSW repair M timing source changed")
+	}
+	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA {
+		return errors.New("local HNSW repair M timing executable changed")
 	}
 	capture, err := startM8ProfileCaptureV1(profiles)
 	if err != nil {

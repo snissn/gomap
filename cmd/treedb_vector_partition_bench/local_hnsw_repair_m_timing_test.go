@@ -1,6 +1,51 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestLocalHNSWRepairMTimingPhaseBarrierV1(t *testing.T) {
+	dir := t.TempDir()
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "start"), []byte("wrong\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err == nil {
+		t.Fatal("expected nonempty gate directory rejection")
+	}
+	if err := localHNSWRepairMTimingWaitForStartV1(context.Background(), dir); err == nil {
+		t.Fatal("expected invalid start marker rejection")
+	}
+
+	dir = t.TempDir()
+	if err := localHNSWRepairMTimingGateDirectoryV1(dir); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		ready := filepath.Join(dir, "ready")
+		for {
+			if _, err := os.Lstat(ready); err == nil {
+				_ = os.WriteFile(filepath.Join(dir, "start"), []byte(localHNSWRepairMTimingGateStartV1), 0o644)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := localHNSWRepairMTimingWaitForStartV1(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWRepairMTimingGateMarkerV1(filepath.Join(dir, "ready"), localHNSWRepairMTimingGateReadyV1); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLocalHNSWRepairMTimingGateV1(t *testing.T) {
 	if !localHNSWRepairMTimingEFsV1(128, 120) || localHNSWRepairMTimingEFsV1(128, 128) || localHNSWRepairMTimingEFsV1(120, 120) {
