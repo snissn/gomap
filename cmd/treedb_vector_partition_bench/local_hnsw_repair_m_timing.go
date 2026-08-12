@@ -378,6 +378,9 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	if err != nil {
 		return err
 	}
+	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("local HNSW repair M timing executable identity")
+	}
 	source, err := openM8ProductionExistingAssetSetV1(retainedDB)
 	if err != nil {
 		return err
@@ -493,7 +496,13 @@ func runLocalHNSWRepairMTimingV1(args []string, stdout io.Writer) (runErr error)
 	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA {
 		return errors.New("local HNSW repair M timing executable changed")
 	}
+	if !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("local HNSW repair M timing executable identity changed")
+	}
 	inputsEvidence := localHNSWAttributionInputsEvidenceV1{DatasetManifest: localHNSWAttributionFileInputV1{Path: filepath.Join(dataset, "fixture_manifest.json"), SHA256: localHNSWAttributionFixtureManifestSHA256V1}, Fixture: fixture, RetainedDB: retainedDB, Descriptor: localHNSWAttributionFileInputV1{Path: inputConfig.Descriptor, SHA256: inputConfig.DescriptorSHA256}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationSplit, SHA256: inputConfig.CalibrationSplitSHA256}, CalibrationRows: len(inputs.Calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutSplit, SHA256: inputConfig.HoldoutSplitSHA256}, HoldoutRows: len(inputs.Holdout.Ordinals), HoldoutStatus: "manifest_validated_lower_ef_query_outcomes_unopened", Truth: localHNSWAttributionFileInputV1{Path: truthArtifact, SHA256: inputConfig.TruthArtifactSHA256}, TruthStatus: "sha256_only_not_decoded", Historical: historical}
+	if err := localHNSWRepairMTimingSelectedCurveUnchangedV1(selectedCurve, curveSHA); err != nil {
+		return err
+	}
 	report := localHNSWRepairMTimingReportV1{Schema: localHNSWRepairMTimingSchemaV1, ResultKind: "local_hnsw_repair_m18_timing_v2", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-repair-m-timing", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Host: m8ProductionHostV1(config{out: out, dataset: dataset}, retainedDB), Inputs: inputsEvidence, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, TopK: 10, BaselineEFSearch: 128, CandidateEFSearch: 120, ProbeCounts: []int{2, 16}, BaselineBuild: overlayBuild, Candidate: candidateInfo, SelectedCurve: localHNSWRepairMTimingCurveV1{Path: selectedCurve, SHA256: curveSHA, Disposition: curve.Disposition}, Quality: quality, Calibration: localHNSWRepairMTimingSummaryV1{BaselineRoutesSHA256: quality.RoutesSHA256, CandidateRoutesSHA256: quality.RoutesSHA256, Baseline: summary.Overlay, Candidate: summary.Repair}, Timing: timing, TimingRoutesSHA256: quality.RoutesSHA256, Gate: gate, Profiles: m8ProductionProfileEvidenceV1{Directory: profiles, Captured: profilePaths, Artifacts: profileArtifacts, Status: "complete", Scope: "ordinary m16_efc128 ef_search=128 versus m18_efc256 ef_search=120 auxiliary-navigation local search; top_k=10 probes=2,all concurrency=1 four order-balanced repetitions"}, Limitations: []string{"offline calibration-only timing pre-gate; not product qualification", "holdout manifest was validated; lower-EF holdout query outcomes remained unopened"}}
 	if err := validateLocalHNSWRepairMTimingReportV1(report); err != nil {
 		return err
