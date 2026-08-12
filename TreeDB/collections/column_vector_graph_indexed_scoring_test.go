@@ -10,8 +10,9 @@ import (
 )
 
 func TestColumnVectorGraphIndexedScoringSearchCosineParity1969(t *testing.T) {
-	rows := columnVectorGraphNativeSearchBenchAssetRowsV3(t, 64, 16, 8)
-	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, 16, 8, rows)
+	const dims = 128
+	rows := columnVectorGraphNativeSearchBenchAssetRowsV3(t, 64, dims, 8)
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, dims, 8, rows)
 	defer func() { _ = d.Close() }()
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
@@ -33,6 +34,7 @@ func TestColumnVectorGraphIndexedScoringSearchCosineParity1969(t *testing.T) {
 	if indexedStats.VectorScratchDecodes != 0 || indexedStats.VectorMmapDirectViews+indexedStats.VectorHeapCopyTypedViews == 0 {
 		t.Fatalf("indexed stats=%+v want direct typed vector source without scratch decodes", indexedStats)
 	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, indexedStats.ScoreBatchOptimizedCalls, indexedStats.ScoreBatchScalarFallbackCalls, int(indexedStats.ScoreBatchMaxTileSize), dims)
 }
 
 func TestColumnVectorGraphIndexedScoringUpperLayerGreedyParity1969(t *testing.T) {
