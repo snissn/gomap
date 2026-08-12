@@ -350,6 +350,7 @@ type vectorPartitionCoordinatorRouterKeyV1 struct {
 
 type vectorPartitionCoordinatorRouterSessionV1 struct {
 	router           VectorPartitionCoordinatorRouterV1
+	partitionRows    []uint64
 	stats            *vectorPartitionCoordinatorRouterSessionStatsV1
 	refs             uint64
 	retired, closing bool
@@ -522,6 +523,13 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 		c.sessionMu.Unlock()
 
 		router, err := c.routerSource.OpenVectorPartitionCoordinatorRouterV1(ctx, index, generation)
+		var partitionRows []uint64
+		if err == nil && router != nil {
+			status := router.Status()
+			if err = c.validateRouterStatus(status); err == nil {
+				partitionRows, err = vectorPartitionCoordinatorPartitionRowsV1(ctx, status.Manifest)
+			}
+		}
 		c.sessionMu.Lock()
 		delete(c.loads, key)
 		if err == nil && router == nil {
@@ -531,7 +539,7 @@ func (c *VectorPartitionCoordinatorV1) acquireRouterSessionV1(ctx context.Contex
 			err = fmt.Errorf("%w: coordinator closed", ErrVectorPartitionCoordinatorUnavailable)
 		}
 		if err == nil {
-			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, stats: stats, refs: 1}
+			session := &vectorPartitionCoordinatorRouterSessionV1{router: router, partitionRows: partitionRows, stats: stats, refs: 1}
 			c.sessions[key] = session
 			c.leases++
 			stats.value.ReaderPins++
@@ -830,6 +838,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	openStarted := time.Now()
 	var routerLease *vectorPartitionCoordinatorRouterLeaseV1
 	var router VectorPartitionCoordinatorRouterV1
+	var partitionRows []uint64
 	if strict == nil {
 		routerLease, err = c.acquireRouterSessionV1(requestCtx, request.IndexName, c.placement.PartitionGeneration)
 		if err != nil {
@@ -841,8 +850,10 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 			}
 		}()
 		router = routerLease.session.router
+		partitionRows = routerLease.session.partitionRows
 	} else {
 		router = strict.snapshot.snapshot.router.session.router
+		partitionRows = strict.snapshot.snapshot.router.session.partitionRows
 	}
 	response.Timing.RouterOpenNanos = elapsedNanosV1(openStarted)
 	if router == nil {
@@ -900,7 +911,7 @@ func (c *VectorPartitionCoordinatorV1) searchV1(ctx context.Context, request Vec
 	}
 
 	placementStarted := time.Now()
-	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, replicatedReadySetDigest, routed.Partitions, strict)
+	tasks, selectedPartitions, selectedGroups, budget, err := c.plan(requestCtx, request, status, partitionRows, replicatedReadySetDigest, routed.Partitions, strict)
 	response.Timing.PlacementNanos = elapsedNanosV1(placementStarted)
 	if err != nil {
 		return response, c.wrapError(err, "")
@@ -1216,7 +1227,7 @@ type vectorPartitionCoordinatorTaskV1 struct {
 	queuedAt      time.Time
 }
 
-func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
+func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorPartitionCoordinatorRequestV1, status collections.VectorPartitionRouterRuntimeStatusV1, partitionRows []uint64, readySetDigest string, routed []collections.VectorPartitionRouterPartitionScoreV1, strict *vectorPartitionCoordinatorStrictSearchV1) ([]vectorPartitionCoordinatorTaskV1, []uint32, []raftcluster.GroupID, vectorPartitionCoordinatorBudgetV1, error) {
 	var zero vectorPartitionCoordinatorBudgetV1
 	if ctx == nil {
 		ctx = context.Background()
@@ -1271,7 +1282,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 	var totalRequestBytes, totalResponseReservation uint64
 	var ok bool
 	candidateRows, totalCandidateWeight, err := vectorPartitionCoordinatorCandidateRowsV1(
-		ctx, status.Manifest, selected,
+		ctx, partitionRows, selected,
 	)
 	if err != nil {
 		return nil, nil, nil, zero, err
@@ -1410,7 +1421,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 
 func vectorPartitionCoordinatorCandidateRowsV1(
 	ctx context.Context,
-	manifest collections.VectorPartitionManifestV1,
+	partitionRows []uint64,
 	selected []uint32,
 ) ([]uint64, uint64, error) {
 	if ctx == nil {
@@ -1419,48 +1430,16 @@ func vectorPartitionCoordinatorCandidateRowsV1(
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	if manifest.PartitionCount == 0 {
+	if len(partitionRows) == 0 {
 		return nil, 0, ErrVectorPartitionCoordinatorGenerationMismatch
-	}
-	weights := make([]uint64, manifest.PartitionCount)
-	selectedSet := make([]bool, manifest.PartitionCount)
-	for _, partitionID := range selected {
-		if partitionID >= manifest.PartitionCount {
-			return nil, 0, ErrVectorPartitionCoordinatorGenerationMismatch
-		}
-		selectedSet[partitionID] = true
-	}
-	countMembership := func(memberships []collections.VectorPartitionMembershipV1) error {
-		for ordinal, membership := range memberships {
-			if ordinal&1023 == 0 {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-			}
-			if membership.PartitionID >= manifest.PartitionCount {
-				return ErrVectorPartitionCoordinatorGenerationMismatch
-			}
-			if !selectedSet[membership.PartitionID] {
-				continue
-			}
-			count, ok := addUint64V1(weights[membership.PartitionID], 1)
-			if !ok {
-				return ErrVectorPartitionCoordinatorBudgetExceeded
-			}
-			weights[membership.PartitionID] = count
-		}
-		return nil
-	}
-	if err := countMembership(manifest.Memberships); err != nil {
-		return nil, 0, err
-	}
-	if err := countMembership(manifest.OverlapMemberships); err != nil {
-		return nil, 0, err
 	}
 	var total uint64
 	for _, partitionID := range selected {
+		if uint64(partitionID) >= uint64(len(partitionRows)) {
+			return nil, 0, ErrVectorPartitionCoordinatorGenerationMismatch
+		}
 		var ok bool
-		total, ok = addUint64V1(total, weights[partitionID])
+		total, ok = addUint64V1(total, partitionRows[partitionID])
 		if !ok {
 			return nil, 0, ErrVectorPartitionCoordinatorBudgetExceeded
 		}
@@ -1468,7 +1447,49 @@ func vectorPartitionCoordinatorCandidateRowsV1(
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	return weights, total, nil
+	return partitionRows, total, nil
+}
+
+func vectorPartitionCoordinatorPartitionRowsV1(ctx context.Context, manifest collections.VectorPartitionManifestV1) ([]uint64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if manifest.PartitionCount == 0 {
+		return nil, ErrVectorPartitionCoordinatorGenerationMismatch
+	}
+	rows := make([]uint64, manifest.PartitionCount)
+	if err := vectorPartitionCoordinatorCountMembershipsV1(ctx, rows, manifest.Memberships); err != nil {
+		return nil, err
+	}
+	if err := vectorPartitionCoordinatorCountMembershipsV1(ctx, rows, manifest.OverlapMemberships); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func vectorPartitionCoordinatorCountMembershipsV1(ctx context.Context, rows []uint64, memberships []collections.VectorPartitionMembershipV1) error {
+	for ordinal, membership := range memberships {
+		if ordinal&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if uint64(membership.PartitionID) >= uint64(len(rows)) {
+			return ErrVectorPartitionCoordinatorGenerationMismatch
+		}
+		count, ok := addUint64V1(rows[membership.PartitionID], 1)
+		if !ok {
+			return ErrVectorPartitionCoordinatorBudgetExceeded
+		}
+		rows[membership.PartitionID] = count
+	}
+	return nil
 }
 
 func vectorPartitionCoordinatorCandidateFloorsV1(
@@ -1479,7 +1500,7 @@ func vectorPartitionCoordinatorCandidateFloorsV1(
 	floors := make([]uint64, len(rows))
 	var total uint64
 	for _, partitionID := range selected {
-		if int(partitionID) >= len(rows) || rows[partitionID] > uint64(math.MaxInt) {
+		if uint64(partitionID) >= uint64(len(rows)) || rows[partitionID] > uint64(math.MaxInt) {
 			return nil, 0, ErrVectorPartitionCoordinatorBudgetExceeded
 		}
 		scratchBytes, err := collections.VectorPartitionConservativeSearchScratchBytesV1(

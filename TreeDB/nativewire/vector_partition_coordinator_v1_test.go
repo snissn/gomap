@@ -28,6 +28,11 @@ type testVectorPartitionCoordinatorRouterV1 struct {
 	closeStart chan<- struct{}
 }
 
+var vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1 struct {
+	rows  []uint64
+	total uint64
+}
+
 func (r *testVectorPartitionCoordinatorRouterV1) SearchWithContextV1(ctx context.Context, _ []float32, opts collections.VectorPartitionRouterSearchOptionsV1) (collections.VectorPartitionRouterSearchResultV1, error) {
 	if err := ctx.Err(); err != nil {
 		return collections.VectorPartitionRouterSearchResultV1{}, err
@@ -750,16 +755,16 @@ func TestVectorPartitionCoordinatorRouterBudgetRejectionStillRunsLifecycleAdmiss
 	}
 }
 
-func TestVectorPartitionCoordinatorRetiredRouterCloseErrorIsRetainedV1(t *testing.T) {
+func TestVectorPartitionCoordinatorColdOpenRouterCloseErrorIsRetainedV1(t *testing.T) {
 	coordinator, source, _ := testVectorPartitionCoordinatorV1(t,
 		[]raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{"node-a"}, LeaderHint: "node-a"}},
 		[]raftcluster.GroupID{"group-a"}, map[uint32][]VectorPartitionShardSearchNeighborV1{0: {{ID: "doc", Score: 1}}}, VectorPartitionCoordinatorLimitsV1{},
 	)
 	sentinel := errors.New("retired router close failed")
 	source.router.closeErr = sentinel
-	source.router.status.Manifest.SourceChecksum++ // fail lifecycle after cache admission
+	source.router.status.Manifest.SourceChecksum++ // fail cold-open status validation
 	response, err := coordinator.Search(t.Context(), testVectorPartitionCoordinatorRequestV1(1))
-	if !errors.Is(err, sentinel) || !errors.Is(err, ErrVectorPartitionCoordinatorUnavailable) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
+	if !errors.Is(err, sentinel) || !errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) || !vectorPartitionCoordinatorResponseIsZeroTestV1(response) {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
 	if err := coordinator.Close(); !errors.Is(err, sentinel) {
@@ -794,6 +799,8 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 	)
 	oldRouter := source.router
 	newRouter := &testVectorPartitionCoordinatorRouterV1{status: oldRouter.status, partitions: slices.Clone(oldRouter.partitions)}
+	newRouter.status.Manifest.Memberships = slices.Clone(oldRouter.status.Manifest.Memberships)
+	newRouter.status.Manifest.Memberships = append(newRouter.status.Manifest.Memberships, collections.VectorPartitionMembershipV1{PartitionID: 0})
 	closeStarted, closeBlock := make(chan struct{}, 1), make(chan struct{})
 	oldRouter.closeStart, oldRouter.closeBlock = closeStarted, closeBlock
 	source.openRouters = []VectorPartitionCoordinatorRouterV1{oldRouter, newRouter}
@@ -804,6 +811,9 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 	}
 	if err := coordinator.recordRouterSessionIdentityV1(oldLease, oldRouter.status, "ready-old"); err != nil {
 		t.Fatal(err)
+	}
+	if !slices.Equal(oldLease.session.partitionRows, []uint64{1}) {
+		t.Fatalf("old partition rows=%v", oldLease.session.partitionRows)
 	}
 	coordinator.retireRouterSessionV1(oldLease)
 	oldClosed := make(chan error, 1)
@@ -820,6 +830,9 @@ func TestVectorPartitionCoordinatorRetirementAllowsDistinctReplacementOpenV1(t *
 	}
 	if newLease.session.router != newRouter || source.openCount() != 2 {
 		t.Fatalf("replacement router=%p opens=%d", newLease.session.router, source.openCount())
+	}
+	if !slices.Equal(newLease.session.partitionRows, []uint64{2}) {
+		t.Fatalf("replacement partition rows=%v", newLease.session.partitionRows)
 	}
 	newStatus := newRouter.status
 	newStatus.ModelDigest = "new-model"
@@ -1417,16 +1430,97 @@ func TestVectorPartitionCoordinatorReservesCandidateBaselineBeforeUnevenSurplusV
 	}
 }
 
-func TestVectorPartitionCoordinatorMembershipWeightsObserveContextV1(t *testing.T) {
+func TestVectorPartitionCoordinatorPartitionRowsObserveContextV1(t *testing.T) {
 	manifest := collections.VectorPartitionManifestV1{
 		PartitionCount: 1,
 		Memberships:    make([]collections.VectorPartitionMembershipV1, 4096),
 	}
 	ctx := &vectorPartitionCoordinatorCancelAfterErrContextV1{cancelAt: 3}
-	if _, _, err := vectorPartitionCoordinatorCandidateRowsV1(
-		ctx, manifest, []uint32{0},
+	if _, err := vectorPartitionCoordinatorPartitionRowsV1(
+		ctx, manifest,
 	); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("candidate weight err=%v want deadline exceeded", err)
+		t.Fatalf("partition rows err=%v want deadline exceeded", err)
+	}
+	ctx = &vectorPartitionCoordinatorCancelAfterErrContextV1{cancelAt: 2}
+	if _, err := vectorPartitionCoordinatorPartitionRowsV1(ctx, collections.VectorPartitionManifestV1{PartitionCount: 1}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("final cancellation err=%v want deadline exceeded", err)
+	}
+}
+
+func TestVectorPartitionCoordinatorPartitionRowsIncludeOverlapAndFailClosedV1(t *testing.T) {
+	rows, err := vectorPartitionCoordinatorPartitionRowsV1(t.Context(), collections.VectorPartitionManifestV1{
+		PartitionCount: 3,
+		Memberships: []collections.VectorPartitionMembershipV1{
+			{PartitionID: 0}, {PartitionID: 1}, {PartitionID: 1},
+		},
+		OverlapMemberships: []collections.VectorPartitionMembershipV1{
+			{PartitionID: 1}, {PartitionID: 2},
+		},
+	})
+	if err != nil || !slices.Equal(rows, []uint64{1, 3, 1}) {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	for _, test := range []struct {
+		name     string
+		selected []uint32
+		total    uint64
+	}{
+		{name: "empty"},
+		{name: "sparse", selected: []uint32{2}, total: 1},
+		{name: "duplicate", selected: []uint32{1, 1}, total: 6},
+		{name: "all", selected: []uint32{0, 1, 2}, total: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gotRows, total, err := vectorPartitionCoordinatorCandidateRowsV1(t.Context(), rows, test.selected)
+			if err != nil || !slices.Equal(gotRows, rows) || total != test.total {
+				t.Fatalf("rows=%v total=%d err=%v", gotRows, total, err)
+			}
+		})
+	}
+	if _, err := vectorPartitionCoordinatorPartitionRowsV1(t.Context(), collections.VectorPartitionManifestV1{
+		PartitionCount: 1, Memberships: []collections.VectorPartitionMembershipV1{{PartitionID: 1}},
+	}); !errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) {
+		t.Fatalf("invalid partition err=%v", err)
+	}
+	rows = []uint64{^uint64(0)}
+	if err := vectorPartitionCoordinatorCountMembershipsV1(t.Context(), rows, []collections.VectorPartitionMembershipV1{{PartitionID: 0}}); !errors.Is(err, ErrVectorPartitionCoordinatorBudgetExceeded) {
+		t.Fatalf("overflow err=%v", err)
+	}
+	if _, _, err := vectorPartitionCoordinatorCandidateRowsV1(t.Context(), []uint64{1}, []uint32{1}); !errors.Is(err, ErrVectorPartitionCoordinatorGenerationMismatch) {
+		t.Fatalf("selected partition err=%v", err)
+	}
+}
+
+func BenchmarkVectorPartitionCoordinatorCandidateRowsV1(b *testing.B) {
+	manifest := collections.VectorPartitionManifestV1{PartitionCount: 16}
+	manifest.Memberships = make([]collections.VectorPartitionMembershipV1, 250_000)
+	manifest.OverlapMemberships = make([]collections.VectorPartitionMembershipV1, 50_000)
+	for i := range manifest.Memberships {
+		manifest.Memberships[i].PartitionID = uint32(i % int(manifest.PartitionCount))
+	}
+	for i := range manifest.OverlapMemberships {
+		manifest.OverlapMemberships[i].PartitionID = uint32(i % int(manifest.PartitionCount))
+	}
+	partitionRows, err := vectorPartitionCoordinatorPartitionRowsV1(context.Background(), manifest)
+	if err != nil {
+		b.Fatal(err)
+	}
+	selected := []uint32{2, 13}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		rows, total, err := vectorPartitionCoordinatorCandidateRowsV1(ctx, partitionRows, selected)
+		if err != nil {
+			b.Fatal(err)
+		}
+		vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.rows = rows
+		vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.total = total
+	}
+	b.StopTimer()
+	if vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.total != 37_500 ||
+		len(vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.rows) != len(partitionRows) {
+		b.Fatalf("rows=%d total=%d", len(vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.rows), vectorPartitionCoordinatorCandidateRowsBenchmarkSinkV1.total)
 	}
 }
 
