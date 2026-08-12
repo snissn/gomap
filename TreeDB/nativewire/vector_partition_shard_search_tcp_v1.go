@@ -6,13 +6,12 @@ package nativewire
 // owns fanout, retry, and no-partial-result semantics.
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -23,7 +22,22 @@ import (
 const (
 	vectorPartitionShardSearchTCPMaxFrameBytesV1      uint32 = 64 << 20
 	vectorPartitionShardSearchTCPMinFrameBytesV1      uint64 = 4 << 10
-	vectorPartitionShardSearchTCPJSONExpansionBoundV1 uint64 = 6
+	vectorPartitionShardSearchTCPFrameVersionV1       byte   = 1
+	vectorPartitionShardSearchTCPFrameRequestV1       byte   = 1
+	vectorPartitionShardSearchTCPFrameResponseV1      byte   = 2
+	vectorPartitionShardSearchTCPFrameErrorV1         byte   = 3
+	vectorPartitionShardSearchTCPFrameProbeV1         byte   = 4
+	vectorPartitionShardSearchTCPFrameProbeResponseV1 byte   = 5
+	// Fixed bytes include the frame-body header and every fixed-width request
+	// field plus the length prefix for each request string.
+	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 151
+	// The capability fixed bytes include its six string length prefixes.
+	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
+	// Response byte accounting excludes the request ID and six proof strings.
+	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
+	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 60
+	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
+	vectorPartitionShardSearchTCPProbeResponseFixedBytesV1  uint64 = 934
 )
 
 // VectorPartitionShardSearchTCPDispatcherV1 is a bounded, length-framed TCP
@@ -84,7 +98,7 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 	if err != nil {
 		return nil, err
 	}
-	maxResponseFrame, err := vectorPartitionShardSearchTCPFrameBoundV1(limits.MaxResponseBytes)
+	maxResponseFrame, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +179,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxRequestFrame); err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxResponseFrame)
+	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, d.maxResponseFrame, request)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
@@ -399,7 +413,7 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
 		var err error
-		maxResponseFrame, err = vectorPartitionShardSearchTCPFrameBoundV1(DefaultVectorPartitionShardSearchLimitsV1().MaxResponseBytes)
+		maxResponseFrame, err = vectorPartitionShardSearchTCPResponseFrameBoundV1(DefaultVectorPartitionShardSearchLimitsV1())
 		if err != nil {
 			return
 		}
@@ -473,11 +487,11 @@ func (s VectorPartitionShardSearchTCPServerV1) writeFrame(conn net.Conn, frame v
 }
 
 type vectorPartitionShardSearchTCPFrameV1 struct {
-	Request       *VectorPartitionShardSearchRequestV1    `json:"request,omitempty"`
-	Response      *VectorPartitionShardSearchResponseV1   `json:"response,omitempty"`
-	Probe         *vectorPartitionShardEndpointProbeV1    `json:"probe,omitempty"`
-	ProbeResponse *VectorPartitionShardEndpointIdentityV1 `json:"probe_response,omitempty"`
-	Error         *vectorPartitionShardSearchTCPErrorV1   `json:"error,omitempty"`
+	Request       *VectorPartitionShardSearchRequestV1
+	Response      *VectorPartitionShardSearchResponseV1
+	Probe         *vectorPartitionShardEndpointProbeV1
+	ProbeResponse *VectorPartitionShardEndpointIdentityV1
+	Error         *vectorPartitionShardSearchTCPErrorV1
 }
 
 // ProbeVectorPartitionShardEndpointV1 returns the identity published by the
@@ -517,10 +531,10 @@ func ProbeVectorPartitionShardEndpointV1(ctx context.Context, endpoint string) (
 }
 
 type vectorPartitionShardSearchTCPErrorV1 struct {
-	Code       VectorPartitionShardSearchErrorCodeV1 `json:"code"`
-	GroupID    raftcluster.GroupID                   `json:"group_id,omitempty"`
-	LeaderHint raftcluster.NodeID                    `json:"leader_hint,omitempty"`
-	Message    string                                `json:"message"`
+	Code       VectorPartitionShardSearchErrorCodeV1
+	GroupID    raftcluster.GroupID
+	LeaderHint raftcluster.NodeID
+	Message    string
 }
 
 func vectorPartitionShardSearchTCPErrorFromErrorV1(err error) *vectorPartitionShardSearchTCPErrorV1 {
@@ -539,7 +553,7 @@ func (e vectorPartitionShardSearchTCPErrorV1) toError() error {
 }
 
 func writeVectorPartitionShardSearchTCPFrameV1(w io.Writer, frame vectorPartitionShardSearchTCPFrameV1, max uint32) error {
-	raw, err := json.Marshal(frame)
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
 	if err != nil {
 		return err
 	}
@@ -569,6 +583,14 @@ func writeVectorPartitionShardSearchTCPAllV1(w io.Writer, raw []byte) error {
 }
 
 func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r, max, math.MaxInt, math.MaxInt)
+}
+
+func readVectorPartitionShardSearchTCPResponseFrameV1(r io.Reader, max uint32, request VectorPartitionShardSearchRequestV1) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r, max, len(request.PartitionIDs), request.TopK)
+}
+
+func readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r io.Reader, max uint32, maxPartials, maxNeighbors int) (vectorPartitionShardSearchTCPFrameV1, error) {
 	var prefix [4]byte
 	if _, err := io.ReadFull(r, prefix[:]); err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, err
@@ -581,27 +603,772 @@ func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPa
 	if _, err := io.ReadFull(r, raw); err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, err
 	}
-	var frame vectorPartitionShardSearchTCPFrameV1
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&frame); err != nil {
-		return vectorPartitionShardSearchTCPFrameV1{}, err
+	return decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(raw, maxPartials, maxNeighbors)
+}
+
+type vectorPartitionShardSearchTCPBodyWriterV1 struct {
+	body []byte
+	err  error
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) u8(v byte) {
+	w.body = append(w.body, v)
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) u32(v uint32) {
+	w.body = binary.LittleEndian.AppendUint32(w.body, v)
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) u64(v uint64) {
+	w.body = binary.LittleEndian.AppendUint64(w.body, v)
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) i64(v int64) {
+	w.u64(uint64(v))
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) f32(v float32) {
+	if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+		w.err = errors.New("M5 TCP float is nonfinite")
+		return
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return vectorPartitionShardSearchTCPFrameV1{}, errors.New("M5 TCP frame has trailing JSON values")
+	w.u32(math.Float32bits(v))
+}
+
+func (w *vectorPartitionShardSearchTCPBodyWriterV1) string(v string) {
+	if uint64(len(v)) > math.MaxUint32 && w.err == nil {
+		w.err = errors.New("M5 TCP string exceeds uint32")
+		return
+	}
+	w.u32(uint32(len(v)))
+	w.body = append(w.body, v...)
+}
+
+type vectorPartitionShardSearchTCPBodyReaderV1 struct {
+	body  []byte
+	owned string
+	off   int
+	err   error
+}
+
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) remaining() int {
+	if r.err != nil {
+		return 0
+	}
+	return len(r.body) - r.off
+}
+
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) bytes(n int) []byte {
+	if r.err != nil {
+		return nil
+	}
+	if n < 0 || n > len(r.body)-r.off {
+		r.err = errors.New("M5 TCP frame is truncated")
+		return nil
+	}
+	out := r.body[r.off : r.off+n]
+	r.off += n
+	return out
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) u8() byte {
+	b := r.bytes(1)
+	if len(b) == 0 {
+		return 0
+	}
+	return b[0]
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) u32() uint32 {
+	b := r.bytes(4)
+	if len(b) < 4 {
+		return 0
+	}
+	return binary.LittleEndian.Uint32(b)
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) u64() uint64 {
+	b := r.bytes(8)
+	if len(b) < 8 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(b)
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) i64() int64 {
+	return int64(r.u64())
+}
+
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) f32() float32 {
+	v := math.Float32frombits(r.u32())
+	if r.err == nil && (math.IsNaN(float64(v)) || math.IsInf(float64(v), 0)) {
+		r.err = errors.New("M5 TCP float is nonfinite")
+	}
+	return v
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) string() string {
+	n := r.u32()
+	if r.err != nil {
+		return ""
+	}
+	if uint64(n) > uint64(len(r.body)-r.off) {
+		r.err = errors.New("M5 TCP string exceeds remaining body")
+		return ""
+	}
+	start := r.off
+	r.bytes(int(n))
+	return r.owned[start:r.off]
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) count(maximum int) int {
+	n := r.u32()
+	if r.err != nil {
+		return 0
+	}
+	if maximum < 0 || uint64(n) > uint64(maximum) {
+		r.err = errors.New("M5 TCP count exceeds bound")
+		return 0
+	}
+	return int(n)
+}
+func (r *vectorPartitionShardSearchTCPBodyReaderV1) done() error {
+	if r.err != nil {
+		return r.err
+	}
+	if r.off != len(r.body) {
+		return errors.New("M5 TCP frame has trailing bytes")
+	}
+	return nil
+}
+
+func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPartitionShardSearchTCPFrameV1) ([]byte, error) {
+	count := 0
+	typ := byte(0)
+	if frame.Request != nil {
+		count++
+		typ = vectorPartitionShardSearchTCPFrameRequestV1
+	}
+	if frame.Response != nil {
+		count++
+		typ = vectorPartitionShardSearchTCPFrameResponseV1
+	}
+	if frame.Error != nil {
+		count++
+		typ = vectorPartitionShardSearchTCPFrameErrorV1
+	}
+	if frame.Probe != nil {
+		count++
+		typ = vectorPartitionShardSearchTCPFrameProbeV1
+	}
+	if frame.ProbeResponse != nil {
+		count++
+		typ = vectorPartitionShardSearchTCPFrameProbeResponseV1
+	}
+	if count != 1 {
+		return nil, errors.New("M5 TCP frame requires exactly one body")
+	}
+	if dst == nil {
+		capacity := 128
+		switch typ {
+		case vectorPartitionShardSearchTCPFrameRequestV1:
+			capacity = 1024
+			if requestBytes, err := vectorPartitionCoordinatorShardRequestBytesV1(*frame.Request); err == nil && requestBytes <= uint64(maxInt) {
+				capacity = int(requestBytes)
+			}
+		case vectorPartitionShardSearchTCPFrameResponseV1, vectorPartitionShardSearchTCPFrameProbeResponseV1:
+			capacity = 2048
+		case vectorPartitionShardSearchTCPFrameProbeV1:
+			capacity = 16
+		}
+		dst = make([]byte, 0, capacity)
+	}
+	w := vectorPartitionShardSearchTCPBodyWriterV1{body: dst}
+	w.u8(vectorPartitionShardSearchTCPFrameVersionV1)
+	w.u8(typ)
+	w.u32(0)
+	switch typ {
+	case vectorPartitionShardSearchTCPFrameRequestV1:
+		appendVectorPartitionShardSearchTCPRequestV1(&w, *frame.Request)
+	case vectorPartitionShardSearchTCPFrameResponseV1:
+		appendVectorPartitionShardSearchTCPResponseV1(&w, *frame.Response)
+	case vectorPartitionShardSearchTCPFrameErrorV1:
+		appendVectorPartitionShardSearchTCPErrorV1(&w, *frame.Error)
+	case vectorPartitionShardSearchTCPFrameProbeV1:
+		w.u32(frame.Probe.Version)
+	case vectorPartitionShardSearchTCPFrameProbeResponseV1:
+		appendVectorPartitionShardSearchTCPEndpointIdentityV1(&w, *frame.ProbeResponse)
+	}
+	if w.err != nil {
+		return nil, w.err
+	}
+	return w.body, nil
+}
+
+func decodeVectorPartitionShardSearchTCPFrameBodyV1(body []byte) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(body, math.MaxInt, math.MaxInt)
+}
+
+func decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(body []byte, maxPartials, maxNeighbors int) (vectorPartitionShardSearchTCPFrameV1, error) {
+	r := vectorPartitionShardSearchTCPBodyReaderV1{body: body}
+	version, typ, flags := r.u8(), r.u8(), r.u32()
+	if r.err != nil {
+		return vectorPartitionShardSearchTCPFrameV1{}, r.err
+	}
+	if version != vectorPartitionShardSearchTCPFrameVersionV1 || flags != 0 {
+		return vectorPartitionShardSearchTCPFrameV1{}, errors.New("unsupported M5 TCP frame version or flags")
+	}
+	if typ < vectorPartitionShardSearchTCPFrameRequestV1 || typ > vectorPartitionShardSearchTCPFrameProbeResponseV1 {
+		return vectorPartitionShardSearchTCPFrameV1{}, errors.New("unknown M5 TCP frame type")
+	}
+	if typ != vectorPartitionShardSearchTCPFrameProbeV1 {
+		r.owned = string(body)
+	}
+	var frame vectorPartitionShardSearchTCPFrameV1
+	switch typ {
+	case vectorPartitionShardSearchTCPFrameRequestV1:
+		value := readVectorPartitionShardSearchTCPRequestV1(&r)
+		frame.Request = &value
+	case vectorPartitionShardSearchTCPFrameResponseV1:
+		value := readVectorPartitionShardSearchTCPResponseWithBoundsV1(&r, maxPartials, maxNeighbors)
+		frame.Response = &value
+	case vectorPartitionShardSearchTCPFrameErrorV1:
+		value := readVectorPartitionShardSearchTCPErrorV1(&r)
+		frame.Error = &value
+	case vectorPartitionShardSearchTCPFrameProbeV1:
+		frame.Probe = &vectorPartitionShardEndpointProbeV1{Version: r.u32()}
+		if r.err == nil && frame.Probe.Version != 1 {
+			r.err = errors.New("unsupported M5 probe version")
+		}
+	case vectorPartitionShardSearchTCPFrameProbeResponseV1:
+		value := readVectorPartitionShardSearchTCPEndpointIdentityV1(&r)
+		frame.ProbeResponse = &value
+		if r.err == nil && value.Version != 1 {
+			r.err = errors.New("unsupported M5 probe response version")
+		}
+	}
+	if err := r.done(); err != nil {
+		return vectorPartitionShardSearchTCPFrameV1{}, err
 	}
 	return frame, nil
 }
 
+func appendVectorPartitionShardSearchTCPRequestV1(w *vectorPartitionShardSearchTCPBodyWriterV1, r VectorPartitionShardSearchRequestV1) {
+	w.u32(r.Version)
+	for _, value := range []string{r.RequestID, r.CancellationID, r.Database, r.Catalog, r.Collection, r.IndexName, r.IndexDefinitionDigest, r.ReadySetDigest, string(r.TargetGroupID), string(r.TargetNodeID)} {
+		w.string(value)
+	}
+	for _, value := range []uint64{r.SourceGeneration, r.SourceChecksum, r.SourceSchemaHash, r.SourceRowCount, r.PartitionGeneration, r.RouterGeneration} {
+		w.u64(value)
+	}
+	if uint64(len(r.PartitionIDs)) > math.MaxUint32 {
+		w.err = errors.New("M5 TCP partition count exceeds uint32")
+		return
+	}
+	w.u32(uint32(len(r.PartitionIDs)))
+	for _, value := range r.PartitionIDs {
+		w.u32(value)
+	}
+	if uint64(len(r.Query)) > math.MaxUint32 {
+		w.err = errors.New("M5 TCP query count exceeds uint32")
+		return
+	}
+	w.u32(uint32(len(r.Query)))
+	for _, value := range r.Query {
+		w.f32(value)
+	}
+	metric := vectorPartitionShardSearchTCPMetricV1(r.Metric)
+	mode := vectorPartitionShardSearchTCPModeV1(r.Mode)
+	consistency := vectorPartitionShardSearchTCPConsistencyV1(r.Consistency)
+	stats := vectorPartitionShardSearchTCPStatsV1(r.StatsMode)
+	if (metric == 0 && r.Metric != "") || (mode == 0 && r.Mode != "") ||
+		(consistency == 0 && r.Consistency != "") || (stats == 0 && r.StatsMode != "") {
+		w.err = errors.New("M5 TCP request enum is invalid")
+		return
+	}
+	w.u8(metric)
+	w.u8(mode)
+	w.u8(consistency)
+	w.u8(stats)
+	if r.TopK < 0 || uint64(r.TopK) > math.MaxUint32 || r.EfSearch < 0 || uint64(r.EfSearch) > math.MaxUint32 {
+		w.err = errors.New("M5 TCP search count is outside uint32")
+		return
+	}
+	w.u32(uint32(r.TopK))
+	w.u32(uint32(r.EfSearch))
+	w.i64(r.DeadlineUnixNano)
+	w.u64(r.RequestBytesLimit)
+	w.u64(r.CandidateBytesLimit)
+	w.u64(r.ResponseBytesLimit)
+	if r.StrictCapability == nil {
+		w.u8(0)
+	} else {
+		w.u8(1)
+		appendVectorPartitionStrictCapabilityBinaryV1(w, *r.StrictCapability)
+	}
+}
+
+func readVectorPartitionShardSearchTCPRequestV1(r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchRequestV1 {
+	value := VectorPartitionShardSearchRequestV1{Version: r.u32()}
+	if r.err == nil && value.Version != 0 && value.Version != VectorPartitionShardSearchVersionV1 {
+		r.err = errors.New("unsupported M5 request version")
+		return value
+	}
+	fields := [10]string{}
+	for i := range fields {
+		fields[i] = r.string()
+	}
+	value.RequestID, value.CancellationID, value.Database, value.Catalog = fields[0], fields[1], fields[2], fields[3]
+	value.Collection, value.IndexName, value.IndexDefinitionDigest, value.ReadySetDigest = fields[4], fields[5], fields[6], fields[7]
+	value.TargetGroupID, value.TargetNodeID = raftcluster.GroupID(fields[8]), raftcluster.NodeID(fields[9])
+	value.SourceGeneration, value.SourceChecksum, value.SourceSchemaHash = r.u64(), r.u64(), r.u64()
+	value.SourceRowCount, value.PartitionGeneration, value.RouterGeneration = r.u64(), r.u64(), r.u64()
+	count := r.count(r.remaining() / 4)
+	if r.err == nil {
+		value.PartitionIDs = make([]uint32, count)
+		for i := range value.PartitionIDs {
+			value.PartitionIDs[i] = r.u32()
+		}
+	}
+	count = r.count(r.remaining() / 4)
+	if r.err == nil {
+		value.Query = make([]float32, count)
+		for i := range value.Query {
+			value.Query[i] = r.f32()
+		}
+	}
+	value.Metric = readVectorPartitionShardSearchTCPMetricV1(r.u8(), r)
+	value.Mode = readVectorPartitionShardSearchTCPModeV1(r.u8(), r)
+	value.Consistency = readVectorPartitionShardSearchTCPConsistencyV1(r.u8(), r)
+	value.StatsMode = readVectorPartitionShardSearchTCPStatsV1(r.u8(), r)
+	topK, efSearch := r.u32(), r.u32()
+	if r.err == nil && (uint64(topK) > uint64(math.MaxInt) || uint64(efSearch) > uint64(math.MaxInt)) {
+		r.err = errors.New("M5 TCP search count overflows int")
+	}
+	value.TopK, value.EfSearch = int(topK), int(efSearch)
+	value.DeadlineUnixNano = r.i64()
+	value.RequestBytesLimit, value.CandidateBytesLimit, value.ResponseBytesLimit = r.u64(), r.u64(), r.u64()
+	switch r.u8() {
+	case 0:
+	case 1:
+		capability := readVectorPartitionStrictCapabilityBinaryV1(r)
+		value.StrictCapability = &capability
+	default:
+		if r.err == nil {
+			r.err = errors.New("M5 TCP strict capability flag is invalid")
+		}
+	}
+	return value
+}
+
+func vectorPartitionShardSearchTCPMetricV1(v VectorPartitionShardSearchMetricV1) byte {
+	if v == VectorPartitionShardSearchMetricCosineV1 {
+		return 1
+	}
+	return 0
+}
+
+func vectorPartitionShardSearchTCPModeV1(v VectorPartitionShardSearchModeV1) byte {
+	if v == VectorPartitionShardSearchModeNoDocumentV1 {
+		return 1
+	}
+	return 0
+}
+
+func vectorPartitionShardSearchTCPConsistencyV1(v VectorPartitionShardSearchConsistencyV1) byte {
+	if v == VectorPartitionShardSearchConsistencySnapshotV1 {
+		return 1
+	}
+	return 0
+}
+
+func vectorPartitionShardSearchTCPStatsV1(v VectorPartitionShardSearchStatsModeV1) byte {
+	switch v {
+	case VectorPartitionShardSearchStatsNoneV1:
+		return 1
+	case VectorPartitionShardSearchStatsBasicV1:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func readVectorPartitionShardSearchTCPMetricV1(v byte, r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchMetricV1 {
+	if v == 0 {
+		return ""
+	}
+	if v == 1 {
+		return VectorPartitionShardSearchMetricCosineV1
+	}
+	if r.err == nil {
+		r.err = errors.New("invalid M5 metric")
+	}
+	return ""
+}
+
+func readVectorPartitionShardSearchTCPModeV1(v byte, r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchModeV1 {
+	if v == 0 {
+		return ""
+	}
+	if v == 1 {
+		return VectorPartitionShardSearchModeNoDocumentV1
+	}
+	if r.err == nil {
+		r.err = errors.New("invalid M5 mode")
+	}
+	return ""
+}
+
+func readVectorPartitionShardSearchTCPConsistencyV1(v byte, r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchConsistencyV1 {
+	if v == 0 {
+		return ""
+	}
+	if v == 1 {
+		return VectorPartitionShardSearchConsistencySnapshotV1
+	}
+	if r.err == nil {
+		r.err = errors.New("invalid M5 consistency")
+	}
+	return ""
+}
+
+func readVectorPartitionShardSearchTCPStatsV1(v byte, r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchStatsModeV1 {
+	switch v {
+	case 0:
+		return ""
+	case 1:
+		return VectorPartitionShardSearchStatsNoneV1
+	case 2:
+		return VectorPartitionShardSearchStatsBasicV1
+	default:
+		if r.err == nil {
+			r.err = errors.New("invalid M5 stats mode")
+		}
+		return ""
+	}
+}
+
+func appendVectorPartitionStrictCapabilityBinaryV1(w *vectorPartitionShardSearchTCPBodyWriterV1, c vectorPartitionStrictSearchCapabilityV1) {
+	w.u32(c.Version)
+	w.string(c.ServingIdentityDigest)
+	w.u64(c.CatalogEpoch)
+	w.string(c.CatalogDigest)
+	w.string(string(c.ProofNodeID))
+	w.string(string(c.ProofGroupID))
+	w.u64(c.ProofLeaderTerm)
+	w.u64(c.CatalogAppliedIndex)
+	w.u64(c.CatalogCommitIndex)
+	w.u64(c.CatalogRaftAppliedIndex)
+	w.i64(c.ValidThroughUnixNano)
+	w.string(string(c.TargetGroupID))
+	w.u64(c.GroupAppliedIndex)
+	w.string(c.MAC)
+}
+
+func readVectorPartitionStrictCapabilityBinaryV1(r *vectorPartitionShardSearchTCPBodyReaderV1) vectorPartitionStrictSearchCapabilityV1 {
+	return vectorPartitionStrictSearchCapabilityV1{
+		Version: r.u32(), ServingIdentityDigest: r.string(), CatalogEpoch: r.u64(), CatalogDigest: r.string(),
+		ProofNodeID: raftcluster.NodeID(r.string()), ProofGroupID: raftcluster.GroupID(r.string()), ProofLeaderTerm: r.u64(),
+		CatalogAppliedIndex: r.u64(), CatalogCommitIndex: r.u64(), CatalogRaftAppliedIndex: r.u64(),
+		ValidThroughUnixNano: r.i64(), TargetGroupID: raftcluster.GroupID(r.string()), GroupAppliedIndex: r.u64(), MAC: r.string(),
+	}
+}
+
+func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearchTCPBodyWriterV1, v VectorPartitionShardSearchResponseV1) {
+	w.u32(v.Version)
+	w.string(v.RequestID)
+	appendVectorPartitionShardSearchTCPProofV1(w, v.Proof)
+	if uint64(len(v.Partials)) > math.MaxUint32 {
+		w.err = errors.New("M5 TCP partial count exceeds uint32")
+		return
+	}
+	w.u32(uint32(len(v.Partials)))
+	for _, partial := range v.Partials {
+		w.u32(partial.PartitionID)
+		if uint64(len(partial.Neighbors)) > math.MaxUint32 {
+			w.err = errors.New("M5 TCP neighbor count exceeds uint32")
+			return
+		}
+		w.u32(uint32(len(partial.Neighbors)))
+		for _, neighbor := range partial.Neighbors {
+			w.string(neighbor.ID)
+			w.f32(neighbor.Score)
+		}
+		w.u64(partial.Candidates)
+		w.u64(partial.Edges)
+		w.string(partial.SearchRoute)
+		w.u64(partial.PackBytes)
+		w.u64(partial.MappedBytes)
+		w.u64(partial.HeapBytes)
+		w.u64(partial.OpenNanos)
+	}
+	for _, value := range []uint64{v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.Edges, v.ResponseBytes, v.Timing.RouteOwnerNanos, v.Timing.ReadIndexApplyNanos, v.Timing.GenerationOpenNanos, v.Timing.SearchNanos, v.Timing.ResponseCopyNanos, v.Timing.TotalNanos} {
+		w.u64(value)
+	}
+}
+func readVectorPartitionShardSearchTCPResponseV1(r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchResponseV1 {
+	return readVectorPartitionShardSearchTCPResponseWithBoundsV1(r, math.MaxInt, math.MaxInt)
+}
+
+func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionShardSearchTCPBodyReaderV1, maxPartials, maxNeighbors int) VectorPartitionShardSearchResponseV1 {
+	v := VectorPartitionShardSearchResponseV1{Version: r.u32()}
+	if r.err == nil && v.Version != 0 && v.Version != VectorPartitionShardSearchVersionV1 {
+		r.err = errors.New("unsupported M5 response version")
+		return v
+	}
+	v.RequestID = r.string()
+	v.Proof = readVectorPartitionShardSearchTCPProofV1(r)
+	count := r.count(min(r.remaining()/vectorPartitionShardSearchTCPResponsePartialMinBytesV1, maxPartials))
+	if r.err == nil {
+		v.Partials = make([]VectorPartitionShardSearchPartialV1, count)
+		for i := range v.Partials {
+			partial := &v.Partials[i]
+			partial.PartitionID = r.u32()
+			neighbors := r.count(min(r.remaining()/vectorPartitionShardSearchTCPResponseNeighborMinBytesV1, maxNeighbors))
+			if r.err == nil {
+				for range neighbors {
+					neighbor := VectorPartitionShardSearchNeighborV1{ID: r.string(), Score: r.f32()}
+					if r.err != nil {
+						return v
+					}
+					partial.Neighbors = append(partial.Neighbors, neighbor)
+				}
+			}
+			partial.Candidates, partial.Edges = r.u64(), r.u64()
+			partial.SearchRoute = r.string()
+			partial.PackBytes, partial.MappedBytes, partial.HeapBytes, partial.OpenNanos = r.u64(), r.u64(), r.u64(), r.u64()
+		}
+	}
+	v.Partitions, v.ReadProofs, v.GenerationPins, v.PartitionOpens, v.Candidates, v.Edges, v.ResponseBytes = r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64(), r.u64()
+	v.Timing = VectorPartitionShardSearchTimingV1{RouteOwnerNanos: r.u64(), ReadIndexApplyNanos: r.u64(), GenerationOpenNanos: r.u64(), SearchNanos: r.u64(), ResponseCopyNanos: r.u64(), TotalNanos: r.u64()}
+	return v
+}
+func appendVectorPartitionShardSearchTCPProofV1(w *vectorPartitionShardSearchTCPBodyWriterV1, p VectorPartitionShardSearchProofV1) {
+	for _, value := range []string{p.Kind, string(p.ServingNode), string(p.LeaderNode), string(p.GroupID), p.ReadySetDigest, p.ServingIdentityDigest} {
+		w.string(value)
+	}
+	for _, value := range []uint64{p.ReadTerm, p.ReadIndex, p.AppliedTerm, p.AppliedIndex, p.CatalogAppliedIndex, p.GroupAppliedIndex, p.SourceGeneration, p.SourceChecksum, p.SourceSchemaHash, p.SourceRowCount, p.PartitionGeneration, p.RouterGeneration} {
+		w.u64(value)
+	}
+}
+
+func readVectorPartitionShardSearchTCPProofV1(r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchProofV1 {
+	fields := [6]string{}
+	for i := range fields {
+		fields[i] = r.string()
+	}
+	return VectorPartitionShardSearchProofV1{
+		Kind: fields[0], ServingNode: raftcluster.NodeID(fields[1]), LeaderNode: raftcluster.NodeID(fields[2]), GroupID: raftcluster.GroupID(fields[3]),
+		ReadySetDigest: fields[4], ServingIdentityDigest: fields[5],
+		ReadTerm: r.u64(), ReadIndex: r.u64(), AppliedTerm: r.u64(), AppliedIndex: r.u64(), CatalogAppliedIndex: r.u64(), GroupAppliedIndex: r.u64(),
+		SourceGeneration: r.u64(), SourceChecksum: r.u64(), SourceSchemaHash: r.u64(), SourceRowCount: r.u64(), PartitionGeneration: r.u64(), RouterGeneration: r.u64(),
+	}
+}
+
+func appendVectorPartitionShardSearchTCPErrorV1(w *vectorPartitionShardSearchTCPBodyWriterV1, e vectorPartitionShardSearchTCPErrorV1) {
+	code := vectorPartitionShardSearchTCPErrorCodeV1(e.Code)
+	if code == 0 {
+		w.err = errors.New("M5 TCP error code is invalid")
+		return
+	}
+	w.u8(code)
+	w.string(string(e.GroupID))
+	w.string(string(e.LeaderHint))
+	w.string(e.Message)
+}
+func readVectorPartitionShardSearchTCPErrorV1(r *vectorPartitionShardSearchTCPBodyReaderV1) vectorPartitionShardSearchTCPErrorV1 {
+	return vectorPartitionShardSearchTCPErrorV1{
+		Code: readVectorPartitionShardSearchTCPErrorCodeV1(r.u8(), r), GroupID: raftcluster.GroupID(r.string()),
+		LeaderHint: raftcluster.NodeID(r.string()), Message: r.string(),
+	}
+}
+
+func vectorPartitionShardSearchTCPErrorCodeV1(v VectorPartitionShardSearchErrorCodeV1) byte {
+	for i, code := range vectorPartitionShardSearchTCPErrorCodesV1 {
+		if code == v {
+			return byte(i + 1)
+		}
+	}
+	return 0
+}
+
+func readVectorPartitionShardSearchTCPErrorCodeV1(v byte, r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchErrorCodeV1 {
+	if v > 0 && int(v) <= len(vectorPartitionShardSearchTCPErrorCodesV1) {
+		return vectorPartitionShardSearchTCPErrorCodesV1[v-1]
+	}
+	if r.err == nil {
+		r.err = errors.New("invalid M5 error code")
+	}
+	return ""
+}
+
+var vectorPartitionShardSearchTCPErrorCodesV1 = []VectorPartitionShardSearchErrorCodeV1{
+	VectorPartitionShardSearchErrorInvalidRequestV1, VectorPartitionShardSearchErrorUnsupportedConsistencyV1,
+	VectorPartitionShardSearchErrorMissingOwnerV1, VectorPartitionShardSearchErrorUnknownOwnerV1,
+	VectorPartitionShardSearchErrorRemoteOwnerV1, VectorPartitionShardSearchErrorRouteMismatchV1,
+	VectorPartitionShardSearchErrorNotLeaderV1, VectorPartitionShardSearchErrorGroupUnavailableV1,
+	VectorPartitionShardSearchErrorGenerationMismatchV1, VectorPartitionShardSearchErrorAssetsUnavailableV1,
+	VectorPartitionShardSearchErrorResponseTooLargeV1, VectorPartitionShardSearchErrorCanceledV1,
+	VectorPartitionShardSearchErrorDeadlineV1,
+}
+
+func appendVectorPartitionShardSearchTCPEndpointIdentityV1(w *vectorPartitionShardSearchTCPBodyWriterV1, v VectorPartitionShardEndpointIdentityV1) {
+	identityBytes := uint64(len(v.GroupID)) + uint64(len(v.InstanceIdentity)) + uint64(len(v.ProcessRuntimeStats.EffectiveCPUSet))
+	if identityBytes > vectorPartitionShardSearchTCPMinFrameBytesV1-vectorPartitionShardSearchTCPProbeResponseFixedBytesV1 {
+		w.err = errors.New("M5 TCP probe response exceeds 4096 bytes")
+		return
+	}
+	w.u32(v.Version)
+	w.string(v.GroupID)
+	w.string(v.InstanceIdentity)
+	stats := v.CatalogMetaReadStats
+	for _, stage := range []raftcluster.CatalogMetaLinearizableReadStageStatsV1{
+		stats.Total,
+		stats.OperationsHealth,
+		stats.StrictSearch,
+		stats.ServingRefresh,
+		stats.CoordinatorLifecycle,
+		stats.ShardLifecycle,
+		stats.Unknown,
+	} {
+		appendVectorPartitionShardSearchTCPReadStageV1(w, stage)
+	}
+	for _, value := range []uint64{
+		stats.LastTerm,
+		stats.LastCatalogApplied,
+		stats.LastRaftApplied,
+		stats.LastRaftLog,
+	} {
+		w.u64(value)
+	}
+	p := v.ProcessRuntimeStats
+	for _, value := range []uint64{
+		p.SampleUnixNano,
+		p.CPUTimeNanos,
+		p.RunQueueDelayNanos,
+		p.Timeslices,
+		p.VoluntaryContextSwitches,
+		p.NonvoluntaryContextSwitches,
+		p.RSSBytes,
+		p.PeakRSSBytes,
+		p.HeapAllocBytes,
+		p.HeapObjects,
+		p.TotalAllocBytes,
+		p.Mallocs,
+		p.Frees,
+		p.NumGC,
+		p.PauseTotalNanos,
+		p.Goroutines,
+	} {
+		w.u64(value)
+	}
+	w.i64(int64(p.LogicalCPUs))
+	w.i64(int64(p.GOMAXPROCS))
+	w.i64(p.GoMemoryLimitBytes)
+	w.string(p.EffectiveCPUSet)
+}
+
+func readVectorPartitionShardSearchTCPEndpointIdentityV1(r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardEndpointIdentityV1 {
+	v := VectorPartitionShardEndpointIdentityV1{
+		Version:          r.u32(),
+		GroupID:          r.string(),
+		InstanceIdentity: r.string(),
+	}
+	stages := [7]raftcluster.CatalogMetaLinearizableReadStageStatsV1{}
+	for i := range stages {
+		stages[i] = readVectorPartitionShardSearchTCPReadStageV1(r)
+	}
+	v.CatalogMetaReadStats = raftcluster.CatalogMetaLinearizableReadStatsV1{
+		Total:                stages[0],
+		OperationsHealth:     stages[1],
+		StrictSearch:         stages[2],
+		ServingRefresh:       stages[3],
+		CoordinatorLifecycle: stages[4],
+		ShardLifecycle:       stages[5],
+		Unknown:              stages[6],
+		LastTerm:             r.u64(),
+		LastCatalogApplied:   r.u64(),
+		LastRaftApplied:      r.u64(),
+		LastRaftLog:          r.u64(),
+	}
+	p := &v.ProcessRuntimeStats
+	p.SampleUnixNano = r.u64()
+	p.CPUTimeNanos = r.u64()
+	p.RunQueueDelayNanos = r.u64()
+	p.Timeslices = r.u64()
+	p.VoluntaryContextSwitches = r.u64()
+	p.NonvoluntaryContextSwitches = r.u64()
+	p.RSSBytes = r.u64()
+	p.PeakRSSBytes = r.u64()
+	p.HeapAllocBytes = r.u64()
+	p.HeapObjects = r.u64()
+	p.TotalAllocBytes = r.u64()
+	p.Mallocs = r.u64()
+	p.Frees = r.u64()
+	p.NumGC = r.u64()
+	p.PauseTotalNanos = r.u64()
+	p.Goroutines = r.u64()
+	logical, gomax, memory := r.i64(), r.i64(), r.i64()
+	if r.err == nil && (int64(int(logical)) != logical || int64(int(gomax)) != gomax) {
+		r.err = errors.New("M5 runtime integer overflows")
+	}
+	p.LogicalCPUs = int(logical)
+	p.GOMAXPROCS = int(gomax)
+	p.GoMemoryLimitBytes = memory
+	p.EffectiveCPUSet = r.string()
+	return v
+}
+
+func appendVectorPartitionShardSearchTCPReadStageV1(w *vectorPartitionShardSearchTCPBodyWriterV1, s raftcluster.CatalogMetaLinearizableReadStageStatsV1) {
+	for _, value := range []uint64{
+		s.Reads,
+		s.Successes,
+		s.Failures,
+		s.VerifyLeaderCalls,
+		s.LogBarriers,
+		s.NoLogProofs,
+		s.TotalNanos,
+		s.AdmissionNanos,
+		s.VerifyLeaderNanos,
+		s.BarrierNanos,
+		s.CurrentTermNanos,
+		s.RaftApplyNanos,
+		s.AppliedReadNanos,
+	} {
+		w.u64(value)
+	}
+}
+
+func readVectorPartitionShardSearchTCPReadStageV1(r *vectorPartitionShardSearchTCPBodyReaderV1) raftcluster.CatalogMetaLinearizableReadStageStatsV1 {
+	return raftcluster.CatalogMetaLinearizableReadStageStatsV1{
+		Reads:             r.u64(),
+		Successes:         r.u64(),
+		Failures:          r.u64(),
+		VerifyLeaderCalls: r.u64(),
+		LogBarriers:       r.u64(),
+		NoLogProofs:       r.u64(),
+		TotalNanos:        r.u64(),
+		AdmissionNanos:    r.u64(),
+		VerifyLeaderNanos: r.u64(),
+		BarrierNanos:      r.u64(),
+		CurrentTermNanos:  r.u64(),
+		RaftApplyNanos:    r.u64(),
+		AppliedReadNanos:  r.u64(),
+	}
+}
+
 func vectorPartitionShardSearchTCPFrameBoundV1(logicalBytes uint64) (uint32, error) {
-	// encoding/json can expand one input byte to a six-byte Unicode escape;
-	// logical request/response accounting already reserves fixed envelopes.
-	if logicalBytes == 0 || logicalBytes > uint64(^uint32(0))/vectorPartitionShardSearchTCPJSONExpansionBoundV1 {
+	if logicalBytes == 0 || logicalBytes > uint64(^uint32(0)) {
 		return 0, errors.New("nativewire: M5 TCP logical byte limit exceeds the frame bound")
 	}
-	frameBytes := logicalBytes * vectorPartitionShardSearchTCPJSONExpansionBoundV1
-	frameBytes = max(frameBytes, vectorPartitionShardSearchTCPMinFrameBytesV1)
+	frameBytes := max(logicalBytes, vectorPartitionShardSearchTCPMinFrameBytesV1)
 	return uint32(frameBytes), nil
+}
+
+func vectorPartitionShardSearchTCPResponseFrameBoundV1(limits VectorPartitionShardSearchLimitsV1) (uint32, error) {
+	identityBytes, ok := mulUint64V1(vectorPartitionShardSearchTCPResponseIdentityFieldsV1, uint64(limits.MaxIdentityBytes))
+	if !ok {
+		return 0, errors.New("nativewire: M5 TCP response identity headroom overflows")
+	}
+	frameBytes, ok := addUint64V1(limits.MaxResponseBytes, identityBytes)
+	if !ok {
+		return 0, errors.New("nativewire: M5 TCP response frame bound overflows")
+	}
+	return vectorPartitionShardSearchTCPFrameBoundV1(frameBytes)
 }
 
 func vectorPartitionShardSearchTCPDeadlineV1(ctx context.Context, deadlineUnixNano int64, conn net.Conn) error {

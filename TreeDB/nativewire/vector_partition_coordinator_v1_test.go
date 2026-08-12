@@ -12,11 +12,42 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
+
+func TestTopVectorPartitionCoordinatorNeighborsV1DetachesIDs(t *testing.T) {
+	backing := strings.Repeat("x", 4096) + "doc"
+	id := backing[len(backing)-3:]
+	got, err := topVectorPartitionCoordinatorNeighborsV1(context.Background(), map[string]float32{id: 1}, 1)
+	if err != nil || len(got) != 1 || got[0].ID != id {
+		t.Fatalf("neighbors=%+v err=%v", got, err)
+	}
+	start := uintptr(unsafe.Pointer(unsafe.StringData(backing)))
+	result := uintptr(unsafe.Pointer(unsafe.StringData(got[0].ID)))
+	if result >= start && result < start+uintptr(len(backing)) {
+		t.Fatal("returned ID retains the decoded response backing frame")
+	}
+}
+
+func TestTopVectorPartitionCoordinatorNeighborsV1OnlyClonesAdmissions(t *testing.T) {
+	unique := map[string]float32{}
+	for i := range 1024 {
+		unique[strings.Repeat("x", 4096)+fmt.Sprint(i)] = float32(i)
+	}
+	allocs := testing.AllocsPerRun(10, func() {
+		got, err := topVectorPartitionCoordinatorNeighborsV1(context.Background(), unique, 1)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("neighbors=%+v err=%v", got, err)
+		}
+	})
+	if allocs > 32 {
+		t.Fatalf("allocs/run=%.1f want bounded top-k admissions", allocs)
+	}
+}
 
 type testVectorPartitionCoordinatorRouterV1 struct {
 	status     collections.VectorPartitionRouterRuntimeStatusV1

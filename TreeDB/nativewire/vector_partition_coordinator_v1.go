@@ -12,6 +12,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -1384,7 +1385,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 						break
 					}
 				}
-				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, groupApplied, strict.key)
+				shardRequest.StrictCapability, err = prepareVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, groupApplied, strict.key)
 				if err != nil {
 					return nil, nil, nil, zero, err
 				}
@@ -1397,8 +1398,7 @@ func (c *VectorPartitionCoordinatorV1) plan(ctx context.Context, request VectorP
 			}
 			shardRequest.RequestBytesLimit = requestBytes
 			if strict != nil {
-				identity := strict.snapshot.IdentityV1()
-				shardRequest.StrictCapability, err = newVectorPartitionStrictSearchCapabilityV1(shardRequest, identity, strict.proof.read, shardRequest.StrictCapability.GroupAppliedIndex, strict.key)
+				shardRequest.StrictCapability.MAC, err = vectorPartitionStrictSearchCapabilityMACV1(shardRequest, *shardRequest.StrictCapability, strict.key)
 				if err != nil {
 					return nil, nil, nil, zero, err
 				}
@@ -1541,7 +1541,7 @@ func vectorPartitionCoordinatorWeightedBudgetShareV1(total, totalWeight, startWe
 }
 
 func vectorPartitionCoordinatorShardRequestBytesV1(request VectorPartitionShardSearchRequestV1) (uint64, error) {
-	size, ok := addUint64V1(256, uint64(len(request.Query))*4)
+	size, ok := addUint64V1(vectorPartitionShardSearchTCPRequestFixedBytesV1, uint64(len(request.Query))*4)
 	if ok {
 		size, ok = addUint64V1(size, uint64(len(request.PartitionIDs))*4)
 	}
@@ -1889,8 +1889,10 @@ func topVectorPartitionCoordinatorNeighborsV1(ctx context.Context, unique map[st
 		seen++
 		candidate := VectorPartitionCoordinatorNeighborV1{ID: id, Score: score}
 		if len(h) < topK {
+			candidate.ID = strings.Clone(candidate.ID)
 			heap.Push(&h, candidate)
 		} else if vectorPartitionCoordinatorNeighborBetterV1(candidate, h[0]) {
+			candidate.ID = strings.Clone(candidate.ID)
 			h[0] = candidate
 			heap.Fix(&h, 0)
 		}
