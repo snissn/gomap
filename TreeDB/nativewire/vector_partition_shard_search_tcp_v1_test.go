@@ -154,6 +154,21 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 	}
 }
 
+func TestVectorPartitionShardSearchTCPBinaryFrameUsesConfiguredLimitsV1(t *testing.T) {
+	request := vectorPartitionShardSearchRequestTestV1(make([]uint32, DefaultVectorPartitionShardSearchLimitsV1().MaxPartitions+1))
+	response := VectorPartitionShardSearchResponseV1{Version: VectorPartitionShardSearchVersionV1, Partials: []VectorPartitionShardSearchPartialV1{{Neighbors: make([]VectorPartitionShardSearchNeighborV1, DefaultVectorPartitionShardSearchLimitsV1().MaxTopK+1)}}}
+	for _, frame := range []vectorPartitionShardSearchTCPFrameV1{{Request: &request}, {Response: &response}} {
+		raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(raw)
+		if err != nil || !reflect.DeepEqual(decoded, frame) {
+			t.Fatalf("decoded=%+v want=%+v err=%v", decoded, frame, err)
+		}
+	}
+}
+
 func BenchmarkVectorPartitionShardSearchTCPBinaryRequestCodecV1(b *testing.B) {
 	request := vectorPartitionShardSearchRequestTestV1([]uint32{1, 3})
 	benchmarkVectorPartitionShardSearchTCPBinaryCodecV1(b, vectorPartitionShardSearchTCPFrameV1{Request: &request})
@@ -283,7 +298,8 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 	if got, want := dispatcher.maxRequestFrame, uint32(limits.MaxRequestBytes); got != want {
 		t.Fatalf("request frame=%d want=%d", got, want)
 	}
-	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes); got != want {
+	wantResponseFrame := uint32(limits.MaxResponseBytes + vectorPartitionShardSearchTCPResponseIdentityFieldsV1*uint64(limits.MaxIdentityBytes))
+	if got, want := dispatcher.maxResponseFrame, wantResponseFrame; got != want {
 		t.Fatalf("response frame=%d want=%d", got, want)
 	}
 	limits.MaxResponseBytes = 128 << 20
@@ -292,11 +308,24 @@ func TestVectorPartitionShardSearchTCPDerivesSeparateFrameBoundsV1(t *testing.T)
 		t.Fatal(err)
 	}
 	defer dispatcher.Close()
-	if got, want := dispatcher.maxResponseFrame, uint32(limits.MaxResponseBytes); got != want {
+	wantResponseFrame = uint32(limits.MaxResponseBytes + vectorPartitionShardSearchTCPResponseIdentityFieldsV1*uint64(limits.MaxIdentityBytes))
+	if got, want := dispatcher.maxResponseFrame, wantResponseFrame; got != want {
 		t.Fatalf("custom response frame=%d want=%d", got, want)
 	}
-	limits.MaxResponseBytes = uint64(^uint32(0)) + 1
-	if _, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, limits); err == nil {
+	smallLimits := limits
+	smallLimits.MaxResponseBytes = vectorPartitionShardSearchTCPMinFrameBytesV1
+	dispatcher, err = newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, smallLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dispatcher.Close()
+	response := VectorPartitionShardSearchResponseV1{RequestID: strings.Repeat("x", smallLimits.MaxIdentityBytes)}
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Response: &response})
+	if err != nil || uint64(len(raw)) <= smallLimits.MaxResponseBytes || len(raw) > int(dispatcher.maxResponseFrame) {
+		t.Fatalf("response bytes=%d logical limit=%d frame=%d err=%v", len(raw), smallLimits.MaxResponseBytes, dispatcher.maxResponseFrame, err)
+	}
+	smallLimits.MaxResponseBytes = uint64(^uint32(0)) + 1
+	if _, err := newVectorPartitionShardSearchTCPDispatcherV1(map[raftcluster.GroupID]string{"group-a": "127.0.0.1:1"}, nil, 1, smallLimits); err == nil {
 		t.Fatal("unencodable response limit succeeded")
 	}
 }

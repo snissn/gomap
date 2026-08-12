@@ -33,6 +33,10 @@ const (
 	vectorPartitionShardSearchTCPRequestFixedBytesV1 uint64 = 151
 	// The capability fixed bytes include its six string length prefixes.
 	vectorPartitionStrictCapabilityFixedBytesV1 uint64 = 84
+	// Response byte accounting excludes the request ID and six proof strings.
+	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
+	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 60
+	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
 )
 
 // VectorPartitionShardSearchTCPDispatcherV1 is a bounded, length-framed TCP
@@ -93,7 +97,7 @@ func newVectorPartitionShardSearchTCPDispatcherV1(endpoints map[raftcluster.Grou
 	if err != nil {
 		return nil, err
 	}
-	maxResponseFrame, err := vectorPartitionShardSearchTCPFrameBoundV1(limits.MaxResponseBytes)
+	maxResponseFrame, err := vectorPartitionShardSearchTCPResponseFrameBoundV1(limits)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +412,7 @@ func (s VectorPartitionShardSearchTCPServerV1) ServeConn(ctx context.Context, co
 	maxResponseFrame := s.MaxResponseFrame
 	if maxResponseFrame == 0 {
 		var err error
-		maxResponseFrame, err = vectorPartitionShardSearchTCPFrameBoundV1(DefaultVectorPartitionShardSearchLimitsV1().MaxResponseBytes)
+		maxResponseFrame, err = vectorPartitionShardSearchTCPResponseFrameBoundV1(DefaultVectorPartitionShardSearchLimitsV1())
 		if err != nil {
 			return
 		}
@@ -900,15 +904,14 @@ func readVectorPartitionShardSearchTCPRequestV1(r *vectorPartitionShardSearchTCP
 	value.TargetGroupID, value.TargetNodeID = raftcluster.GroupID(fields[8]), raftcluster.NodeID(fields[9])
 	value.SourceGeneration, value.SourceChecksum, value.SourceSchemaHash = r.u64(), r.u64(), r.u64()
 	value.SourceRowCount, value.PartitionGeneration, value.RouterGeneration = r.u64(), r.u64(), r.u64()
-	limits := DefaultVectorPartitionShardSearchLimitsV1()
-	count := r.count(min(limits.MaxPartitions, r.remaining()/4))
+	count := r.count(r.remaining() / 4)
 	if r.err == nil {
 		value.PartitionIDs = make([]uint32, count)
 		for i := range value.PartitionIDs {
 			value.PartitionIDs[i] = r.u32()
 		}
 	}
-	count = r.count(min(limits.MaxDimensions, r.remaining()/4))
+	count = r.count(r.remaining() / 4)
 	if r.err == nil {
 		value.Query = make([]float32, count)
 		for i := range value.Query {
@@ -1092,14 +1095,13 @@ func readVectorPartitionShardSearchTCPResponseV1(r *vectorPartitionShardSearchTC
 	}
 	v.RequestID = r.string()
 	v.Proof = readVectorPartitionShardSearchTCPProofV1(r)
-	limits := DefaultVectorPartitionShardSearchLimitsV1()
-	count := r.count(limits.MaxPartitions)
+	count := r.count(r.remaining() / vectorPartitionShardSearchTCPResponsePartialMinBytesV1)
 	if r.err == nil {
 		v.Partials = make([]VectorPartitionShardSearchPartialV1, count)
 		for i := range v.Partials {
 			partial := &v.Partials[i]
 			partial.PartitionID = r.u32()
-			neighbors := r.count(limits.MaxTopK)
+			neighbors := r.count(r.remaining() / vectorPartitionShardSearchTCPResponseNeighborMinBytesV1)
 			if r.err == nil {
 				partial.Neighbors = make([]VectorPartitionShardSearchNeighborV1, neighbors)
 				for j := range partial.Neighbors {
@@ -1330,6 +1332,18 @@ func vectorPartitionShardSearchTCPFrameBoundV1(logicalBytes uint64) (uint32, err
 	}
 	frameBytes := max(logicalBytes, vectorPartitionShardSearchTCPMinFrameBytesV1)
 	return uint32(frameBytes), nil
+}
+
+func vectorPartitionShardSearchTCPResponseFrameBoundV1(limits VectorPartitionShardSearchLimitsV1) (uint32, error) {
+	identityBytes, ok := mulUint64V1(vectorPartitionShardSearchTCPResponseIdentityFieldsV1, uint64(limits.MaxIdentityBytes))
+	if !ok {
+		return 0, errors.New("nativewire: M5 TCP response identity headroom overflows")
+	}
+	frameBytes, ok := addUint64V1(limits.MaxResponseBytes, identityBytes)
+	if !ok {
+		return 0, errors.New("nativewire: M5 TCP response frame bound overflows")
+	}
+	return vectorPartitionShardSearchTCPFrameBoundV1(frameBytes)
 }
 
 func vectorPartitionShardSearchTCPDeadlineV1(ctx context.Context, deadlineUnixNano int64, conn net.Conn) error {
