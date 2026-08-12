@@ -131,11 +131,94 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	if metrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
 		t.Fatalf("metrics=%+v", metrics)
 	}
+	first := results[0]
+	repeated, repeatedMetrics, err := searcher.SearchWithOptionsV1(
+		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3},
+	)
+	if err != nil || len(repeated) != 1 || repeated[0] != first || repeatedMetrics != metrics {
+		t.Fatalf("first=%+v repeated=%+v metrics=%+v/%+v err=%v", first, repeated, metrics, repeatedMetrics, err)
+	}
+	attributed, attributedMetrics, attribution, err := searcher.SearchWithAttributionV1(
+		context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3},
+	)
+	if err != nil || len(attributed) != 1 || attributed[0] != first || attributedMetrics != metrics ||
+		attribution.VisitedRows == 0 {
+		t.Fatalf("attributed=%+v metrics=%+v attribution=%+v err=%v", attributed, attributedMetrics, attribution, err)
+	}
+	checkedOutA := searcher.scratch.Get().(*columnVectorGraphNativeSearchScratch)
+	checkedOutB := searcher.scratch.Get().(*columnVectorGraphNativeSearchScratch)
+	if checkedOutA == checkedOutB {
+		t.Fatal("concurrent scratch checkouts aliased")
+	}
+	searcher.scratch.Put(checkedOutA)
+	searcher.scratch.Put(checkedOutB)
+	type searchResult struct {
+		results []VectorPartitionSearchResultV1
+		metrics VectorPartitionSearchMetricsV1
+		err     error
+	}
+	start, concurrent := make(chan struct{}), make(chan searchResult, 2)
+	for range 2 {
+		go func() {
+			<-start
+			results, metrics, err := searcher.SearchWithOptionsV1(
+				context.Background(), []float32{1, 0, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 3},
+			)
+			concurrent <- searchResult{results: results, metrics: metrics, err: err}
+		}()
+	}
+	close(start)
+	for range 2 {
+		got := <-concurrent
+		if got.err != nil || len(got.results) != 1 || got.results[0] != first || got.metrics != metrics {
+			t.Fatalf("concurrent results=%+v metrics=%+v err=%v", got.results, got.metrics, got.err)
+		}
+	}
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if searcher.scratchReady {
+		t.Fatal("retired searcher retained its scratch pool")
+	}
 	if !handle.Released() {
 		t.Fatal("HNSW tie search retained prepared resource")
+	}
+}
+
+func BenchmarkVectorPartitionLocalSearcherV1HNSWScratchV1(b *testing.B) {
+	const rows = 4096
+	input := testVectorPartitionLocalSearcherDisconnectedHNSWInputV1(rows)
+	raw, err := encodeColumnHNSWSearchPack(input)
+	if err != nil {
+		b.Fatal(err)
+	}
+	view, _ := testColumnHNSWSearchPackPreparedViewFromBytes2314(
+		b, raw, mappedresource.SourceHeapCopy, input.BaseIdentity,
+	)
+	searcher := &VectorPartitionLocalSearcherV1{
+		asset:    VectorPartitionSearchAssetV1{Generation: 11, PartitionID: 2, Dimensions: input.Dimensions},
+		prepared: view, opened: 1, homeMemberships: input.Rows,
+		searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1, maxStableIDBytes: 1,
+	}
+	b.Cleanup(func() { _ = searcher.Close() })
+	query := []float32{1}
+	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: rows}
+	ctx := context.Background()
+	var results []VectorPartitionSearchResultV1
+	var metrics VectorPartitionSearchMetricsV1
+	var total uint64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		results, metrics, err = searcher.SearchWithOptionsV1(ctx, query, opts)
+		if err != nil {
+			b.Fatal(err)
+		}
+		total += uint64(len(results))
+	}
+	b.StopTimer()
+	if total != uint64(b.N) || len(results) != 1 || results[0].ID == "" || metrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
+		b.Fatalf("total=%d results=%+v metrics=%+v", total, results, metrics)
 	}
 }
 
@@ -656,34 +739,7 @@ func TestVectorPartitionLocalSearcherV1DeadlineInterruptsExactRankingAndReleases
 
 func TestVectorPartitionLocalSearcherV1DeadlineInterruptsNativeTraversalAndReleasesResources(t *testing.T) {
 	const rows = 4096
-	input := columnHNSWSearchPackBuildInput{
-		Rows: rows, Dimensions: 1, VectorStride: 4,
-		M: 1, EfConstruction: rows, EfSearch: rows,
-		EntryOrdinal: 0, MaxLayer: 0,
-		BaseIdentity: columnHNSWSearchPackBaseIdentity{
-			ManifestGeneration: 11,
-			ManifestChecksum:   12,
-			SchemaHash:         13,
-		},
-		NormalizedVectors:       make([]float32, rows*4),
-		Levels:                  make([]uint16, rows),
-		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rows+1)}},
-		RowRefGenerations:       make([]int64, rows),
-		RowRefPartIDs:           make([]int64, rows),
-		RowRefRowIndexes:        make([]int64, rows),
-		RowRefAppliedCommandLSN: make([]int64, rows),
-		DocumentIDOffsets:       make([]uint64, rows+1),
-		DocumentIDBytes:         bytes.Repeat([]byte{'x'}, rows),
-	}
-	for ordinal := range rows {
-		input.NormalizedVectors[ordinal*4] = 1
-		input.RowRefGenerations[ordinal] = 11
-		input.RowRefPartIDs[ordinal] = 1
-		input.RowRefRowIndexes[ordinal] = int64(ordinal)
-		input.RowRefAppliedCommandLSN[ordinal] = 1
-		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
-	}
-	input.DocumentIDOffsets[rows] = uint64(rows)
+	input := testVectorPartitionLocalSearcherDisconnectedHNSWInputV1(rows)
 	raw, err := encodeColumnHNSWSearchPack(input)
 	if err != nil {
 		t.Fatal(err)
@@ -721,12 +777,48 @@ func TestVectorPartitionLocalSearcherV1DeadlineInterruptsNativeTraversalAndRelea
 	if status := searcher.Status(); status.ActivePins != 0 || status.Searches != 0 || status.Failures != 1 {
 		t.Fatalf("deadline return retained search pin or stats: %+v", status)
 	}
+	retry, retryMetrics, retryErr := searcher.SearchWithOptionsV1(context.Background(), []float32{1}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: rows})
+	if retryErr != nil || len(retry) != 1 || retryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
+		t.Fatalf("retry=%+v metrics=%+v err=%v", retry, retryMetrics, retryErr)
+	}
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if !handle.Released() {
 		t.Fatal("deadline return retained prepared search resource after lease close")
 	}
+}
+
+func testVectorPartitionLocalSearcherDisconnectedHNSWInputV1(rows int) columnHNSWSearchPackBuildInput {
+	input := columnHNSWSearchPackBuildInput{
+		Rows: rows, Dimensions: 1, VectorStride: 4,
+		M: 1, EfConstruction: rows, EfSearch: rows,
+		EntryOrdinal: 0, MaxLayer: 0,
+		BaseIdentity: columnHNSWSearchPackBaseIdentity{
+			ManifestGeneration: 11,
+			ManifestChecksum:   12,
+			SchemaHash:         13,
+		},
+		NormalizedVectors:       make([]float32, rows*4),
+		Levels:                  make([]uint16, rows),
+		AdjacencyLayers:         []columnHNSWSearchPackLayerInput{{Offsets: make([]uint64, rows+1)}},
+		RowRefGenerations:       make([]int64, rows),
+		RowRefPartIDs:           make([]int64, rows),
+		RowRefRowIndexes:        make([]int64, rows),
+		RowRefAppliedCommandLSN: make([]int64, rows),
+		DocumentIDOffsets:       make([]uint64, rows+1),
+		DocumentIDBytes:         bytes.Repeat([]byte{'x'}, rows),
+	}
+	for ordinal := range rows {
+		input.NormalizedVectors[ordinal*4] = 1
+		input.RowRefGenerations[ordinal] = 11
+		input.RowRefPartIDs[ordinal] = 1
+		input.RowRefRowIndexes[ordinal] = int64(ordinal)
+		input.RowRefAppliedCommandLSN[ordinal] = 1
+		input.DocumentIDOffsets[ordinal] = uint64(ordinal)
+	}
+	input.DocumentIDOffsets[rows] = uint64(rows)
+	return input
 }
 
 func TestVectorPartitionLocalSearcherV1FailsClosed(t *testing.T) {
