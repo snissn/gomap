@@ -1004,16 +1004,10 @@ func m8QualificationM3BuildCapsV1(variant m3VariantDescriptorV1, fixture fixture
 	if !ok || variant.PartitionMaxDistanceWork != partitionConfig.MaxDistanceWork || variant.RouterMaxScalarWork != routerConfig.MaxScalarWork || variant.M3MaxBenchmarkVisits != visits || variant.PartitionConfig != partitionConfig || variant.RouterConfig != routerConfig {
 		return false
 	}
-	switch variant.PartitionHNSWM {
-	case partitionConfig.Degree:
-	case 18:
-	default:
+	if _, err := m3PartitionLocalGraphVariantV1(variant.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(variant)); err != nil {
 		return false
 	}
-	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, variant.PartitionHNSWM).VectorIndexes[0]
-	if variant.PartitionHNSWM == 18 {
-		definition.EfConstruction = 256
-	}
+	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, partitionHNSWDegree).VectorIndexes[0]
 	return variant.IndexDefinitionDigest == collections.VectorIndexDefinitionDigestV1(definition)
 }
 

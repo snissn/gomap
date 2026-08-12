@@ -387,17 +387,28 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
-	var partitionHNSWM int
 	var indexDefinitionDigest string
 	for _, index := range h.collection.MetaView().VectorIndexes {
 		if index.Name == partitionHNSWIndex {
-			partitionHNSWM = index.M
 			indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
 			break
 		}
 	}
-	if partitionHNSWM != descriptor.PartitionHNSWM || indexDefinitionDigest != descriptor.IndexDefinitionDigest {
-		return errors.New("retained M8 descriptor local HNSW definition does not match collection metadata")
+	if indexDefinitionDigest != descriptor.IndexDefinitionDigest {
+		return errors.New("retained M8 descriptor source index definition does not match collection metadata")
+	}
+	if descriptor.SourceOrdinalDigest != "" {
+		_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
+		if err != nil {
+			return errors.New("retained M8 source ordinals are unavailable")
+		}
+		digest, err := m3SourceOrdinalDigestV1(rows)
+		if err != nil || digest != descriptor.SourceOrdinalDigest {
+			return errors.New("retained M8 source ordinal mapping does not match descriptor")
+		}
+	}
+	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
+		return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {

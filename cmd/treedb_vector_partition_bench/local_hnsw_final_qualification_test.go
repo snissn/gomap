@@ -198,7 +198,7 @@ func TestLocalHNSWFinalQualificationInvokeV1(t *testing.T) {
 		rowOutcome.Probes, rowOutcome.EfSearch, rowOutcome.Concurrency = run.Probes, 128, run.Concurrency
 		exhaustive := run.Probes == 16
 		reportPath, transcriptPath := filepath.Join(dir, "vector_partition_m8_test.json"), filepath.Join(dir, "vector_partition_m8_measurements_test.json")
-		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
+		report := m8ProductionReportV1{ExecutionID: "m8-production-test", MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: transcriptPath, SHA256: digest}, Variant: &m3VariantDescriptorV1{PartitionHNSWM: map[string]int{localHNSWFinalQualificationBaselineV1: 16, localHNSWFinalQualificationCandidateV1: 18}[run.Variant], PartitionHNSWEfC: map[string]int{localHNSWFinalQualificationBaselineV1: 128, localHNSWFinalQualificationCandidateV1: 256}[run.Variant], IndexDefinitionDigest: digest, BuildIdentityDigest: digest, Source: vectorpartition.Source{Checksum: digest}}, Rows: []m8ProductionRowV1{{Status: "pass", Probes: run.Probes, EfSearch: 128, Concurrency: run.Concurrency, Samples: fixture.Queries, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true, ExhaustivePartitionRecallAtK: 1, ExhaustivePartitionIDParity: exhaustive, ExhaustivePartitionScoreParity: exhaustive}}}}
 		localHNSWFinalQualificationTestGateEvidenceV1(&report)
 		return report, m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{rowOutcome}}, reportPath, digest, nil
 	}, io.Discard)
@@ -237,7 +237,7 @@ func TestLocalHNSWFinalQualificationChildFromTranscriptV1(t *testing.T) {
 	report := m8ProductionReportV1{
 		ExecutionID:           "m8-production-test",
 		MeasurementTranscript: m8ProductionMeasurementTranscriptEvidenceV1{Path: "/transcript", SHA256: digest},
-		Variant:               &m3VariantDescriptorV1{PartitionHNSWM: 16, IndexDefinitionDigest: digest, Source: vectorpartition.Source{Checksum: digest}},
+		Variant:               &m3VariantDescriptorV1{PartitionHNSWM: 16, PartitionHNSWEfC: 128, IndexDefinitionDigest: digest, BuildIdentityDigest: digest, Source: vectorpartition.Source{Checksum: digest}},
 		Rows:                  []m8ProductionRowV1{{Status: "pass", Probes: 2, EfSearch: 128, Concurrency: 1, Samples: localHNSWFinalQueryCountV1, QPS: 100, P95Nanos: 10, Attribution: m8ProductionAttributionV1{ExactRepresentativeRecallAtK: 1, ApproximateRouterPartitionCoverageComplete: true, CoordinatorMergeIDParity: true, CoordinatorMergeScoreParity: true}}},
 	}
 	transcript := m8ProductionMeasurementTranscriptV1{ExecutionID: report.ExecutionID, Outcomes: []m8ProductionRowOutcomesV1{outcome}}
@@ -404,18 +404,26 @@ func TestLocalHNSWFinalQualificationDescriptorsV1(t *testing.T) {
 	head, executable := strings.Repeat("a", 40), strings.Repeat("b", 64)
 	source := vectorpartition.Source{SourceID: "fixture", Checksum: strings.Repeat("c", 64), Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, Metric: fixture.Metric}
 	definition := partitionCollectionMetaWithDegree(m3BenchmarkCollection, fixture.Dimensions, 16).VectorIndexes[0]
-	baseline := m3VariantDescriptorV1{VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2, FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head, ExecutableSHA256: executable, ArtifactSHA256: strings.Repeat("d", 64), GraphArtifactSHA256: strings.Repeat("d", 64), GraphBuildSHA256: strings.Repeat("f", 64), ArtifactBackend: "kahip_python_3.25_eco_symmetrized_v1_seed_4016", KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1, KaHIPAdapterSHA256: kahipAdapterSHA256, Source: source, SourceRows: uint64(fixture.Vectors), Partitions: 16, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(definition), PartitionHNSWM: 16, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: routerConfig.MaxScalarWork, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits, RouterAssetChecksum: strings.Repeat("1", 64), RouterModelDigest: strings.Repeat("2", 64)}
+	baseline := m3VariantDescriptorV1{VariantID: "graph-overlap-020-v1", AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2, FixtureChecksum: fixture.Checksum, BaseSHA: head, HeadSHA: head, ExecutableSHA256: executable, ArtifactSHA256: strings.Repeat("d", 64), GraphArtifactSHA256: strings.Repeat("d", 64), GraphBuildSHA256: strings.Repeat("f", 64), ArtifactBackend: "kahip_python_3.25_eco_symmetrized_v1_seed_4016", KaHIPPythonSHA256: m8QualificationKaHIPPythonSHA256V1, KaHIPAdapterSHA256: kahipAdapterSHA256, Source: source, SourceRows: uint64(fixture.Vectors), SourceOrdinalDigest: strings.Repeat("9", 64), Partitions: 16, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(definition), PartitionHNSWM: 16, PartitionHNSWEfC: 128, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: routerConfig.MaxScalarWork, RouterConfig: routerConfig, M3MaxBenchmarkVisits: visits, RouterAssetChecksum: strings.Repeat("1", 64), RouterModelDigest: strings.Repeat("2", 64)}
 	candidate := baseline
-	candidate.PartitionHNSWM = 18
-	definition.M, definition.EfConstruction = 18, 256
-	candidate.IndexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(definition)
-	candidate.RouterAssetChecksum = strings.Repeat("3", 64)
-	candidate.RouterModelDigest = strings.Repeat("4", 64)
+	candidate.PartitionHNSWM, candidate.PartitionHNSWEfC = 18, 256
 	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err != nil {
 		t.Fatal(err)
 	}
 	candidate.Source.Checksum = strings.Repeat("5", 64)
 	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
 		t.Fatal("accepted source drift")
+	}
+	candidate = baseline
+	candidate.PartitionHNSWM, candidate.PartitionHNSWEfC = 18, 256
+	candidate.RouterAssetChecksum = strings.Repeat("5", 64)
+	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
+		t.Fatal("accepted router drift")
+	}
+	candidate = baseline
+	candidate.PartitionHNSWM, candidate.PartitionHNSWEfC = 18, 256
+	candidate.SourceOrdinalDigest = strings.Repeat("5", 64)
+	if err := localHNSWFinalQualificationDescriptorsV1(fixture, baseline, candidate, config{baseSHA: head, headSHA: head}, executable); err == nil {
+		t.Fatal("accepted source ordinal drift")
 	}
 }
