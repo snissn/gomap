@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"os"
@@ -35,6 +36,8 @@ type localHNSWRepairEFCurveCellV1 struct {
 	RoutingMissSlots uint64                                `json:"routing_miss_slots"`
 	P2HitSlots       uint64                                `json:"p2_hit_slots"`
 	P16HitSlots      uint64                                `json:"p16_hit_slots"`
+	P2ResultsSHA256  string                                `json:"p2_results_sha256"`
+	P16ResultsSHA256 string                                `json:"p16_results_sha256"`
 	P2Work           localHNSWRepairCalibrationWorkV1      `json:"p2_work"`
 	P16Work          localHNSWRepairCalibrationWorkV1      `json:"p16_work"`
 	TerminationCount map[string]uint64                     `json:"termination_counts"`
@@ -130,11 +133,15 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 		return nil, errors.New("invalid local HNSW repair EF curve router")
 	}
 	out := make([]localHNSWRepairEFCurveCellV1, len(points))
+	resultHashes := make([][2]hash.Hash, len(points))
 	routesHash := sha256.New()
 	routesHash.Write([]byte("treedb-4106-local-hnsw-repair-ef-curve-routes-v1/"))
 	var raw [4]byte
 	for i, efSearch := range points {
 		out[i].EFSearch, out[i].TerminationCount = efSearch, map[string]uint64{}
+		resultHashes[i][0], resultHashes[i][1] = sha256.New(), sha256.New()
+		resultHashes[i][0].Write([]byte("treedb-4106-local-hnsw-repair-ef-curve-p2-results-v1/"))
+		resultHashes[i][1].Write([]byte("treedb-4106-local-hnsw-repair-ef-curve-p16-results-v1/"))
 	}
 	for i, ordinal := range ordinals {
 		if ordinal < 0 || !localHNSWCalibrationOrdinalV1(ordinal) || i > 0 && ordinals[i-1] >= ordinal || len(queries[i]) == 0 {
@@ -180,6 +187,11 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 				return nil, err
 			}
 			cell := &out[cellIndex]
+			binary.LittleEndian.PutUint32(raw[:], uint32(ordinal))
+			resultHashes[cellIndex][0].Write(raw[:])
+			resultHashes[cellIndex][0].Write([]byte(localHNSWRepairCalibrationResultsSHA256V1(p2Results)))
+			resultHashes[cellIndex][1].Write(raw[:])
+			resultHashes[cellIndex][1].Write([]byte(localHNSWRepairCalibrationResultsSHA256V1(p16Results)))
 			routingHits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, exactLocal)
 			p2Hits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, p2Results)
 			p16Hits := localHNSWRepairEFCurveHitSlotsV1(canonicalTruth, p16Results)
@@ -212,7 +224,9 @@ func localHNSWRepairEFCurveV1Build(ctx context.Context, source *m8ProductionMult
 	for i := range out {
 		cell := &out[i]
 		cell.RoutesSHA256 = routesSHA256
-		if cell.QueryCount != len(ordinals) || !localHNSWAttributionSHA256V1(cell.RoutesSHA256) {
+		cell.P2ResultsSHA256 = fmt.Sprintf("%x", resultHashes[i][0].Sum(nil))
+		cell.P16ResultsSHA256 = fmt.Sprintf("%x", resultHashes[i][1].Sum(nil))
+		if cell.QueryCount != len(ordinals) || !localHNSWAttributionSHA256V1(cell.RoutesSHA256) || !localHNSWAttributionSHA256V1(cell.P2ResultsSHA256) || !localHNSWAttributionSHA256V1(cell.P16ResultsSHA256) {
 			return nil, errors.New("invalid local HNSW repair EF curve aggregate")
 		}
 		for _, recall := range []*localHNSWAttributionRecallAggregateV1{&cell.RoutingRecall, &cell.P2Recall, &cell.P16Recall} {
