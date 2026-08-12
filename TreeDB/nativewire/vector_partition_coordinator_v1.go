@@ -12,6 +12,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -1865,7 +1866,7 @@ func topVectorPartitionCoordinatorNeighborsV1(ctx context.Context, unique map[st
 			}
 		}
 		seen++
-		candidate := VectorPartitionCoordinatorNeighborV1{ID: id, Score: score}
+		candidate := VectorPartitionCoordinatorNeighborV1{ID: strings.Clone(id), Score: score}
 		if len(h) < topK {
 			heap.Push(&h, candidate)
 		} else if vectorPartitionCoordinatorNeighborBetterV1(candidate, h[0]) {
