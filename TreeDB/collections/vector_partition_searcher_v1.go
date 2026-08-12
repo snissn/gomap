@@ -960,6 +960,7 @@ func (s *VectorPartitionLocalSearcherV1) Close() error {
 	s.closing = true
 	release := s.releasePersistentPinLocked()
 	view := s.releasePreparedLocked()
+	s.releaseScratchLocked()
 	s.mu.Unlock()
 	if view != nil {
 		_ = view.Close()
@@ -985,6 +986,13 @@ func (s *VectorPartitionLocalSearcherV1) releasePersistentPinLocked() *VectorPar
 		return s.partitionPin
 	}
 	return nil
+}
+
+func (s *VectorPartitionLocalSearcherV1) releaseScratchLocked() {
+	if s.closing && s.pins == 0 {
+		s.scratch = sync.Pool{}
+		s.scratchReady = false
+	}
 }
 
 func OpenVectorPartitionLocalSearcherV1(asset VectorPartitionSearchAssetV1) (*VectorPartitionLocalSearcherV1, error) {
@@ -1129,6 +1137,7 @@ func (s *VectorPartitionLocalSearcherV1) Release() {
 	}
 	release := s.releasePersistentPinLocked()
 	view := s.releasePreparedLocked()
+	s.releaseScratchLocked()
 	s.mu.Unlock()
 	if view != nil {
 		_ = view.Close()
@@ -1150,6 +1159,7 @@ func (s *VectorPartitionLocalSearcherV1) Retire() error {
 	}
 	release := s.releasePersistentPinLocked()
 	view := s.releasePreparedLocked()
+	s.releaseScratchLocked()
 	s.mu.Unlock()
 	if view != nil {
 		_ = view.Close()

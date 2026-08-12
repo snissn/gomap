@@ -177,6 +177,9 @@ func TestVectorPartitionLocalSearcherV1HNSWCanonicalizesFP32TieOrder(t *testing.
 	if err := searcher.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if searcher.scratchReady {
+		t.Fatal("retired searcher retained its scratch pool")
+	}
 	if !handle.Released() {
 		t.Fatal("HNSW tie search retained prepared resource")
 	}
