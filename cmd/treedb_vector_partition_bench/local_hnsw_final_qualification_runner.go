@@ -20,7 +20,7 @@ import (
 const (
 	localHNSWFinalApprovalEvidencePathV1         = "TreeDB/docs/evidence/vector-partition-revalidation-4093"
 	localHNSWFinalApprovalPullRequestV1          = 4115
-	localHNSWFinalQualificationM18TimingSHA256V1 = "8c5ccef9fe77446c99fbc0688be9727ee2de244721a36eafdf2c675a6a31fc5b"
+	localHNSWFinalQualificationM18TimingSHA256V1 = "b89f6e8dfb04406c916eb8243cb3e9f7905d0977f4ca5f7f35bf2a39e2a2f655"
 )
 
 func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {

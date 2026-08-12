@@ -170,6 +170,12 @@ func TestLocalHNSWFinalQualificationM18EvidenceV1UsesMatrixCap(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWFinalQualificationM18TimingSHA256V1(t *testing.T) {
+	if localHNSWFinalQualificationM18TimingSHA256V1 != "b89f6e8dfb04406c916eb8243cb3e9f7905d0977f4ca5f7f35bf2a39e2a2f655" {
+		t.Fatalf("unexpected M18 timing SHA %q", localHNSWFinalQualificationM18TimingSHA256V1)
+	}
+}
+
 func localHNSWFinalQualificationTestGateEvidenceV1(report *m8ProductionReportV1) {
 	report.Status = "experimental_gate_failures"
 	report.Config.Partitions, report.Config.RecallTarget = 16, 0.95
