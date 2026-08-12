@@ -17,8 +17,13 @@ import (
 )
 
 const localHNSWRepairM18EFCurveSchemaV1 = "treedb_local_hnsw_repair_m18_ef_curve_v1"
+const localHNSWRepairM18EFCurveDescriptorSHA256V1 = "057287712e84e219a2ecb1d36aebab53e2d78c044b06cbe56fe288cb854ac43b"
 
 var localHNSWRepairM18EFCurvePointsV1 = []int{96, 112, 120, 128}
+
+func localHNSWRepairM18EFCurveDescriptorV1(digest string) bool {
+	return digest == localHNSWRepairM18EFCurveDescriptorSHA256V1
+}
 
 type localHNSWRepairM18EFCurveReportV1 struct {
 	Schema         string                               `json:"schema"`
@@ -61,7 +66,7 @@ func validateLocalHNSWRepairM18EFCurveReportV1(report localHNSWRepairM18EFCurveR
 	if report.Schema != localHNSWRepairM18EFCurveSchemaV1 || report.ResultKind != "local_hnsw_repair_m18_ef_curve_v1" || report.Status != "valid" || report.Provenance.BaseSHA != localHNSWAttributionSourceLockV1 || report.Provenance.SourceDirty || !validLowerSHA(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.TopK != 10 || report.M != 18 || report.EfConstruction != 256 || report.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || !slices.Equal(report.EFSearch, localHNSWRepairM18EFCurvePointsV1) || !slices.Equal(report.ProbeCounts, []int{2, 16}) {
 		return errors.New("invalid local HNSW repair M18 EF identity")
 	}
-	if _, err := time.Parse(time.RFC3339Nano, report.GeneratedAt); err != nil || !localHNSWAttributionFixtureV1(report.Inputs.Fixture) || report.Inputs.DatasetManifest.SHA256 != localHNSWAttributionFixtureManifestSHA256V1 || report.Inputs.Descriptor.SHA256 != localHNSWAttributionDescriptorSHA256V1 || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.HoldoutStatus != "manifest_validated_lower_ef_query_outcomes_unopened" || report.Inputs.TruthStatus != "sha256_only_not_decoded" || report.Source.Partitions != 16 || report.Source.SourceRows != 250000 || len(report.Source.PartitionLoads) != 16 {
+	if _, err := time.Parse(time.RFC3339Nano, report.GeneratedAt); err != nil || !localHNSWAttributionFixtureV1(report.Inputs.Fixture) || report.Inputs.DatasetManifest.SHA256 != localHNSWAttributionFixtureManifestSHA256V1 || !localHNSWRepairM18EFCurveDescriptorV1(report.Inputs.Descriptor.SHA256) || report.Inputs.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Inputs.Holdout.SHA256 != localHNSWAttributionHoldoutSHA256V1 || report.Inputs.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Inputs.CalibrationRows != 806 || report.Inputs.HoldoutRows != 194 || report.Inputs.HoldoutStatus != "manifest_validated_lower_ef_query_outcomes_unopened" || report.Inputs.TruthStatus != "sha256_only_not_decoded" || report.Source.Partitions != 16 || report.Source.SourceRows != 250000 || len(report.Source.PartitionLoads) != 16 {
 		return errors.New("invalid local HNSW repair M18 EF inputs")
 	}
 	for i, historical := range report.Inputs.Historical {
@@ -155,7 +160,7 @@ func runLocalHNSWRepairM18EFCurveV1(args []string, stdout io.Writer) (runErr err
 	if err != nil || !localHNSWAttributionFixtureV1(fixture) {
 		return errors.New("local HNSW repair M18 EF fixture identity")
 	}
-	inputConfig := localHNSWAttributionInputConfigV1{Fixture: fixture, RetainedDB: retainedDB, Descriptor: filepath.Join(retainedDB, m3VariantDescriptorFileV1), CalibrationSplit: calibrationSplit, HoldoutSplit: holdoutSplit, TruthArtifact: truthArtifact, HistoricalSearchReports: historicalPaths, DescriptorSHA256: localHNSWAttributionDescriptorSHA256V1, CalibrationSplitSHA256: localHNSWAttributionCalibrationSHA256V1, HoldoutSplitSHA256: localHNSWAttributionHoldoutSHA256V1, TruthArtifactSHA256: localHNSWAttributionTruthSHA256V1, HistoricalReportSHA256: localHNSWAttributionHistoricalSHA256V1}
+	inputConfig := localHNSWAttributionInputConfigV1{Fixture: fixture, RetainedDB: retainedDB, Descriptor: filepath.Join(retainedDB, m3VariantDescriptorFileV1), CalibrationSplit: calibrationSplit, HoldoutSplit: holdoutSplit, TruthArtifact: truthArtifact, HistoricalSearchReports: historicalPaths, DescriptorSHA256: localHNSWRepairM18EFCurveDescriptorSHA256V1, CalibrationSplitSHA256: localHNSWAttributionCalibrationSHA256V1, HoldoutSplitSHA256: localHNSWAttributionHoldoutSHA256V1, TruthArtifactSHA256: localHNSWAttributionTruthSHA256V1, HistoricalReportSHA256: localHNSWAttributionHistoricalSHA256V1}
 	inputs, err := localHNSWAttributionInputsV1(inputConfig)
 	if err != nil {
 		return err

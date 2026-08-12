@@ -11,6 +11,9 @@ import (
 )
 
 func TestLocalHNSWRepairM18EFCurveV1(t *testing.T) {
+	if !localHNSWRepairM18EFCurveDescriptorV1(localHNSWRepairM18EFCurveDescriptorSHA256V1) || localHNSWRepairM18EFCurveDescriptorV1(localHNSWAttributionDescriptorSHA256V1) {
+		t.Fatal("descriptor lock")
+	}
 	if !slices.Equal(localHNSWRepairM18EFCurvePointsV1, []int{96, 112, 120, 128}) {
 		t.Fatalf("points=%v", localHNSWRepairM18EFCurvePointsV1)
 	}
