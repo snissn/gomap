@@ -2202,6 +2202,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	if err != nil {
 		t.Fatal(err)
 	}
+	sourceOrdinalDigest, err := m3SourceOrdinalDigestV1(sourceRows)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, sourceRows)
 	if err != nil {
 		t.Fatal(err)
@@ -2214,6 +2218,7 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
 		descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
 	}
+	descriptor.SourceOrdinalDigest = sourceOrdinalDigest
 	descriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(descriptor)
 	if err != nil {
 		t.Fatal(err)

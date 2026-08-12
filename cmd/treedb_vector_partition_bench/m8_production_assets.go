@@ -397,15 +397,13 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 	if indexDefinitionDigest != descriptor.IndexDefinitionDigest {
 		return errors.New("retained M8 descriptor source index definition does not match collection metadata")
 	}
-	if descriptor.SourceOrdinalDigest != "" {
-		_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
-		if err != nil {
-			return errors.New("retained M8 source ordinals are unavailable")
-		}
-		digest, err := m3SourceOrdinalDigestV1(rows)
-		if err != nil || digest != descriptor.SourceOrdinalDigest {
-			return errors.New("retained M8 source ordinal mapping does not match descriptor")
-		}
+	_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
+	if err != nil {
+		return errors.New("retained M8 source ordinals are unavailable")
+	}
+	digest, err := m3SourceOrdinalDigestV1(rows)
+	if err != nil || digest != descriptor.SourceOrdinalDigest {
+		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
 	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
 		return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
