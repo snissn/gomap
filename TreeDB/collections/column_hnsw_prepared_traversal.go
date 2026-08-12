@@ -404,20 +404,16 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedScorePlane(query 
 		return scratch.results, *stats, nil
 	}
 	if opts.OmitResultMaterialization {
-		if len(scratch.top) > retainedCandidateLimit {
-			scratch.top = scratch.top[:retainedCandidateLimit]
-		}
 		if opts.SuppressOmittedResultMaterialization {
 			return scratch.results, *stats, nil
 		}
+		scratch.retainTopBestFirst(retainedCandidateLimit)
 		for _, candidate := range scratch.top {
 			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
 		}
 		return scratch.results, *stats, nil
 	}
-	if len(scratch.top) > topK {
-		scratch.top = scratch.top[:topK]
-	}
+	scratch.retainTopBestFirst(topK)
 	if err := v.fetchTopSearchResults(scratch, stats); err != nil {
 		return nil, *stats, err
 	}
@@ -551,9 +547,7 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCand
 		scratch.top = scratch.top[:0]
 		return nil
 	}
-	if len(scratch.top) > rerankLimit {
-		scratch.top = scratch.top[:rerankLimit]
-	}
+	scratch.retainTopBestFirst(rerankLimit)
 	if len(scratch.top) < topK {
 		topK = len(scratch.top)
 	}
@@ -593,6 +587,7 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalRowIDCand
 		candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: exactScores[i]}
 		scratch.insertTop(topK, candidate)
 	}
+	scratch.sortTopBestFirst()
 	return nil
 }
 
@@ -610,6 +605,7 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalCandidate
 	if len(scratch.top) < topK {
 		topK = len(scratch.top)
 	}
+	scratch.sortTopBestFirst()
 	n := len(scratch.top)
 	scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, n)
 	ordinals := scratch.scoreTileOrdinals[:0]
@@ -637,5 +633,6 @@ func (v *columnHNSWSearchPackPreparedView) exactRerankPreparedTraversalCandidate
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: exactScores[i]}
 		scratch.insertTop(topK, candidate)
 	}
+	scratch.sortTopBestFirst()
 	return nil
 }

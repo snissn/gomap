@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -252,11 +253,12 @@ type columnVectorGraphNativeSearchOptions struct {
 	// per-edge/per-candidate diagnostics on the healthy combined prepared path.
 	StatsMode columnVectorGraphNativeSearchStatsMode
 
-	// OmitResultMaterialization is an internal benchmark/profiling hook for the
-	// graph-only boundary. It preserves traversal/scoring/top-k work but skips
-	// final result-ID and row-ref materialization; public search paths must leave
-	// this false so returned IDs and row refs are populated and counted.
+	// OmitResultMaterialization preserves traversal/scoring/top-k work while
+	// skipping final result-ID and row-ref materialization.
 	OmitResultMaterialization bool
+	// SuppressOmittedResultMaterialization leaves retained ordinal/score
+	// candidates in scratch.top instead of copying them into scratch.results.
+	SuppressOmittedResultMaterialization bool
 
 	// CandidateRows is an optional pre-composed row-domain filter over graph
 	// ordinals. It is intentionally internal until public metadata predicate
@@ -545,7 +547,7 @@ type columnVectorGraphNativeSearchStats struct {
 	TopKInsertAttempts   uint64
 	TopKInsertSuccesses  uint64
 	TopKInsertRejections uint64
-	TopKShiftSteps       uint64
+	TopKHeapSiftSteps    uint64
 
 	VisitedMarkChecks         uint64
 	VisitedMarkHits           uint64
@@ -1798,8 +1800,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		if err := r.exactRerankQuantizedCandidates(plan, singleBlockView, query, queryInvNorm, topK, quantizedRerankCandidateLimit, scratch, &stats); err != nil {
 			return nil, stats, err
 		}
-	} else if len(scratch.top) > topK {
-		scratch.top = scratch.top[:topK]
+	} else {
+		scratch.retainTopBestFirst(topK)
 	}
 	if opts.OmitResultMaterialization {
 		stats.BlockViewHits = plan.hits
@@ -1824,9 +1826,7 @@ func (r *columnVectorGraphPhysicalRowReader) exactRerankQuantizedCandidates(plan
 		scratch.top = scratch.top[:0]
 		return nil
 	}
-	if len(scratch.top) > rerankLimit {
-		scratch.top = scratch.top[:rerankLimit]
-	}
+	scratch.retainTopBestFirst(rerankLimit)
 	n := len(scratch.top)
 	scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, n)
 	ordinals := scratch.scoreTileOrdinals[:0]
@@ -1858,6 +1858,7 @@ func (r *columnVectorGraphPhysicalRowReader) exactRerankQuantizedCandidates(plan
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: exactScores[i]}
 		scratch.insertTop(topK, candidate)
 	}
+	scratch.sortTopBestFirst()
 	return nil
 }
 
@@ -1865,7 +1866,7 @@ func columnVectorGraphLayer0SearchShouldStop(candidate columnVectorGraphSearchCa
 	if efSearch <= 0 || len(top) < efSearch {
 		return false
 	}
-	return candidate.score < top[len(top)-1].score
+	return candidate.score < top[0].score
 }
 
 func (r *columnVectorGraphPhysicalRowReader) searchLayer0Wavefront(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, retainedCandidateLimit int, rowCount int, candidateLimit uint64, wavefrontWidth int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, wavefrontStats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters, debugCounters *columnVectorGraphNativeSearchDebugCounters, countLoopEdges bool, loopEdgeVisits *uint64, nextSeed *int) error {
@@ -2927,20 +2928,20 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 	if limit <= 0 {
 		return false
 	}
-	top := s.top
-	pos := len(top)
-	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, top[pos-1]) {
-		pos--
+	if len(s.top) < limit {
+		s.top = append(s.top, candidate)
+		if len(s.top) == limit {
+			for parent := (len(s.top) - 2) / columnVectorGraphNativeFrontierHeapFanout; parent >= 0; parent-- {
+				s.topSiftDownWorst(parent)
+			}
+		}
+		return true
 	}
-	if pos >= limit {
+	if !columnVectorGraphSearchCandidateBetter(candidate, s.top[0]) {
 		return false
 	}
-	if len(top) < limit {
-		top = append(top, columnVectorGraphSearchCandidate{})
-		s.top = top
-	}
-	copy(top[pos+1:], top[pos:len(top)-1])
-	top[pos] = candidate
+	s.top[0] = candidate
+	s.topSiftDownWorst(0)
 	return true
 }
 
@@ -2950,34 +2951,113 @@ func (s *columnVectorGraphNativeSearchScratch) insertTopDebug(limit int, candida
 		debugCounters.stats.TopKInsertRejections++
 		return false
 	}
-	top := s.top
-	pos := len(top)
-	for pos > 0 {
-		debugCounters.recordCandidateComparison(false)
-		if !columnVectorGraphSearchCandidateBetter(candidate, top[pos-1]) {
-			break
+	if len(s.top) < limit {
+		s.top = append(s.top, candidate)
+		if len(s.top) == limit {
+			for parent := (len(s.top) - 2) / columnVectorGraphNativeFrontierHeapFanout; parent >= 0; parent-- {
+				s.topSiftDownWorstDebug(parent, debugCounters)
+			}
 		}
-		pos--
+		debugCounters.stats.TopKInsertSuccesses++
+		return true
 	}
-	if pos >= limit {
+	debugCounters.recordCandidateComparison(false)
+	if !columnVectorGraphSearchCandidateBetter(candidate, s.top[0]) {
 		debugCounters.stats.TopKInsertRejections++
 		return false
 	}
+	s.top[0] = candidate
+	s.topSiftDownWorstDebug(0, debugCounters)
 	debugCounters.stats.TopKInsertSuccesses++
-	shiftSteps := len(top) - pos
-	if len(top) >= limit && shiftSteps > 0 {
-		shiftSteps--
-	}
-	debugCounters.stats.TopKShiftSteps += uint64(shiftSteps)
-	if len(top) < limit {
-		top = append(top, columnVectorGraphSearchCandidate{})
-		s.top = top
-	}
-	for shift := len(top) - 1; shift > pos; shift-- {
-		top[shift] = top[shift-1]
-	}
-	top[pos] = candidate
 	return true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) topSiftDownWorst(parent int) {
+	for {
+		firstChild := parent*columnVectorGraphNativeFrontierHeapFanout + 1
+		if firstChild >= len(s.top) {
+			return
+		}
+		child := firstChild
+		childLimit := min(firstChild+columnVectorGraphNativeFrontierHeapFanout, len(s.top))
+		for next := firstChild + 1; next < childLimit; next++ {
+			if columnVectorGraphSearchCandidateBetter(s.top[child], s.top[next]) {
+				child = next
+			}
+		}
+		if !columnVectorGraphSearchCandidateBetter(s.top[parent], s.top[child]) {
+			return
+		}
+		s.top[parent], s.top[child] = s.top[child], s.top[parent]
+		parent = child
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) topSiftDownWorstDebug(parent int, debugCounters *columnVectorGraphNativeSearchDebugCounters) {
+	for {
+		firstChild := parent*columnVectorGraphNativeFrontierHeapFanout + 1
+		if firstChild >= len(s.top) {
+			return
+		}
+		child := firstChild
+		childLimit := min(firstChild+columnVectorGraphNativeFrontierHeapFanout, len(s.top))
+		for next := firstChild + 1; next < childLimit; next++ {
+			debugCounters.recordCandidateComparison(false)
+			if columnVectorGraphSearchCandidateBetter(s.top[child], s.top[next]) {
+				child = next
+			}
+		}
+		debugCounters.recordCandidateComparison(false)
+		if !columnVectorGraphSearchCandidateBetter(s.top[parent], s.top[child]) {
+			return
+		}
+		s.top[parent], s.top[child] = s.top[child], s.top[parent]
+		debugCounters.stats.TopKHeapSiftSteps++
+		parent = child
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) sortTopBestFirst() {
+	slices.SortFunc(s.top, func(left, right columnVectorGraphSearchCandidate) int {
+		if columnVectorGraphSearchCandidateBetter(left, right) {
+			return -1
+		}
+		if columnVectorGraphSearchCandidateBetter(right, left) {
+			return 1
+		}
+		return 0
+	})
+}
+
+func (s *columnVectorGraphNativeSearchScratch) retainTopBestFirst(limit int) {
+	if limit <= 0 {
+		s.top = s.top[:0]
+		return
+	}
+	if len(s.top) <= limit {
+		s.sortTopBestFirst()
+		return
+	}
+
+	retained := s.top
+	selected := s.frontier[:0]
+	for _, candidate := range retained {
+		pos := len(selected)
+		for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, selected[pos-1]) {
+			pos--
+		}
+		if pos >= limit {
+			continue
+		}
+		if len(selected) < limit {
+			selected = append(selected, columnVectorGraphSearchCandidate{})
+		}
+		copy(selected[pos+1:], selected[pos:len(selected)-1])
+		selected[pos] = candidate
+	}
+	copy(retained, selected)
+	s.top = retained[:len(selected)]
+	s.frontier = selected[:0]
 }
 
 func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchCandidate) bool {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -227,13 +228,13 @@ func TestColumnVectorGraphNativeSearchTopInsertOrder2272(t *testing.T) {
 		if gotAccepted := scratch.insertTop(limit, candidate); gotAccepted != wantAccepted {
 			t.Fatalf("insertTop[%d] accepted=%v want %v", i, gotAccepted, wantAccepted)
 		}
-		if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want) {
+		if got := sortedColumnGraphTopForTest4136(scratch.top); !columnVectorGraphCandidateSlicesEqual2272(got, want) {
 			t.Fatalf("insertTop[%d] top=%+v want %+v", i, scratch.top, want)
 		}
 		if gotAccepted := debugScratch.insertTopDebug(limit, candidate, debugCounters); gotAccepted != wantAccepted {
 			t.Fatalf("debug insertTop[%d] accepted=%v want %v", i, gotAccepted, wantAccepted)
 		}
-		if !columnVectorGraphCandidateSlicesEqual2272(debugScratch.top, want) {
+		if got := sortedColumnGraphTopForTest4136(debugScratch.top); !columnVectorGraphCandidateSlicesEqual2272(got, want) {
 			t.Fatalf("debug insertTop[%d] top=%+v want %+v", i, debugScratch.top, want)
 		}
 		if wantAccepted {
@@ -243,9 +244,49 @@ func TestColumnVectorGraphNativeSearchTopInsertOrder2272(t *testing.T) {
 	if stats.TopKInsertAttempts != uint64(len(candidates)) || stats.TopKInsertSuccesses != successes || stats.TopKInsertRejections != uint64(len(candidates))-successes {
 		t.Fatalf("debug top-k stats=%+v want attempts=%d successes=%d", stats, len(candidates), successes)
 	}
-	if stats.TopKComparisons == 0 || stats.TopKShiftSteps == 0 {
-		t.Fatalf("debug top-k comparison/shift stats=%+v want non-zero", stats)
+	if stats.TopKComparisons == 0 || stats.TopKHeapSiftSteps == 0 {
+		t.Fatalf("debug top-k comparison/sift stats=%+v want non-zero", stats)
 	}
+	scratch.sortTopBestFirst()
+	debugScratch.sortTopBestFirst()
+	if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want) || !columnVectorGraphCandidateSlicesEqual2272(debugScratch.top, want) {
+		t.Fatalf("final ordered top=%+v debug=%+v want=%+v", scratch.top, debugScratch.top, want)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchTopRetentionCharacterization4136(t *testing.T) {
+	for _, limit := range []int{1, 2, 10, 32, 128, 256} {
+		scratch := columnVectorGraphNativeSearchScratch{frontier: make([]columnVectorGraphSearchCandidate, 0, limit)}
+		var want []columnVectorGraphSearchCandidate
+		state := uint64(0x4136_9e37_79b9_7f4a)
+		for i := 0; i < 4096; i++ {
+			state ^= state << 13
+			state ^= state >> 7
+			state ^= state << 17
+			candidate := columnVectorGraphSearchCandidate{ordinal: int(state % 769), score: float64(int64(state>>32)%31) / 8}
+			want = insertColumnGraphTopForTest(want, limit, candidate)
+			scratch.insertTop(limit, candidate)
+			got := sortedColumnGraphTopForTest4136(scratch.top)
+			if !columnVectorGraphCandidateSlicesEqual2272(got, want) {
+				t.Fatalf("limit=%d insert=%d got=%+v want=%+v", limit, i, got, want)
+			}
+		}
+		outputLimit := min(limit, 10)
+		scratch.retainTopBestFirst(outputLimit)
+		if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want[:outputLimit]) {
+			t.Fatalf("limit=%d retained output=%+v want=%+v", limit, scratch.top, want[:outputLimit])
+		}
+		scratch.top = scratch.top[:0]
+		if !scratch.insertTop(limit, columnVectorGraphSearchCandidate{ordinal: 1, score: 1}) || len(scratch.top) != 1 {
+			t.Fatalf("limit=%d reset/reuse top=%+v", limit, scratch.top)
+		}
+	}
+}
+
+func sortedColumnGraphTopForTest4136(top []columnVectorGraphSearchCandidate) []columnVectorGraphSearchCandidate {
+	got := append([]columnVectorGraphSearchCandidate(nil), top...)
+	sort.Slice(got, func(i, j int) bool { return columnVectorGraphSearchCandidateBetter(got[i], got[j]) })
+	return got
 }
 
 func columnVectorGraphCandidateSlicesEqual2272(left, right []columnVectorGraphSearchCandidate) bool {
@@ -1165,6 +1206,17 @@ func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3(b *
 	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
 	shape.typedColumnVector = true
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnEFScale4136(b *testing.B) {
+	for _, efSearch := range []int{32, 64, 128, 256} {
+		shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
+		shape.typedColumnVector = true
+		shape.efSearch = efSearch
+		b.Run(fmt.Sprintf("ef=%d", efSearch), func(b *testing.B) {
+			benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+		})
+	}
 }
 
 func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnStatsMode2042(b *testing.B) {

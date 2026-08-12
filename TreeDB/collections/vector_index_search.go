@@ -558,7 +558,7 @@ type VectorIndexSearchStats struct {
 	TopKInsertAttempts                    uint64 `json:"top_k_insert_attempts,omitempty"`
 	TopKInsertSuccesses                   uint64 `json:"top_k_insert_successes,omitempty"`
 	TopKInsertRejections                  uint64 `json:"top_k_insert_rejections,omitempty"`
-	TopKShiftSteps                        uint64 `json:"top_k_shift_steps,omitempty"`
+	TopKHeapSiftSteps                     uint64 `json:"top_k_heap_sift_steps,omitempty"`
 	VisitedMarkChecks                     uint64 `json:"visited_mark_checks,omitempty"`
 	VisitedMarkHits                       uint64 `json:"visited_mark_hits,omitempty"`
 	VisitedMarkMisses                     uint64 `json:"visited_mark_misses,omitempty"`
@@ -2371,7 +2371,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		TopKInsertAttempts:                    searchStats.TopKInsertAttempts,
 		TopKInsertSuccesses:                   searchStats.TopKInsertSuccesses,
 		TopKInsertRejections:                  searchStats.TopKInsertRejections,
-		TopKShiftSteps:                        searchStats.TopKShiftSteps,
+		TopKHeapSiftSteps:                     searchStats.TopKHeapSiftSteps,
 		VisitedMarkChecks:                     searchStats.VisitedMarkChecks,
 		VisitedMarkHits:                       searchStats.VisitedMarkHits,
 		VisitedMarkMisses:                     searchStats.VisitedMarkMisses,

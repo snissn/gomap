@@ -270,9 +270,9 @@ func TestVectorPartitionNativeResultsCanonicalizeCollapsedFP32TieV1(t *testing.T
 		DocumentIDOffsets: []uint64{0, 1, 2},
 		DocumentIDBytes:   []byte("za"),
 	}
-	results, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphNativeSearchResult{
-		{Ordinal: 0, ID: []byte("z"), Score: higherFloat64},
-		{Ordinal: 1, ID: []byte("a"), Score: -1},
+	results, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphSearchCandidate{
+		{ordinal: 0, score: higherFloat64},
+		{ordinal: 1, score: -1},
 	}, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -372,13 +372,12 @@ func TestCanonicalizeVectorPartitionNativeResultsAllocationsBoundedByTopKV1(t *t
 	vectors := make([]float32, rows*2)
 	offsets := make([]uint64, rows+1)
 	ids := make([]byte, 0, rows*8)
-	results := make([]columnVectorGraphNativeSearchResult, rows)
+	candidates := make([]columnVectorGraphSearchCandidate, rows)
 	for row := 0; row < rows; row++ {
 		vectors[row*2] = 1
-		start := len(ids)
 		ids = fmt.Appendf(ids, "%08d", rows-row-1)
 		offsets[row+1] = uint64(len(ids))
-		results[row] = columnVectorGraphNativeSearchResult{Ordinal: row, ID: ids[start:len(ids)]}
+		candidates[row] = columnVectorGraphSearchCandidate{ordinal: row}
 	}
 	prepared := &columnHNSWSearchPackPreparedView{
 		Header:            columnHNSWSearchPackHeader{Rows: rows, Dimensions: 2, VectorStride: 2},
@@ -389,7 +388,7 @@ func TestCanonicalizeVectorPartitionNativeResultsAllocationsBoundedByTopKV1(t *t
 	var canonicalErr error
 	allocs := testing.AllocsPerRun(10, func() {
 		var got []VectorPartitionSearchResultV1
-		got, canonicalErr = canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, results, topK)
+		got, canonicalErr = canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, candidates, topK)
 		if len(got) != topK || got[0].ID != "00000000" {
 			canonicalErr = fmt.Errorf("canonical results=%+v", got)
 		}
@@ -494,15 +493,14 @@ func TestCanonicalizeVectorPartitionNativeResultsRejectsUntrustedIdentityV1(t *t
 		DocumentIDBytes:   []byte("ab"),
 	}
 	for _, tc := range []struct {
-		name   string
-		result columnVectorGraphNativeSearchResult
+		name      string
+		candidate columnVectorGraphSearchCandidate
 	}{
-		{name: "negative ordinal", result: columnVectorGraphNativeSearchResult{Ordinal: -1, ID: []byte("a")}},
-		{name: "out of range ordinal", result: columnVectorGraphNativeSearchResult{Ordinal: 2, ID: []byte("a")}},
-		{name: "ID mismatch", result: columnVectorGraphNativeSearchResult{Ordinal: 0, ID: []byte("b")}},
+		{name: "negative ordinal", candidate: columnVectorGraphSearchCandidate{ordinal: -1}},
+		{name: "out of range ordinal", candidate: columnVectorGraphSearchCandidate{ordinal: 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphNativeSearchResult{tc.result}, 1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			if _, err := canonicalizeVectorPartitionNativeResultsV1(context.Background(), prepared, []float32{1, 0}, []columnVectorGraphSearchCandidate{tc.candidate}, 1); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 				t.Fatalf("err=%v want unavailable", err)
 			}
 		})
@@ -532,7 +530,7 @@ func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *
 	}
 }
 
-func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T) {
+func TestVectorPartitionHNSWSearchScratchIncludesOrdinalHandoffResultsV1(t *testing.T) {
 	const (
 		rows         = 17
 		dimensions   = 29
@@ -548,23 +546,23 @@ func TestVectorPartitionHNSWSearchScratchIncludesConvertedResultsV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	frontier := columnVectorGraphNativeSearchFrontierCapacity(rows, degree, efSearch, efSearch)
-	withoutConverted := uint64(rows)*uint64(unsafe.Sizeof(uint64(0))) +
+	frontier := columnVectorGraphNativeSearchFrontierCapacity(rows, degree, topK, efSearch)
+	withoutCanonical := uint64(rows)*uint64(unsafe.Sizeof(uint64(0))) +
 		uint64(frontier)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
 		uint64(efSearch)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
-		uint64(efSearch)*uint64(unsafe.Sizeof(columnVectorGraphNativeSearchResult{})) +
-		uint64(efSearch)*uint64(unsafe.Sizeof([]byte(nil))) +
-		uint64(efSearch)*uint64(unsafe.Sizeof(int(0)))*2 +
-		uint64(efSearch)*uint64(unsafe.Sizeof(DocumentRowRef{})) +
-		uint64(efSearch)*uint64(unsafe.Sizeof(bool(false))) +
+		uint64(topK)*uint64(unsafe.Sizeof(columnVectorGraphNativeSearchResult{})) +
+		uint64(topK)*uint64(unsafe.Sizeof([]byte(nil))) +
+		uint64(topK)*uint64(unsafe.Sizeof(int(0)))*2 +
+		uint64(topK)*uint64(unsafe.Sizeof(DocumentRowRef{})) +
+		uint64(topK)*uint64(unsafe.Sizeof(bool(false))) +
 		uint64(degree)*uint64(unsafe.Sizeof(float64(0))) +
 		uint64(degree)*uint64(unsafe.Sizeof(uint32(0))) +
 		uint64(degree)*uint64(unsafe.Sizeof(float32(0))) +
 		uint64(vectorStride)*uint64(unsafe.Sizeof(float32(0)))
-	wantConverted := uint64(topK) * uint64(unsafe.Sizeof(vectorPartitionSearchRefResultV1{})+unsafe.Sizeof(VectorPartitionSearchResultV1{}))
+	wantConverted := uint64(topK) * uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})+unsafe.Sizeof(VectorPartitionSearchResultV1{}))
 	wantCanonicalQuery := uint64(dimensions) * uint64(unsafe.Sizeof(float32(0)))
-	if got-withoutConverted != wantConverted+wantCanonicalQuery {
-		t.Fatalf("converted result and canonical query scratch=%d want=%d (total=%d)", got-withoutConverted, wantConverted+wantCanonicalQuery, got)
+	if got-withoutCanonical != wantConverted+wantCanonicalQuery {
+		t.Fatalf("ordinal result and canonical query scratch=%d want=%d (total=%d)", got-withoutCanonical, wantConverted+wantCanonicalQuery, got)
 	}
 }
 

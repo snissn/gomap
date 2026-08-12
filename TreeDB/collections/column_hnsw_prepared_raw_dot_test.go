@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -37,6 +38,7 @@ func TestScalarU8RawDotCandidateOrderingMatchesFloatScores2658(t *testing.T) {
 		}
 	}
 	rawTop.promoteRawDotTopToFloat(limit)
+	floatTop.sortTopBestFirst()
 	if len(rawTop.top) != len(floatTop.top) {
 		t.Fatalf("raw top=%d float top=%d", len(rawTop.top), len(floatTop.top))
 	}
@@ -65,6 +67,31 @@ func TestScalarU8RawDotCandidateOrderingMatchesFloatScores2658(t *testing.T) {
 		}
 		if raw.ordinal != floatCandidate.ordinal || scalarU8QuantizedCosineScoreFromDot(raw.dot) != floatCandidate.score {
 			t.Fatalf("pop[%d] raw=%+v float=%+v", i, raw, floatCandidate)
+		}
+	}
+}
+
+func TestScalarU8RawDotTopRetention4136(t *testing.T) {
+	for _, limit := range []int{1, 10, 64, 256} {
+		var scratch columnVectorGraphNativeSearchScratch
+		scratch.prepareRawDotCandidateQueues(4096, 16, limit, limit)
+		var want []columnVectorGraphRawDotSearchCandidate
+		state := uint64(0x4136_2658_9e37_79b9)
+		for i := 0; i < 4096; i++ {
+			state ^= state << 13
+			state ^= state >> 7
+			state ^= state << 17
+			candidate := columnVectorGraphRawDotSearchCandidate{ordinal: int(state % 769), dot: int64(state>>32) % 31}
+			scratch.insertRawDotTop(limit, candidate)
+			want = append(want, candidate)
+			slices.SortFunc(want, compareColumnVectorGraphRawDotSearchCandidates)
+			if len(want) > limit {
+				want = want[:limit]
+			}
+		}
+		scratch.retainRawDotTopBestFirst(limit)
+		if !slices.Equal(scratch.rawDot.top, want) {
+			t.Fatalf("limit=%d retained=%+v want=%+v", limit, scratch.rawDot.top, want)
 		}
 	}
 }

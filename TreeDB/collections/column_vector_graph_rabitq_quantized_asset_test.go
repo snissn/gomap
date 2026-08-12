@@ -247,6 +247,7 @@ func TestRabitQPreparedHNSWSearchPackRouteParity2587(t *testing.T) {
 		wantExact bool
 	}{
 		{name: "quantized_only", mode: VectorIndexQueryModeQuantizedOnly, topK: 4},
+		{name: "quantized_rerank_default", mode: VectorIndexQueryModeQuantizedRerank, topK: 3, wantExact: true},
 		{name: "quantized_rerank_all", mode: VectorIndexQueryModeQuantizedRerank, topK: 3, rerank: len(rows), wantExact: true},
 		{name: "quantized_rerank_shortlist", mode: VectorIndexQueryModeQuantizedRerank, topK: 3, rerank: 5, wantExact: true},
 	}
@@ -271,8 +272,12 @@ func TestRabitQPreparedHNSWSearchPackRouteParity2587(t *testing.T) {
 				t.Fatalf("quantized scorer counters got=%+v legacy=%+v", got.Stats, legacyStats)
 			}
 			if tc.wantExact {
-				if got.Stats.QuantizedRerankCandidates != uint64(tc.rerank) || got.Stats.QuantizedRerankExactScoreCalls != uint64(tc.rerank) || got.Stats.PreparedScoreCalls != uint64(tc.rerank) {
-					t.Fatalf("rerank counters=%+v want shortlist=%d", got.Stats, tc.rerank)
+				wantRerank := tc.rerank
+				if wantRerank == 0 {
+					wantRerank = len(rows)
+				}
+				if got.Stats.QuantizedRerankCandidates != uint64(wantRerank) || got.Stats.QuantizedRerankExactScoreCalls != uint64(wantRerank) || got.Stats.PreparedScoreCalls != uint64(wantRerank) {
+					t.Fatalf("rerank counters=%+v want shortlist=%d", got.Stats, wantRerank)
 				}
 			} else if got.Stats.PreparedScoreCalls != 0 || got.Stats.VectorBytesRead != 0 || got.Stats.NormBytesRead != 0 {
 				t.Fatalf("quantized_only exact counters=%+v want zero", got.Stats)
