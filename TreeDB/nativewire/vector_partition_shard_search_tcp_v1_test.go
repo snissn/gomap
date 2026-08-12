@@ -152,6 +152,36 @@ func TestVectorPartitionShardSearchTCPBinaryFrameRejectsMalformedV1(t *testing.T
 	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(w.body); err == nil {
 		t.Fatal("accepted response count that exceeds the remaining body")
 	}
+	w = vectorPartitionShardSearchTCPBodyWriterV1{}
+	w.u8(vectorPartitionShardSearchTCPFrameVersionV1)
+	w.u8(vectorPartitionShardSearchTCPFrameResponseV1)
+	w.u32(0)
+	w.u32(response.Version)
+	w.string(response.RequestID)
+	appendVectorPartitionShardSearchTCPProofV1(&w, response.Proof)
+	w.u32(1)
+	w.u32(1)
+	w.u32(512)
+	neighborStart := len(w.body)
+	w.body = append(w.body, make([]byte, 512*vectorPartitionShardSearchTCPResponseNeighborMinBytesV1)...)
+	binary.LittleEndian.PutUint32(w.body[neighborStart:neighborStart+4], 4096)
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(w.body); err == nil {
+		t.Fatal("accepted malformed neighbor tail")
+	}
+}
+
+func TestVectorPartitionShardSearchTCPProbeResponseBoundedV1(t *testing.T) {
+	identity := VectorPartitionShardEndpointIdentityV1{
+		Version: 1,
+		GroupID: strings.Repeat("g", int(vectorPartitionShardSearchTCPMinFrameBytesV1-vectorPartitionShardSearchTCPProbeResponseFixedBytesV1)),
+	}
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}); err != nil {
+		t.Fatalf("encoded probe at limit: %v", err)
+	}
+	identity.InstanceIdentity = "x"
+	if _, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{ProbeResponse: &identity}); err == nil {
+		t.Fatal("encoded probe response above 4096 bytes")
+	}
 }
 
 func TestVectorPartitionShardSearchTCPBinaryFrameUsesConfiguredLimitsV1(t *testing.T) {
@@ -166,6 +196,28 @@ func TestVectorPartitionShardSearchTCPBinaryFrameUsesConfiguredLimitsV1(t *testi
 		if err != nil || !reflect.DeepEqual(decoded, frame) {
 			t.Fatalf("decoded=%+v want=%+v err=%v", decoded, frame, err)
 		}
+	}
+}
+
+func TestVectorPartitionShardSearchTCPResponseDecodeRespectsRequestShapeV1(t *testing.T) {
+	response := VectorPartitionShardSearchResponseV1{
+		Version: VectorPartitionShardSearchVersionV1,
+		Partials: []VectorPartitionShardSearchPartialV1{
+			{PartitionID: 1, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "a", Score: 1}, {ID: "b", Score: .5}}},
+			{PartitionID: 2, Neighbors: []VectorPartitionShardSearchNeighborV1{{ID: "c", Score: .25}}},
+		},
+	}
+	raw, err := appendVectorPartitionShardSearchTCPFrameBodyV1(nil, vectorPartitionShardSearchTCPFrameV1{Response: &response})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyV1(raw); err != nil {
+		t.Fatalf("generic codec rejected valid response: %v", err)
+	}
+	request := vectorPartitionShardSearchRequestTestV1([]uint32{1})
+	request.TopK = 1
+	if _, err := decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(raw, len(request.PartitionIDs), request.TopK); err == nil {
+		t.Fatal("accepted response beyond request partial/neighbor shape")
 	}
 }
 

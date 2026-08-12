@@ -1887,10 +1887,12 @@ func topVectorPartitionCoordinatorNeighborsV1(ctx context.Context, unique map[st
 			}
 		}
 		seen++
-		candidate := VectorPartitionCoordinatorNeighborV1{ID: strings.Clone(id), Score: score}
+		candidate := VectorPartitionCoordinatorNeighborV1{ID: id, Score: score}
 		if len(h) < topK {
+			candidate.ID = strings.Clone(candidate.ID)
 			heap.Push(&h, candidate)
 		} else if vectorPartitionCoordinatorNeighborBetterV1(candidate, h[0]) {
+			candidate.ID = strings.Clone(candidate.ID)
 			h[0] = candidate
 			heap.Fix(&h, 0)
 		}

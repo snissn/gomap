@@ -33,6 +33,22 @@ func TestTopVectorPartitionCoordinatorNeighborsV1DetachesIDs(t *testing.T) {
 	}
 }
 
+func TestTopVectorPartitionCoordinatorNeighborsV1OnlyClonesAdmissions(t *testing.T) {
+	unique := map[string]float32{}
+	for i := range 1024 {
+		unique[strings.Repeat("x", 4096)+fmt.Sprint(i)] = float32(i)
+	}
+	allocs := testing.AllocsPerRun(10, func() {
+		got, err := topVectorPartitionCoordinatorNeighborsV1(context.Background(), unique, 1)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("neighbors=%+v err=%v", got, err)
+		}
+	})
+	if allocs > 32 {
+		t.Fatalf("allocs/run=%.1f want bounded top-k admissions", allocs)
+	}
+}
+
 type testVectorPartitionCoordinatorRouterV1 struct {
 	status     collections.VectorPartitionRouterRuntimeStatusV1
 	partitions []collections.VectorPartitionRouterPartitionScoreV1

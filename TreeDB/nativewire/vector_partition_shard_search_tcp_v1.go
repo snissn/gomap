@@ -37,6 +37,7 @@ const (
 	vectorPartitionShardSearchTCPResponseIdentityFieldsV1   uint64 = 7
 	vectorPartitionShardSearchTCPResponsePartialMinBytesV1         = 60
 	vectorPartitionShardSearchTCPResponseNeighborMinBytesV1        = 8
+	vectorPartitionShardSearchTCPProbeResponseFixedBytesV1  uint64 = 934
 )
 
 // VectorPartitionShardSearchTCPDispatcherV1 is a bounded, length-framed TCP
@@ -178,7 +179,7 @@ func (d *VectorPartitionShardSearchTCPDispatcherV1) dispatchVectorPartitionShard
 	if err := writeVectorPartitionShardSearchTCPFrameV1(conn, frame, d.maxRequestFrame); err != nil {
 		return VectorPartitionShardSearchResponseV1{}, vectorPartitionShardSearchTCPRetryableTransportErrorV1(requestCtx, request.TargetGroupID, err)
 	}
-	frame, err = readVectorPartitionShardSearchTCPFrameV1(conn, d.maxResponseFrame)
+	frame, err = readVectorPartitionShardSearchTCPResponseFrameV1(conn, d.maxResponseFrame, request)
 	if err != nil {
 		if request.DeadlineUnixNano != 0 && !time.Now().Before(time.Unix(0, request.DeadlineUnixNano)) {
 			return VectorPartitionShardSearchResponseV1{}, &VectorPartitionShardSearchErrorV1{Code: VectorPartitionShardSearchErrorDeadlineV1, GroupID: request.TargetGroupID, Err: context.DeadlineExceeded}
@@ -582,6 +583,14 @@ func writeVectorPartitionShardSearchTCPAllV1(w io.Writer, raw []byte) error {
 }
 
 func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r, max, math.MaxInt, math.MaxInt)
+}
+
+func readVectorPartitionShardSearchTCPResponseFrameV1(r io.Reader, max uint32, request VectorPartitionShardSearchRequestV1) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r, max, len(request.PartitionIDs), request.TopK)
+}
+
+func readVectorPartitionShardSearchTCPFrameWithResponseBoundsV1(r io.Reader, max uint32, maxPartials, maxNeighbors int) (vectorPartitionShardSearchTCPFrameV1, error) {
 	var prefix [4]byte
 	if _, err := io.ReadFull(r, prefix[:]); err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, err
@@ -594,7 +603,7 @@ func readVectorPartitionShardSearchTCPFrameV1(r io.Reader, max uint32) (vectorPa
 	if _, err := io.ReadFull(r, raw); err != nil {
 		return vectorPartitionShardSearchTCPFrameV1{}, err
 	}
-	return decodeVectorPartitionShardSearchTCPFrameBodyV1(raw)
+	return decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(raw, maxPartials, maxNeighbors)
 }
 
 type vectorPartitionShardSearchTCPBodyWriterV1 struct {
@@ -791,6 +800,10 @@ func appendVectorPartitionShardSearchTCPFrameBodyV1(dst []byte, frame vectorPart
 }
 
 func decodeVectorPartitionShardSearchTCPFrameBodyV1(body []byte) (vectorPartitionShardSearchTCPFrameV1, error) {
+	return decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(body, math.MaxInt, math.MaxInt)
+}
+
+func decodeVectorPartitionShardSearchTCPFrameBodyWithResponseBoundsV1(body []byte, maxPartials, maxNeighbors int) (vectorPartitionShardSearchTCPFrameV1, error) {
 	r := vectorPartitionShardSearchTCPBodyReaderV1{body: body}
 	version, typ, flags := r.u8(), r.u8(), r.u32()
 	if r.err != nil {
@@ -811,7 +824,7 @@ func decodeVectorPartitionShardSearchTCPFrameBodyV1(body []byte) (vectorPartitio
 		value := readVectorPartitionShardSearchTCPRequestV1(&r)
 		frame.Request = &value
 	case vectorPartitionShardSearchTCPFrameResponseV1:
-		value := readVectorPartitionShardSearchTCPResponseV1(&r)
+		value := readVectorPartitionShardSearchTCPResponseWithBoundsV1(&r, maxPartials, maxNeighbors)
 		frame.Response = &value
 	case vectorPartitionShardSearchTCPFrameErrorV1:
 		value := readVectorPartitionShardSearchTCPErrorV1(&r)
@@ -1088,6 +1101,10 @@ func appendVectorPartitionShardSearchTCPResponseV1(w *vectorPartitionShardSearch
 	}
 }
 func readVectorPartitionShardSearchTCPResponseV1(r *vectorPartitionShardSearchTCPBodyReaderV1) VectorPartitionShardSearchResponseV1 {
+	return readVectorPartitionShardSearchTCPResponseWithBoundsV1(r, math.MaxInt, math.MaxInt)
+}
+
+func readVectorPartitionShardSearchTCPResponseWithBoundsV1(r *vectorPartitionShardSearchTCPBodyReaderV1, maxPartials, maxNeighbors int) VectorPartitionShardSearchResponseV1 {
 	v := VectorPartitionShardSearchResponseV1{Version: r.u32()}
 	if r.err == nil && v.Version != 0 && v.Version != VectorPartitionShardSearchVersionV1 {
 		r.err = errors.New("unsupported M5 response version")
@@ -1095,17 +1112,20 @@ func readVectorPartitionShardSearchTCPResponseV1(r *vectorPartitionShardSearchTC
 	}
 	v.RequestID = r.string()
 	v.Proof = readVectorPartitionShardSearchTCPProofV1(r)
-	count := r.count(r.remaining() / vectorPartitionShardSearchTCPResponsePartialMinBytesV1)
+	count := r.count(min(r.remaining()/vectorPartitionShardSearchTCPResponsePartialMinBytesV1, maxPartials))
 	if r.err == nil {
 		v.Partials = make([]VectorPartitionShardSearchPartialV1, count)
 		for i := range v.Partials {
 			partial := &v.Partials[i]
 			partial.PartitionID = r.u32()
-			neighbors := r.count(r.remaining() / vectorPartitionShardSearchTCPResponseNeighborMinBytesV1)
+			neighbors := r.count(min(r.remaining()/vectorPartitionShardSearchTCPResponseNeighborMinBytesV1, maxNeighbors))
 			if r.err == nil {
-				partial.Neighbors = make([]VectorPartitionShardSearchNeighborV1, neighbors)
-				for j := range partial.Neighbors {
-					partial.Neighbors[j] = VectorPartitionShardSearchNeighborV1{ID: r.string(), Score: r.f32()}
+				for range neighbors {
+					neighbor := VectorPartitionShardSearchNeighborV1{ID: r.string(), Score: r.f32()}
+					if r.err != nil {
+						return v
+					}
+					partial.Neighbors = append(partial.Neighbors, neighbor)
 				}
 			}
 			partial.Candidates, partial.Edges = r.u64(), r.u64()
@@ -1187,6 +1207,11 @@ var vectorPartitionShardSearchTCPErrorCodesV1 = []VectorPartitionShardSearchErro
 }
 
 func appendVectorPartitionShardSearchTCPEndpointIdentityV1(w *vectorPartitionShardSearchTCPBodyWriterV1, v VectorPartitionShardEndpointIdentityV1) {
+	identityBytes := uint64(len(v.GroupID)) + uint64(len(v.InstanceIdentity)) + uint64(len(v.ProcessRuntimeStats.EffectiveCPUSet))
+	if identityBytes > vectorPartitionShardSearchTCPMinFrameBytesV1-vectorPartitionShardSearchTCPProbeResponseFixedBytesV1 {
+		w.err = errors.New("M5 TCP probe response exceeds 4096 bytes")
+		return
+	}
 	w.u32(v.Version)
 	w.string(v.GroupID)
 	w.string(v.InstanceIdentity)
