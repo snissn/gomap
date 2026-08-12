@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -245,6 +246,31 @@ func TestColumnVectorGraphNativeSearchTopInsertOrder2272(t *testing.T) {
 	}
 	if stats.TopKComparisons == 0 || stats.TopKShiftSteps == 0 {
 		t.Fatalf("debug top-k comparison/shift stats=%+v want non-zero", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchTopRetentionCharacterization4136(t *testing.T) {
+	for _, limit := range []int{1, 2, 10, 32, 128, 256} {
+		var scratch columnVectorGraphNativeSearchScratch
+		var want []columnVectorGraphSearchCandidate
+		state := uint64(0x4136_9e37_79b9_7f4a)
+		for i := 0; i < 4096; i++ {
+			state ^= state << 13
+			state ^= state >> 7
+			state ^= state << 17
+			candidate := columnVectorGraphSearchCandidate{ordinal: int(state % 769), score: float64(int64(state>>32)%31) / 8}
+			want = insertColumnGraphTopForTest(want, limit, candidate)
+			scratch.insertTop(limit, candidate)
+			got := append([]columnVectorGraphSearchCandidate(nil), scratch.top...)
+			sort.Slice(got, func(i, j int) bool { return columnVectorGraphSearchCandidateBetter(got[i], got[j]) })
+			if !columnVectorGraphCandidateSlicesEqual2272(got, want) {
+				t.Fatalf("limit=%d insert=%d got=%+v want=%+v", limit, i, got, want)
+			}
+		}
+		scratch.top = scratch.top[:0]
+		if !scratch.insertTop(limit, columnVectorGraphSearchCandidate{ordinal: 1, score: 1}) || len(scratch.top) != 1 {
+			t.Fatalf("limit=%d reset/reuse top=%+v", limit, scratch.top)
+		}
 	}
 }
 
