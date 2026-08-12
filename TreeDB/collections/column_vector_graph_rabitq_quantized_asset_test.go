@@ -150,13 +150,13 @@ func TestColumnGraphRabitQQuantizedAssetRebuildPrepareReopen2450(t *testing.T) {
 
 func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{1, 0, 0}},
-		{id: "doc-b", vector: []float32{0.5, 0.5, 0}},
-		{id: "doc-c", vector: []float32{0, 1, 0}},
-		{id: "doc-d", vector: []float32{0, 0, 1}},
-		{id: "doc-e", vector: []float32{-0.25, 0.75, 0.125}},
+		{id: "doc-a", vector: append([]float32{1, 0, 0}, make([]float32, 61)...)},
+		{id: "doc-b", vector: append([]float32{0.5, 0.5, 0}, make([]float32, 61)...)},
+		{id: "doc-c", vector: append([]float32{0, 1, 0}, make([]float32, 61)...)},
+		{id: "doc-d", vector: append([]float32{0, 0, 1}, make([]float32, 61)...)},
+		{id: "doc-e", vector: append([]float32{-0.25, 0.75, 0.125}, make([]float32, 61)...)},
 	}
-	query := []float32{0.2, 0.9, 0.1}
+	query := append([]float32{0.2, 0.9, 0.1}, make([]float32, 61)...)
 	_, d, col, def := openColumnGraphRabitQQuantizedTestCollection2450(t, rows)
 	defer func() { _ = d.Close() }()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
@@ -202,6 +202,7 @@ func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 	}
 	assertVectorIndexSearchResultsV4(t, rerankedAll.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
 	assertRabitQQuantizedRerankStats2451(t, rerankedAll.Stats, len(rows), def.Dimensions, plan.BytesPerCode())
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, rerankedAll.Stats.ScoreBatchOptimizedCalls, rerankedAll.Stats.ScoreBatchScalarFallbackCalls, int(rerankedAll.Stats.ScoreBatchMaxTileSize), def.Dimensions)
 
 	const shortlist = 3
 	rerankedShort, err := searcher.SearchWithBuffer(VectorIndexSearcherSearchOptions{Query: query, QueryMode: VectorIndexQueryModeQuantizedRerank, QuantizedIndexName: q.Name, QuantizedRerankCandidates: shortlist, TopK: 2, EfSearch: len(rows)}, &buffer)
@@ -212,6 +213,7 @@ func TestVectorIndexSearcherRabitQQuantizedSearchWithBuffer2451(t *testing.T) {
 		t.Fatalf("rabitq quantized_rerank short results=%d want 2", len(rerankedShort.Results))
 	}
 	assertRabitQQuantizedRerankStats2451(t, rerankedShort.Stats, shortlist, def.Dimensions, plan.BytesPerCode())
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, rerankedShort.Stats.ScoreBatchOptimizedCalls, rerankedShort.Stats.ScoreBatchScalarFallbackCalls, int(rerankedShort.Stats.ScoreBatchMaxTileSize), def.Dimensions)
 }
 
 func TestRabitQPreparedHNSWSearchPackRouteParity2587(t *testing.T) {

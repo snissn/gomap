@@ -1802,6 +1802,10 @@ func attachScalarU8QuantizedAssetForReader1926(tb testing.TB, reader *columnVect
 
 func openColumnGraphQuantizedTestCollection1926(tb testing.TB, rows []columnGraphRebuildInputRowV2A, quantizedIndexes []QuantizedVectorIndexDefinition) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	dims := 3
+	if len(rows) > 0 {
+		dims = len(rows[0].vector)
+	}
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
@@ -1811,7 +1815,7 @@ func openColumnGraphQuantizedTestCollection1926(tb testing.TB, rows []columnGrap
 		Name:             "embedding_graph",
 		Field:            "embedding",
 		Metric:           VectorMetricCosine,
-		Dimensions:       3,
+		Dimensions:       dims,
 		M:                3,
 		Strategy:         VectorIndexStrategyColumnGraph,
 		QuantizedIndexes: quantizedIndexes,
@@ -1824,7 +1828,7 @@ func openColumnGraphQuantizedTestCollection1926(tb testing.TB, rows []columnGrap
 		Name: "docs",
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
-			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(3),
+			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(dims),
 		},
 		VectorIndexes: []VectorIndexDefinition{def},
 	}

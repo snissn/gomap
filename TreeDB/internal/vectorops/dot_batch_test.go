@@ -315,18 +315,7 @@ func TestDotFloat32BatchZeroAllocs(t *testing.T) {
 }
 
 func BenchmarkDotFloat32IndexedWrapper(b *testing.B) {
-	cases := []struct {
-		name      string
-		dims      int
-		rows      int
-		scattered bool
-	}{
-		{name: "dims16_rows4_contiguous_fallback", dims: 16, rows: 4},
-		{name: "dims64_rows4_contiguous", dims: 64, rows: 4},
-		{name: "dims64_rows13_scattered", dims: 64, rows: 13, scattered: true},
-		{name: "dims128_rows32_scattered", dims: 128, rows: 32, scattered: true},
-		{name: "dims768_rows13_scattered", dims: 768, rows: 13, scattered: true},
-	}
+	cases := dotFloat32IndexedBenchmarkCases()
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			baseRows := tc.rows
@@ -345,18 +334,7 @@ func BenchmarkDotFloat32IndexedWrapper(b *testing.B) {
 }
 
 func BenchmarkDotFloat32IndexedPrevalidatedWrapper(b *testing.B) {
-	cases := []struct {
-		name      string
-		dims      int
-		rows      int
-		scattered bool
-	}{
-		{name: "dims16_rows4_contiguous_fallback", dims: 16, rows: 4},
-		{name: "dims64_rows4_contiguous", dims: 64, rows: 4},
-		{name: "dims64_rows13_scattered", dims: 64, rows: 13, scattered: true},
-		{name: "dims128_rows32_scattered", dims: 128, rows: 32, scattered: true},
-		{name: "dims768_rows13_scattered", dims: 768, rows: 13, scattered: true},
-	}
+	cases := dotFloat32IndexedBenchmarkCases()
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
 			baseRows := tc.rows
@@ -372,6 +350,36 @@ func BenchmarkDotFloat32IndexedPrevalidatedWrapper(b *testing.B) {
 			}, dst)
 		})
 	}
+}
+
+type dotFloat32IndexedBenchmarkCase struct {
+	name      string
+	dims      int
+	rows      int
+	scattered bool
+}
+
+func dotFloat32IndexedBenchmarkCases() []dotFloat32IndexedBenchmarkCase {
+	dimensions := []int{16, 64, 128, 256, 768, 1536}
+	rowTiles := []int{2, 4, 8, 16, 32}
+	cases := make([]dotFloat32IndexedBenchmarkCase, 0, len(dimensions)*len(rowTiles)*2)
+	for _, dims := range dimensions {
+		for _, rows := range rowTiles {
+			for _, scattered := range []bool{false, true} {
+				layout := "contiguous"
+				if scattered {
+					layout = "scattered"
+				}
+				cases = append(cases, dotFloat32IndexedBenchmarkCase{
+					name:      fmt.Sprintf("dims%d_rows%d_%s", dims, rows, layout),
+					dims:      dims,
+					rows:      rows,
+					scattered: scattered,
+				})
+			}
+		}
+	}
+	return cases
 }
 
 func BenchmarkDotFloat32StridedWrapper(b *testing.B) {
