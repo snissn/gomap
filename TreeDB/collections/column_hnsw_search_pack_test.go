@@ -495,7 +495,7 @@ func TestColumnHNSWSearchPackReopenPreservesManifestIdentity2313(t *testing.T) {
 }
 
 func TestColumnHNSWSearchPackWorkAccountingStats(t *testing.T) {
-	const dims = 16
+	const dims = 128
 	rows := make([]columnGraphRebuildInputRowV2A, 32)
 	for i := range rows {
 		vec := make([]float32, dims)
@@ -539,6 +539,7 @@ func TestColumnHNSWSearchPackWorkAccountingStats(t *testing.T) {
 	if stats.DistanceKernelNanos == 0 || stats.GraphTraversalNanos == 0 {
 		t.Fatalf("work-accounting timers missing stats=%+v", stats)
 	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls, int(stats.ScoreBatchMaxTileSize), dims)
 }
 
 func TestColumnHNSWSearchPackEmptyAndSingleRowFixtures2313(t *testing.T) {
@@ -1090,8 +1091,8 @@ func TestColumnHNSWPreparedScalarU8RouteUsesTypedRowIDScorePlane2653(t *testing.
 
 func TestColumnHNSWPreparedScalarU8RerankUsesPackNativeRowIDExactScorer2657(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-exact", vector: []float32{0.40633525, -0.06700023, -0.027197814}},
-		{id: "doc-quantized", vector: []float32{-0.22174846, 0.8332732, 0.28568664}},
+		{id: "doc-exact", vector: append([]float32{0.40633525, -0.06700023, -0.027197814}, make([]float32, 61)...)},
+		{id: "doc-quantized", vector: append([]float32{-0.22174846, 0.8332732, 0.28568664}, make([]float32, 61)...)},
 	}
 	_, d, col, def := openColumnGraphQuantizedGuardrailTestCollection1926(t, rows)
 	defer func() { _ = d.Close() }()
@@ -1107,7 +1108,7 @@ func TestColumnHNSWPreparedScalarU8RerankUsesPackNativeRowIDExactScorer2657(t *t
 		t.Fatal("searcher missing hnsw_search_pack_v1 prepared view")
 	}
 
-	query := []float32{-0.23968919, -0.60389674, 0.9352316}
+	query := append([]float32{-0.23968919, -0.60389674, 0.9352316}, make([]float32, 61)...)
 	quantizedTop := scalarU8QuantizedTopKForTest1926(t, rows, query, 1)
 	exactTop := exactColumnGraphTopKForTest(t, rows, query, 1)
 	if string(quantizedTop[0].ID) != "doc-quantized" || string(exactTop[0].ID) != "doc-exact" {
@@ -1134,6 +1135,7 @@ func TestColumnHNSWPreparedScalarU8RerankUsesPackNativeRowIDExactScorer2657(t *t
 	if stats.PreparedScoreCalls != uint64(len(rows)) || stats.VectorBytesRead != uint64(len(rows)*def.Dimensions*4) || stats.NormBytesRead != uint64(len(rows)*4) {
 		t.Fatalf("scalar_u8 prepared rerank stats=%+v want pack-native exact row-ID vector reads and logical norm bytes", stats)
 	}
+	assertColumnVectorGraphPreparedIndexedBackendCounters2125(t, stats.ScoreBatchOptimizedCalls, stats.ScoreBatchScalarFallbackCalls, int(stats.ScoreBatchMaxTileSize), def.Dimensions)
 	if routeScratch.searchPlan.reader != nil || routeScratch.searchPlan.physicalReader != nil || routeScratch.searchPlan.preparedSearch != nil || routeScratch.searchPlan.quantizedScorer.kind != columnVectorGraphQuantizedScorerKindNone {
 		t.Fatalf("scalar_u8 prepared rerank populated generic native search plan: %+v", routeScratch.searchPlan)
 	}
