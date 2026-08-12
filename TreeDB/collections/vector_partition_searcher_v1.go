@@ -15,6 +15,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -945,6 +946,9 @@ type VectorPartitionLocalSearcherV1 struct {
 	maxStableIDBytes                                         int
 	candidates, edges                                        uint64
 	auxiliaryEdges, auxiliaryCandidates, auxiliaryAdmissions uint64
+	scratch                                                  sync.Pool
+	scratchCreates                                           atomic.Uint64
+	scratchReady                                             bool
 }
 
 // Close releases the M1 generation pin held by a persistent opener. It is
@@ -1108,6 +1112,13 @@ func (s *VectorPartitionLocalSearcherV1) Acquire() error {
 		s.failures++
 		return ErrVectorPartitionSearchUnavailable
 	}
+	if !s.scratchReady {
+		s.scratch.New = func() any {
+			s.scratchCreates.Add(1)
+			return &columnVectorGraphNativeSearchScratch{}
+		}
+		s.scratchReady = true
+	}
 	s.pins++
 	return nil
 }
@@ -1235,7 +1246,11 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 		if nativeTopK > s.prepared.Header.Rows {
 			nativeTopK = s.prepared.Header.Rows
 		}
-		scratch := &columnVectorGraphNativeSearchScratch{}
+		scratch := s.scratch.Get().(*columnVectorGraphNativeSearchScratch)
+		defer func() {
+			resetVectorPartitionNativeSearchScratchV1(scratch)
+			s.scratch.Put(scratch)
+		}()
 		nativeOpts := columnVectorGraphNativeSearchOptions{TopK: nativeTopK, EfSearch: opts.EfSearch}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {
@@ -1479,6 +1494,26 @@ func canonicalizeVectorPartitionNativeResultsV1(ctx context.Context, prepared *c
 		return nil, err
 	}
 	return out, nil
+}
+
+func resetVectorPartitionNativeSearchScratchV1(scratch *columnVectorGraphNativeSearchScratch) {
+	if scratch == nil {
+		return
+	}
+	clearColumnVectorGraphNativeRowScratchViews(&scratch.scoreScratch)
+	clearColumnVectorGraphNativeRowScratchViews(&scratch.expandScratch)
+	clearColumnVectorGraphNativeRowScratchViews(&scratch.resultScratch)
+	clear(scratch.results)
+	scratch.results = scratch.results[:0]
+	for i := range scratch.idBuffers {
+		scratch.idBuffers[i] = scratch.idBuffers[i][:0]
+	}
+	clear(scratch.resultIDViews)
+	scratch.resultIDViews = scratch.resultIDViews[:0]
+	clear(scratch.resultRowRefs)
+	scratch.resultRowRefs = scratch.resultRowRefs[:0]
+	clear(scratch.resultHasRefs)
+	scratch.resultHasRefs = scratch.resultHasRefs[:0]
 }
 
 func (s *VectorPartitionLocalSearcherV1) recordFailure() {
