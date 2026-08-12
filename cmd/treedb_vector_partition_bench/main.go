@@ -922,7 +922,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.partition.Pivots, "partition-pivots", cfg.partition.Pivots, "dense-ball pivots per recursive level")
 	fs.IntVar(&cfg.partition.MaxLeafBucket, "partition-max-leaf-bucket", cfg.partition.MaxLeafBucket, "maximum dense-ball leaf bucket")
 	fs.IntVar(&cfg.partition.Degree, "partition-degree", cfg.partition.Degree, "maximum canonical graph degree")
-	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits -partition-degree")
+	fs.IntVar(&cfg.partitionHNSWM, "partition-hnsw-m", 0, "persistent partition-local HNSW M for M3; zero inherits 16")
 	fs.IntVar(&cfg.partitionHNSWEfC, "partition-hnsw-ef-construction", 0, "persistent partition-local HNSW efConstruction for M3; zero inherits 128")
 	fs.Float64Var(&cfg.partition.Imbalance, "imbalance", cfg.partition.Imbalance, "partition imbalance epsilon")
 	fs.IntVar(&cfg.routerConfig.BranchFactor, "router-branch-factor", cfg.routerConfig.BranchFactor, "router hierarchical k-means branch factor")
@@ -1208,7 +1208,7 @@ func parseConfig(args []string) (config, error) {
 func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 	m := cfg.partitionHNSWM
 	if m == 0 {
-		m = cfg.partition.Degree
+		m = partitionHNSWDegree
 	}
 	if m < 2 || m > maxPartitionLocalHNSWM {
 		return 0, 0, fmt.Errorf("effective partition HNSW M must be in [2,%d]", maxPartitionLocalHNSWM)
@@ -1221,6 +1221,17 @@ func m3PartitionLocalHNSWConfigV1(cfg config) (int, int, error) {
 		return 0, 0, fmt.Errorf("effective partition HNSW efConstruction must be in [%d,%d]", m, maxPartitionHNSWEfC)
 	}
 	return m, efConstruction, nil
+}
+
+func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
+	switch {
+	case m == partitionHNSWDegree && efConstruction == partitionHNSWDefaultEfC:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
+	case m == 18 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, nil
+	default:
+		return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
+	}
 }
 
 func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
