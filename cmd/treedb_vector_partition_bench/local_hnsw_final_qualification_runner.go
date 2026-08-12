@@ -197,7 +197,7 @@ func runLocalHNSWFinalQualificationV1(args []string, stdout io.Writer) error {
 		if child.Variant == localHNSWFinalQualificationCandidateV1 {
 			descriptor = descriptors[child.Corpus][1]
 		}
-		if child.SourceIdentitySHA256 != descriptor.Source.Checksum || child.VariantIdentitySHA256 != descriptor.IndexDefinitionDigest {
+		if child.SourceIdentitySHA256 != descriptor.Source.Checksum || child.VariantIdentitySHA256 != descriptor.BuildIdentityDigest {
 			return errors.New("local HNSW final qualification child descriptor drift")
 		}
 	}
@@ -283,7 +283,7 @@ func localHNSWFinalQualificationDescriptorsV1(fixture fixtureManifest, baseline,
 	if err := m8ValidateRetainedM3ProvenanceV1(cfg, candidate, executableSHA); err != nil {
 		return err
 	}
-	if baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest == candidate.IndexDefinitionDigest {
+	if !m8SHA256V1(baseline.SourceOrdinalDigest) || baseline.SourceOrdinalDigest != candidate.SourceOrdinalDigest || baseline.Source != candidate.Source || baseline.VariantID != candidate.VariantID || baseline.AssignmentBasis != candidate.AssignmentBasis || baseline.ArtifactSHA256 != candidate.ArtifactSHA256 || baseline.GraphArtifactSHA256 != candidate.GraphArtifactSHA256 || baseline.GraphBuildSHA256 != candidate.GraphBuildSHA256 || baseline.RouterConfig != candidate.RouterConfig || baseline.IndexDefinitionDigest != candidate.IndexDefinitionDigest || baseline.RouterAssetChecksum != candidate.RouterAssetChecksum || baseline.RouterModelDigest != candidate.RouterModelDigest || baseline.SourceGeneration != candidate.SourceGeneration || baseline.SourceChecksum != candidate.SourceChecksum || baseline.SourceSchemaHash != candidate.SourceSchemaHash || baseline.SourceRows != candidate.SourceRows {
 		return errors.New("local HNSW final qualification retained source drift")
 	}
 	return nil
