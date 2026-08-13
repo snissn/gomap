@@ -87,7 +87,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || out == "" || candidates != 64 || topK != 10 {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || out == "" || candidates < 1 || topK != 10 {
 		return errors.New("M0 calibration frontier arguments")
 	}
 	if _, e := os.Stat(out); e == nil || !errors.Is(e, os.ErrNotExist) {
@@ -128,6 +128,9 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	defer h.Close()
 	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
 		return errors.New("M0 frontier DB status")
+	}
+	if h.status.Representatives == 0 || uint64(candidates) > h.status.Representatives {
+		return errors.New("M0 frontier router candidate budget")
 	}
 	account, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest)
 	if e != nil {
@@ -190,7 +193,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if !m0FrontierCellsCompleteV1(report.Cells, probes, efs, len(split.Ordinals)) {
 		return errors.New("M0 frontier incomplete or duplicate cells")
 	}
-	if !validateM0FrontierReportV1(report, probes, efs) {
+	if !validateM0FrontierReportV1(report, probes, efs, candidates) {
 		return errors.New("M0 frontier report validation")
 	}
 	raw, e := json.MarshalIndent(report, "", "  ")
@@ -237,8 +240,8 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 	return account, m0SHA256V1(raw), nil
 }
 
-func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int) bool {
-	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount != 32 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.OverlapCount != 0 || report.PackBytes == 0 || report.RouterCandidates != 64 || report.TopK != 10 || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
+func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int, candidates int) bool {
+	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount != 32 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.OverlapCount != 0 || report.PackBytes == 0 || report.RouterCandidates != candidates || candidates < 1 || report.TopK != 10 || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
 		return false
 	}
 	for _, id := range []string{report.ManifestIntegrity, report.ReadySet, report.AssetChecksumsSHA256, report.RouterModelDigest, report.MembershipReportSHA256, report.GraphArtifactSHA256, report.AssignmentArtifactSHA256, report.DatasetManifestSHA256, report.BinarySHA256, report.CalibrationSHA256, report.TruthSHA256} {
