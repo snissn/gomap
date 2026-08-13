@@ -4,8 +4,11 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+
+sys.dont_write_bytecode = True
 
 import reduce_matrix as reducer
 
