@@ -94,7 +94,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if len(split.Ordinals) != 806 || split.DatasetChecksum != fixture.Checksum || split.Selection != localHNSWQuerySplitSelectionV1 {
+	if len(split.Ordinals) != 806 || split.DatasetChecksum != fixture.Checksum || split.Selection != localHNSWQuerySplitSelectionV1 || m0FrontierCalibrationOrdinalsV1(split.Ordinals, fixture.Queries) != nil {
 		return errors.New("M0 diagnostic calibration identity")
 	}
 	queries := qualificationQueriesV1(fixture)
@@ -116,12 +116,15 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer h.Close()
-	account, _, _, err := m0FrontierAccountV1(membershipReport, h.manifest, "zero")
+	account, selected, _, err := m0FrontierAccountV1(membershipReport, h.manifest, "zero")
 	if err != nil {
 		return err
 	}
 	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.PartitionCount) {
 		return errors.New("M0 diagnostic artifact binding")
+	}
+	if err := m0FrontierMembershipTopologyV1(artifactPath, account, selected, fixture, h); err != nil {
+		return fmt.Errorf("M0 diagnostic topology: %w", err)
 	}
 	graphRaw, err := os.ReadFile(graphArtifactPath)
 	if err != nil {
