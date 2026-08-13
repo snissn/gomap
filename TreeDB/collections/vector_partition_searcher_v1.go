@@ -1289,6 +1289,72 @@ type VectorPartitionSearchPageTokenV1 struct {
 	Page      uint64
 }
 
+// VectorPartitionPackLayoutSnapshotV1 is an offline serialization seam for
+// layout simulations. It exposes no vectors or IDs, only immutable pack row
+// geometry needed to remap recorded traversal reads.
+type VectorPartitionPackLayoutSnapshotV1 struct {
+	Namespace                     string     `json:"namespace"`
+	FileID                        uint32     `json:"file_id"`
+	BaseOffset                    uint64     `json:"base_offset"`
+	Rows                          int        `json:"rows"`
+	VectorStride                  int        `json:"vector_stride"`
+	VectorOffset                  uint64     `json:"vector_offset"`
+	LayerOffsets                  [][]uint64 `json:"layer_offsets"`
+	LayerOffsetsSectionOffsets    []uint64   `json:"layer_offsets_section_offsets"`
+	LayerNeighborOffsets          []uint64   `json:"layer_neighbor_offsets"`
+	AuxiliaryOffsets              []uint64   `json:"auxiliary_offsets,omitempty"`
+	AuxiliaryOffsetsSectionOffset uint64     `json:"auxiliary_offsets_section_offset,omitempty"`
+	AuxiliaryNeighborOffset       uint64     `json:"auxiliary_neighbor_offset,omitempty"`
+}
+
+func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartitionPackLayoutSnapshotV1, error) {
+	if s == nil {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := s.Acquire(); err != nil {
+		return VectorPartitionPackLayoutSnapshotV1{}, err
+	}
+	defer s.Release()
+	s.mu.Lock()
+	pack := s.prepared
+	s.mu.Unlock()
+	if pack == nil || pack.validateLive() != nil {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	key := pack.handle.Key()
+	if key.Offset < 0 {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	out := VectorPartitionPackLayoutSnapshotV1{Namespace: key.Namespace, FileID: key.FileID, BaseOffset: uint64(key.Offset), Rows: pack.Header.Rows, VectorStride: pack.Header.VectorStride, LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)), LayerNeighborOffsets: make([]uint64, len(pack.AdjacencyLayers))}
+	for _, x := range pack.Sections {
+		if x.Kind == columnHNSWSearchPackSectionNormalizedVectors {
+			out.VectorOffset = x.Offset
+		}
+		if x.Kind == columnHNSWSearchPackSectionAdjacencyOffsets && int(x.Index) < len(out.LayerOffsetsSectionOffsets) {
+			out.LayerOffsetsSectionOffsets[x.Index] = x.Offset
+		}
+		if x.Kind == columnHNSWSearchPackSectionAdjacencyNeighbors && int(x.Index) < len(out.LayerNeighborOffsets) {
+			out.LayerNeighborOffsets[x.Index] = x.Offset
+		}
+		if x.Kind == columnHNSWSearchPackSectionAuxiliaryOffsets {
+			out.AuxiliaryOffsetsSectionOffset = x.Offset
+		}
+		if x.Kind == columnHNSWSearchPackSectionAuxiliaryNeighbors {
+			out.AuxiliaryNeighborOffset = x.Offset
+		}
+	}
+	for _, x := range pack.AdjacencyLayers {
+		out.LayerOffsets = append(out.LayerOffsets, append([]uint64(nil), x.Offsets...))
+	}
+	if pack.Header.HasAuxiliaryNavigation {
+		out.AuxiliaryOffsets = append([]uint64(nil), pack.AuxiliaryNavigation.Offsets...)
+	}
+	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	return out, nil
+}
+
 // PageAttributionForTraceV1 converts exact offline native-read events to pack
 // pages. It is deliberately separate from SearchWithAttributionV1: tracing
 // is opt-in and this method never participates in request execution.

@@ -189,6 +189,10 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if _, err := searcher.PageAttributionForTraceV1(VectorPartitionSearchAttributionV1{}, 64); err == nil {
 		t.Fatal("accepted empty trace")
 	}
+	snapshot, err := searcher.PackLayoutSnapshotV1()
+	if err != nil || snapshot.Rows != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
 	manager := mappedresource.NewManager()
 	key := testColumnHNSWSearchPackMappedResourceKey2314(17, int64(len(raw)), page.Checksum(raw))
 	handle, err := manager.AcquireBytes(key, testColumnHNSWSearchPackScope2314(), mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: "nonaligned trace test", ValidationMode: mappedresource.ValidationVerify})
