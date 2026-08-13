@@ -47,8 +47,9 @@ closed unless identity remapping reproduces every captured holdout page count.
 | co-visitation | 1583 | 2057 |
 | hybrid | 1604 | 2066 |
 
-`co-visitation` is the selected M0 page objective: -16.33% held-out median
-pages versus identity/BFS. The raw calibration capture SHA-256 is
+`co-visitation` is the provisional M0 page-objective leader: -16.33% held-out
+median pages versus identity/BFS. Second-corpus/query-distribution sensitivity
+and integrated construction remain required before selecting a contract. The raw calibration capture SHA-256 is
 `84ca7f00e6e658ff951b841d8f367cab4d1809d106516900e4193e1a0c85ec5f`,
 holdout is `2d07e255c7c4eecd04596215c523940fe77daec66ed76603ed65f595b3632dd1`,
 and the reduced simulation is
