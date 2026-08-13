@@ -26,6 +26,9 @@ func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 		}
 		seen[objective] = first
 	}
+	if _, err := m0ObjectiveOrderV1(snapshot, pairs, "unknown"); err == nil {
+		t.Fatal("accepted unknown objective")
+	}
 	if reflect.DeepEqual(seen["edge_window"], seen["co_visitation"]) || reflect.DeepEqual(seen["gorder_like"], seen["hybrid"]) {
 		t.Fatalf("objectives collapsed: %+v", seen)
 	}
