@@ -287,70 +287,66 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, neighbors [][]int, pairs map[[2]int]uint32, objective string) []int {
 	window := max(1, 4096/(snapshot.VectorStride*4))
 	placed := make([]bool, snapshot.Rows)
-	pairNeighbors := make([][]int, snapshot.Rows)
-	for pair := range pairs {
-		pairNeighbors[pair[0]] = append(pairNeighbors[pair[0]], pair[1])
-		pairNeighbors[pair[1]] = append(pairNeighbors[pair[1]], pair[0])
+	pairNeighbors := make([]map[int]uint32, snapshot.Rows)
+	for pair, weight := range pairs {
+		if pairNeighbors[pair[0]] == nil {
+			pairNeighbors[pair[0]] = map[int]uint32{}
+		}
+		if pairNeighbors[pair[1]] == nil {
+			pairNeighbors[pair[1]] = map[int]uint32{}
+		}
+		pairNeighbors[pair[0]][pair[1]] = weight
+		pairNeighbors[pair[1]][pair[0]] = weight
 	}
 	out := []int{snapshot.EntryOrdinal}
 	placed[snapshot.EntryOrdinal] = true
 	for len(out) < snapshot.Rows {
 		begin := max(0, len(out)-window)
-		candidates := map[int]struct{}{}
+		direct, common, pairGain := map[int]int{}, map[int]int{}, map[int]int{}
 		for _, prior := range out[begin:] {
-			if objective != "co_visitation" {
-				for _, node := range neighbors[prior] {
-					if !placed[node] {
-						candidates[node] = struct{}{}
+			for _, node := range neighbors[prior] {
+				if !placed[node] {
+					direct[node]++
+				}
+				for _, twoHop := range neighbors[node] {
+					if !placed[twoHop] {
+						common[twoHop]++
 					}
 				}
 			}
-			if objective == "gorder_like" || objective == "hybrid" {
-				for _, neighbor := range neighbors[prior] {
-					for _, node := range neighbors[neighbor] {
-						if !placed[node] {
-							candidates[node] = struct{}{}
-						}
-					}
+			for node, weight := range pairNeighbors[prior] {
+				if !placed[node] {
+					pairGain[node] += int(weight)
 				}
 			}
-			if objective == "co_visitation" || objective == "hybrid" {
-				for _, node := range pairNeighbors[prior] {
-					if !placed[node] {
-						candidates[node] = struct{}{}
-					}
-				}
+		}
+		candidates := map[int]struct{}{}
+		if objective == "edge_window" || objective == "gorder_like" || objective == "hybrid" {
+			for node := range direct {
+				candidates[node] = struct{}{}
+			}
+		}
+		if objective == "gorder_like" || objective == "hybrid" {
+			for node := range common {
+				candidates[node] = struct{}{}
+			}
+		}
+		if objective == "co_visitation" || objective == "hybrid" {
+			for node := range pairGain {
+				candidates[node] = struct{}{}
 			}
 		}
 		best, bestGain := -1, -1
 		for node := range candidates {
-			gain := 0
-			for _, prior := range out[begin:] {
-				for _, neighbor := range neighbors[node] {
-					if neighbor == prior {
-						gain++
-					}
-				}
-				if objective == "gorder_like" || objective == "hybrid" {
-					for _, neighbor := range neighbors[node] {
-						for _, twoHop := range neighbors[neighbor] {
-							if twoHop == prior {
-								gain++
-							}
-						}
-					}
-				}
-				if objective == "co_visitation" || objective == "hybrid" {
-					a, b := node, prior
-					if a > b {
-						a, b = b, a
-					}
-					if objective == "co_visitation" {
-						gain += int(pairs[[2]int{a, b}])
-					} else {
-						gain += 2 * int(pairs[[2]int{a, b}])
-					}
-				}
+			gain := direct[node]
+			if objective == "gorder_like" {
+				gain += common[node]
+			}
+			if objective == "co_visitation" {
+				gain = pairGain[node]
+			}
+			if objective == "hybrid" {
+				gain += common[node] + 2*pairGain[node]
 			}
 			if gain > bestGain || gain == bestGain && (best < 0 || snapshot.RowOrdinals[node] < snapshot.RowOrdinals[best]) {
 				best, bestGain = node, gain
