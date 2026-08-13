@@ -18,6 +18,22 @@ func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
 	}
 }
 
+func TestM0CleanBuildIdentityValidV1(t *testing.T) {
+	identity := m0CleanBuildIdentityV1{BinarySHA256: strings.Repeat("a", 64), SourceRevision: strings.Repeat("b", 40)}
+	if !m0CleanBuildIdentityValidV1(identity) {
+		t.Fatal("clean build identity rejected")
+	}
+	for _, changed := range []m0CleanBuildIdentityV1{
+		{BinarySHA256: "bad", SourceRevision: identity.SourceRevision},
+		{BinarySHA256: identity.BinarySHA256, SourceRevision: "bad"},
+		{BinarySHA256: identity.BinarySHA256, SourceRevision: identity.SourceRevision, VCSModified: true},
+	} {
+		if m0CleanBuildIdentityValidV1(changed) {
+			t.Fatalf("invalid build identity accepted: %+v", changed)
+		}
+	}
+}
+
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
 	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}
 	cells := make([]m0FrontierCellV1, 0, 12)

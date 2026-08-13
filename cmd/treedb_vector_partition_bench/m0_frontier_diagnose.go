@@ -53,6 +53,9 @@ type m0FrontierDiagnosticV1 struct {
 	GraphArtifactSHA256       string                          `json:"graph_artifact_sha256"`
 	AssignmentSHA256          string                          `json:"assignment_artifact_sha256"`
 	ManifestIntegrity         string                          `json:"manifest_integrity_digest"`
+	BinarySHA256              string                          `json:"binary_sha256"`
+	SourceRevision            string                          `json:"source_revision"`
+	VCSModified               bool                            `json:"vcs_modified"`
 	EFSearch                  int                             `json:"ef_search"`
 	TruthRankSlots            [5]uint64                       `json:"truth_slots_at_route_rank"`
 	ExactTruthRankSlots       [5]uint64                       `json:"exact_truth_slots_at_route_rank"`
@@ -84,6 +87,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	if _, err := os.Stat(out); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return errors.New("M0 frontier diagnostic output exists")
+	}
+	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
+	if err != nil {
+		return err
 	}
 	fixture, err := loadFixture(dataset)
 	if err != nil {
@@ -164,7 +171,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, EFSearch: ef}
+	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, EFSearch: ef}
 	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members)
 	if err != nil {
 		return fmt.Errorf("M0 diagnostic router sweep: %w", err)

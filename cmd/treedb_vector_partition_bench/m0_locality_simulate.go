@@ -29,12 +29,15 @@ type m0PageTokenV1 struct {
 // read trace captured by m0-locality-capture. It does not mutate a pack: only
 // row offsets are remapped, with the fixed pack section geometry retained.
 type m0LocalitySimulationV1 struct {
-	Schema      string                  `json:"schema"`
-	Calibration string                  `json:"calibration_sha256"`
-	Holdout     string                  `json:"holdout_sha256"`
-	Artifact    string                  `json:"graph_artifact_sha256"`
-	PageScope   string                  `json:"page_scope"`
-	Objectives  []m0LocalityObjectiveV1 `json:"objectives"`
+	Schema         string                  `json:"schema"`
+	BinarySHA256   string                  `json:"binary_sha256"`
+	SourceRevision string                  `json:"source_revision"`
+	VCSModified    bool                    `json:"vcs_modified"`
+	Calibration    string                  `json:"calibration_sha256"`
+	Holdout        string                  `json:"holdout_sha256"`
+	Artifact       string                  `json:"graph_artifact_sha256"`
+	PageScope      string                  `json:"page_scope"`
+	Objectives     []m0LocalityObjectiveV1 `json:"objectives"`
 }
 
 type m0LocalityObjectiveV1 struct {
@@ -60,6 +63,10 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 0 || calibrationPath == "" || holdoutPath == "" || artifactPath == "" || dataset == "" || out == "" {
 		return errors.New("m0-locality-simulate requires raw calibration, holdout, graph artifact, dataset, and output")
+	}
+	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
+	if err != nil {
+		return err
 	}
 	if digest, err := localHNSWAttributionRegularFileSHA256V1(filepath.Join(dataset, "fixture_manifest.json"), maxManifestBytes); err != nil || digest != localHNSWAttributionFixtureManifestSHA256V1 {
 		return errors.New("frozen fixture manifest identity")
@@ -100,7 +107,7 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if calibration.Artifact != artifactSHA || holdout.Artifact != artifactSHA {
 		return errors.New("capture graph artifact identity")
 	}
-	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v2", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
+	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v3", BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
 	identity, err := m0IdentityPermutationsV1(holdout)
 	if err != nil {
 		return err
@@ -146,7 +153,7 @@ func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, quer
 	if queryCount < 1 || calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 || len(calibration.Rows)+len(holdout.Rows) != queryCount {
 		return errors.New("capture split identity")
 	}
-	if calibration.DB != holdout.DB || calibration.Artifact != holdout.Artifact || calibration.Descriptor != holdout.Descriptor || calibration.Source != holdout.Source || calibration.Manifest != holdout.Manifest || calibration.ReadySet != holdout.ReadySet || calibration.RouterModel != holdout.RouterModel || calibration.Probes != holdout.Probes || calibration.RouterCandidates != holdout.RouterCandidates || calibration.EF != holdout.EF || calibration.PageScope != holdout.PageScope {
+	if calibration.DB != holdout.DB || calibration.Artifact != holdout.Artifact || calibration.Descriptor != holdout.Descriptor || calibration.Source != holdout.Source || calibration.Manifest != holdout.Manifest || calibration.ReadySet != holdout.ReadySet || calibration.RouterModel != holdout.RouterModel || calibration.BinarySHA256 != holdout.BinarySHA256 || calibration.SourceRevision != holdout.SourceRevision || calibration.VCSModified != holdout.VCSModified || calibration.Probes != holdout.Probes || calibration.RouterCandidates != holdout.RouterCandidates || calibration.EF != holdout.EF || calibration.PageScope != holdout.PageScope {
 		return errors.New("capture retained input identity")
 	}
 	seen := make([]bool, queryCount)
@@ -176,7 +183,7 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
-	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v2" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
+	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v3" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || !m0CleanBuildIdentityValidV1(m0CleanBuildIdentityV1{BinarySHA256: capture.BinarySHA256, SourceRevision: capture.SourceRevision, VCSModified: capture.VCSModified}) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
 	return capture, m0SHA256V1(raw), nil

@@ -46,6 +46,9 @@ type m0LocalityCaptureV1 struct {
 	Manifest         string                                                     `json:"manifest_integrity_digest,omitempty"`
 	ReadySet         string                                                     `json:"ready_set_digest,omitempty"`
 	RouterModel      string                                                     `json:"router_model_digest,omitempty"`
+	BinarySHA256     string                                                     `json:"binary_sha256"`
+	SourceRevision   string                                                     `json:"source_revision"`
+	VCSModified      bool                                                       `json:"vcs_modified"`
 	Probes           int                                                        `json:"probes"`
 	RouterCandidates int                                                        `json:"router_candidates"`
 	EF               int                                                        `json:"ef_search"`
@@ -77,6 +80,10 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || candidates < probes || ef < 1 {
 		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-candidates/ef")
+	}
+	buildIdentity, err := m0CurrentCleanBuildIdentityV1()
+	if err != nil {
+		return err
 	}
 	ordinals := map[string]uint32{}
 	var artifact vectorpartition.Artifact
@@ -164,7 +171,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			snapshots[uint32(p)] = snapshot
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v2", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v3", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")

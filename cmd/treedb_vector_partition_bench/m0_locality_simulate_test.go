@@ -1,13 +1,16 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestM0EvidenceOutputPreservesExistingFile(t *testing.T) {
@@ -32,6 +35,8 @@ func TestM0EvidenceOutputPreservesExistingFile(t *testing.T) {
 func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	var calibration, holdout m0LocalityCaptureV1
 	calibration.Split, holdout.Split = "calibration", "holdout"
+	calibration.BinarySHA256, holdout.BinarySHA256 = "binary", "binary"
+	calibration.SourceRevision, holdout.SourceRevision = "revision", "revision"
 	for ordinal := 0; ordinal < 32; ordinal++ {
 		capture := &holdout
 		if localHNSWCalibrationOrdinalV1(ordinal) {
@@ -51,6 +56,9 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 		"wrong split":   func(c, h *m0LocalityCaptureV1) { c.Rows[0], h.Rows[0] = h.Rows[0], c.Rows[0] },
 		"wrong retained input": func(c, h *m0LocalityCaptureV1) {
 			h.Descriptor = "different"
+		},
+		"different binary": func(c, h *m0LocalityCaptureV1) {
+			h.BinarySHA256 = "different"
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -73,6 +81,43 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	holdout.Snapshots[0] = collections.VectorPartitionPackLayoutSnapshotV1{Rows: 1, RowOrdinals: []uint32{8}}
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
 		t.Fatal("accepted incompatible capture snapshots")
+	}
+}
+
+func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	capture := m0LocalityCaptureV1{
+		Schema:         "treedb_vector_partition_m0_exact_pack_trace_v3",
+		Artifact:       sha,
+		Descriptor:     sha,
+		Source:         vectorpartition.Source{SourceID: "fixture", Checksum: sha, Vectors: 1, Dimensions: 1, Metric: "cosine"},
+		Manifest:       sha,
+		ReadySet:       sha,
+		RouterModel:    sha,
+		BinarySHA256:   sha,
+		SourceRevision: strings.Repeat("b", 40),
+		Rows:           []m0LocalityCaptureRowV1{{}},
+		Traces:         []m0LocalityTraceRowV1{{}},
+		Snapshots:      map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {}},
+	}
+	write := func(name string, value m0LocalityCaptureV1) string {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if _, _, err := m0ReadCaptureV1(write("clean.json", capture)); err != nil {
+		t.Fatal(err)
+	}
+	capture.VCSModified = true
+	if _, _, err := m0ReadCaptureV1(write("modified.json", capture)); err == nil {
+		t.Fatal("accepted modified capture binary")
 	}
 }
 
