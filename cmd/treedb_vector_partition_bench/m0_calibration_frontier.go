@@ -114,6 +114,9 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
+	if e := validateFixture(fixture); e != nil {
+		return e
+	}
 	split, splitSHA, e := loadLocalHNSWQuerySplitV1(calibration)
 	if e != nil {
 		return e

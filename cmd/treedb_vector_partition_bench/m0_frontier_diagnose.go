@@ -90,6 +90,9 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := validateFixture(fixture); err != nil {
+		return err
+	}
 	split, splitSHA, err := loadLocalHNSWQuerySplitV1(calibration)
 	if err != nil {
 		return err
