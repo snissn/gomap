@@ -189,14 +189,10 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
-	raw, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
-	if err = os.WriteFile(out, append(raw, '\n'), 0644); err != nil {
+	if err = writeVectorPartitionSystemJSONExclusiveV1(out, result); err != nil {
 		return err
 	}
 	succeeded = true
