@@ -169,9 +169,22 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	}
 	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: view, opened: 1, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
 	ordinary, ordinaryMetrics, err := searcher.SearchWithOptionsV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
-	attributed, attributedMetrics, _, attributedErr := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
+	attributed, attributedMetrics, attribution, attributedErr := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
 	if err != nil || attributedErr != nil || !reflect.DeepEqual(ordinary, attributed) || ordinaryMetrics != attributedMetrics || ordinaryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
 		t.Fatalf("ordinary=%+v/%+v err=%v attributed=%+v/%+v err=%v", ordinary, ordinaryMetrics, err, attributed, attributedMetrics, attributedErr)
+	}
+	var upper, layer0, auxiliary bool
+	for _, read := range attribution.AdjacencyReads {
+		upper = upper || read.Layer > 0
+		layer0 = layer0 || read.Layer == 0 && !read.Auxiliary
+		auxiliary = auxiliary || read.Auxiliary
+	}
+	if len(attribution.ScoreOrdinals) == 0 || !upper || !layer0 || !auxiliary {
+		t.Fatalf("incomplete read trace scores=%v reads=%+v", attribution.ScoreOrdinals, attribution.AdjacencyReads)
+	}
+	pages, pageErr := searcher.PageAttributionForTraceV1(attribution, 64)
+	if pageErr != nil || pages.UniquePages < 2 || pages.VectorPages == 0 || pages.AdjacencyPages == 0 {
+		t.Fatalf("page mapping=%+v err=%v", pages, pageErr)
 	}
 	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
 	if err != nil || seed != 1 {

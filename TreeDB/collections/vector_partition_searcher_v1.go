@@ -1275,6 +1275,109 @@ type VectorPartitionSearchPageReadV1 struct {
 	Ordinal   int
 	Auxiliary bool
 }
+type VectorPartitionSearchPageAttributionV1 struct {
+	PageBytes      uint64 `json:"page_bytes"`
+	UniquePages    uint64 `json:"unique_pages"`
+	VectorPages    uint64 `json:"vector_pages"`
+	AdjacencyPages uint64 `json:"adjacency_pages"`
+}
+
+// PageAttributionForTraceV1 converts exact offline native-read events to pack
+// pages. It is deliberately separate from SearchWithAttributionV1: tracing
+// is opt-in and this method never participates in request execution.
+func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorPartitionSearchAttributionV1, pageBytes uint64) (VectorPartitionSearchPageAttributionV1, error) {
+	if s == nil || pageBytes == 0 {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if err := s.Acquire(); err != nil {
+		return VectorPartitionSearchPageAttributionV1{}, err
+	}
+	defer s.Release()
+	s.mu.Lock()
+	pack := s.prepared
+	s.mu.Unlock()
+	if pack == nil || pack.validateLive() != nil {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	find := func(kind columnHNSWSearchPackSectionKind, index uint16) (columnHNSWSearchPackSection, bool) {
+		for _, x := range pack.Sections {
+			if x.Kind == kind && x.Index == index {
+				return x, true
+			}
+		}
+		return columnHNSWSearchPackSection{}, false
+	}
+	vectors, ok := find(columnHNSWSearchPackSectionNormalizedVectors, 0)
+	if !ok {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	all, vs, as := map[uint64]struct{}{}, map[uint64]struct{}{}, map[uint64]struct{}{}
+	add := func(set map[uint64]struct{}, start, length uint64) error {
+		if length == 0 {
+			return nil
+		}
+		if start > ^uint64(0)-length {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		for p := start / pageBytes; p <= (start+length-1)/pageBytes; p++ {
+			set[p] = struct{}{}
+			all[p] = struct{}{}
+			if p == ^uint64(0) {
+				break
+			}
+		}
+		return nil
+	}
+	for _, ordinal := range trace.ScoreOrdinals {
+		if int(ordinal) >= pack.Header.Rows {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if err := add(vs, vectors.Offset+uint64(ordinal)*uint64(pack.Header.VectorStride)*4, uint64(pack.Header.VectorStride)*4); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
+	}
+	for _, read := range trace.AdjacencyReads {
+		if read.Ordinal < 0 || read.Ordinal >= pack.Header.Rows {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		kind := columnHNSWSearchPackSectionAdjacencyOffsets
+		if read.Auxiliary {
+			kind = columnHNSWSearchPackSectionAuxiliaryOffsets
+			read.Layer = 0
+		}
+		offs, ok := find(kind, uint16(read.Layer))
+		if !ok {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		nk := columnHNSWSearchPackSectionAdjacencyNeighbors
+		if read.Auxiliary {
+			nk = columnHNSWSearchPackSectionAuxiliaryNeighbors
+		}
+		neighbors, ok := find(nk, uint16(read.Layer))
+		if !ok {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		var layer columnHNSWSearchPackPreparedLayer
+		if read.Auxiliary {
+			layer = pack.AuxiliaryNavigation
+		} else if read.Layer >= 0 && read.Layer < len(pack.AdjacencyLayers) {
+			layer = pack.AdjacencyLayers[read.Layer]
+		} else {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		start, end := layer.Offsets[read.Ordinal], layer.Offsets[read.Ordinal+1]
+		if end < start {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if err := add(as, offs.Offset+uint64(read.Ordinal)*8, 16); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
+		if err := add(as, neighbors.Offset+start*4, (end-start)*4); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
+	}
+	return VectorPartitionSearchPageAttributionV1{PageBytes: pageBytes, UniquePages: uint64(len(all)), VectorPages: uint64(len(vs)), AdjacencyPages: uint64(len(as))}, nil
+}
 
 // SearchWithAttributionV1 runs the offline prepared-pack attribution path.
 func (s *VectorPartitionLocalSearcherV1) SearchWithAttributionV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, VectorPartitionSearchAttributionV1, error) {
