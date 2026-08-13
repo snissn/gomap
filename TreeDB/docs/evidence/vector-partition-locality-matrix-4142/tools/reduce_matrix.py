@@ -7,6 +7,7 @@ pretend that historical qualification assets are evidence for a new head.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
@@ -135,3 +136,18 @@ def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
     require([row["row_id"] for row in rows] == sorted(seen), "rows are reordered")
     require(coordinates == AUTHORIZED_COORDINATES, "incomplete matrix")
     return {"schema_version": 1, "result_kind": "vector_partition_locality_matrix_summary_v1", "identity": expected, "rows": len(rows)}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--preflight", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("rows", type=Path, nargs="+")
+    args = parser.parse_args()
+    summary = reduce_rows(args.rows, args.preflight)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

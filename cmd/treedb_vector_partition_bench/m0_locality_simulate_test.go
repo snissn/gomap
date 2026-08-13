@@ -41,6 +41,15 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 1000); err == nil {
 		t.Fatal("accepted incomplete capture coverage")
 	}
+	calibration.Snapshots = map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {Rows: 1, RowOrdinals: []uint32{7}}}
+	holdout.Snapshots = map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: {Rows: 1, RowOrdinals: []uint32{7}}}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
+		t.Fatal(err)
+	}
+	holdout.Snapshots[0] = collections.VectorPartitionPackLayoutSnapshotV1{Rows: 1, RowOrdinals: []uint32{8}}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err == nil {
+		t.Fatal("accepted incompatible capture snapshots")
+	}
 }
 
 func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {

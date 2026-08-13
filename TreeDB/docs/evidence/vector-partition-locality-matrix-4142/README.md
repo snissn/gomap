@@ -19,6 +19,8 @@ calibration frontier also requires the strict assignment artifact and rebuilds
 the selected overlap before comparing it with the materialized manifest. All generated
 rows, DBs, profiles, and logs belong under `/mnt/fast4tb/gomap-4142-locality-matrix-evidence`.
 
+Run the reducer with `reduce_matrix.py --preflight preflight.json --out summary.json rows/*.json`.
+
 Smoke preflight:
 
 ```sh

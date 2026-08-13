@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 
@@ -93,6 +94,10 @@ class ReducerTest(unittest.TestCase):
             preflight_path = write("preflight.json", preflight())
             paths = [write(f"{value['row_id']}.json", value) for value in complete_rows()]
             self.assertEqual(reducer.reduce_rows(paths, preflight_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
+            summary_path = root / "summary.json"
+            with mock.patch.object(sys, "argv", ["reduce_matrix.py", "--preflight", str(preflight_path), "--out", str(summary_path), *map(str, paths)]):
+                reducer.main()
+            self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["rows"], len(reducer.AUTHORIZED_COORDINATES))
             with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
                 reducer.reduce_rows(paths[:-1], preflight_path)
             with self.assertRaisesRegex(reducer.ContractError, "duplicate"):

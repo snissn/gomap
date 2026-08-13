@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -160,6 +161,9 @@ func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, quer
 	}
 	if slices.Contains(seen, false) {
 		return errors.New("capture split coverage")
+	}
+	if !reflect.DeepEqual(calibration.Snapshots, holdout.Snapshots) {
+		return errors.New("capture snapshot identity")
 	}
 	return nil
 }
