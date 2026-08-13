@@ -41,7 +41,8 @@ The v4 offline trace/simulation is a held-out graph+vector page selection
 only, not a recall, throughput, or production-layout result. It uses the
 frozen 250k graph artifact and frozen calibration/holdout manifests; snapshots
 bind each pack document ID to the artifact ordinal and the simulator fails
-closed unless identity remapping reproduces every captured holdout page count.
+closed unless the trusted dataset manifest proves complete disjoint query-split
+coverage and identity remapping reproduces every captured holdout page count.
 
 | held-out objective | median pages | p95 pages |
 | --- | ---: | ---: |

@@ -21,7 +21,7 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	if len(calibration.Rows) == 0 || len(holdout.Rows) == 0 {
 		t.Fatal("test split is degenerate")
 	}
-	if err := m0ValidateCaptureSplitPairV1(calibration, holdout); err != nil {
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 32); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*m0LocalityCaptureV1, *m0LocalityCaptureV1){
@@ -33,10 +33,13 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 			c, h := calibration, holdout
 			c.Rows, h.Rows = slices.Clone(c.Rows), slices.Clone(h.Rows)
 			mutate(&c, &h)
-			if err := m0ValidateCaptureSplitPairV1(c, h); err == nil {
+			if err := m0ValidateCaptureSplitPairV1(c, h, 32); err == nil {
 				t.Fatal("accepted contaminated capture split")
 			}
 		})
+	}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, 1000); err == nil {
+		t.Fatal("accepted incomplete capture coverage")
 	}
 }
 

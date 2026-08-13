@@ -48,16 +48,24 @@ type m0LocalityObjectiveV1 struct {
 func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-locality-simulate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var calibrationPath, holdoutPath, artifactPath, out string
+	var calibrationPath, holdoutPath, artifactPath, dataset, out string
 	fs.StringVar(&calibrationPath, "calibration", "", "raw calibration capture")
 	fs.StringVar(&holdoutPath, "holdout", "", "raw holdout capture")
 	fs.StringVar(&artifactPath, "artifact", "", "frozen vectorpartition graph artifact")
+	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || calibrationPath == "" || holdoutPath == "" || artifactPath == "" || out == "" {
-		return errors.New("m0-locality-simulate requires raw calibration, holdout, graph artifact, and output")
+	if fs.NArg() != 0 || calibrationPath == "" || holdoutPath == "" || artifactPath == "" || dataset == "" || out == "" {
+		return errors.New("m0-locality-simulate requires raw calibration, holdout, graph artifact, dataset, and output")
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil {
+		return err
+	}
+	if err := validateFixture(fixture); err != nil {
+		return err
 	}
 	calibration, calibrationSHA, err := m0ReadCaptureV1(calibrationPath)
 	if err != nil {
@@ -67,7 +75,7 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err := m0ValidateCaptureSplitPairV1(calibration, holdout); err != nil {
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout, fixture.Queries); err != nil {
 		return err
 	}
 	if calibration.PageScope != holdout.PageScope || calibration.Probes != holdout.Probes || calibration.RouterCandidates != holdout.RouterCandidates || calibration.EF != holdout.EF {
@@ -78,8 +86,12 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	artifactSHA := m0SHA256V1(artifactRaw)
-	if _, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw)); err != nil {
+	artifact, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw))
+	if err != nil {
 		return err
+	}
+	if artifact.Source.SourceID != "m0_fixture:"+fixture.Checksum || artifact.Source.Vectors != fixture.Vectors || artifact.Source.Dimensions != fixture.Dimensions || artifact.Source.Metric != fixture.Metric || artifact.Config.Seed != fixture.Seed {
+		return errors.New("dataset and graph artifact identity")
 	}
 	if calibration.Artifact != artifactSHA || holdout.Artifact != artifactSHA {
 		return errors.New("capture graph artifact identity")
@@ -130,11 +142,11 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	return err
 }
 
-func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1) error {
-	if calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 {
+func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, queryCount int) error {
+	if queryCount < 1 || calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 || len(calibration.Rows)+len(holdout.Rows) != queryCount {
 		return errors.New("capture split identity")
 	}
-	seen := make([]bool, len(calibration.Rows)+len(holdout.Rows))
+	seen := make([]bool, queryCount)
 	for kind, capture := range []m0LocalityCaptureV1{calibration, holdout} {
 		for i, row := range capture.Rows {
 			if row.Query < 0 || row.Query >= len(seen) || seen[row.Query] || i > 0 && capture.Rows[i-1].Query >= row.Query || localHNSWCalibrationOrdinalV1(row.Query) != (kind == 0) || len(capture.Traces) > 0 && capture.Traces[i].Query != row.Query {
