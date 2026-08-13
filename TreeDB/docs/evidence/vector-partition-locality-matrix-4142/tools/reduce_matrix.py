@@ -52,7 +52,7 @@ PREFLIGHT_FIELDS = {
     "frozen_head", "campaign_sha256", "descriptor_sha256", "descriptor_head",
     "dataset_sha256", "truth_sha256", "graph_sha256", "calibration_sha256",
     "holdout_sha256", "query_union_sha256", "binary_vcs_revision",
-    "binary_vcs_modified", "status",
+    "binary_vcs_modified", "topology_contract_sha256", "status",
 }
 
 
@@ -118,12 +118,18 @@ def validate_preflight(path: Path) -> dict[str, Any]:
     require(isinstance(value["binary_sha256"], str) and len(value["binary_sha256"]) == 64 and all(c in "0123456789abcdef" for c in value["binary_sha256"]), "preflight binary_sha256 is invalid")
     for field in ("dataset_sha256", "truth_sha256", "graph_sha256", "calibration_sha256", "holdout_sha256", "query_union_sha256"):
         require(value[field] == getattr(preflight_contract, f"FROZEN_{field.upper()}"), f"preflight {field} is not pinned")
+    require(isinstance(value["topology_contract_sha256"], str) and len(value["topology_contract_sha256"]) == 64 and all(char in "0123456789abcdef" for char in value["topology_contract_sha256"]), "preflight topology contract is invalid")
     return value
 
 
-def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
+def reduce_rows(paths: list[Path], preflight_path: Path, topology_contract_path: Path) -> dict[str, Any]:
     require(paths, "matrix has no rows")
     preflight = validate_preflight(preflight_path)
+    require(sha256(topology_contract_path) == preflight["topology_contract_sha256"], "topology contract does not match preflight")
+    try:
+        topology_contract = preflight_contract.topology_identities(load(topology_contract_path))
+    except SystemExit as error:
+        raise ContractError("topology contract is invalid") from error
     rows = [load(path) for path in paths]
     expected = {field: preflight[field] for field in (*CAMPAIGN_IDENTITIES, "calibration_sha256", "holdout_sha256")}
     seen: set[str] = set()
@@ -139,6 +145,7 @@ def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
         coordinates.add(point)
         topology = (row["layout"], row["partitions"], row["overlap"])
         identity = (row["membership_sha256"], row["router_sha256"])
+        require(identity == topology_contract[topology], "topology identity does not match pinned contract")
         require(topology_identities.setdefault(topology, identity) == identity, "mixed topology identity")
     require([row["row_id"] for row in rows] == sorted(seen), "rows are reordered")
     require(coordinates == AUTHORIZED_COORDINATES, "incomplete matrix")
@@ -148,10 +155,11 @@ def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preflight", type=Path, required=True)
+    parser.add_argument("--topology-contract", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("rows", type=Path, nargs="+")
     args = parser.parse_args()
-    summary = reduce_rows(args.rows, args.preflight)
+    summary = reduce_rows(args.rows, args.preflight, args.topology_contract)
     preflight_contract.write_json_exclusive(args.out, summary)
 
 

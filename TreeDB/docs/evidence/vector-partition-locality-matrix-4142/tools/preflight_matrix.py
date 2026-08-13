@@ -21,6 +21,15 @@ FROZEN_CALIBRATION_SHA256 = "077ec68492638dfe4f3cd589e125a769149130666533491e501
 FROZEN_HOLDOUT_SHA256 = "b25cc80df7d03294949f3ce3ef70f14e10692d1127d14e45b9081e07e8196e28"
 FROZEN_QUERY_UNION_SHA256 = "b1c32e2197c96b83093960b247b9a8eac730c9527f14fa7691c116b77d679a63"
 
+TOPOLOGY_CONTRACT_FIELDS = {"schema_version", "result_kind", "graph_sha256", "topologies"}
+TOPOLOGY_FIELDS = {"layout", "partitions", "overlap", "membership_sha256", "router_sha256"}
+TOPOLOGY_COORDINATES = frozenset(
+    (layout, partitions, overlap)
+    for layout in ("source-order", "entry-first-bfs")
+    for partitions in (16, 32, 40)
+    for overlap in ("exact-20%", "useful-only-20%-cap", "zero")
+)
+
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -55,6 +64,26 @@ def query_union(calibration: Path, holdout: Path) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def topology_identities(value: dict) -> dict[tuple[str, int, str], tuple[str, str]]:
+    if set(value) != TOPOLOGY_CONTRACT_FIELDS or value.get("schema_version") != 1 or value.get("result_kind") != "vector_partition_locality_matrix_topology_contract_v1" or value.get("graph_sha256") != FROZEN_GRAPH_SHA256 or not isinstance(value.get("topologies"), list):
+        raise SystemExit("topology contract is invalid")
+    identities: dict[tuple[str, int, str], tuple[str, str]] = {}
+    for topology in value["topologies"]:
+        if not isinstance(topology, dict) or set(topology) != TOPOLOGY_FIELDS:
+            raise SystemExit("topology contract is invalid")
+        layout, partitions, overlap = topology["layout"], topology["partitions"], topology["overlap"]
+        key = (layout, partitions, overlap)
+        if key not in TOPOLOGY_COORDINATES or key in identities:
+            raise SystemExit("topology contract is invalid")
+        membership, router = topology["membership_sha256"], topology["router_sha256"]
+        if any(not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest) for digest in (membership, router)):
+            raise SystemExit("topology contract is invalid")
+        identities[key] = (membership, router)
+    if set(identities) != TOPOLOGY_COORDINATES:
+        raise SystemExit("topology contract is incomplete")
+    return identities
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-evidence", type=Path, required=True, help="#4027 compact evidence root")
@@ -64,11 +93,12 @@ def main() -> None:
     parser.add_argument("--truth-artifact", type=Path, required=True)
     parser.add_argument("--calibration", type=Path, required=True)
     parser.add_argument("--holdout", type=Path, required=True)
+    parser.add_argument("--topology-contract", type=Path, required=True, help="authoritative membership/router topology mapping")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     campaign = args.source_evidence / "campaign.json"
     descriptor = args.source_evidence / "m3-descriptors/250k/graph-overlap-020/vector_partition_variant_v1.json"
-    for path in (campaign, descriptor, args.dataset_manifest, args.truth_artifact, args.calibration, args.holdout):
+    for path in (campaign, descriptor, args.dataset_manifest, args.truth_artifact, args.calibration, args.holdout, args.topology_contract):
         if not path.is_file():
             raise SystemExit(f"missing frozen input: {path}")
     source_head = subprocess.check_output(("git", "-C", str(args.source_checkout), "rev-parse", "HEAD"), text=True).strip()
@@ -79,6 +109,8 @@ def main() -> None:
         raise SystemExit(f"missing measured binary: {args.binary}")
     source = json.loads(campaign.read_text(encoding="utf-8"))
     descriptor_value = json.loads(descriptor.read_text(encoding="utf-8"))
+    topology_value = json.loads(args.topology_contract.read_text(encoding="utf-8"))
+    topology_identities(topology_value)
     vcs = build_vcs(args.binary)
     campaign_sha = digest(campaign)
     descriptor_sha = digest(descriptor)
@@ -118,6 +150,7 @@ def main() -> None:
         "calibration_sha256": calibration_sha,
         "holdout_sha256": holdout_sha,
         "query_union_sha256": query_union_sha,
+        "topology_contract_sha256": digest(args.topology_contract),
         "binary_vcs_revision": vcs.get("vcs.revision"),
         "binary_vcs_modified": vcs.get("vcs.modified"),
         "status": "ready" if ready else "blocked_source_identity",

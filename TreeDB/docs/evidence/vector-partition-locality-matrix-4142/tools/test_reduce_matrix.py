@@ -18,12 +18,31 @@ import preflight_matrix as preflight_contract
 IDENTITY = "a" * 64
 
 
+def topology_contract() -> dict:
+    return {
+        "schema_version": 1,
+        "result_kind": "vector_partition_locality_matrix_topology_contract_v1",
+        "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256,
+        "topologies": [
+            {"layout": layout, "partitions": partitions, "overlap": overlap, "membership_sha256": f"{index + 1:064x}", "router_sha256": f"{index + 101:064x}"}
+            for index, (layout, partitions, overlap) in enumerate(sorted(preflight_contract.TOPOLOGY_COORDINATES))
+        ],
+    }
+
+
+def topology_identity(layout: str, partitions: int, overlap: str) -> tuple[str, str]:
+    for topology in topology_contract()["topologies"]:
+        if (topology["layout"], topology["partitions"], topology["overlap"]) == (layout, partitions, overlap):
+            return topology["membership_sha256"], topology["router_sha256"]
+    raise AssertionError("missing test topology")
+
+
 def row(row_id: str) -> dict:
     return {
         "schema_version": 1, "result_kind": "vector_partition_locality_matrix_row_v1", "row_id": row_id, "terminal": True,
         "source_head": preflight_contract.MEASURED_SOURCE_HEAD, "binary_sha256": IDENTITY,
         "dataset_sha256": preflight_contract.FROZEN_DATASET_SHA256, "truth_sha256": preflight_contract.FROZEN_TRUTH_SHA256,
-        "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256, "membership_sha256": IDENTITY, "router_sha256": IDENTITY,
+        "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256, "membership_sha256": topology_identity("entry-first-bfs", 16, "zero")[0], "router_sha256": topology_identity("entry-first-bfs", 16, "zero")[1],
         "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
         "query_split_sha256": preflight_contract.FROZEN_HOLDOUT_SHA256,
         "layout": "entry-first-bfs", "partitions": 16, "overlap": "zero", "probes": 2, "ef": 96, "split": "holdout",
@@ -36,6 +55,7 @@ def complete_rows() -> list[dict]:
     for index, point in enumerate(sorted(reducer.AUTHORIZED_COORDINATES)):
         value = row(f"{index:04d}")
         value["layout"], value["partitions"], value["overlap"], value["probes"], value["ef"], value["split"] = point
+        value["membership_sha256"], value["router_sha256"] = topology_identity(value["layout"], value["partitions"], value["overlap"])
         if value["split"] == "train":
             value["query_split_sha256"] = preflight_contract.FROZEN_CALIBRATION_SHA256
             value["metrics"]["queries"] = 806
@@ -63,6 +83,7 @@ def preflight() -> dict:
         "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
         "binary_vcs_revision": preflight_contract.MEASURED_SOURCE_HEAD,
         "binary_vcs_modified": "false",
+        "topology_contract_sha256": IDENTITY,
         "status": "ready",
     }
 
@@ -110,30 +131,47 @@ class ReducerTest(unittest.TestCase):
                 path.write_text(json.dumps(value), encoding="utf-8")
                 return path
             preflight_path = write("preflight.json", preflight())
+            contract_path = write("topology-contract.json", topology_contract())
+            value = preflight()
+            value["topology_contract_sha256"] = reducer.sha256(contract_path)
+            preflight_path.write_text(json.dumps(value), encoding="utf-8")
             paths = [write(f"{value['row_id']}.json", value) for value in complete_rows()]
-            self.assertEqual(reducer.reduce_rows(paths, preflight_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
+            self.assertEqual(reducer.reduce_rows(paths, preflight_path, contract_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
             summary_path = root / "summary.json"
-            with mock.patch.object(sys, "argv", ["reduce_matrix.py", "--preflight", str(preflight_path), "--out", str(summary_path), *map(str, paths)]):
+            with mock.patch.object(sys, "argv", ["reduce_matrix.py", "--preflight", str(preflight_path), "--topology-contract", str(contract_path), "--out", str(summary_path), *map(str, paths)]):
                 reducer.main()
             self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["rows"], len(reducer.AUTHORIZED_COORDINATES))
+            changed_contract = topology_contract()
+            changed_contract["topologies"][0]["router_sha256"] = "f" * 64
+            with self.assertRaisesRegex(reducer.ContractError, "does not match preflight"):
+                reducer.reduce_rows(paths, preflight_path, write("changed-topology-contract.json", changed_contract))
             with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
-                reducer.reduce_rows(paths[:-1], preflight_path)
+                reducer.reduce_rows(paths[:-1], preflight_path, contract_path)
             with self.assertRaisesRegex(reducer.ContractError, "duplicate"):
-                reducer.reduce_rows(paths + [paths[0]], preflight_path)
+                reducer.reduce_rows(paths + [paths[0]], preflight_path, contract_path)
             with self.assertRaisesRegex(reducer.ContractError, "reordered"):
-                reducer.reduce_rows([paths[1], paths[0]] + paths[2:], preflight_path)
+                reducer.reduce_rows([paths[1], paths[0]] + paths[2:], preflight_path, contract_path)
             mixed = complete_rows()[-1]
             mixed["dataset_sha256"] = "b" * 64
             with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
-                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)], preflight_path)
+                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)], preflight_path, contract_path)
             mixed_topology = complete_rows()[-1]
             mixed_topology["membership_sha256"] = "b" * 64
-            with self.assertRaisesRegex(reducer.ContractError, "mixed topology identity"):
-                reducer.reduce_rows(paths[:-1] + [write("mixed-topology.json", mixed_topology)], preflight_path)
+            with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
+                reducer.reduce_rows(paths[:-1] + [write("mixed-topology.json", mixed_topology)], preflight_path, contract_path)
+            consistently_mislabeled = complete_rows()
+            source = ("source-order", 16, "zero")
+            replacement = topology_identity("entry-first-bfs", 16, "zero")
+            for value in consistently_mislabeled:
+                if (value["layout"], value["partitions"], value["overlap"]) == source:
+                    value["membership_sha256"], value["router_sha256"] = replacement
+            mislabeled_paths = [write(f"mislabeled-{value['row_id']}.json", value) for value in consistently_mislabeled]
+            with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
+                reducer.reduce_rows(mislabeled_paths, preflight_path, contract_path)
             blocked = preflight()
             blocked["status"] = "blocked_source_identity"
             with self.assertRaisesRegex(reducer.ContractError, "preflight"):
-                reducer.reduce_rows(paths, write("blocked.json", blocked))
+                reducer.reduce_rows(paths, write("blocked.json", blocked), contract_path)
 
     def test_variant_identities_and_exact_baseline_filler_are_permitted(self) -> None:
         value = row("exact")

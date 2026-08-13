@@ -11,7 +11,9 @@ Historical recall or overlap rows are not promoted to this issue.
 
 The reducer schema reserves the required 16/32/40 × overlap × probe × EF ×
 layout rows and binds source, executable, dataset, truth, graph, membership,
-router, and query-union identities. It requires a ready pinned preflight,
+router, and query-union identities. It requires a ready pinned preflight and
+an explicit complete topology contract (each layout/partition/overlap tuple's
+authoritative membership and router hashes),
 every explicitly authorized coordinate, and stable membership/router identity
 within each topology; it rejects nonterminal, mixed, duplicate-coordinate,
 reordered, incomplete, invalid-numeric, or filler-containing rows. The
@@ -19,7 +21,7 @@ calibration frontier also requires the strict assignment artifact and rebuilds
 the selected overlap before comparing it with the materialized manifest. All generated
 rows, DBs, profiles, and logs belong under `/mnt/fast4tb/gomap-4142-locality-matrix-evidence`.
 
-Run the reducer with `reduce_matrix.py --preflight preflight.json --out summary.json rows/*.json`.
+Run the reducer with `reduce_matrix.py --preflight preflight.json --topology-contract topology-contract.json --out summary.json rows/*.json`.
 
 Smoke preflight:
 
@@ -32,11 +34,12 @@ python3 TreeDB/docs/evidence/vector-partition-locality-matrix-4142/tools/preflig
   --truth-artifact /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json \
   --calibration /mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-calibration-manifest.json \
   --holdout /mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-holdout-manifest.json \
+  --topology-contract /mnt/fast4tb/gomap-4142-locality-matrix-evidence/topology-contract.json \
   --out /mnt/fast4tb/gomap-4142-locality-matrix-evidence/preflight.json
 ```
 
-The expected disposition is `ready` when the #4140 source and binary are
-supplied. The retained #4027 descriptor is source-older and is used only as a
+The expected disposition is `ready` when the #4140 source and binary plus the
+complete authoritative topology contract are supplied. The retained #4027 descriptor is source-older and is used only as a
 frozen input anchor; it is never passed off as fresh matrix evidence. No target
 byte/row, probe, overlap, or page-objective contract is selected by this
 scaffold.
