@@ -21,6 +21,8 @@ type m0MaterializeReportV1 struct {
 	SourceDB                  string `json:"source_db"`
 	CloneDB                   string `json:"clone_db"`
 	AssignmentSHA256          string `json:"assignment_artifact_sha256"`
+	Mode                      string `json:"mode"`
+	MembershipSHA256          string `json:"membership_sha256"`
 	SourceOrdinalDigestBefore string `json:"source_ordinal_digest_before"`
 	SourceOrdinalDigestAfter  string `json:"source_ordinal_digest_after"`
 	Generation                uint64 `json:"generation"`
@@ -35,13 +37,14 @@ type m0MaterializeReportV1 struct {
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var sourceDB, artifactPath, membershipPath, root, out string
+	var sourceDB, artifactPath, membershipPath, root, out, mode string
 	fs.StringVar(&sourceDB, "source-db", "", "retained source DB (read only)")
 	fs.StringVar(&artifactPath, "artifact", "", "strict canonical assignment artifact")
 	fs.StringVar(&membershipPath, "membership-report", "", "M0 membership report")
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || membershipPath == "" || root == "" || out == "" {
+	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
 		return errors.New("m0-materialize-membership requires source-db, artifact, membership-report, root, out")
 	}
 	if _, statErr := os.Stat(out); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
@@ -63,27 +66,9 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = json.Unmarshal(reportRaw, &account); err != nil {
 		return err
 	}
-	artifactDigest, digestErr := vectorpartition.Digest(artifact)
-	if digestErr != nil || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || artifact.Config.Partitions < 1 || account.AssignmentArtifactSHA256 != m0SHA256V1(artifactRaw) || account.RepartitionedArtifactSHA256 != artifactDigest || account.Partitions != artifact.Config.Partitions || account.EdgeCut != 0 {
+	overlap, selected, err := m0SelectedMembershipV1(artifact, artifactRaw, account, mode)
+	if err != nil {
 		return errors.New("M0 assignment/report binding")
-	}
-	eligible := 0
-	var zeroFound, usefulFound, exactFound bool
-	for _, mode := range account.Modes {
-		switch mode.Name {
-		case "zero":
-			zeroFound = true
-			if mode.Materialize && mode.Used == 0 && mode.Useful == 0 && mode.Filler == 0 {
-				eligible++
-			}
-		case "useful_only_20":
-			usefulFound = mode.EquivalentTo == "zero" && !mode.Materialize && mode.Used == 0 && mode.Useful == 0 && mode.Filler == 0
-		case "exact_20":
-			exactFound = mode.Rejected != "" && !mode.Materialize
-		}
-	}
-	if eligible != 1 || !zeroFound || !usefulFound || !exactFound {
-		return errors.New("M0 membership eligibility")
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
@@ -117,10 +102,6 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return errors.New("retained source identity")
 	}
 	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, rows)
-	if err != nil {
-		return err
-	}
-	overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{})
 	if err != nil {
 		return err
 	}
@@ -199,7 +180,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
+	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
 	raw, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return err
@@ -212,6 +193,44 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	_, err = fmt.Fprintf(stdout, "m0_materialized=%s clone=%s generation=%d\n", out, clone, generation)
 	return err
+}
+
+func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byte, account m0MembershipAccountV1, requested string) (vectorpartition.OverlapResult, m0MembershipModeV1, error) {
+	digest, err := vectorpartition.Digest(artifact)
+	if err != nil || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || artifact.Config.Partitions < 1 || account.AssignmentArtifactSHA256 != m0SHA256V1(artifactRaw) || account.RepartitionedArtifactSHA256 != digest || account.Partitions != artifact.Config.Partitions {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 membership account identity")
+	}
+	capacity, err := m3OverlapCapacityV1(artifact, .2)
+	if err != nil {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, err
+	}
+	config := vectorpartition.OverlapConfig{}
+	if requested == "useful_only_20" {
+		config = vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity}
+	}
+	overlap, err := vectorpartition.BuildOverlap(artifact, config)
+	if err != nil {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, err
+	}
+	var selected m0MembershipModeV1
+	found := false
+	for _, candidate := range account.Modes {
+		if candidate.Name == requested {
+			selected, found = candidate, true
+			break
+		}
+	}
+	actualSHA, err := m0MembershipDigestV1(overlap.Memberships)
+	if err != nil || !found || !selected.Materialize || selected.EquivalentTo != "" || selected.Rejected != "" || selected.MembershipSHA256 != actualSHA || selected.Used != overlap.Used || selected.Useful != overlap.Useful || selected.Filler != overlap.Filler {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 membership mode disposition")
+	}
+	if requested == "zero" && (overlap.Used != 0 || overlap.Useful != 0 || overlap.Filler != 0) {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 zero membership")
+	}
+	if requested == "useful_only_20" && (overlap.Used == 0 || overlap.Useful != overlap.Used || overlap.Filler != 0) {
+		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 useful-only membership")
+	}
+	return overlap, selected, nil
 }
 
 func m0RouterPartitionsV1(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, rows []collections.VectorPartitionRouterSourceRowV1) ([]vectorpartition.RouterPartitionV1, error) {
