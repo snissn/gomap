@@ -23,7 +23,7 @@ TreeDB QPS ratios at those selected rows:
 | corpus | vs pgvector c=1 / c=32 | vs Milvus c=1 / c=32 |
 | --- | ---: | ---: |
 | 100k | 1.75x / 2.90x | 3.41x / 4.81x |
-| 250k | 3.96x / 3.63x | 2.73x / 2.91x |
+| 250k | 3.96x / 3.63x | 2.72x / 2.91x |
 
 ## Method
 
