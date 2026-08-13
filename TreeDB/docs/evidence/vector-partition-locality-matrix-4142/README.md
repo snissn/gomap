@@ -78,7 +78,11 @@ and the reduced simulation is
 The clean capture/simulation binary is bound to source
 `41a7df66ded8374989ac8d755cd98a32b91c8d96` with SHA-256
 `93cc8cf4665ec0c5da54dbe6d8d6414aa8944e5e070f8dde26a64431fe419c4a`.
-All raw artifacts remain under the task-specific `/mnt/fast4tb` root.
+Those retained artifacts are historical evidence. New v3 capture, simulation,
+frontier, and diagnostic generation is intentionally blocked until a later
+provenance-reviewed commit pins `m0ApprovedExecutableRevisionV1` to its exact
+clean executable revision. All raw artifacts remain under the task-specific
+`/mnt/fast4tb` root.
 
 ## Clean checkpoint: p32 membership and routing
 

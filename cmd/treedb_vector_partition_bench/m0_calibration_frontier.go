@@ -78,6 +78,10 @@ type m0FrontierQueryRouteV1 struct {
 	RoutingMissSlots uint64
 }
 
+// Deliberately unset: a later provenance review must approve the exact clean
+// executable revision before new M0 evidence can be emitted.
+var m0ApprovedExecutableRevisionV1 = ""
+
 type m0CleanBuildIdentityV1 struct {
 	BinarySHA256   string
 	SourceRevision string
@@ -96,13 +100,13 @@ func m0CurrentCleanBuildIdentityV1() (m0CleanBuildIdentityV1, error) {
 	revision, modified := vectorPartitionSystemBuildVCSIdentityV1()
 	identity := m0CleanBuildIdentityV1{BinarySHA256: binarySHA, SourceRevision: revision, VCSModified: modified}
 	if !m0CleanBuildIdentityValidV1(identity) {
-		return m0CleanBuildIdentityV1{}, errors.New("M0 binary is not a clean VCS build")
+		return m0CleanBuildIdentityV1{}, errors.New("M0 binary is not an approved clean VCS build")
 	}
 	return identity, nil
 }
 
 func m0CleanBuildIdentityValidV1(identity m0CleanBuildIdentityV1) bool {
-	return localHNSWAttributionSHA256V1(identity.BinarySHA256) && validLowerSHA(identity.SourceRevision) && !identity.VCSModified
+	return localHNSWAttributionSHA256V1(identity.BinarySHA256) && validLowerSHA(identity.SourceRevision) && identity.SourceRevision == m0ApprovedExecutableRevisionV1 && !identity.VCSModified
 }
 
 func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
