@@ -12,7 +12,6 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
-	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 // m0-locality-simulate evaluates candidate row permutations against the exact
@@ -64,15 +63,11 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	artifact, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw))
-	if err != nil {
-		return err
-	}
 	artifactSHA := m0SHA256V1(artifactRaw)
 	objectives := []string{"source", "bfs", "edge_window", "gorder_like", "co_visitation", "hybrid"}
 	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v1", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
 	for _, objective := range objectives {
-		permutations, err := m0BuildPermutationsV1(calibration, artifact, objective)
+		permutations, err := m0BuildPermutationsV1(calibration, objective)
 		if err != nil {
 			return fmt.Errorf("%s: %w", objective, err)
 		}
@@ -120,37 +115,46 @@ func m0SHA256V1(raw []byte) string {
 
 type m0PermutationV1 []int // old ordinal -> new ordinal
 
-func m0BuildPermutationsV1(capture m0LocalityCaptureV1, artifact vectorpartition.Artifact, objective string) (map[uint32]m0PermutationV1, error) {
-	visits := make(map[uint32][]uint64, len(capture.Snapshots))
+func m0BuildPermutationsV1(capture m0LocalityCaptureV1, objective string) (map[uint32]m0PermutationV1, error) {
+	pairs := make(map[uint32]map[[2]int]uint32, len(capture.Snapshots))
 	for partition, snapshot := range capture.Snapshots {
 		if err := m0ValidateSnapshotV1(snapshot); err != nil {
 			return nil, err
 		}
-		visits[partition] = make([]uint64, snapshot.Rows)
+		pairs[partition] = make(map[[2]int]uint32)
 	}
 	for _, trace := range capture.Traces {
 		for _, partitionTrace := range trace.Partitions {
-			counts, ok := visits[partitionTrace.Partition]
+			weights, ok := pairs[partitionTrace.Partition]
 			if !ok {
 				return nil, errors.New("trace partition snapshot")
 			}
-			for _, ordinal := range partitionTrace.ScoreOrdinals {
-				if int(ordinal) >= len(counts) {
-					return nil, errors.New("score ordinal")
-				}
-				counts[ordinal]++
-			}
+			sequence := append([]uint32(nil), partitionTrace.ScoreOrdinals...)
 			for _, read := range partitionTrace.AdjacencyReads {
-				if read.Ordinal < 0 || read.Ordinal >= len(counts) {
-					return nil, errors.New("adjacency ordinal")
+				sequence = append(sequence, uint32(read.Ordinal))
+			}
+			rows := capture.Snapshots[partitionTrace.Partition].Rows
+			for i, left := range sequence {
+				if int(left) >= rows {
+					return nil, errors.New("trace ordinal")
 				}
-				counts[read.Ordinal]++
+				for j := i + 1; j < len(sequence) && j <= i+8; j++ {
+					right := sequence[j]
+					if int(right) >= rows || left == right {
+						continue
+					}
+					a, b := int(left), int(right)
+					if a > b {
+						a, b = b, a
+					}
+					weights[[2]int{a, b}]++
+				}
 			}
 		}
 	}
 	out := make(map[uint32]m0PermutationV1, len(capture.Snapshots))
 	for partition, snapshot := range capture.Snapshots {
-		order, err := m0ObjectiveOrderV1(snapshot, artifact.Graph.Neighbors, visits[partition], objective)
+		order, err := m0ObjectiveOrderV1(snapshot, pairs[partition], objective)
 		if err != nil {
 			return nil, err
 		}
@@ -164,18 +168,18 @@ func m0BuildPermutationsV1(capture m0LocalityCaptureV1, artifact vectorpartition
 }
 
 func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1) error {
-	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
+	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighbors) || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
 		return errors.New("snapshot geometry")
 	}
 	for layer, offsets := range snapshot.LayerOffsets {
-		if len(offsets) != snapshot.Rows+1 || snapshot.LayerOffsetsSectionOffsets[layer] == 0 || snapshot.LayerNeighborOffsets[layer] == 0 || offsets[0] != 0 {
+		if len(offsets) != snapshot.Rows+1 || len(snapshot.LayerNeighbors[layer]) != int(offsets[len(offsets)-1]) || snapshot.LayerOffsetsSectionOffsets[layer] == 0 || snapshot.LayerNeighborOffsets[layer] == 0 || offsets[0] != 0 {
 			return errors.New("layer geometry")
 		}
 	}
 	return nil
 }
 
-func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, graph [][]int, visits []uint64, objective string) ([]int, error) {
+func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, pairs map[[2]int]uint32, objective string) ([]int, error) {
 	rows := make([]int, snapshot.Rows)
 	bySource := func(i, j int) bool { return snapshot.RowOrdinals[rows[i]] < snapshot.RowOrdinals[rows[j]] }
 	for i := range rows {
@@ -185,46 +189,73 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 	if objective == "source" {
 		return rows, nil
 	}
-	local := make(map[uint32]int, snapshot.Rows)
-	for ordinal, source := range snapshot.RowOrdinals {
-		local[source] = ordinal
-	}
-	degree := make([]int, snapshot.Rows)
 	neighbors := make([][]int, snapshot.Rows)
-	for ordinal, source := range snapshot.RowOrdinals {
-		if int(source) >= len(graph) {
-			return nil, errors.New("source ordinal exceeds graph")
-		}
-		for _, neighborSource := range graph[source] {
-			if neighbor, ok := local[uint32(neighborSource)]; ok {
-				neighbors[ordinal] = append(neighbors[ordinal], neighbor)
+	for ordinal := range neighbors {
+		start, end := snapshot.LayerOffsets[0][ordinal], snapshot.LayerOffsets[0][ordinal+1]
+		for _, neighbor := range snapshot.LayerNeighbors[0][start:end] {
+			if int(neighbor) < snapshot.Rows && int(neighbor) != ordinal {
+				neighbors[ordinal] = append(neighbors[ordinal], int(neighbor))
 			}
 		}
 		sort.Slice(neighbors[ordinal], func(i, j int) bool {
 			return snapshot.RowOrdinals[neighbors[ordinal][i]] < snapshot.RowOrdinals[neighbors[ordinal][j]]
 		})
-		degree[ordinal] = len(neighbors[ordinal])
 	}
 	if objective == "bfs" {
 		return m0BFSOrderV1(snapshot.EntryOrdinal, neighbors, rows), nil
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		switch objective {
-		case "edge_window":
-			return degree[a] > degree[b] || degree[a] == degree[b] && snapshot.RowOrdinals[a] < snapshot.RowOrdinals[b]
-		case "gorder_like":
-			return degree[a] > degree[b] || degree[a] == degree[b] && visits[a] > visits[b] || degree[a] == degree[b] && visits[a] == visits[b] && snapshot.RowOrdinals[a] < snapshot.RowOrdinals[b]
-		case "co_visitation":
-			return visits[a] > visits[b] || visits[a] == visits[b] && snapshot.RowOrdinals[a] < snapshot.RowOrdinals[b]
-		case "hybrid":
-			left, right := visits[a]*uint64(snapshot.Rows+1)+uint64(degree[a]), visits[b]*uint64(snapshot.Rows+1)+uint64(degree[b])
-			return left > right || left == right && snapshot.RowOrdinals[a] < snapshot.RowOrdinals[b]
-		default:
-			return false
+	return m0GreedyOrderV1(snapshot, neighbors, pairs, objective), nil
+}
+
+func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, neighbors [][]int, pairs map[[2]int]uint32, objective string) []int {
+	placed := make([]bool, snapshot.Rows)
+	out := make([]int, 0, snapshot.Rows)
+	out = append(out, snapshot.EntryOrdinal)
+	placed[snapshot.EntryOrdinal] = true
+	for len(out) < snapshot.Rows {
+		best, bestGain := -1, -1
+		for node := range placed {
+			if placed[node] {
+				continue
+			}
+			gain := 0
+			for _, neighbor := range neighbors[node] {
+				if placed[neighbor] {
+					gain++
+				}
+				if objective == "gorder_like" {
+					for _, twoHop := range neighbors[neighbor] {
+						if placed[twoHop] {
+							gain++
+						}
+					}
+				}
+			}
+			if objective == "co_visitation" || objective == "hybrid" {
+				for prior := range placed {
+					if !placed[prior] {
+						continue
+					}
+					a, b := node, prior
+					if a > b {
+						a, b = b, a
+					}
+					weight := int(pairs[[2]int{a, b}])
+					if objective == "co_visitation" {
+						gain += weight
+					} else {
+						gain += 2 * weight
+					}
+				}
+			}
+			if gain > bestGain || gain == bestGain && (best < 0 || snapshot.RowOrdinals[node] < snapshot.RowOrdinals[best]) {
+				best, bestGain = node, gain
+			}
 		}
-	})
-	return rows, nil
+		out = append(out, best)
+		placed[best] = true
+	}
+	return out
 }
 
 func m0BFSOrderV1(entry int, neighbors [][]int, fallback []int) []int {
