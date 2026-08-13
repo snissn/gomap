@@ -1276,10 +1276,16 @@ type VectorPartitionSearchPageReadV1 struct {
 	Auxiliary bool
 }
 type VectorPartitionSearchPageAttributionV1 struct {
-	PageBytes      uint64 `json:"page_bytes"`
-	UniquePages    uint64 `json:"unique_pages"`
-	VectorPages    uint64 `json:"vector_pages"`
-	AdjacencyPages uint64 `json:"adjacency_pages"`
+	PageBytes      uint64                             `json:"page_bytes"`
+	UniquePages    uint64                             `json:"unique_pages"`
+	VectorPages    uint64                             `json:"vector_pages"`
+	AdjacencyPages uint64                             `json:"adjacency_pages"`
+	Tokens         []VectorPartitionSearchPageTokenV1 `json:"-"`
+}
+type VectorPartitionSearchPageTokenV1 struct {
+	Namespace string
+	FileID    uint32
+	Page      uint64
 }
 
 // PageAttributionForTraceV1 converts exact offline native-read events to pack
@@ -1287,6 +1293,9 @@ type VectorPartitionSearchPageAttributionV1 struct {
 // is opt-in and this method never participates in request execution.
 func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorPartitionSearchAttributionV1, pageBytes uint64) (VectorPartitionSearchPageAttributionV1, error) {
 	if s == nil || pageBytes == 0 {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	if len(trace.ScoreOrdinals) == 0 || len(trace.AdjacencyReads) == 0 {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	if err := s.Acquire(); err != nil {
@@ -1311,17 +1320,26 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 	if !ok {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	all, vs, as := map[uint64]struct{}{}, map[uint64]struct{}{}, map[uint64]struct{}{}
-	add := func(set map[uint64]struct{}, start, length uint64) error {
+	key := pack.handle.Key()
+	if key.Offset < 0 {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	all, vs, as := map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}
+	add := func(set map[VectorPartitionSearchPageTokenV1]struct{}, start, length uint64) error {
 		if length == 0 {
 			return nil
 		}
 		if start > ^uint64(0)-length {
 			return ErrVectorPartitionSearchUnavailable
 		}
-		for p := start / pageBytes; p <= (start+length-1)/pageBytes; p++ {
-			set[p] = struct{}{}
-			all[p] = struct{}{}
+		if uint64(key.Offset) > ^uint64(0)-start {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		physical := uint64(key.Offset) + start
+		for p := physical / pageBytes; p <= (physical+length-1)/pageBytes; p++ {
+			token := VectorPartitionSearchPageTokenV1{Namespace: key.Namespace, FileID: key.FileID, Page: p}
+			set[token] = struct{}{}
+			all[token] = struct{}{}
 			if p == ^uint64(0) {
 				break
 			}
@@ -1376,7 +1394,20 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 			return VectorPartitionSearchPageAttributionV1{}, err
 		}
 	}
-	return VectorPartitionSearchPageAttributionV1{PageBytes: pageBytes, UniquePages: uint64(len(all)), VectorPages: uint64(len(vs)), AdjacencyPages: uint64(len(as))}, nil
+	tokens := make([]VectorPartitionSearchPageTokenV1, 0, len(all))
+	for token := range all {
+		tokens = append(tokens, token)
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		if tokens[i].Namespace != tokens[j].Namespace {
+			return tokens[i].Namespace < tokens[j].Namespace
+		}
+		if tokens[i].FileID != tokens[j].FileID {
+			return tokens[i].FileID < tokens[j].FileID
+		}
+		return tokens[i].Page < tokens[j].Page
+	})
+	return VectorPartitionSearchPageAttributionV1{PageBytes: pageBytes, UniquePages: uint64(len(all)), VectorPages: uint64(len(vs)), AdjacencyPages: uint64(len(as)), Tokens: tokens}, nil
 }
 
 // SearchWithAttributionV1 runs the offline prepared-pack attribution path.

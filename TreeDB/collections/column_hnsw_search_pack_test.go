@@ -183,7 +183,7 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 		t.Fatalf("incomplete read trace scores=%v reads=%+v", attribution.ScoreOrdinals, attribution.AdjacencyReads)
 	}
 	pages, pageErr := searcher.PageAttributionForTraceV1(attribution, 64)
-	if pageErr != nil || pages.UniquePages < 2 || pages.VectorPages == 0 || pages.AdjacencyPages == 0 {
+	if pageErr != nil || pages.UniquePages != 4 || pages.VectorPages != 2 || pages.AdjacencyPages != 3 {
 		t.Fatalf("page mapping=%+v err=%v", pages, pageErr)
 	}
 	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
