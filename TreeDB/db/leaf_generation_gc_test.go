@@ -162,6 +162,24 @@ func currentLeafLogRawFileIDSetForTest(t *testing.T, db *DB) map[uint32]struct{}
 	return currentRaw
 }
 
+func requireLeafGenerationGCPublisherDrained(t *testing.T, db *DB) {
+	t.Helper()
+	state, ok := db.StateToken()
+	if !ok {
+		t.Fatal("StateToken unavailable after checkpoint")
+	}
+	if db.rootPublication == nil || db.rootPublication.coordinator == nil {
+		t.Fatal("missing root-publication coordinator after checkpoint")
+	}
+	publication := db.rootPublication.coordinator.Stats()
+	if publication.PendingCommits != 0 {
+		t.Fatalf("checkpoint left %d queued root publications", publication.PendingCommits)
+	}
+	if publication.DurableCommitSeq < state.CommitSeq {
+		t.Fatalf("checkpoint durable root sequence=%d want >= visible sequence %d", publication.DurableCommitSeq, state.CommitSeq)
+	}
+}
+
 func leafGenerationRawFileIDsWithout(base, exclude map[uint32]struct{}) []uint32 {
 	out := make([]uint32, 0, len(base))
 	for rawFileID := range base {
@@ -942,6 +960,15 @@ func TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment(t *testing
 	baseRawFileID := page.ValueLogSegmentID(base.FileID)
 
 	putBatch(t, db, 0, 4096, "new")
+	// putBatch deliberately uses Batch.Write so other flush-apply tests can
+	// exercise asynchronous admission. This fixture edits the manifest directly,
+	// however, so it must first cross the normal publication and durability
+	// boundary. Otherwise a queued publisher can legitimately change the
+	// RecoverableRootSet while LeafGenerationGC revalidates it.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint fixture writes before manifest edit: %v", err)
+	}
+	requireLeafGenerationGCPublisherDrained(t, db)
 	currentRaw := currentLeafLogRawFileIDSetForTest(t, db)
 	if _, ok := currentRaw[baseRawFileID]; !ok {
 		t.Fatalf("base segment %d is no longer a current leaf-log lane; current=%v", base.FileID, currentRaw)
@@ -973,6 +1000,17 @@ func TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment(t *testing
 	db.mu.Unlock()
 	if err := db.publishLeafGenerationState(false); err != nil {
 		t.Fatalf("publish retiring manifest: %v", err)
+	}
+	// This is a fixture invariant, not a retry: the direct manifest mutation
+	// must leave a stable recoverable-root basis before this test asks the
+	// destructive GC path to capture it.
+	recoverableRoots, err := db.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatalf("capture recoverable root set after manifest edit: %v", err)
+	}
+	defer recoverableRoots.Release()
+	if err := recoverableRoots.Revalidate(); err != nil {
+		t.Fatalf("fixture recoverable root set changed after manifest edit: %v", err)
 	}
 
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
