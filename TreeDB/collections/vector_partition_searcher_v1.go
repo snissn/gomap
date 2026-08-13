@@ -1297,6 +1297,8 @@ type VectorPartitionPackLayoutSnapshotV1 struct {
 	FileID                        uint32     `json:"file_id"`
 	BaseOffset                    uint64     `json:"base_offset"`
 	Rows                          int        `json:"rows"`
+	EntryOrdinal                  int        `json:"entry_ordinal"`
+	RowOrdinals                   []uint32   `json:"row_ordinals"`
 	VectorStride                  int        `json:"vector_stride"`
 	VectorOffset                  uint64     `json:"vector_offset"`
 	LayerOffsets                  [][]uint64 `json:"layer_offsets"`
@@ -1325,7 +1327,24 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 	if key.Offset < 0 {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	out := VectorPartitionPackLayoutSnapshotV1{Namespace: key.Namespace, FileID: key.FileID, BaseOffset: uint64(key.Offset), Rows: pack.Header.Rows, VectorStride: pack.Header.VectorStride, LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)), LayerNeighborOffsets: make([]uint64, len(pack.AdjacencyLayers))}
+	out := VectorPartitionPackLayoutSnapshotV1{
+		Namespace:                  key.Namespace,
+		FileID:                     key.FileID,
+		BaseOffset:                 uint64(key.Offset),
+		Rows:                       pack.Header.Rows,
+		EntryOrdinal:               pack.Header.EntryOrdinal,
+		RowOrdinals:                make([]uint32, pack.Header.Rows),
+		VectorStride:               pack.Header.VectorStride,
+		LayerOffsets:               make([][]uint64, len(pack.AdjacencyLayers)),
+		LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)),
+		LayerNeighborOffsets:       make([]uint64, len(pack.AdjacencyLayers)),
+	}
+	for ordinal, row := range pack.RowRefRowIndexes {
+		if row < 0 || uint64(row) > uint64(^uint32(0)) {
+			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		out.RowOrdinals[ordinal] = uint32(row)
+	}
 	for _, x := range pack.Sections {
 		if x.Kind == columnHNSWSearchPackSectionNormalizedVectors {
 			out.VectorOffset = x.Offset
@@ -1343,13 +1362,13 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 			out.AuxiliaryNeighborOffset = x.Offset
 		}
 	}
-	for _, x := range pack.AdjacencyLayers {
-		out.LayerOffsets = append(out.LayerOffsets, append([]uint64(nil), x.Offsets...))
+	for layer, x := range pack.AdjacencyLayers {
+		out.LayerOffsets[layer] = append([]uint64(nil), x.Offsets...)
 	}
 	if pack.Header.HasAuxiliaryNavigation {
 		out.AuxiliaryOffsets = append([]uint64(nil), pack.AuxiliaryNavigation.Offsets...)
 	}
-	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 {
+	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 || out.EntryOrdinal < 0 || out.EntryOrdinal >= out.Rows || len(out.RowOrdinals) != out.Rows {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	for i, offsets := range out.LayerOffsets {
