@@ -1396,17 +1396,25 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 			return VectorPartitionSearchPageAttributionV1{}, err
 		}
 		local := map[VectorPartitionSearchPageTokenV1]struct{}{}
-		addLocal := func(start, length uint64) {
+		addLocal := func(start, length uint64) error {
 			if length == 0 {
-				return
+				return nil
+			}
+			if start > ^uint64(0)-length || uint64(key.Offset) > ^uint64(0)-start {
+				return ErrVectorPartitionSearchUnavailable
 			}
 			physical := uint64(key.Offset) + start
 			for p := physical / pageBytes; p <= (physical+length-1)/pageBytes; p++ {
 				local[VectorPartitionSearchPageTokenV1{Namespace: key.Namespace, FileID: key.FileID, Page: p}] = struct{}{}
 			}
+			return nil
 		}
-		addLocal(offs.Offset+uint64(read.Ordinal)*8, 16)
-		addLocal(neighbors.Offset+start*4, (end-start)*4)
+		if err := addLocal(offs.Offset+uint64(read.Ordinal)*8, 16); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
+		if err := addLocal(neighbors.Offset+start*4, (end-start)*4); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
 		adjacencyAccesses += uint64(len(local))
 	}
 	tokens := make([]VectorPartitionSearchPageTokenV1, 0, len(all))

@@ -189,6 +189,21 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if _, err := searcher.PageAttributionForTraceV1(VectorPartitionSearchAttributionV1{}, 64); err == nil {
 		t.Fatal("accepted empty trace")
 	}
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(17, int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireBytes(key, testColumnHNSWSearchPackScope2314(), mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: "nonaligned trace test", ValidationMode: mappedresource.ValidationVerify})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shifted, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shiftedSearcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: shifted, opened: 1, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
+	shiftedPages, err := shiftedSearcher.PageAttributionForTraceV1(attribution, 64)
+	if err != nil || len(shiftedPages.Tokens) == 0 || shiftedPages.AdjacencyPageAccesses == pages.AdjacencyPageAccesses {
+		t.Fatalf("nonaligned pages=%+v base=%+v err=%v", shiftedPages, pages, err)
+	}
 	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
 	if err != nil || seed != 1 {
 		t.Fatalf("upper descent seed=%d err=%v", seed, err)
