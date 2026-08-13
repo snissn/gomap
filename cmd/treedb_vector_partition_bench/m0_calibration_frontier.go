@@ -558,13 +558,13 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
 		return errors.New("M0 frontier assignment artifact")
 	}
-	capacity, err := m3OverlapCapacityV1(artifact, .2)
+	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
 	if err != nil {
 		return err
 	}
 	config := vectorpartition.OverlapConfig{}
 	if selected.Name == "useful_only_20" {
-		config = vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity}
+		config = vectorpartition.OverlapConfig{Ratio: m0OverlapRatioV1, Capacity: capacity}
 	}
 	overlap, err := vectorpartition.BuildOverlap(artifact, config)
 	if err != nil {

@@ -206,13 +206,13 @@ func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byt
 	if err != nil || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || artifact.Config.Partitions < 1 || account.AssignmentArtifactSHA256 != m0SHA256V1(artifactRaw) || account.RepartitionedArtifactSHA256 != digest || account.Partitions != artifact.Config.Partitions {
 		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 membership account identity")
 	}
-	capacity, err := m3OverlapCapacityV1(artifact, .2)
+	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
 	if err != nil {
 		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, err
 	}
 	config := vectorpartition.OverlapConfig{}
 	if requested == "useful_only_20" {
-		config = vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity}
+		config = vectorpartition.OverlapConfig{Ratio: m0OverlapRatioV1, Capacity: capacity}
 	}
 	overlap, err := vectorpartition.BuildOverlap(artifact, config)
 	if err != nil {

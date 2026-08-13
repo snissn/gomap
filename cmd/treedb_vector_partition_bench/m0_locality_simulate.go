@@ -16,6 +16,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+const m0PageBytesV1 uint64 = 4096
+
+type m0PageTokenV1 struct {
+	Namespace string
+	FileID    uint32
+	Page      uint64
+}
+
 // m0-locality-simulate evaluates candidate row permutations against the exact
 // read trace captured by m0-locality-capture. It does not mutate a pack: only
 // row offsets are remapped, with the fixed pack section geometry retained.
@@ -158,7 +166,7 @@ func m0BuildPermutationsV1(capture m0LocalityCaptureV1, objective string) (map[u
 			}
 			sequence := partitionTrace.ScoreOrdinals
 			rows := capture.Snapshots[partitionTrace.Partition].Rows
-			window := max(1, 4096/(capture.Snapshots[partitionTrace.Partition].VectorStride*4))
+			window := max(1, int(m0PageBytesV1)/(capture.Snapshots[partitionTrace.Partition].VectorStride*4))
 			for i, left := range sequence {
 				if int(left) >= rows {
 					return nil, errors.New("trace ordinal")
@@ -288,7 +296,7 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 }
 
 func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, neighbors [][]int, pairs map[[2]int]uint32, objective string) []int {
-	window := max(1, 4096/(snapshot.VectorStride*4))
+	window := max(1, int(m0PageBytesV1)/(snapshot.VectorStride*4))
 	placed := make([]bool, snapshot.Rows)
 	pairNeighbors := make([]map[int]uint32, snapshot.Rows)
 	for pair, weight := range pairs {
@@ -303,9 +311,13 @@ func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, n
 	}
 	out := []int{snapshot.EntryOrdinal}
 	placed[snapshot.EntryOrdinal] = true
+	direct, common, pairGain, candidates := map[int]int{}, map[int]int{}, map[int]int{}, map[int]struct{}{}
 	for len(out) < snapshot.Rows {
+		clear(direct)
+		clear(common)
+		clear(pairGain)
+		clear(candidates)
 		begin := max(0, len(out)-window)
-		direct, common, pairGain := map[int]int{}, map[int]int{}, map[int]int{}
 		for _, prior := range out[begin:] {
 			for _, node := range neighbors[prior] {
 				if !placed[node] {
@@ -323,7 +335,6 @@ func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, n
 				}
 			}
 		}
-		candidates := map[int]struct{}{}
 		if objective == "edge_window" || objective == "gorder_like" || objective == "hybrid" {
 			for node := range direct {
 				candidates[node] = struct{}{}
@@ -415,7 +426,7 @@ func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint
 	}
 	var accesses, expanded uint64
 	for _, trace := range capture.Traces {
-		tokens := map[string]struct{}{}
+		tokens := map[m0PageTokenV1]struct{}{}
 		for _, partitionTrace := range trace.Partitions {
 			snapshot, ok := capture.Snapshots[partitionTrace.Partition]
 			if !ok {
@@ -435,7 +446,7 @@ func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint
 				}
 			}
 			for _, read := range partitionTrace.AdjacencyReads {
-				local := map[string]struct{}{}
+				local := map[m0PageTokenV1]struct{}{}
 				if err := m0AddAdjacencyV1(tokens, local, snapshot, permutation, starts, read); err != nil {
 					return m0LocalityObjectiveV1{}, err
 				}
@@ -480,8 +491,8 @@ func m0CSRStartsV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, per
 	return out
 }
 
-func m0AddAdjacencyV1(all, local map[string]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, permutation m0PermutationV1, starts [][]uint64, read collections.VectorPartitionSearchPageReadV1) error {
-	if read.Ordinal < 0 || read.Ordinal >= snapshot.Rows {
+func m0AddAdjacencyV1(all, local map[m0PageTokenV1]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, permutation m0PermutationV1, starts [][]uint64, read collections.VectorPartitionSearchPageReadV1) error {
+	if read.Ordinal < 0 || read.Ordinal >= snapshot.Rows || len(permutation) != snapshot.Rows {
 		return errors.New("adjacency ordinal")
 	}
 	layer, offsets, offsetsSection, neighborSection := read.Layer, snapshot.LayerOffsets, snapshot.LayerOffsetsSectionOffsets, snapshot.LayerNeighborOffsets
@@ -491,7 +502,7 @@ func m0AddAdjacencyV1(all, local map[string]struct{}, snapshot collections.Vecto
 		offsetsSection = []uint64{snapshot.AuxiliaryOffsetsSectionOffset}
 		neighborSection = []uint64{snapshot.AuxiliaryNeighborOffset}
 	}
-	if layer < 0 || layer >= len(offsets) || len(offsets[layer]) != snapshot.Rows+1 {
+	if layer < 0 || layer >= len(offsets) || len(offsets[layer]) != snapshot.Rows+1 || layer >= len(offsetsSection) || layer >= len(neighborSection) || offsetsSection[layer] == 0 || neighborSection[layer] == 0 {
 		return errors.New("adjacency layer")
 	}
 	old, next := read.Ordinal, permutation[read.Ordinal]
@@ -502,6 +513,9 @@ func m0AddAdjacencyV1(all, local map[string]struct{}, snapshot collections.Vecto
 	startLayer := layer
 	if read.Auxiliary {
 		startLayer = len(snapshot.LayerOffsets)
+	}
+	if startLayer < 0 || startLayer >= len(starts) || len(starts[startLayer]) != snapshot.Rows {
+		return errors.New("adjacency starts")
 	}
 	newStart := starts[startLayer][old]
 	if err := m0AddRangeV1(all, snapshot, offsetsSection[layer]+uint64(next)*8, 16); err != nil {
@@ -516,7 +530,7 @@ func m0AddAdjacencyV1(all, local map[string]struct{}, snapshot collections.Vecto
 	return m0AddRangeV1(local, snapshot, neighborSection[layer]+newStart*4, (end-start)*4)
 }
 
-func m0AddRangeV1(tokens map[string]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, offset, length uint64) error {
+func m0AddRangeV1(tokens map[m0PageTokenV1]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, offset, length uint64) error {
 	if length == 0 {
 		return nil
 	}
@@ -524,8 +538,8 @@ func m0AddRangeV1(tokens map[string]struct{}, snapshot collections.VectorPartiti
 		return errors.New("page range")
 	}
 	physical := snapshot.BaseOffset + offset
-	for page := physical / 4096; page <= (physical+length-1)/4096; page++ {
-		tokens[fmt.Sprintf("%s/%d/%d", snapshot.Namespace, snapshot.FileID, page)] = struct{}{}
+	for page := physical / m0PageBytesV1; page <= (physical+length-1)/m0PageBytesV1; page++ {
+		tokens[m0PageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: page}] = struct{}{}
 		if page == ^uint64(0) {
 			break
 		}

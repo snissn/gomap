@@ -15,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+const m0OverlapRatioV1 = .2
+
 type m0MembershipAccountV1 struct {
 	Schema                      string               `json:"schema"`
 	GraphArtifactSHA256         string               `json:"graph_artifact_sha256"`
@@ -126,7 +128,7 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	capacity, err := m3OverlapCapacityV1(candidate, .2)
+	capacity, err := m3OverlapCapacityV1(candidate, m0OverlapRatioV1)
 	if err != nil {
 		return err
 	}
@@ -134,11 +136,11 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	useful, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity})
+	useful, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: m0OverlapRatioV1, Capacity: capacity})
 	if err != nil {
 		return err
 	}
-	exact, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity, RequireExact: true})
+	exact, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: m0OverlapRatioV1, Capacity: capacity, RequireExact: true})
 	if err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	report := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw), RepartitionedArtifactSHA256: digest, Backend: candidate.Backend, Partitions: candidate.Config.Partitions, Cap: candidate.Metrics.Cap, OverlapCapacity: capacity, OverlapBudget: int(math.Floor(.2 * float64(len(candidate.IDs)))), MaxPartitionSize: candidate.Metrics.MaxPartitionSize, EdgeCut: candidate.Metrics.EdgeCut, Modes: modes}
+	report := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw), RepartitionedArtifactSHA256: digest, Backend: candidate.Backend, Partitions: candidate.Config.Partitions, Cap: candidate.Metrics.Cap, OverlapCapacity: capacity, OverlapBudget: int(math.Floor(m0OverlapRatioV1 * float64(len(candidate.IDs)))), MaxPartitionSize: candidate.Metrics.MaxPartitionSize, EdgeCut: candidate.Metrics.EdgeCut, Modes: modes}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
@@ -200,7 +202,7 @@ func m0MembershipModesV1(artifact vectorpartition.Artifact, zero, useful, exact 
 	if err != nil {
 		return nil, err
 	}
-	budget := int(math.Floor(.2 * float64(len(artifact.IDs))))
+	budget := int(math.Floor(m0OverlapRatioV1 * float64(len(artifact.IDs))))
 	if artifact.Metrics.EdgeCut == 0 && (exact.Used != budget || exact.Useful != 0 || exact.Filler != budget) {
 		return nil, errors.New("zero-cut exact-20 overlap is not filler-only at the declared budget")
 	}

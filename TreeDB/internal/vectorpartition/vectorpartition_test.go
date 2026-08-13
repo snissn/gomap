@@ -1188,12 +1188,16 @@ func TestRepartitionArtifactFailsClosedAfterMutatingBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := in
+	before, err := CanonicalJSON(in)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = RepartitionArtifact(in, 2, mutatingPartitioner{err: fmt.Errorf("backend failure")})
 	if err == nil {
 		t.Fatal("accepted mutating backend failure")
 	}
-	if !reflect.DeepEqual(in, before) {
+	after, err := CanonicalJSON(in)
+	if err != nil || !bytes.Equal(after, before) {
 		t.Fatal("mutating backend changed frozen input artifact")
 	}
 }

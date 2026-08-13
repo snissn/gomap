@@ -193,6 +193,24 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	for ordinal := 0; ordinal < view.Header.Rows; ordinal++ {
 		ordinals[string(view.DocumentIDBytes[view.DocumentIDOffsets[ordinal]:view.DocumentIDOffsets[ordinal+1]])] = uint32(ordinal)
 	}
+	if _, err := searcher.PackLayoutSnapshotV1(nil); err == nil {
+		t.Fatal("accepted empty ordinal map")
+	}
+	missing := make(map[string]uint32, 1)
+	for id, ordinal := range ordinals {
+		missing[id] = ordinal
+		break
+	}
+	if _, err := searcher.PackLayoutSnapshotV1(missing); err == nil {
+		t.Fatal("accepted missing ordinal map")
+	}
+	duplicates := make(map[string]uint32, len(ordinals))
+	for id := range ordinals {
+		duplicates[id] = 0
+	}
+	if _, err := searcher.PackLayoutSnapshotV1(duplicates); err == nil {
+		t.Fatal("accepted duplicate ordinal map")
+	}
 	snapshot, err := searcher.PackLayoutSnapshotV1(ordinals)
 	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
@@ -203,7 +221,18 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	shifted, err := newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	var shifted *columnHNSWSearchPackPreparedView
+	t.Cleanup(func() {
+		if shifted != nil {
+			_ = shifted.Close()
+		} else {
+			_ = handle.Release()
+		}
+		if manager.Stats().ActiveHandles != 0 {
+			t.Errorf("shifted trace manager stats=%+v", manager.Stats())
+		}
+	})
+	shifted, err = newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
 	if err != nil {
 		t.Fatal(err)
 	}

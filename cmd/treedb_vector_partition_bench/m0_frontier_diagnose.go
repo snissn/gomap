@@ -161,7 +161,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, EFSearch: ef}
 	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members)
-	if err != nil || !m0FrontierRouterSweepCompleteV1(report.RouterSweep) {
+	if err != nil {
+		return fmt.Errorf("M0 diagnostic router sweep: %w", err)
+	}
+	if !m0FrontierRouterSweepCompleteV1(report.RouterSweep) {
 		return errors.New("M0 diagnostic router sweep")
 	}
 	for _, ordinal := range split.Ordinals {

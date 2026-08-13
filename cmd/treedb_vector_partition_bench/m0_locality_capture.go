@@ -161,7 +161,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			s := searchers[p]
 			_, m, t, e := s.SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
 			if e == nil {
-				pages, x := s.PageAttributionForTraceV1(t, 4096)
+				pages, x := s.PageAttributionForTraceV1(t, m0PageBytesV1)
 				if x != nil {
 					e = x
 				} else {
