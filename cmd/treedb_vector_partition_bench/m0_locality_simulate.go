@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 // m0-locality-simulate evaluates candidate row permutations against the exact
@@ -27,11 +28,12 @@ type m0LocalitySimulationV1 struct {
 }
 
 type m0LocalityObjectiveV1 struct {
-	Name                    string  `json:"name"`
-	Queries                 int     `json:"queries"`
-	MedianPages             uint64  `json:"median_unique_graph_vector_pages"`
-	P95Pages                uint64  `json:"p95_unique_graph_vector_pages"`
-	MeanAdjacencyPageAccess float64 `json:"mean_adjacency_pages_per_expanded_neighbor_list"`
+	Name                    string   `json:"name"`
+	Queries                 int      `json:"queries"`
+	MedianPages             uint64   `json:"median_unique_graph_vector_pages"`
+	P95Pages                uint64   `json:"p95_unique_graph_vector_pages"`
+	MeanAdjacencyPageAccess float64  `json:"mean_adjacency_pages_per_expanded_neighbor_list"`
+	PageCounts              []uint64 `json:"-"`
 }
 
 func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
@@ -64,6 +66,9 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	artifactSHA := m0SHA256V1(artifactRaw)
+	if _, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw)); err != nil {
+		return err
+	}
 	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v1", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
 	identity, err := m0IdentityPermutationsV1(holdout)
 	if err != nil {
@@ -73,8 +78,13 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if baseline.MedianPages != holdout.MedianPages || baseline.P95Pages != holdout.P95Pages {
+	if baseline.MedianPages != holdout.MedianPages || baseline.P95Pages != holdout.P95Pages || len(baseline.PageCounts) != len(holdout.Rows) {
 		return errors.New("identity page simulation does not reproduce capture")
+	}
+	for i, row := range holdout.Rows {
+		if holdout.Traces[i].Query != row.Query || baseline.PageCounts[i] != row.Pages {
+			return errors.New("identity page simulation per-query mismatch")
+		}
 	}
 	baseline.Name = "identity_current"
 	report.Objectives = append(report.Objectives, baseline)
@@ -144,11 +154,12 @@ func m0BuildPermutationsV1(capture m0LocalityCaptureV1, objective string) (map[u
 			}
 			sequence := partitionTrace.ScoreOrdinals
 			rows := capture.Snapshots[partitionTrace.Partition].Rows
+			window := max(1, 4096/(capture.Snapshots[partitionTrace.Partition].VectorStride*4))
 			for i, left := range sequence {
 				if int(left) >= rows {
 					return nil, errors.New("trace ordinal")
 				}
-				for j := i + 1; j < len(sequence) && j <= i+8; j++ {
+				for j := i + 1; j < len(sequence) && j <= i+window; j++ {
 					right := sequence[j]
 					if int(right) >= rows || left == right {
 						continue
@@ -347,6 +358,14 @@ func m0BFSOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, fall
 
 func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint32]m0PermutationV1) (m0LocalityObjectiveV1, error) {
 	pages := make([]uint64, 0, len(capture.Traces))
+	startsByPartition := make(map[uint32][][]uint64, len(capture.Snapshots))
+	for partition, snapshot := range capture.Snapshots {
+		permutation, ok := permutations[partition]
+		if !ok || len(permutation) != snapshot.Rows {
+			return m0LocalityObjectiveV1{}, errors.New("permutation")
+		}
+		startsByPartition[partition] = m0CSRStartsV1(snapshot, permutation)
+	}
 	var accesses, expanded uint64
 	for _, trace := range capture.Traces {
 		tokens := map[string]struct{}{}
@@ -359,8 +378,11 @@ func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint
 			if !ok || len(permutation) != snapshot.Rows {
 				return m0LocalityObjectiveV1{}, errors.New("permutation")
 			}
-			starts := m0CSRStartsV1(snapshot, permutation)
+			starts := startsByPartition[partitionTrace.Partition]
 			for _, ordinal := range partitionTrace.ScoreOrdinals {
+				if int(ordinal) >= snapshot.Rows {
+					return m0LocalityObjectiveV1{}, errors.New("score ordinal")
+				}
 				if err := m0AddRangeV1(tokens, snapshot, snapshot.VectorOffset+uint64(permutation[ordinal])*uint64(snapshot.VectorStride)*4, uint64(snapshot.VectorStride)*4); err != nil {
 					return m0LocalityObjectiveV1{}, err
 				}
@@ -376,8 +398,9 @@ func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint
 		}
 		pages = append(pages, uint64(len(tokens)))
 	}
+	pageCounts := append([]uint64(nil), pages...)
 	sort.Slice(pages, func(i, j int) bool { return pages[i] < pages[j] })
-	result := m0LocalityObjectiveV1{Queries: len(pages)}
+	result := m0LocalityObjectiveV1{Queries: len(pages), PageCounts: pageCounts}
 	if len(pages) > 0 {
 		result.MedianPages = pages[len(pages)/2]
 		result.P95Pages = pages[(len(pages)*95+99)/100-1]
