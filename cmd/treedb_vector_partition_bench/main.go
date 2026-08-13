@@ -449,6 +449,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "m0-locality-capture" {
 		return runM0LocalityCaptureV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "m0-locality-simulate" {
+		return runM0LocalitySimulateV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "local-hnsw-attribution" {
 		return runLocalHNSWAttributionV1(args[1:], stdout)
 	}
