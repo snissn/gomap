@@ -38,28 +38,33 @@ type m0FrontierCellV1 struct {
 	WorkSHA256               string  `json:"work_sha256"`
 }
 type m0FrontierReportV1 struct {
-	Schema                string             `json:"schema"`
-	DB                    string             `json:"db"`
-	ManifestIntegrity     string             `json:"manifest_integrity_digest"`
-	ReadySet              string             `json:"ready_set_digest"`
-	PackBytes             uint64             `json:"pack_bytes"`
-	AssetChecksumsSHA256  string             `json:"asset_checksums_sha256"`
-	SourceGeneration      uint64             `json:"source_generation"`
-	SourceChecksum        uint64             `json:"source_checksum"`
-	SourceSchemaHash      uint64             `json:"source_schema_hash"`
-	SourceRows            uint64             `json:"source_rows"`
-	PartitionGeneration   uint64             `json:"partition_generation"`
-	PartitionCount        uint32             `json:"partition_count"`
-	RouterGeneration      uint64             `json:"router_generation"`
-	RouterModelDigest     string             `json:"router_model_digest"`
-	DatasetManifestSHA256 string             `json:"dataset_manifest_sha256"`
-	BinarySHA256          string             `json:"binary_sha256"`
-	CalibrationSHA256     string             `json:"calibration_sha256"`
-	TruthSHA256           string             `json:"truth_sha256"`
-	RouterCandidates      int                `json:"router_candidates"`
-	TopK                  int                `json:"top_k"`
-	Measurements          []m0FrontierCellV1 `json:"measurements"`
-	Cells                 []m0FrontierCellV1 `json:"cells"`
+	Schema                   string             `json:"schema"`
+	DB                       string             `json:"db"`
+	ManifestIntegrity        string             `json:"manifest_integrity_digest"`
+	ReadySet                 string             `json:"ready_set_digest"`
+	PackBytes                uint64             `json:"pack_bytes"`
+	AssetChecksumsSHA256     string             `json:"asset_checksums_sha256"`
+	SourceGeneration         uint64             `json:"source_generation"`
+	SourceChecksum           uint64             `json:"source_checksum"`
+	SourceSchemaHash         uint64             `json:"source_schema_hash"`
+	SourceRows               uint64             `json:"source_rows"`
+	PartitionGeneration      uint64             `json:"partition_generation"`
+	PartitionCount           uint32             `json:"partition_count"`
+	RouterGeneration         uint64             `json:"router_generation"`
+	RouterModelDigest        string             `json:"router_model_digest"`
+	BalancePolicy            string             `json:"balance_policy"`
+	OverlapCount             int                `json:"overlap_count"`
+	MembershipReportSHA256   string             `json:"membership_report_sha256"`
+	GraphArtifactSHA256      string             `json:"graph_artifact_sha256"`
+	AssignmentArtifactSHA256 string             `json:"assignment_artifact_sha256"`
+	DatasetManifestSHA256    string             `json:"dataset_manifest_sha256"`
+	BinarySHA256             string             `json:"binary_sha256"`
+	CalibrationSHA256        string             `json:"calibration_sha256"`
+	TruthSHA256              string             `json:"truth_sha256"`
+	RouterCandidates         int                `json:"router_candidates"`
+	TopK                     int                `json:"top_k"`
+	Measurements             []m0FrontierCellV1 `json:"measurements"`
+	Cells                    []m0FrontierCellV1 `json:"cells"`
 }
 type m0FrontierQueryRouteV1 struct {
 	Ordinal          int
@@ -70,18 +75,19 @@ type m0FrontierQueryRouteV1 struct {
 func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-calibration-frontier", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var db, dataset, calibration, truthCache, out, probesRaw, efRaw string
+	var db, dataset, calibration, truthCache, membershipReport, out, probesRaw, efRaw string
 	candidates, topK := 0, 0
 	fs.StringVar(&db, "db", "", "materialized clone")
 	fs.StringVar(&dataset, "dataset", "", "frozen dataset directory")
 	fs.StringVar(&calibration, "calibration", "", "frozen calibration split")
 	fs.StringVar(&truthCache, "truth-cache", "", "frozen truth cache directory")
+	fs.StringVar(&membershipReport, "membership-report", "", "strict M0 membership report")
 	fs.StringVar(&out, "out", "", "fresh report")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
 	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || out == "" || candidates != 64 || topK != 10 {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || out == "" || candidates != 64 || topK != 10 {
 		return errors.New("M0 calibration frontier arguments")
 	}
 	if _, e := os.Stat(out); e == nil || !errors.Is(e, os.ErrNotExist) {
@@ -123,6 +129,10 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
 		return errors.New("M0 frontier DB status")
 	}
+	account, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest)
+	if e != nil {
+		return e
+	}
 	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
 	defer closeM3PartitionSearchers(searchers)
 	for i, a := range h.manifest.Assets {
@@ -147,7 +157,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, DatasetManifestSHA256: datasetSHA, BinarySHA256: binarySHA, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: binarySHA, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
 	for _, a := range h.manifest.Assets {
 		report.PackBytes += a.Bytes
 	}
@@ -180,6 +190,9 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if !m0FrontierCellsCompleteV1(report.Cells, probes, efs, len(split.Ordinals)) {
 		return errors.New("M0 frontier incomplete or duplicate cells")
 	}
+	if !validateM0FrontierReportV1(report, probes, efs) {
+		return errors.New("M0 frontier report validation")
+	}
 	raw, e := json.MarshalIndent(report, "", "  ")
 	if e != nil {
 		return e
@@ -192,6 +205,66 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	}
 	_, e = fmt.Fprintf(stdout, "m0_calibration_frontier=%s cells=%d\n", out, len(report.Cells))
 	return e
+}
+
+func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManifestV1) (m0MembershipAccountV1, string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return m0MembershipAccountV1{}, "", err
+	}
+	var account m0MembershipAccountV1
+	if err = json.Unmarshal(raw, &account); err != nil {
+		return account, "", err
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions != 32 || account.EdgeCut != 0 || manifest.PartitionCount != 32 || policy.BuildIdentityDigest != account.AssignmentArtifactSHA256 {
+		return account, "", errors.New("M0 frontier membership binding")
+	}
+	var zero, useful, exact *m0MembershipModeV1
+	for i := range account.Modes {
+		switch account.Modes[i].Name {
+		case "zero":
+			zero = &account.Modes[i]
+		case "useful_only_20":
+			useful = &account.Modes[i]
+		case "exact_20":
+			exact = &account.Modes[i]
+		}
+	}
+	if zero == nil || useful == nil || exact == nil || !zero.Materialize || zero.Used != 0 || zero.Useful != 0 || zero.Filler != 0 || useful.Materialize || useful.EquivalentTo != "zero" || useful.Used != 0 || useful.Useful != 0 || useful.Filler != 0 || exact.Materialize || exact.Rejected == "" || exact.Filler == 0 || !localHNSWAttributionSHA256V1(account.GraphArtifactSHA256) || !localHNSWAttributionSHA256V1(account.AssignmentArtifactSHA256) {
+		return account, "", errors.New("M0 frontier membership dispositions")
+	}
+	return account, m0SHA256V1(raw), nil
+}
+
+func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int) bool {
+	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount != 32 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.OverlapCount != 0 || report.PackBytes == 0 || report.RouterCandidates != 64 || report.TopK != 10 || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
+		return false
+	}
+	for _, id := range []string{report.ManifestIntegrity, report.ReadySet, report.AssetChecksumsSHA256, report.RouterModelDigest, report.MembershipReportSHA256, report.GraphArtifactSHA256, report.AssignmentArtifactSHA256, report.DatasetManifestSHA256, report.BinarySHA256, report.CalibrationSHA256, report.TruthSHA256} {
+		if !localHNSWAttributionSHA256V1(id) {
+			return false
+		}
+	}
+	aggregates := map[[2]int]m0FrontierCellV1{}
+	for _, c := range report.Cells {
+		aggregates[[2]int{c.Probes, c.EFSearch}] = c
+	}
+	seen := map[[3]int]bool{}
+	for _, m := range report.Measurements {
+		k := [3]int{m.Repetition, m.Probes, m.EFSearch}
+		if m.Repetition < 0 || m.Repetition > 2 || seen[k] || m.SelectedPartitions != m.Probes || m.RouterSelectedPartitions != uint64(m.Probes*806) || m.Queries != 806 || !localHNSWAttributionSHA256V1(m.ResultSHA256) || !localHNSWAttributionSHA256V1(m.WorkSHA256) {
+			return false
+		}
+		seen[k] = true
+	}
+	for _, m := range report.Measurements {
+		c, ok := aggregates[[2]int{m.Probes, m.EFSearch}]
+		if !ok || m.Recall != c.Recall || m.Candidates != c.Candidates || m.Edges != c.Edges || m.RoutingMissSlots != c.RoutingMissSlots || m.ResultSHA256 != c.ResultSHA256 || m.WorkSHA256 != c.WorkSHA256 {
+			return false
+		}
+	}
+	return len(seen) == 36
 }
 
 func m0FrontierPlanV1(probes, efs []int) []m0FrontierCellV1 {
