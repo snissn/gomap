@@ -137,7 +137,8 @@ The persisted assignment is `membership/250k-p40-assignment-v1.json`
 (`b07ab6272598447ee517d41665305af776ba806bb94033046b687e283a786040`);
 the strict account is `membership/250k-p40-membership-v1.json`
 (`15ba48e82841c4154e97f88501721cd37b6afdb4243571561265575e92c0816e`).
-It validates the frozen source, IDs, graph, and p40 request configuration.
+It validates the frozen source, IDs, graph, p40 request configuration, and the
+pinned KaHIP backend/license identity embedded by the verified adapter.
 Its max partition size is 6,561 under cap 6,563; edge cut is 1,046,273;
 overlap capacity is 7,500 and exact-20 budget is 50,000. Zero has no overlap
 (`3218f36b395897430cd34ee77504aa40a7f7aad5f747bbb00e50153abb2fcb33`).
@@ -168,15 +169,17 @@ The retained source ordinal digest remained
 before and after. P40 zero and duplicate exact-20 were not run: the promoted
 useful topology failed its first local-recall gate.
 
-The review-hardened frozen-calibration c256 frontier is
-`frontier/p40-useful-v2/250k-p40-useful-c256-calibration-v2.json`
-(`f3883ddefdd5ef3e31d96e73b9f5c8a12973810173a300d2260c6835e56b6f97`).
+The final review-hardened frozen-calibration c256 frontier is
+`frontier/p40-useful-v3/250k-p40-useful-c256-calibration-v3.json`
+(`0a7f9ddd5269816bae7460cc9f152817f8b9996fcc860872734cb70d29ad8200`).
 It binds the p40 assignment/account above, binary
-`4730cf61fee28aaea46325aeeebc181f2f74af6ba8038023baa4ad167475b8a3`,
+`bfa0bbdb52d52135aaa811feb4e80c11b25bdb9503061cfe2658839e4bd19096`,
 frozen graph, calibration split, truth, manifest, and ready-set identities. It
 also reconstructs the selected overlap from the strict assignment, compares
 the concrete materialized topology, and includes overlap replicas in the
-routing oracle.
+routing oracle. This rerun uses the ordinary non-attribution search path for
+timing; its deterministic recall, work, and result fields exactly reproduce
+the preceding review-hardened report.
 
 | probes | EF | recall | correct / 8060 | routing misses |
 | ---: | ---: | ---: | ---: | ---: |
@@ -197,9 +200,8 @@ The required EF96 threshold is 0.9500 = 7657/8060 correct. Both p2 and p4
 achieved 7654/8060, three short, despite zero routing misses. Therefore the
 single M0 blocker is **local-pack approximate HNSW recall at the maximum
 allowed EF96**. The report's three-repetition recall/work/result identities are
-invariant, but QPS/latency are non-authoritative: unrelated Lean/git work
-affected the earlier capture, and the review-hardened rerun still had up to
-13.28% per-cell QPS spread. No QPS selection claim is made.
+invariant, but QPS/latency are non-authoritative: the final rerun still had up
+to 10.65% per-cell QPS spread. No QPS selection claim is made.
 
 The final search holdout remains sealed. Do not start #4143, #4144, #4145, or
 #4146: the dependency checkpoint remains
