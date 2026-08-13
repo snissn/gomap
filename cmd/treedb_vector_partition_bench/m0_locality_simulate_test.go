@@ -2,10 +2,43 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
+	var calibration, holdout m0LocalityCaptureV1
+	calibration.Split, holdout.Split = "calibration", "holdout"
+	for ordinal := 0; ordinal < 32; ordinal++ {
+		capture := &holdout
+		if localHNSWCalibrationOrdinalV1(ordinal) {
+			capture = &calibration
+		}
+		capture.Rows = append(capture.Rows, m0LocalityCaptureRowV1{Query: ordinal})
+	}
+	if len(calibration.Rows) == 0 || len(holdout.Rows) == 0 {
+		t.Fatal("test split is degenerate")
+	}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*m0LocalityCaptureV1, *m0LocalityCaptureV1){
+		"same identity": func(c, h *m0LocalityCaptureV1) { h.Split = c.Split },
+		"overlap":       func(c, h *m0LocalityCaptureV1) { h.Rows[0] = c.Rows[0] },
+		"wrong split":   func(c, h *m0LocalityCaptureV1) { c.Rows[0], h.Rows[0] = h.Rows[0], c.Rows[0] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, h := calibration, holdout
+			c.Rows, h.Rows = slices.Clone(c.Rows), slices.Clone(h.Rows)
+			mutate(&c, &h)
+			if err := m0ValidateCaptureSplitPairV1(c, h); err == nil {
+				t.Fatal("accepted contaminated capture split")
+			}
+		})
+	}
+}
 
 func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{

@@ -64,6 +64,35 @@ func TestM0MembershipModesZeroCutElidesUsefulAndRejectsExactFiller(t *testing.T)
 	}
 }
 
+func TestM0AssignmentArtifactRequiresPinnedKaHIPIdentity(t *testing.T) {
+	config := vectorpartition.DefaultConfig()
+	config.Partitions = 2
+	config.Degree = 1
+	graph, err := vectorpartition.BuildWithPartitioner([]vectorpartition.Vector{{ID: "a", Values: []float64{1}}, {ID: "b", Values: []float64{-1}}}, config, vectorpartition.Source{SourceID: "m0-kahip"}, m0StaticPartitionerV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := graph
+	candidate := request
+	candidate.Backend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", request.Config.Seed)
+	candidate.BackendLicense = m0KaHIPBackendLicenseV1
+	if err := m0ValidateAssignmentArtifactV1(graph, request, candidate); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*vectorpartition.Artifact){
+		"backend": func(a *vectorpartition.Artifact) { a.Backend = "forged" },
+		"license": func(a *vectorpartition.Artifact) { a.BackendLicense = "forged" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := candidate
+			mutate(&forged)
+			if err := m0ValidateAssignmentArtifactV1(graph, request, forged); err == nil {
+				t.Fatal("accepted forged KaHIP identity")
+			}
+		})
+	}
+}
+
 type m0StaticPartitionerV1 struct{}
 
 func (m0StaticPartitionerV1) Name() string    { return "m0_static_test" }

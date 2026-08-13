@@ -15,7 +15,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-const m0OverlapRatioV1 = .2
+const (
+	m0OverlapRatioV1        = .2
+	m0KaHIPBackendLicenseV1 = "MIT; kahip==3.25; wheel_sha256=e6ea76524e9fc01b27e6f5c5f00b7eec71c94cbd1e84678ce2a14d64dfc9eda4; record_sha256=7ff011253147286fcebc9185573662bf31dbcfbab1944f9b4940032f49ea5217; ECO; epsilon=0.05; symmetrized_unweighted_v1"
+)
 
 type m0MembershipAccountV1 struct {
 	Schema                      string               `json:"schema"`
@@ -165,6 +168,9 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 func m0ValidateAssignmentArtifactV1(graph, request, candidate vectorpartition.Artifact) error {
 	if candidate.Source != graph.Source || !reflect.DeepEqual(candidate.IDs, graph.IDs) || !reflect.DeepEqual(candidate.Graph, graph.Graph) || !reflect.DeepEqual(candidate.Config, request.Config) {
 		return errors.New("assignment artifact does not bind frozen source, IDs, graph, and requested config")
+	}
+	if candidate.Backend != fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", request.Config.Seed) || candidate.BackendLicense != m0KaHIPBackendLicenseV1 {
+		return errors.New("assignment artifact does not bind pinned KaHIP execution identity")
 	}
 	return nil
 }

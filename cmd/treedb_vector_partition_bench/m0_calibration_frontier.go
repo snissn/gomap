@@ -391,7 +391,7 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		var found []m8CanonicalResultV1
 		for _, partition := range routeInput.Route {
 			s := searchers[partition]
-			got, m, _, e := s.SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
+			got, m, e := s.SearchWithOptionsV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
 			if e != nil {
 				return c, e
 			}

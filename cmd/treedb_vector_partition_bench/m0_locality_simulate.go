@@ -67,6 +67,9 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := m0ValidateCaptureSplitPairV1(calibration, holdout); err != nil {
+		return err
+	}
 	if calibration.PageScope != holdout.PageScope || calibration.Probes != holdout.Probes || calibration.RouterCandidates != holdout.RouterCandidates || calibration.EF != holdout.EF {
 		return errors.New("calibration and holdout capture settings differ")
 	}
@@ -125,6 +128,25 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "m0_locality_simulation=%s objectives=%d\n", out, len(report.Objectives))
 	return err
+}
+
+func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1) error {
+	if calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 {
+		return errors.New("capture split identity")
+	}
+	seen := make([]bool, len(calibration.Rows)+len(holdout.Rows))
+	for kind, capture := range []m0LocalityCaptureV1{calibration, holdout} {
+		for i, row := range capture.Rows {
+			if row.Query < 0 || row.Query >= len(seen) || seen[row.Query] || i > 0 && capture.Rows[i-1].Query >= row.Query || localHNSWCalibrationOrdinalV1(row.Query) != (kind == 0) || len(capture.Traces) > 0 && capture.Traces[i].Query != row.Query {
+				return errors.New("capture split ordinals")
+			}
+			seen[row.Query] = true
+		}
+	}
+	if slices.Contains(seen, false) {
+		return errors.New("capture split coverage")
+	}
+	return nil
 }
 
 func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
