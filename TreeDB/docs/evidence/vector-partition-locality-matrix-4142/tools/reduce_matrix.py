@@ -91,7 +91,7 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     metrics = row["metrics"]
     require(isinstance(metrics, dict) and isinstance(metrics.get("queries"), int) and not isinstance(metrics.get("queries"), bool) and isinstance(metrics.get("filler_replicas"), int) and not isinstance(metrics.get("filler_replicas"), bool) and isinstance(metrics.get("unique_pages_per_query"), (int, float)) and not isinstance(metrics.get("unique_pages_per_query"), bool), "metrics are incomplete")
     for name, value in metrics.items():
-        require(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0, f"invalid metric: {name}")
+        require(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 and (not isinstance(value, float) or math.isfinite(value)), f"invalid metric: {name}")
     required_queries = 806 if row["split"] == "train" else 194
     require(metrics["queries"] == required_queries, "row does not cover the full frozen split")
     require(metrics["unique_pages_per_query"] > 0, "terminal row has no measured pages")

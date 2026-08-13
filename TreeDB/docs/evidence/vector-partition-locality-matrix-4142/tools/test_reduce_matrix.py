@@ -198,6 +198,9 @@ class ReducerTest(unittest.TestCase):
             changed["metrics"]["unique_pages_per_query"] = value
             with self.assertRaisesRegex(reducer.ContractError, "metric"):
                 reducer.validate_row(changed, expected_identity())
+        changed = row("large-integer")
+        changed["metrics"]["unique_pages_per_query"] = 10 ** 1000
+        reducer.validate_row(changed, expected_identity())
 
     def test_rejects_wrong_split_identity_and_empty_measurement(self) -> None:
         expected = expected_identity()
