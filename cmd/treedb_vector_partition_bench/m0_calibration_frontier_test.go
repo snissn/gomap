@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
@@ -91,6 +93,16 @@ func TestM0FrontierModeV1AcceptsP40UsefulOnly(t *testing.T) {
 	useful.Filler = 1
 	if _, err = m0FrontierModeV1("useful_only_20", zero, useful, exact, 50_000); err == nil {
 		t.Fatal("filler useful mode accepted")
+	}
+}
+
+func TestM0FrontierManifestMembershipsEqualV1RejectsDifferentTopology(t *testing.T) {
+	actual := []collections.VectorPartitionMembershipV1{{VectorOrdinal: 3, PartitionID: 1}, {VectorOrdinal: 7, PartitionID: 2}}
+	if err := m0FrontierManifestMembershipsEqualV1([]collections.VectorPartitionMembershipV1{{VectorOrdinal: 7, PartitionID: 2}, {VectorOrdinal: 3, PartitionID: 1}}, actual); err != nil {
+		t.Fatalf("canonical topology rejected: %v", err)
+	}
+	if err := m0FrontierManifestMembershipsEqualV1([]collections.VectorPartitionMembershipV1{{VectorOrdinal: 3, PartitionID: 2}, {VectorOrdinal: 7, PartitionID: 2}}, actual); err == nil {
+		t.Fatal("different overlap topology accepted")
 	}
 }
 

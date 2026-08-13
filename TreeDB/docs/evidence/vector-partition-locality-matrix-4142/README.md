@@ -4,14 +4,18 @@ This is the small, fail-closed M0 gate before expensive matrix execution. It
 reuses the #4027 qualification campaign descriptor instead of inventing a
 second benchmark format. `preflight_matrix.py` binds an explicit clean measured
 source checkout and binary; the evidence-PR checkout is intentionally not the
-measured source. It accepts the #4140 measured source `21a57f93...` and rejects
-another source revision. Historical recall or overlap rows are not promoted to
-this issue.
+measured source. It accepts the #4140 measured source `21a57f93...` only when
+the binary's Go VCS build metadata names that clean revision with
+`vcs.modified=false`, and pins the retained campaign/descriptor hashes.
+Historical recall or overlap rows are not promoted to this issue.
 
 The reducer schema reserves the required 16/32/40 × overlap × probe × EF ×
 layout rows and binds source, executable, dataset, truth, graph, membership,
-router, and query-union SHA-256 identities. It rejects nonterminal, mixed,
-duplicate, reordered, incomplete, or filler-containing rows. All generated
+router, and query-union SHA-256 identities. It requires every explicitly
+authorized coordinate, and rejects nonterminal, mixed, duplicate-coordinate,
+reordered, incomplete, invalid-numeric, or filler-containing rows. The
+calibration frontier also requires the strict assignment artifact and rebuilds
+the selected overlap before comparing it with the materialized manifest. All generated
 rows, DBs, profiles, and logs belong under `/mnt/fast4tb/gomap-4142-locality-matrix-evidence`.
 
 Smoke preflight:

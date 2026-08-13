@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 type m0FrontierCellV1 struct {
@@ -77,20 +79,21 @@ type m0FrontierQueryRouteV1 struct {
 func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-calibration-frontier", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var db, dataset, calibration, truthCache, membershipReport, out, probesRaw, efRaw, mode string
+	var db, dataset, calibration, truthCache, membershipReport, assignmentArtifact, out, probesRaw, efRaw, mode string
 	candidates, topK := 0, 0
 	fs.StringVar(&db, "db", "", "materialized clone")
 	fs.StringVar(&dataset, "dataset", "", "frozen dataset directory")
 	fs.StringVar(&calibration, "calibration", "", "frozen calibration split")
 	fs.StringVar(&truthCache, "truth-cache", "", "frozen truth cache directory")
 	fs.StringVar(&membershipReport, "membership-report", "", "strict M0 membership report")
+	fs.StringVar(&assignmentArtifact, "assignment-artifact", "", "strict canonical assignment artifact")
 	fs.StringVar(&out, "out", "", "fresh report")
 	fs.StringVar(&mode, "mode", "zero", "materialized membership mode")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
 	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
 		return errors.New("M0 calibration frontier arguments")
 	}
 	if _, e := os.Stat(out); e == nil || !errors.Is(e, os.ErrNotExist) {
@@ -137,6 +140,9 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	}
 	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, mode)
 	if e != nil {
+		return e
+	}
+	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, account, selected, h); e != nil {
 		return e
 	}
 	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
@@ -223,7 +229,7 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 		return account, m0MembershipModeV1{}, "", err
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || manifest.PartitionCount != uint32(account.Partitions) || policy.BuildIdentityDigest != account.AssignmentArtifactSHA256 {
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || policy.BuildIdentityDigest != account.AssignmentArtifactSHA256 {
 		return account, m0MembershipModeV1{}, "", errors.New("M0 frontier membership binding")
 	}
 	var zero, useful, exact *m0MembershipModeV1
@@ -517,12 +523,91 @@ func m0FrontierMembershipOracleV1(h *m8ProductionMultiGroupAssetsV1) (map[string
 		ids[row.VectorOrdinal] = id
 	}
 	members := make(map[string][]uint32, len(rows))
-	for _, m := range h.manifest.Memberships {
+	add := func(m collections.VectorPartitionMembershipV1) error {
 		id, ok := ids[m.VectorOrdinal]
 		if !ok || m.PartitionID >= h.manifest.PartitionCount {
-			return nil, errors.New("M0 frontier membership")
+			return errors.New("M0 frontier membership")
+		}
+		for _, partition := range members[id] {
+			if partition == m.PartitionID {
+				return nil
+			}
 		}
 		members[id] = append(members[id], m.PartitionID)
+		return nil
+	}
+	for _, m := range h.manifest.Memberships {
+		if err := add(m); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range h.manifest.OverlapMemberships {
+		if err := add(m); err != nil {
+			return nil, err
+		}
 	}
 	return members, nil
+}
+
+func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, selected m0MembershipModeV1, h *m8ProductionMultiGroupAssetsV1) error {
+	raw, err := os.ReadFile(path)
+	if err != nil || m0SHA256V1(raw) != account.AssignmentArtifactSHA256 {
+		return errors.New("M0 frontier assignment artifact binding")
+	}
+	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
+	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
+		return errors.New("M0 frontier assignment artifact")
+	}
+	capacity, err := m3OverlapCapacityV1(artifact, .2)
+	if err != nil {
+		return err
+	}
+	config := vectorpartition.OverlapConfig{}
+	if selected.Name == "useful_only_20" {
+		config = vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity}
+	}
+	overlap, err := vectorpartition.BuildOverlap(artifact, config)
+	if err != nil {
+		return err
+	}
+	digest, err := m0MembershipDigestV1(overlap.Memberships)
+	if err != nil || digest != selected.MembershipSHA256 {
+		return errors.New("M0 frontier selected membership")
+	}
+	_, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
+	if err != nil {
+		return err
+	}
+	sourceOrdinals, err := m3SourceOrdinalsByArtifactID(artifact, rows)
+	if err != nil {
+		return err
+	}
+	expected := make([]collections.VectorPartitionMembershipV1, 0, overlap.Used)
+	for _, membership := range overlap.Memberships {
+		if !membership.Home {
+			expected = append(expected, collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[membership.VectorOrdinal]), PartitionID: uint32(membership.Partition)})
+		}
+	}
+	return m0FrontierManifestMembershipsEqualV1(expected, h.manifest.OverlapMemberships)
+}
+
+func m0FrontierManifestMembershipsEqualV1(left, right []collections.VectorPartitionMembershipV1) error {
+	left = append([]collections.VectorPartitionMembershipV1(nil), left...)
+	right = append([]collections.VectorPartitionMembershipV1(nil), right...)
+	less := func(values []collections.VectorPartitionMembershipV1) {
+		sort.Slice(values, func(i, j int) bool {
+			return values[i].VectorOrdinal < values[j].VectorOrdinal || values[i].VectorOrdinal == values[j].VectorOrdinal && values[i].PartitionID < values[j].PartitionID
+		})
+	}
+	less(left)
+	less(right)
+	if len(left) != len(right) {
+		return errors.New("M0 frontier materialized overlap count")
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return errors.New("M0 frontier materialized overlap membership")
+		}
+	}
+	return nil
 }

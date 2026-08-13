@@ -58,6 +58,9 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	if fs.NArg() != 0 || graphPath == "" || out == "" || partitions < 1 || assignmentPath != "" && (pythonPath != "" || scriptPath != "") || assignmentPath == "" && (pythonPath == "" || scriptPath == "") || assignmentPath != "" && assignmentOut != "" {
 		return errors.New("m0-membership-account requires artifact, partitions, output, and either assignment or pinned KaHIP paths")
 	}
+	if _, err := os.Stat(out); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return errors.New("M0 membership account output exists")
+	}
 	graphRaw, err := os.ReadFile(graphPath)
 	if err != nil {
 		return err

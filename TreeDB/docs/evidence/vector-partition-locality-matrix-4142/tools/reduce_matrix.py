@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,21 @@ REQUIRED = {
 CAMPAIGN_IDENTITIES = ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256")
 
 
+AUTHORIZED_COORDINATES = frozenset(
+    (layout, partitions, overlap, probes, ef, split)
+    for layout in ("source-order", "entry-first-bfs")
+    for partitions in (16, 32, 40)
+    for overlap in ("exact-20%", "useful-only-20%-cap", "zero")
+    for probes in (1, 2, 4)
+    for ef in (64, 80, 96, 128, 256)
+    for split in ("train", "holdout")
+)
+
+
+def coordinate(row: dict[str, Any]) -> tuple[Any, ...]:
+    return (row["layout"], row["partitions"], row["overlap"], row["probes"], row["ef"], row["split"])
+
+
 def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(set(row) == REQUIRED, "row fields are not exact")
     require(row["schema_version"] == 1 and row["result_kind"] == "vector_partition_locality_matrix_row_v1", "row schema is invalid")
@@ -58,7 +74,9 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(row["probes"] in (1, 2, 4) and row["ef"] in (64, 80, 96, 128, 256), "search budget is invalid")
     require(row["split"] in ("train", "holdout"), "split is invalid")
     metrics = row["metrics"]
-    require(isinstance(metrics, dict) and isinstance(metrics.get("filler_replicas"), int) and isinstance(metrics.get("unique_pages_per_query"), (int, float)), "metrics are incomplete")
+    require(isinstance(metrics, dict) and isinstance(metrics.get("filler_replicas"), int) and not isinstance(metrics.get("filler_replicas"), bool) and isinstance(metrics.get("unique_pages_per_query"), (int, float)) and not isinstance(metrics.get("unique_pages_per_query"), bool), "metrics are incomplete")
+    for name, value in metrics.items():
+        require(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0, f"invalid metric: {name}")
     if row["overlap"] in ("zero", "useful-only-20%-cap"):
         require(metrics["filler_replicas"] == 0, "selected useful/zero overlap has filler")
 
@@ -69,9 +87,15 @@ def reduce_rows(paths: list[Path]) -> dict[str, Any]:
     first = rows[0]
     expected = {field: first[field] for field in CAMPAIGN_IDENTITIES}
     seen: set[str] = set()
+    coordinates: set[tuple[Any, ...]] = set()
     for row in rows:
         validate_row(row, expected)
         require(row["row_id"] not in seen, "duplicate row")
         seen.add(row["row_id"])
+        point = coordinate(row)
+        require(point in AUTHORIZED_COORDINATES, "unauthorized coordinate")
+        require(point not in coordinates, "duplicate coordinate")
+        coordinates.add(point)
     require([row["row_id"] for row in rows] == sorted(seen), "rows are reordered")
+    require(coordinates == AUTHORIZED_COORDINATES, "incomplete matrix")
     return {"schema_version": 1, "result_kind": "vector_partition_locality_matrix_summary_v1", "identity": expected, "rows": len(rows)}

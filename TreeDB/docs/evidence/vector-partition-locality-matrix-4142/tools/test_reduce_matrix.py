@@ -26,6 +26,17 @@ def row(row_id: str) -> dict:
     }
 
 
+def complete_rows() -> list[dict]:
+    rows = []
+    for index, point in enumerate(sorted(reducer.AUTHORIZED_COORDINATES)):
+        value = row(f"{index:04d}")
+        value["layout"], value["partitions"], value["overlap"], value["probes"], value["ef"], value["split"] = point
+        if value["overlap"] == "exact-20%":
+            value["metrics"]["filler_replicas"] = 1
+        rows.append(value)
+    return rows
+
+
 class ReducerTest(unittest.TestCase):
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
@@ -36,23 +47,25 @@ class ReducerTest(unittest.TestCase):
             with self.assertRaisesRegex(reducer.ContractError, message):
                 reducer.validate_row(changed, {key: IDENTITY for key in reducer.REQUIRED if key.endswith("sha256") or key == "source_head"})
 
-    def test_matrix_rejects_duplicate_reordered_and_mixed_rows(self) -> None:
+    def test_matrix_rejects_duplicate_reordered_mixed_and_incomplete_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             def write(name: str, value: dict) -> Path:
                 path = root / name
                 path.write_text(json.dumps(value), encoding="utf-8")
                 return path
-            a, b = write("a.json", row("a")), write("b.json", row("b"))
-            self.assertEqual(reducer.reduce_rows([a, b])["rows"], 2)
+            paths = [write(f"{value['row_id']}.json", value) for value in complete_rows()]
+            self.assertEqual(reducer.reduce_rows(paths)["rows"], len(reducer.AUTHORIZED_COORDINATES))
+            with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
+                reducer.reduce_rows(paths[:-1])
             with self.assertRaisesRegex(reducer.ContractError, "duplicate"):
-                reducer.reduce_rows([a, a])
+                reducer.reduce_rows(paths + [paths[0]])
             with self.assertRaisesRegex(reducer.ContractError, "reordered"):
-                reducer.reduce_rows([b, a])
-            mixed = row("c")
+                reducer.reduce_rows([paths[1], paths[0]] + paths[2:])
+            mixed = complete_rows()[-1]
             mixed["dataset_sha256"] = "b" * 64
             with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
-                reducer.reduce_rows([a, write("c.json", mixed)])
+                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)])
 
     def test_variant_identities_and_exact_baseline_filler_are_permitted(self) -> None:
         value = row("exact")
@@ -61,6 +74,13 @@ class ReducerTest(unittest.TestCase):
         value["membership_sha256"] = "b" * 64
         value["router_sha256"] = "c" * 64
         reducer.validate_row(value, {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES})
+
+    def test_rejects_invalid_numeric_metrics(self) -> None:
+        for value in (True, -1, float("nan"), float("inf")):
+            changed = row("metric")
+            changed["metrics"]["unique_pages_per_query"] = value
+            with self.assertRaisesRegex(reducer.ContractError, "metric"):
+                reducer.validate_row(changed, {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES})
 
 
 if __name__ == "__main__":

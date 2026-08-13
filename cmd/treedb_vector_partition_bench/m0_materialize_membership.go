@@ -68,7 +68,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	overlap, selected, err := m0SelectedMembershipV1(artifact, artifactRaw, account, mode)
 	if err != nil {
-		return errors.New("M0 assignment/report binding")
+		return fmt.Errorf("M0 assignment/report binding: %w", err)
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
@@ -77,8 +77,13 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = os.RemoveAll(clone)
+		}
+	}()
 	if output, e := exec.Command("cp", "-a", "--reflink=auto", sourceDB+"/.", clone).CombinedOutput(); e != nil {
-		_ = os.RemoveAll(clone)
 		return fmt.Errorf("reflink clone: %w: %s", e, output)
 	}
 	if err = backenddb.RebindDurableRootSnapshotV1(clone); err != nil {
@@ -191,6 +196,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = os.WriteFile(out, append(raw, '\n'), 0644); err != nil {
 		return err
 	}
+	succeeded = true
 	_, err = fmt.Fprintf(stdout, "m0_materialized=%s clone=%s generation=%d\n", out, clone, generation)
 	return err
 }

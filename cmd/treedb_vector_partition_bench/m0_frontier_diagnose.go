@@ -186,8 +186,12 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 			row.TruthAtRouteRank[rank]++
 			report.TruthRankSlots[rank]++
 			if rank == 0 {
+				parent, ok := originalByID[want.ID]
+				if !ok {
+					return errors.New("M0 diagnostic truth ID absent from graph artifact")
+				}
 				for _, p := range row.Route {
-					if childParent[int(p)] == originalByID[want.ID] {
+					if childParent[int(p)] == parent {
 						report.ApproxMissSiblingSelected++
 						break
 					}
