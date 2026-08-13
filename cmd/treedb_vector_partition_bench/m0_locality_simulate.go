@@ -233,6 +233,16 @@ func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshot
 	if len(snapshot.AuxiliaryOffsets) != 0 && (len(snapshot.AuxiliaryOffsets) != snapshot.Rows+1 || snapshot.AuxiliaryOffsets[0] != 0 || snapshot.AuxiliaryOffsets[len(snapshot.AuxiliaryOffsets)-1] != uint64(len(snapshot.AuxiliaryNeighbors)) || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0) {
 		return errors.New("auxiliary geometry")
 	}
+	for i := 1; i < len(snapshot.AuxiliaryOffsets); i++ {
+		if snapshot.AuxiliaryOffsets[i] < snapshot.AuxiliaryOffsets[i-1] {
+			return errors.New("non-monotone auxiliary offsets")
+		}
+	}
+	for _, neighbor := range snapshot.AuxiliaryNeighbors {
+		if int(neighbor) >= snapshot.Rows {
+			return errors.New("auxiliary neighbor ordinal")
+		}
+	}
 	if len(snapshot.AuxiliaryOffsets) == 0 && (len(snapshot.AuxiliaryNeighbors) != 0 || snapshot.AuxiliaryOffsetsSectionOffset != 0 || snapshot.AuxiliaryNeighborOffset != 0) {
 		return errors.New("unexpected auxiliary geometry")
 	}
