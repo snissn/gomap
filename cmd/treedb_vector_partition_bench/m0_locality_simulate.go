@@ -60,6 +60,9 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if fs.NArg() != 0 || calibrationPath == "" || holdoutPath == "" || artifactPath == "" || dataset == "" || out == "" {
 		return errors.New("m0-locality-simulate requires raw calibration, holdout, graph artifact, dataset, and output")
 	}
+	if digest, err := localHNSWAttributionRegularFileSHA256V1(filepath.Join(dataset, "fixture_manifest.json"), maxManifestBytes); err != nil || digest != localHNSWAttributionFixtureManifestSHA256V1 {
+		return errors.New("frozen fixture manifest identity")
+	}
 	fixture, err := loadFixture(dataset)
 	if err != nil {
 		return err
