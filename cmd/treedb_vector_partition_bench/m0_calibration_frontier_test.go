@@ -75,3 +75,23 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 		t.Fatal("mixed measurement identity accepted")
 	}
 }
+
+func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
+	plan := m0FrontierPlanV1([]int{1, 2, 4}, []int{64, 80, 96, 128})
+	sha := strings.Repeat("a", 64)
+	measurements := make([]m0FrontierCellV1, 0, 36)
+	for repetition := 0; repetition < 3; repetition++ {
+		for _, point := range m0FrontierExecutionOrderV1(plan, repetition) {
+			measurements = append(measurements, m0FrontierCellV1{Repetition: repetition, Probes: point.Probes, EFSearch: point.EFSearch, SelectedPartitions: point.Probes, RouterSelectedPartitions: uint64(point.Probes * 806), Queries: 806, QPS: 100 + float64(repetition), P50Nanos: uint64(10 + repetition), P95Nanos: uint64(20 + repetition), ResultSHA256: sha, WorkSHA256: sha})
+		}
+	}
+	aggregates, err := m0FrontierAggregateV1(measurements, plan, 806)
+	if err != nil || len(aggregates) != 12 || !m0FrontierCellsCompleteV1(aggregates, []int{1, 2, 4}, []int{64, 80, 96, 128}, 806) {
+		t.Fatalf("counterbalanced aggregate err=%v rows=%d", err, len(aggregates))
+	}
+	for _, cell := range aggregates {
+		if cell.QPS != 101 || cell.P50Nanos != 11 || cell.P95Nanos != 21 {
+			t.Fatalf("median aggregation=%+v", cell)
+		}
+	}
+}

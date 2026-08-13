@@ -337,6 +337,8 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		return c, errors.New("M0 frontier cell")
 	}
 	c.Repetition = repetition
+	c.Probes = probes
+	c.EFSearch = ef
 	c.SelectedPartitions = probes
 	lat := make([]uint64, 0, len(routes))
 	resultHash, workHash := sha256.New(), sha256.New()
