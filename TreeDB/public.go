@@ -396,6 +396,13 @@ func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sam
 	commandPublicPayloadEntryScanPreparationNs := nonNegativeDurationNs(sample.commandPublicPayloadEntryScanPreparation)
 	commandPublishLockBarrierWaitNs := nonNegativeDurationNs(sample.commandPublishLockBarrierWait)
 	commandBackendIntentPlanningSerializationNs := nonNegativeDurationNs(sample.commandBackendIntentPlanningSerialization)
+	// Public preparation runs inside the backend planning interval: the backend
+	// holds the command-WAL publish serialization while it invokes the public
+	// preparation callback. Publish those two labels as an exclusive partition,
+	// rather than counting that nested preparation twice.
+	if commandPublicPayloadEntryScanPreparationNs <= commandBackendIntentPlanningSerializationNs {
+		commandBackendIntentPlanningSerializationNs -= commandPublicPayloadEntryScanPreparationNs
+	}
 	commandExternalRefOrderingNs := nonNegativeDurationNs(sample.commandExternalRefOrdering)
 	commandAppendNs := nonNegativeDurationNs(sample.commandAppend)
 	commandFlushNs := nonNegativeDurationNs(sample.commandFlush)
