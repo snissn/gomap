@@ -14,6 +14,7 @@ func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 		LayerOffsetsSectionOffsets: []uint64{2}, LayerNeighborOffsets: []uint64{3},
 	}
 	pairs := map[[2]int]uint32{{1, 3}: 9, {2, 4}: 7}
+	want := map[string][]int{"source": {0, 1, 2, 3, 4}, "bfs": {0, 1, 2, 3, 4}, "edge_window": {0, 1, 2, 3, 4}, "gorder_like": {0, 1, 2, 3, 4}, "co_visitation": {0, 1, 3, 2, 4}, "hybrid": {0, 1, 3, 2, 4}}
 	seen := map[string][]int{}
 	for _, objective := range []string{"source", "bfs", "edge_window", "gorder_like", "co_visitation", "hybrid"} {
 		first, err := m0ObjectiveOrderV1(snapshot, pairs, objective)
@@ -25,6 +26,9 @@ func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 			t.Fatalf("%s nondeterministic: %v %v", objective, first, second)
 		}
 		seen[objective] = first
+		if !reflect.DeepEqual(first, want[objective]) {
+			t.Fatalf("%s got %v want %v", objective, first, want[objective])
+		}
 	}
 	if _, err := m0ObjectiveOrderV1(snapshot, pairs, "unknown"); err == nil {
 		t.Fatal("accepted unknown objective")

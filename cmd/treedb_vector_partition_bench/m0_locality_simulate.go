@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -208,9 +209,32 @@ func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshot
 		return errors.New("snapshot geometry")
 	}
 	for layer, offsets := range snapshot.LayerOffsets {
-		if len(offsets) != snapshot.Rows+1 || len(snapshot.LayerNeighbors[layer]) != int(offsets[len(offsets)-1]) || snapshot.LayerOffsetsSectionOffsets[layer] == 0 || snapshot.LayerNeighborOffsets[layer] == 0 || offsets[0] != 0 {
+		if len(offsets) != snapshot.Rows+1 || offsets[0] != 0 || offsets[len(offsets)-1] > uint64(len(snapshot.LayerNeighbors[layer])) || len(snapshot.LayerNeighbors[layer]) != int(offsets[len(offsets)-1]) || snapshot.LayerOffsetsSectionOffsets[layer] == 0 || snapshot.LayerNeighborOffsets[layer] == 0 {
 			return errors.New("layer geometry")
 		}
+		for i := 1; i < len(offsets); i++ {
+			if offsets[i] < offsets[i-1] {
+				return errors.New("non-monotone layer offsets")
+			}
+		}
+		for _, neighbor := range snapshot.LayerNeighbors[layer] {
+			if int(neighbor) >= snapshot.Rows {
+				return errors.New("layer neighbor ordinal")
+			}
+		}
+	}
+	seen := make(map[uint32]struct{}, snapshot.Rows)
+	for _, source := range snapshot.RowOrdinals {
+		if _, duplicate := seen[source]; duplicate {
+			return errors.New("duplicate source ordinal")
+		}
+		seen[source] = struct{}{}
+	}
+	if len(snapshot.AuxiliaryOffsets) != 0 && (len(snapshot.AuxiliaryOffsets) != snapshot.Rows+1 || snapshot.AuxiliaryOffsets[0] != 0 || snapshot.AuxiliaryOffsets[len(snapshot.AuxiliaryOffsets)-1] != uint64(len(snapshot.AuxiliaryNeighbors)) || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0) {
+		return errors.New("auxiliary geometry")
+	}
+	if len(snapshot.AuxiliaryOffsets) == 0 && (len(snapshot.AuxiliaryNeighbors) != 0 || snapshot.AuxiliaryOffsetsSectionOffset != 0 || snapshot.AuxiliaryNeighborOffset != 0) {
+		return errors.New("unexpected auxiliary geometry")
 	}
 	return nil
 }
@@ -234,9 +258,12 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 				neighbors[neighbor] = append(neighbors[neighbor], ordinal)
 			}
 		}
+	}
+	for ordinal := range neighbors {
 		sort.Slice(neighbors[ordinal], func(i, j int) bool {
 			return snapshot.RowOrdinals[neighbors[ordinal][i]] < snapshot.RowOrdinals[neighbors[ordinal][j]]
 		})
+		neighbors[ordinal] = slices.Compact(neighbors[ordinal])
 	}
 	if objective == "bfs" {
 		return m0BFSOrderV1(snapshot, rows), nil
@@ -261,9 +288,20 @@ func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, n
 		begin := max(0, len(out)-window)
 		candidates := map[int]struct{}{}
 		for _, prior := range out[begin:] {
-			for _, node := range neighbors[prior] {
-				if !placed[node] {
-					candidates[node] = struct{}{}
+			if objective != "co_visitation" {
+				for _, node := range neighbors[prior] {
+					if !placed[node] {
+						candidates[node] = struct{}{}
+					}
+				}
+			}
+			if objective == "gorder_like" || objective == "hybrid" {
+				for _, neighbor := range neighbors[prior] {
+					for _, node := range neighbors[neighbor] {
+						if !placed[node] {
+							candidates[node] = struct{}{}
+						}
+					}
 				}
 			}
 			if objective == "co_visitation" || objective == "hybrid" {
