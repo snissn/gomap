@@ -43,12 +43,14 @@ scaffold.
 
 ## M0 page-objective checkpoint
 
-The v4 offline trace/simulation is a held-out graph+vector page selection
+The v5 offline trace/simulation is a held-out graph+vector page selection
 only, not a recall, throughput, or production-layout result. It uses the
 frozen 250k graph artifact and frozen calibration/holdout manifests; snapshots
 bind each pack document ID to the artifact ordinal and the simulator fails
 closed unless the trusted dataset manifest proves complete disjoint query-split
 coverage and identity remapping reproduces every captured holdout page count.
+Each capture also binds the retained source, descriptor, ready manifest, and
+router model before tracing.
 
 | held-out objective | median pages | p95 pages |
 | --- | ---: | ---: |
@@ -62,10 +64,10 @@ coverage and identity remapping reproduces every captured holdout page count.
 `co-visitation` is the provisional M0 page-objective leader: -16.33% held-out
 median pages versus identity/BFS. Second-corpus/query-distribution sensitivity
 and integrated construction remain required before selecting a contract. The raw calibration capture SHA-256 is
-`84ca7f00e6e658ff951b841d8f367cab4d1809d106516900e4193e1a0c85ec5f`,
-holdout is `2d07e255c7c4eecd04596215c523940fe77daec66ed76603ed65f595b3632dd1`,
+`99d6b81f776476afb66e958dc30b24ce3af52c6e66f36e65749c3f3a8f426ce7`,
+holdout is `6fb2f93b0ee18cdb2bae0e9926fbad7710ae78f916787615c7e5aae8694a41fd`,
 and the reduced simulation is
-`a170741fa6a2dfa6685b5a3a96b751e3ba20ea4f3743baafa259069ff78f5c1d`.
+`eb377416652c84ee59e8ed5627bb56896b5910bdd08dcdffdffd657022e526f1`.
 All raw artifacts remain under the task-specific `/mnt/fast4tb` root.
 
 ## Clean checkpoint: p32 membership and routing
