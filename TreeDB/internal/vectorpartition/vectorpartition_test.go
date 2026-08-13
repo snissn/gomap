@@ -1166,6 +1166,38 @@ func TestBuildWithPartitionerFailsClosedAfterMutatingBackendFailure(t *testing.T
 	}
 }
 
+func TestRepartitionArtifactReusesCanonicalGraph(t *testing.T) {
+	in, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RepartitionArtifact(in, 2, ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in.Graph, out.Graph) || !reflect.DeepEqual(in.IDs, out.IDs) || in.Source != out.Source || out.Config.Partitions != 2 {
+		t.Fatalf("repartition changed frozen graph identity: in=%+v out=%+v", in, out)
+	}
+	if err := ValidateArtifact(out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepartitionArtifactFailsClosedAfterMutatingBackend(t *testing.T) {
+	in, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := in
+	_, err = RepartitionArtifact(in, 2, mutatingPartitioner{err: fmt.Errorf("backend failure")})
+	if err == nil {
+		t.Fatal("accepted mutating backend failure")
+	}
+	if !reflect.DeepEqual(in, before) {
+		t.Fatal("mutating backend changed frozen input artifact")
+	}
+}
+
 func TestCloneGraphBoundedUsesIndependentExactBacking(t *testing.T) {
 	original := Graph{Neighbors: [][]int{{1, 2}, {}, {0}}}
 	clone, err := cloneGraphBounded(original, 3)

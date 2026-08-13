@@ -92,6 +92,9 @@ func BuildWithPartitioner(v []Vector, c Config, s Source, p Partitioner) (Artifa
 func BuildWithPartitionerPhased(v []Vector, c Config, s Source, p Partitioner) (Artifact, PhaseMetrics, error) {
 	return internal.BuildWithPartitionerPhased(v, c, s, p)
 }
+func RepartitionArtifact(a Artifact, partitions int, p Partitioner) (Artifact, error) {
+	return internal.RepartitionArtifact(a, partitions, p)
+}
 func ValidateArtifact(a Artifact) error { return internal.ValidateArtifact(a) }
 func BuildStableIDHashBaseline(a Artifact) (Artifact, error) {
 	return internal.BuildStableIDHashBaseline(a)
