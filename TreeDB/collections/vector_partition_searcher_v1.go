@@ -1302,9 +1302,11 @@ type VectorPartitionPackLayoutSnapshotV1 struct {
 	VectorStride                  int        `json:"vector_stride"`
 	VectorOffset                  uint64     `json:"vector_offset"`
 	LayerOffsets                  [][]uint64 `json:"layer_offsets"`
+	LayerNeighbors                [][]uint32 `json:"layer_neighbors"`
 	LayerOffsetsSectionOffsets    []uint64   `json:"layer_offsets_section_offsets"`
 	LayerNeighborOffsets          []uint64   `json:"layer_neighbor_offsets"`
 	AuxiliaryOffsets              []uint64   `json:"auxiliary_offsets,omitempty"`
+	AuxiliaryNeighbors            []uint32   `json:"auxiliary_neighbors,omitempty"`
 	AuxiliaryOffsetsSectionOffset uint64     `json:"auxiliary_offsets_section_offset,omitempty"`
 	AuxiliaryNeighborOffset       uint64     `json:"auxiliary_neighbor_offset,omitempty"`
 }
@@ -1336,6 +1338,7 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 		RowOrdinals:                make([]uint32, pack.Header.Rows),
 		VectorStride:               pack.Header.VectorStride,
 		LayerOffsets:               make([][]uint64, len(pack.AdjacencyLayers)),
+		LayerNeighbors:             make([][]uint32, len(pack.AdjacencyLayers)),
 		LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)),
 		LayerNeighborOffsets:       make([]uint64, len(pack.AdjacencyLayers)),
 	}
@@ -1364,19 +1367,21 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 	}
 	for layer, x := range pack.AdjacencyLayers {
 		out.LayerOffsets[layer] = append([]uint64(nil), x.Offsets...)
+		out.LayerNeighbors[layer] = append([]uint32(nil), x.Neighbors...)
 	}
 	if pack.Header.HasAuxiliaryNavigation {
 		out.AuxiliaryOffsets = append([]uint64(nil), pack.AuxiliaryNavigation.Offsets...)
+		out.AuxiliaryNeighbors = append([]uint32(nil), pack.AuxiliaryNavigation.Neighbors...)
 	}
 	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 || out.EntryOrdinal < 0 || out.EntryOrdinal >= out.Rows || len(out.RowOrdinals) != out.Rows {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	for i, offsets := range out.LayerOffsets {
-		if len(offsets) != out.Rows+1 || out.LayerOffsetsSectionOffsets[i] == 0 || out.LayerNeighborOffsets[i] == 0 {
+		if len(offsets) != out.Rows+1 || len(out.LayerNeighbors[i]) != int(offsets[len(offsets)-1]) || out.LayerOffsetsSectionOffsets[i] == 0 || out.LayerNeighborOffsets[i] == 0 {
 			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	if pack.Header.HasAuxiliaryNavigation != (len(out.AuxiliaryOffsets) != 0) || pack.Header.HasAuxiliaryNavigation && (len(out.AuxiliaryOffsets) != out.Rows+1 || out.AuxiliaryOffsetsSectionOffset == 0 || out.AuxiliaryNeighborOffset == 0) {
+	if pack.Header.HasAuxiliaryNavigation != (len(out.AuxiliaryOffsets) != 0) || pack.Header.HasAuxiliaryNavigation && (len(out.AuxiliaryOffsets) != out.Rows+1 || len(out.AuxiliaryNeighbors) != int(out.AuxiliaryOffsets[len(out.AuxiliaryOffsets)-1]) || out.AuxiliaryOffsetsSectionOffset == 0 || out.AuxiliaryNeighborOffset == 0) {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	return out, nil

@@ -190,7 +190,7 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 		t.Fatal("accepted empty trace")
 	}
 	snapshot, err := searcher.PackLayoutSnapshotV1()
-	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
+	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}
 	manager := mappedresource.NewManager()
