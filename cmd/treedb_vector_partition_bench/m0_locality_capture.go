@@ -74,6 +74,22 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if int(assets.manifest.PartitionCount) < probes {
 		return errors.New("probes exceed retained partitions")
 	}
+	// Open/verify each immutable pack once. Reopening inside the query loop
+	// would measure checksum/open work rather than traversal page locality.
+	searchers := make([]*collections.VectorPartitionLocalSearcherV1, assets.manifest.PartitionCount)
+	defer func() {
+		for _, s := range searchers {
+			if s != nil {
+				_ = s.Close()
+			}
+		}
+	}()
+	for p := range searchers {
+		searchers[p], err = assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, uint32(p))
+		if err != nil {
+			return err
+		}
+	}
 	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization"}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
@@ -87,10 +103,10 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		row := m0LocalityCaptureRowV1{Query: ordinal}
 		tokens := map[collections.VectorPartitionSearchPageTokenV1]struct{}{}
 		for _, p := range route {
-			s, e := assets.collection.OpenVectorPartitionLocalSearcherForGenerationV1(partitionHNSWIndex, assets.manifest.Generation, p)
-			if e != nil {
-				return e
+			if int(p) >= len(searchers) || searchers[p] == nil {
+				return errors.New("routed partition searcher")
 			}
+			s := searchers[p]
 			_, m, t, e := s.SearchWithAttributionV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
 			if e == nil {
 				pages, x := s.PageAttributionForTraceV1(t, 4096)
@@ -104,12 +120,8 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 					row.Edges += m.Edges
 				}
 			}
-			closeErr := s.Close()
 			if e != nil {
 				return e
-			}
-			if closeErr != nil {
-				return closeErr
 			}
 		}
 		row.Pages = uint64(len(tokens))
