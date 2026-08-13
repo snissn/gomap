@@ -11,6 +11,7 @@ import unittest
 sys.dont_write_bytecode = True
 
 import reduce_matrix as reducer
+import preflight_matrix as preflight_contract
 
 
 IDENTITY = "a" * 64
@@ -19,7 +20,7 @@ IDENTITY = "a" * 64
 def row(row_id: str) -> dict:
     return {
         "schema_version": 1, "result_kind": "vector_partition_locality_matrix_row_v1", "row_id": row_id, "terminal": True,
-        "source_head": IDENTITY, "binary_sha256": IDENTITY, "dataset_sha256": IDENTITY, "truth_sha256": IDENTITY,
+        "source_head": preflight_contract.MEASURED_SOURCE_HEAD, "binary_sha256": IDENTITY, "dataset_sha256": IDENTITY, "truth_sha256": IDENTITY,
         "graph_sha256": IDENTITY, "membership_sha256": IDENTITY, "router_sha256": IDENTITY, "query_union_sha256": IDENTITY,
         "layout": "entry-first-bfs", "partitions": 16, "overlap": "zero", "probes": 2, "ef": 96, "split": "holdout",
         "metrics": {"filler_replicas": 0, "unique_pages_per_query": 1.0},
@@ -37,15 +38,33 @@ def complete_rows() -> list[dict]:
     return rows
 
 
+def preflight() -> dict:
+    return {
+        "schema_version": 1,
+        "result_kind": "vector_partition_locality_matrix_preflight_v1",
+        "source_head": preflight_contract.MEASURED_SOURCE_HEAD,
+        "binary_sha256": IDENTITY,
+        "frozen_head": preflight_contract.FROZEN_INPUT_HEAD,
+        "campaign_sha256": preflight_contract.FROZEN_CAMPAIGN_SHA256,
+        "descriptor_sha256": preflight_contract.FROZEN_DESCRIPTOR_SHA256,
+        "descriptor_head": preflight_contract.FROZEN_INPUT_HEAD,
+        "binary_vcs_revision": preflight_contract.MEASURED_SOURCE_HEAD,
+        "binary_vcs_modified": "false",
+        "status": "ready",
+    }
+
+
 class ReducerTest(unittest.TestCase):
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
-        reducer.validate_row(value, {key: IDENTITY for key in reducer.REQUIRED if key.endswith("sha256") or key == "source_head"})
-        for mutate, message in ((lambda x: x.update(source_head="b" * 64), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "filler")):
+        expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
+        expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+        reducer.validate_row(value, expected)
+        for mutate, message in ((lambda x: x.update(source_head="b" * 40), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "filler")):
             changed = copy.deepcopy(value)
             mutate(changed)
             with self.assertRaisesRegex(reducer.ContractError, message):
-                reducer.validate_row(changed, {key: IDENTITY for key in reducer.REQUIRED if key.endswith("sha256") or key == "source_head"})
+                reducer.validate_row(changed, expected)
 
     def test_matrix_rejects_duplicate_reordered_mixed_and_incomplete_rows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -54,18 +73,27 @@ class ReducerTest(unittest.TestCase):
                 path = root / name
                 path.write_text(json.dumps(value), encoding="utf-8")
                 return path
+            preflight_path = write("preflight.json", preflight())
             paths = [write(f"{value['row_id']}.json", value) for value in complete_rows()]
-            self.assertEqual(reducer.reduce_rows(paths)["rows"], len(reducer.AUTHORIZED_COORDINATES))
+            self.assertEqual(reducer.reduce_rows(paths, preflight_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
             with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
-                reducer.reduce_rows(paths[:-1])
+                reducer.reduce_rows(paths[:-1], preflight_path)
             with self.assertRaisesRegex(reducer.ContractError, "duplicate"):
-                reducer.reduce_rows(paths + [paths[0]])
+                reducer.reduce_rows(paths + [paths[0]], preflight_path)
             with self.assertRaisesRegex(reducer.ContractError, "reordered"):
-                reducer.reduce_rows([paths[1], paths[0]] + paths[2:])
+                reducer.reduce_rows([paths[1], paths[0]] + paths[2:], preflight_path)
             mixed = complete_rows()[-1]
             mixed["dataset_sha256"] = "b" * 64
             with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
-                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)])
+                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)], preflight_path)
+            mixed_topology = complete_rows()[-1]
+            mixed_topology["membership_sha256"] = "b" * 64
+            with self.assertRaisesRegex(reducer.ContractError, "mixed topology identity"):
+                reducer.reduce_rows(paths[:-1] + [write("mixed-topology.json", mixed_topology)], preflight_path)
+            blocked = preflight()
+            blocked["status"] = "blocked_source_identity"
+            with self.assertRaisesRegex(reducer.ContractError, "preflight"):
+                reducer.reduce_rows(paths, write("blocked.json", blocked))
 
     def test_variant_identities_and_exact_baseline_filler_are_permitted(self) -> None:
         value = row("exact")
@@ -73,14 +101,18 @@ class ReducerTest(unittest.TestCase):
         value["metrics"]["filler_replicas"] = 3
         value["membership_sha256"] = "b" * 64
         value["router_sha256"] = "c" * 64
-        reducer.validate_row(value, {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES})
+        expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
+        expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+        reducer.validate_row(value, expected)
 
     def test_rejects_invalid_numeric_metrics(self) -> None:
         for value in (True, -1, float("nan"), float("inf")):
             changed = row("metric")
             changed["metrics"]["unique_pages_per_query"] = value
             with self.assertRaisesRegex(reducer.ContractError, "metric"):
-                reducer.validate_row(changed, {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES})
+                expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
+                expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+                reducer.validate_row(changed, expected)
 
 
 if __name__ == "__main__":

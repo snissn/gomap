@@ -13,6 +13,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import preflight_matrix as preflight_contract
+
 
 class ContractError(ValueError):
     pass
@@ -43,6 +45,12 @@ REQUIRED = {
 
 CAMPAIGN_IDENTITIES = ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256")
 
+PREFLIGHT_FIELDS = {
+    "schema_version", "result_kind", "source_head", "binary_sha256",
+    "frozen_head", "campaign_sha256", "descriptor_sha256", "descriptor_head",
+    "binary_vcs_revision", "binary_vcs_modified", "status",
+}
+
 
 AUTHORIZED_COORDINATES = frozenset(
     (layout, partitions, overlap, probes, ef, split)
@@ -63,11 +71,12 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(set(row) == REQUIRED, "row fields are not exact")
     require(row["schema_version"] == 1 and row["result_kind"] == "vector_partition_locality_matrix_row_v1", "row schema is invalid")
     require(row["terminal"] is True and isinstance(row["row_id"], str) and row["row_id"], "row is nonterminal or unnamed")
-    for field in ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256"):
+    require(isinstance(row["source_head"], str) and len(row["source_head"]) == 40 and all(c in "0123456789abcdef" for c in row["source_head"]), "source_head is not a git revision")
+    for field in ("binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256"):
         value = row[field]
         require(isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value), f"{field} is not sha256")
-        if field in CAMPAIGN_IDENTITIES:
-            require(value == expected[field], f"mixed identity: {field}")
+    for field in CAMPAIGN_IDENTITIES:
+        require(row[field] == expected[field], f"mixed identity: {field}")
     require(row["layout"] in ("source-order", "entry-first-bfs"), "layout is invalid")
     require(row["partitions"] in (16, 32, 40), "partition count is invalid")
     require(row["overlap"] in ("exact-20%", "useful-only-20%-cap", "zero"), "overlap is invalid")
@@ -81,13 +90,37 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
         require(metrics["filler_replicas"] == 0, "selected useful/zero overlap has filler")
 
 
-def reduce_rows(paths: list[Path]) -> dict[str, Any]:
+def validate_preflight(path: Path) -> dict[str, Any]:
+    value = load(path)
+    require(set(value) == PREFLIGHT_FIELDS, "preflight fields are not exact")
+    require(
+        value["schema_version"] == 1
+        and value["result_kind"] == "vector_partition_locality_matrix_preflight_v1"
+        and value["status"] == "ready"
+        and value["source_head"] == preflight_contract.MEASURED_SOURCE_HEAD
+        and value["binary_vcs_revision"] == value["source_head"]
+        and value["binary_vcs_modified"] == "false"
+        and value["frozen_head"] == preflight_contract.FROZEN_INPUT_HEAD
+        and value["descriptor_head"] == preflight_contract.FROZEN_INPUT_HEAD
+        and value["campaign_sha256"] == preflight_contract.FROZEN_CAMPAIGN_SHA256
+        and value["descriptor_sha256"] == preflight_contract.FROZEN_DESCRIPTOR_SHA256,
+        "preflight is not ready or pinned",
+    )
+    require(isinstance(value["binary_sha256"], str) and len(value["binary_sha256"]) == 64 and all(c in "0123456789abcdef" for c in value["binary_sha256"]), "preflight binary_sha256 is invalid")
+    return value
+
+
+def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
     require(paths, "matrix has no rows")
+    preflight = validate_preflight(preflight_path)
     rows = [load(path) for path in paths]
     first = rows[0]
+    require(set(first) == REQUIRED, "row fields are not exact")
     expected = {field: first[field] for field in CAMPAIGN_IDENTITIES}
+    expected.update(source_head=preflight["source_head"], binary_sha256=preflight["binary_sha256"])
     seen: set[str] = set()
     coordinates: set[tuple[Any, ...]] = set()
+    topology_identities: dict[tuple[Any, ...], tuple[str, str]] = {}
     for row in rows:
         validate_row(row, expected)
         require(row["row_id"] not in seen, "duplicate row")
@@ -96,6 +129,9 @@ def reduce_rows(paths: list[Path]) -> dict[str, Any]:
         require(point in AUTHORIZED_COORDINATES, "unauthorized coordinate")
         require(point not in coordinates, "duplicate coordinate")
         coordinates.add(point)
+        topology = (row["layout"], row["partitions"], row["overlap"])
+        identity = (row["membership_sha256"], row["router_sha256"])
+        require(topology_identities.setdefault(topology, identity) == identity, "mixed topology identity")
     require([row["row_id"] for row in rows] == sorted(seen), "rows are reordered")
     require(coordinates == AUTHORIZED_COORDINATES, "incomplete matrix")
     return {"schema_version": 1, "result_kind": "vector_partition_locality_matrix_summary_v1", "identity": expected, "rows": len(rows)}

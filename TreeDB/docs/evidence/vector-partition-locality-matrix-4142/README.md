@@ -11,8 +11,9 @@ Historical recall or overlap rows are not promoted to this issue.
 
 The reducer schema reserves the required 16/32/40 × overlap × probe × EF ×
 layout rows and binds source, executable, dataset, truth, graph, membership,
-router, and query-union SHA-256 identities. It requires every explicitly
-authorized coordinate, and rejects nonterminal, mixed, duplicate-coordinate,
+router, and query-union identities. It requires a ready pinned preflight,
+every explicitly authorized coordinate, and stable membership/router identity
+within each topology; it rejects nonterminal, mixed, duplicate-coordinate,
 reordered, incomplete, invalid-numeric, or filler-containing rows. The
 calibration frontier also requires the strict assignment artifact and rebuilds
 the selected overlap before comparing it with the materialized manifest. All generated
