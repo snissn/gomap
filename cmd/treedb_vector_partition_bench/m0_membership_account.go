@@ -7,30 +7,27 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-type m0AssignmentPartitionerV1 struct {
-	assignment    []int
-	name, license string
-}
-
-func (p m0AssignmentPartitionerV1) Name() string    { return p.name }
-func (p m0AssignmentPartitionerV1) License() string { return p.license }
-func (p m0AssignmentPartitionerV1) Partition(_ vectorpartition.Graph, _ int, _ int) ([]int, error) {
-	return append([]int(nil), p.assignment...), nil
-}
-
 type m0MembershipAccountV1 struct {
-	Schema, GraphArtifactSHA256, AssignmentSHA256, RepartitionedArtifactSHA256, Backend string
-	Partitions                                                                          int
-	Cap                                                                                 int `json:"cap"`
-	MaxPartitionSize                                                                    int `json:"max_partition_size"`
-	EdgeCut                                                                             int `json:"edge_cut"`
-	Modes                                                                               []m0MembershipModeV1
+	Schema                      string               `json:"schema"`
+	GraphArtifactSHA256         string               `json:"graph_artifact_sha256"`
+	AssignmentArtifactSHA256    string               `json:"assignment_artifact_sha256"`
+	RepartitionedArtifactSHA256 string               `json:"repartitioned_artifact_sha256"`
+	Backend                     string               `json:"backend"`
+	Partitions                  int                  `json:"partitions"`
+	Cap                         int                  `json:"cap"`
+	OverlapCapacity             int                  `json:"overlap_capacity"`
+	OverlapBudget               int                  `json:"overlap_budget"`
+	MaxPartitionSize            int                  `json:"max_partition_size"`
+	EdgeCut                     int                  `json:"edge_cut"`
+	Modes                       []m0MembershipModeV1 `json:"modes"`
 }
 type m0MembershipModeV1 struct {
 	Name             string `json:"name"`
@@ -47,22 +44,28 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-membership-account", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var graphPath, assignmentPath, out, pythonPath, scriptPath string
+	partitions := 0
 	fs.StringVar(&graphPath, "artifact", "", "canonical graph artifact")
 	fs.StringVar(&assignmentPath, "assignment", "", "KaHIP assignment artifact")
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	fs.StringVar(&pythonPath, "kahip-python", "", "pinned KaHIP Python")
 	fs.StringVar(&scriptPath, "kahip-script", "", "pinned KaHIP adapter")
+	fs.IntVar(&partitions, "partitions", 0, "target partition count")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || graphPath == "" || out == "" || assignmentPath != "" && (pythonPath != "" || scriptPath != "") || assignmentPath == "" && (pythonPath == "" || scriptPath == "") {
-		return errors.New("m0-membership-account requires artifact, assignment, output")
+	if fs.NArg() != 0 || graphPath == "" || out == "" || partitions < 1 || assignmentPath != "" && (pythonPath != "" || scriptPath != "") || assignmentPath == "" && (pythonPath == "" || scriptPath == "") {
+		return errors.New("m0-membership-account requires artifact, partitions, output, and either assignment or pinned KaHIP paths")
 	}
 	graphRaw, err := os.ReadFile(graphPath)
 	if err != nil {
 		return err
 	}
 	graph, err := vectorpartition.DecodeArtifact(graphRaw, len(graphRaw))
+	if err != nil {
+		return err
+	}
+	request, err := vectorpartition.RepartitionArtifact(graph, partitions, kahipRequestPartitioner{})
 	if err != nil {
 		return err
 	}
@@ -89,17 +92,13 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 		if m0SHA256V1(pythonRaw) != m8QualificationKaHIPPythonSHA256V1 || m0SHA256V1(scriptRaw) != kahipAdapterSHA256 {
 			return errors.New("pinned KaHIP identity")
 		}
-		request, e := vectorpartition.RepartitionArtifact(graph, 32, kahipRequestPartitioner{})
-		if e != nil {
-			return e
-		}
 		requestRaw, e := vectorpartition.CanonicalJSON(request)
 		if e != nil {
 			return e
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), kahipDefaultTimeout)
 		defer cancel()
-		candidate, e = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{pythonPath, "-c", string(scriptRaw)}, requestRaw, vectorpartition.ExternalJSONLimits{MaxInput: len(requestRaw), MaxOutput: kahipOutputCap(requestRaw, request)}, request)
+		candidate, e = vectorpartition.RunExternalJSONForRequestWithLimits(ctx, []string{pythonPath, scriptPath}, requestRaw, vectorpartition.ExternalJSONLimits{MaxInput: len(requestRaw), MaxOutput: kahipOutputCap(requestRaw, request)}, request)
 		if e != nil {
 			return e
 		}
@@ -108,49 +107,34 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 			return e
 		}
 	}
-	if candidate.Source != graph.Source || len(candidate.Assignment) != len(graph.Assignment) || candidate.Config.Partitions < 1 {
-		return errors.New("assignment graph identity")
+	if err := m0ValidateAssignmentArtifactV1(graph, request, candidate); err != nil {
+		return err
 	}
-	artifact, err := vectorpartition.RepartitionArtifact(graph, candidate.Config.Partitions, m0AssignmentPartitionerV1{assignment: candidate.Assignment, name: candidate.Backend, license: candidate.BackendLicense})
+	digest, err := vectorpartition.Digest(candidate)
 	if err != nil {
 		return err
 	}
-	digest, err := vectorpartition.Digest(artifact)
+	capacity, err := m3OverlapCapacityV1(candidate, .2)
 	if err != nil {
 		return err
 	}
-	report := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentSHA256: m0SHA256V1(assignmentRaw), RepartitionedArtifactSHA256: digest, Backend: artifact.Backend, Partitions: artifact.Config.Partitions, Cap: artifact.Metrics.Cap, MaxPartitionSize: artifact.Metrics.MaxPartitionSize, EdgeCut: artifact.Metrics.EdgeCut}
-	zero, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{})
+	zero, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{})
 	if err != nil {
 		return err
 	}
-	zeroDigest, err := m0OverlapDigestV1(zero)
+	useful, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity})
 	if err != nil {
 		return err
 	}
-	report.Modes = append(report.Modes, m0MembershipModeV1{Name: "zero", Used: zero.Used, Useful: zero.Useful, Filler: zero.Filler, MembershipSHA256: zeroDigest, Materialize: true})
-	for _, exact := range []bool{false, true} {
-		name := "useful_only_20"
-		if exact {
-			name = "exact_20"
-		}
-		overlap, e := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: .2, Capacity: artifact.Metrics.Cap, RequireExact: exact})
-		mode := m0MembershipModeV1{Name: name}
-		if e != nil {
-			mode.Rejected = e.Error()
-		} else {
-			mode.Used, mode.Useful, mode.Filler = overlap.Used, overlap.Useful, overlap.Filler
-			mode.MembershipSHA256, _ = m0OverlapDigestV1(overlap)
-			if exact && overlap.Filler != 0 {
-				mode.Rejected = "exact-20 contains filler"
-			} else if mode.MembershipSHA256 == zeroDigest {
-				mode.EquivalentTo = "zero"
-			} else {
-				mode.Materialize = true
-			}
-		}
-		report.Modes = append(report.Modes, mode)
+	exact, err := vectorpartition.BuildOverlap(candidate, vectorpartition.OverlapConfig{Ratio: .2, Capacity: capacity, RequireExact: true})
+	if err != nil {
+		return err
 	}
+	modes, err := m0MembershipModesV1(candidate, zero, useful, exact)
+	if err != nil {
+		return err
+	}
+	report := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw), RepartitionedArtifactSHA256: digest, Backend: candidate.Backend, Partitions: candidate.Config.Partitions, Cap: candidate.Metrics.Cap, OverlapCapacity: capacity, OverlapBudget: int(math.Floor(.2 * float64(len(candidate.IDs)))), MaxPartitionSize: candidate.Metrics.MaxPartitionSize, EdgeCut: candidate.Metrics.EdgeCut, Modes: modes}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
@@ -164,8 +148,62 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	_, err = fmt.Fprintf(stdout, "m0_membership_account=%s partitions=%d\n", out, report.Partitions)
 	return err
 }
-func m0OverlapDigestV1(overlap vectorpartition.OverlapResult) (string, error) {
-	raw, err := json.Marshal(overlap)
+func m0ValidateAssignmentArtifactV1(graph, request, candidate vectorpartition.Artifact) error {
+	if candidate.Source != graph.Source || !reflect.DeepEqual(candidate.IDs, graph.IDs) || !reflect.DeepEqual(candidate.Graph, graph.Graph) || !reflect.DeepEqual(candidate.Config, request.Config) {
+		return errors.New("assignment artifact does not bind frozen source, IDs, graph, and requested config")
+	}
+	return nil
+}
+
+func m0MembershipModesV1(artifact vectorpartition.Artifact, zero, useful, exact vectorpartition.OverlapResult) ([]m0MembershipModeV1, error) {
+	zeroDigest, err := m0MembershipDigestV1(zero.Memberships)
+	if err != nil {
+		return nil, err
+	}
+	mode := func(name string, overlap vectorpartition.OverlapResult) (m0MembershipModeV1, error) {
+		digest, err := m0MembershipDigestV1(overlap.Memberships)
+		if err != nil {
+			return m0MembershipModeV1{}, err
+		}
+		return m0MembershipModeV1{Name: name, Used: overlap.Used, Useful: overlap.Useful, Filler: overlap.Filler, MembershipSHA256: digest}, nil
+	}
+	zeroMode, err := mode("zero", zero)
+	if err != nil {
+		return nil, err
+	}
+	zeroMode.Materialize = true
+	usefulMode, err := mode("useful_only_20", useful)
+	if err != nil {
+		return nil, err
+	}
+	if artifact.Metrics.EdgeCut == 0 && (useful.Used != 0 || useful.Useful != 0 || useful.Filler != 0 || usefulMode.MembershipSHA256 != zeroDigest) {
+		return nil, errors.New("zero-cut useful-only overlap differs from zero")
+	}
+	if usefulMode.MembershipSHA256 == zeroDigest {
+		usefulMode.EquivalentTo = "zero"
+	} else {
+		usefulMode.Materialize = true
+	}
+	exactMode, err := mode("exact_20", exact)
+	if err != nil {
+		return nil, err
+	}
+	budget := int(math.Floor(.2 * float64(len(artifact.IDs))))
+	if artifact.Metrics.EdgeCut == 0 && (exact.Used != budget || exact.Useful != 0 || exact.Filler != budget) {
+		return nil, errors.New("zero-cut exact-20 overlap is not filler-only at the declared budget")
+	}
+	if exact.Filler != 0 {
+		exactMode.Rejected = "exact-20 contains filler"
+	} else if exactMode.MembershipSHA256 == zeroDigest {
+		exactMode.EquivalentTo = "zero"
+	} else {
+		exactMode.Materialize = true
+	}
+	return []m0MembershipModeV1{zeroMode, usefulMode, exactMode}, nil
+}
+
+func m0MembershipDigestV1(memberships []vectorpartition.Membership) (string, error) {
+	raw, err := json.Marshal(memberships)
 	if err != nil {
 		return "", err
 	}
