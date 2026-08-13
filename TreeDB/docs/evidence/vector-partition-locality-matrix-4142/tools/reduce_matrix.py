@@ -40,6 +40,9 @@ REQUIRED = {
 }
 
 
+CAMPAIGN_IDENTITIES = ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256")
+
+
 def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(set(row) == REQUIRED, "row fields are not exact")
     require(row["schema_version"] == 1 and row["result_kind"] == "vector_partition_locality_matrix_row_v1", "row schema is invalid")
@@ -47,21 +50,24 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     for field in ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256"):
         value = row[field]
         require(isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value), f"{field} is not sha256")
-        require(value == expected[field], f"mixed identity: {field}")
+        if field in CAMPAIGN_IDENTITIES:
+            require(value == expected[field], f"mixed identity: {field}")
     require(row["layout"] in ("source-order", "entry-first-bfs"), "layout is invalid")
     require(row["partitions"] in (16, 32, 40), "partition count is invalid")
     require(row["overlap"] in ("exact-20%", "useful-only-20%-cap", "zero"), "overlap is invalid")
     require(row["probes"] in (1, 2, 4) and row["ef"] in (64, 80, 96, 128, 256), "search budget is invalid")
     require(row["split"] in ("train", "holdout"), "split is invalid")
     metrics = row["metrics"]
-    require(isinstance(metrics, dict) and metrics.get("filler_replicas") == 0 and isinstance(metrics.get("unique_pages_per_query"), (int, float)), "metrics are incomplete")
+    require(isinstance(metrics, dict) and isinstance(metrics.get("filler_replicas"), int) and isinstance(metrics.get("unique_pages_per_query"), (int, float)), "metrics are incomplete")
+    if row["overlap"] in ("zero", "useful-only-20%-cap"):
+        require(metrics["filler_replicas"] == 0, "selected useful/zero overlap has filler")
 
 
 def reduce_rows(paths: list[Path]) -> dict[str, Any]:
     require(paths, "matrix has no rows")
     rows = [load(path) for path in paths]
     first = rows[0]
-    expected = {field: first[field] for field in ("source_head", "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256")}
+    expected = {field: first[field] for field in CAMPAIGN_IDENTITIES}
     seen: set[str] = set()
     for row in rows:
         validate_row(row, expected)

@@ -30,7 +30,7 @@ class ReducerTest(unittest.TestCase):
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
         reducer.validate_row(value, {key: IDENTITY for key in reducer.REQUIRED if key.endswith("sha256") or key == "source_head"})
-        for mutate, message in ((lambda x: x.update(source_head="b" * 64), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "metrics")):
+        for mutate, message in ((lambda x: x.update(source_head="b" * 64), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "filler")):
             changed = copy.deepcopy(value)
             mutate(changed)
             with self.assertRaisesRegex(reducer.ContractError, message):
@@ -53,6 +53,14 @@ class ReducerTest(unittest.TestCase):
             mixed["dataset_sha256"] = "b" * 64
             with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
                 reducer.reduce_rows([a, write("c.json", mixed)])
+
+    def test_variant_identities_and_exact_baseline_filler_are_permitted(self) -> None:
+        value = row("exact")
+        value["overlap"] = "exact-20%"
+        value["metrics"]["filler_replicas"] = 3
+        value["membership_sha256"] = "b" * 64
+        value["router_sha256"] = "c" * 64
+        reducer.validate_row(value, {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES})
 
 
 if __name__ == "__main__":

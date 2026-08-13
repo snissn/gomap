@@ -1261,12 +1261,19 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 // VectorPartitionSearchAttributionV1 is offline evidence for one prepared
 // partition-local HNSW traversal.
 type VectorPartitionSearchAttributionV1 struct {
-	Schema                string   `json:"schema"`
-	FrontierAdmissions    uint64   `json:"frontier_admissions"`
-	VisitedRows           uint64   `json:"visited_rows"`
-	VisitedOrdinalsSHA256 string   `json:"visited_ordinals_sha256"`
-	TerminationReason     string   `json:"termination_reason"`
-	VisitedOrdinals       []uint32 `json:"-"`
+	Schema                string                            `json:"schema"`
+	FrontierAdmissions    uint64                            `json:"frontier_admissions"`
+	VisitedRows           uint64                            `json:"visited_rows"`
+	VisitedOrdinalsSHA256 string                            `json:"visited_ordinals_sha256"`
+	TerminationReason     string                            `json:"termination_reason"`
+	VisitedOrdinals       []uint32                          `json:"-"`
+	ScoreOrdinals         []uint32                          `json:"-"`
+	AdjacencyReads        []VectorPartitionSearchPageReadV1 `json:"-"`
+}
+type VectorPartitionSearchPageReadV1 struct {
+	Layer     int
+	Ordinal   int
+	Auxiliary bool
 }
 
 // SearchWithAttributionV1 runs the offline prepared-pack attribution path.
@@ -1362,6 +1369,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 				}
 			}
 			attribution.VisitedRows = uint64(len(attribution.VisitedOrdinals))
+			attribution.ScoreOrdinals = append(attribution.ScoreOrdinals, trace.ScoreOrdinals...)
+			for _, read := range trace.AdjacencyReads {
+				attribution.AdjacencyReads = append(attribution.AdjacencyReads, VectorPartitionSearchPageReadV1{Layer: read.Layer, Ordinal: read.Ordinal, Auxiliary: read.Auxiliary})
+			}
 			attribution.FrontierAdmissions = stats.FrontierPushes
 			attribution.TerminationReason = trace.Termination
 			attribution.VisitedOrdinalsSHA256 = hex.EncodeToString(h.Sum(nil))
