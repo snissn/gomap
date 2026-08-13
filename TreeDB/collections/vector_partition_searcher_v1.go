@@ -1352,6 +1352,14 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
+	for i, offsets := range out.LayerOffsets {
+		if len(offsets) != out.Rows+1 || out.LayerOffsetsSectionOffsets[i] == 0 || out.LayerNeighborOffsets[i] == 0 {
+			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+		}
+	}
+	if pack.Header.HasAuxiliaryNavigation != (len(out.AuxiliaryOffsets) != 0) || pack.Header.HasAuxiliaryNavigation && (len(out.AuxiliaryOffsets) != out.Rows+1 || out.AuxiliaryOffsetsSectionOffset == 0 || out.AuxiliaryNeighborOffset == 0) {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
 	return out, nil
 }
 
