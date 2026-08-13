@@ -517,7 +517,10 @@ func m0AddAdjacencyV1(all, local map[string]struct{}, snapshot collections.Vecto
 }
 
 func m0AddRangeV1(tokens map[string]struct{}, snapshot collections.VectorPartitionPackLayoutSnapshotV1, offset, length uint64) error {
-	if length == 0 || offset > ^uint64(0)-length || snapshot.BaseOffset > ^uint64(0)-offset {
+	if length == 0 {
+		return nil
+	}
+	if offset > ^uint64(0)-length || snapshot.BaseOffset > ^uint64(0)-offset {
 		return errors.New("page range")
 	}
 	physical := snapshot.BaseOffset + offset
