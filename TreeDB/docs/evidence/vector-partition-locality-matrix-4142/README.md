@@ -55,3 +55,73 @@ holdout is `2d07e255c7c4eecd04596215c523940fe77daec66ed76603ed65f595b3632dd1`,
 and the reduced simulation is
 `a170741fa6a2dfa6685b5a3a96b751e3ba20ea4f3743baafa259069ff78f5c1d`.
 All raw artifacts remain under the task-specific `/mnt/fast4tb` root.
+
+## Clean checkpoint: p32 membership and routing
+
+Checkpoint branch/head before this documentation-only handoff:
+`codex/issue-4142-locality-matrix` at
+`c0a56597eb82658b4a1dac3d6f3b2f05d9ba2407`. Raw captures,
+DB clones, binaries, profiles, timing files, and command files remain outside
+the repository at `/mnt/fast4tb/gomap-4142-locality-matrix-evidence`.
+
+The frozen 250k graph input is
+`/mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/graph-disjoint-out/vector_partition_57ad36d923c5_03e7a26e5610_eed54bc0b9ec.json`
+(`57ad36d923c5fdb701a082727fd24efdcf0c6ac0e24efeda28ca11f232a65f1d`).
+Strict p32 zero-overlap accounting is
+`membership/250k-p32-membership-v4.json`
+(`508099904be0d85fa6ff65033adf50dbd342c16d79adaad1a4261c82d893d18b`),
+bound to assignment
+`membership/250k-p32-assignment-v4.json`
+(`808c4dd300063cc0015d936c3f269b93d2a50989ae5aec483820db14fbe69816`).
+It has capacity 9,375 and a 50,000 overlap budget: zero and useful-only are
+canonical-membership equivalent because the strict cut is zero; exact-20 is
+filler-only and rejected, not materialized.
+
+The only materialized topology is the disposable p32 zero-overlap clone:
+`materialized/p32-zero-v1/m0-membership-1163546352`. Its materialization report
+SHA-256 is
+`7e2d7e444006e3eb1f15e898702f4a9508bf2a3a93a8bad5501ff4bc76b0a679`:
+generation 2, 32 ready partitions, zero overlap, 186,767,456 pack bytes, and
+1,262,091,124 logical clone bytes. The source-ordinal digest before and after
+is `79653ed96e52602ec25696de96ef2af4be933f1bbf7cbe18f62a46a18f60418a`.
+
+The quiet-host c64 calibration frontier is retained as
+`frontier/reports/250k-p32-calibration-v1.json`
+(`cc2356af7968a11933eb55d91c9e39c0a909b13440321e4549284c7a96a62160`).
+It contains all 12 `probes={1,2,4} × EF={64,80,96,128}` aggregates and three
+counterbalanced repetitions per cell. At c64 all probe counts had the same
+recall at each EF: 0.6660, 0.6942, 0.7138, and 0.7367 respectively. The
+diagnosis found no pack/source-ID binding defect: approximate c64 missed 1,890
+truth-membership slots, while exact routing missed none. The first failed
+frontier reduction is deliberately retained at
+`frontier/reports/250k-p32-calibration-v1.attempt-1.{stdout,time}`; it failed
+closed with `M0 frontier duplicate or missing measurement`, and the succeeding
+rerun used the fixed reducer.
+
+The router sweep report is
+`frontier/diagnostic/250k-p32-calibration-router-sweep-v1.json`
+(`c99da61a5fa24e5eb0c74fa274b92fc5b564b5ccdd89f7cf21e116f926f1c68e`).
+Its deterministic coverage results are authoritative: approximate c64/c128/c256
+missed 1,890/20/0 truth-membership slots; exact routing missed zero. Thus c256
+is the smallest tested approximate candidate budget that restores the exact
+coverage ceiling. Its timing, latency, and rate fields are explicitly
+non-authoritative: the sibling `.noise.txt` records sustained unrelated
+Lean/lake CI load during the capture. This report is diagnostic only and makes
+no QPS selection claim.
+
+The selected next step is one quiet-host c256 **calibration-only** frontier,
+not a holdout or p40 run. It must use the head-pinned binary
+`frontier/bin/treedb_vector_partition_bench-c256-c0a56597`
+(`cbc147522165f16c989fa28f522eee6246b0e7061f2024ed5c8ad064e835a7ba`),
+the frozen calibration manifest
+`/mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-calibration-manifest.json`,
+and fresh output
+`frontier/reports/250k-p32-c256-calibration-v1.json`. The exact command is
+preserved in the adjacent
+`frontier/reports/250k-p32-c256-calibration-v1.command.txt`; it specifies all
+three probes, all four EFs, c256, and top-k 10. Holdout remains sealed and p40
+has not started.
+
+The issue dependency route is `#4142 -> #4143 -> #4144 -> #4146 -> #4141`,
+with conditional route `#4144 -> #4145 -> #4146`. This checkpoint is not a
+production-default, persistent-format, traversal, membership, or router change.
