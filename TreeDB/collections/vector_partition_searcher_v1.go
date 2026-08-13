@@ -1267,6 +1267,7 @@ type VectorPartitionSearchAttributionV1 struct {
 	VisitedOrdinalsSHA256 string                            `json:"visited_ordinals_sha256"`
 	TerminationReason     string                            `json:"termination_reason"`
 	VisitedOrdinals       []uint32                          `json:"-"`
+	LevelOrdinals         []uint32                          `json:"-"`
 	ScoreOrdinals         []uint32                          `json:"-"`
 	AdjacencyReads        []VectorPartitionSearchPageReadV1 `json:"-"`
 }
@@ -1301,6 +1302,7 @@ type VectorPartitionPackLayoutSnapshotV1 struct {
 	RowOrdinals                   []uint32   `json:"row_ordinals"`
 	VectorStride                  int        `json:"vector_stride"`
 	VectorOffset                  uint64     `json:"vector_offset"`
+	LevelsOffset                  uint64     `json:"levels_offset"`
 	LayerOffsets                  [][]uint64 `json:"layer_offsets"`
 	LayerNeighbors                [][]uint32 `json:"layer_neighbors"`
 	LayerOffsetsSectionOffsets    []uint64   `json:"layer_offsets_section_offsets"`
@@ -1362,6 +1364,9 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[strin
 		out.RowOrdinals[ordinal] = row
 	}
 	for _, x := range pack.Sections {
+		if x.Kind == columnHNSWSearchPackSectionLevels {
+			out.LevelsOffset = x.Offset
+		}
 		if x.Kind == columnHNSWSearchPackSectionNormalizedVectors {
 			out.VectorOffset = x.Offset
 		}
@@ -1386,7 +1391,7 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[strin
 		out.AuxiliaryOffsets = append([]uint64(nil), pack.AuxiliaryNavigation.Offsets...)
 		out.AuxiliaryNeighbors = append([]uint32(nil), pack.AuxiliaryNavigation.Neighbors...)
 	}
-	if out.VectorOffset == 0 || len(out.LayerOffsets) == 0 || out.EntryOrdinal < 0 || out.EntryOrdinal >= out.Rows || len(out.RowOrdinals) != out.Rows {
+	if out.VectorOffset == 0 || out.LevelsOffset == 0 || len(out.LayerOffsets) == 0 || out.EntryOrdinal < 0 || out.EntryOrdinal >= out.Rows || len(out.RowOrdinals) != out.Rows {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	for i, offsets := range out.LayerOffsets {
@@ -1407,7 +1412,7 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 	if s == nil || pageBytes == 0 {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if trace.Schema != "treedb_vector_partition_search_attribution_v1" || len(trace.ScoreOrdinals) == 0 || len(trace.AdjacencyReads) == 0 {
+	if trace.Schema != "treedb_vector_partition_search_attribution_v1" || len(trace.LevelOrdinals) != 1 || len(trace.ScoreOrdinals) == 0 || len(trace.AdjacencyReads) == 0 {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	if err := s.Acquire(); err != nil {
@@ -1429,6 +1434,10 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		return columnHNSWSearchPackSection{}, false
 	}
 	vectors, ok := find(columnHNSWSearchPackSectionNormalizedVectors, 0)
+	if !ok {
+		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	levels, ok := find(columnHNSWSearchPackSectionLevels, 0)
 	if !ok {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
@@ -1466,6 +1475,14 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		if err := add(vectors.Offset+uint64(ordinal)*uint64(pack.Header.VectorStride)*4, uint64(pack.Header.VectorStride)*4, vs); err != nil {
+			return VectorPartitionSearchPageAttributionV1{}, err
+		}
+	}
+	for _, ordinal := range trace.LevelOrdinals {
+		if int(ordinal) != pack.Header.EntryOrdinal {
+			return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if err := add(levels.Offset+uint64(ordinal)*2, 2); err != nil {
 			return VectorPartitionSearchPageAttributionV1{}, err
 		}
 	}
@@ -1620,6 +1637,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 				}
 			}
 			attribution.VisitedRows = uint64(len(attribution.VisitedOrdinals))
+			attribution.LevelOrdinals = append(attribution.LevelOrdinals, trace.LevelOrdinals...)
 			attribution.ScoreOrdinals = append(attribution.ScoreOrdinals, trace.ScoreOrdinals...)
 			for _, read := range trace.AdjacencyReads {
 				attribution.AdjacencyReads = append(attribution.AdjacencyReads, VectorPartitionSearchPageReadV1{Layer: read.Layer, Ordinal: read.Ordinal, Auxiliary: read.Auxiliary})

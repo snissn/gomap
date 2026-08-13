@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
@@ -103,6 +104,38 @@ func TestM0FrontierManifestMembershipsEqualV1RejectsDifferentTopology(t *testing
 	}
 	if err := m0FrontierManifestMembershipsEqualV1([]collections.VectorPartitionMembershipV1{{VectorOrdinal: 3, PartitionID: 2}, {VectorOrdinal: 7, PartitionID: 2}}, actual); err == nil {
 		t.Fatal("different overlap topology accepted")
+	}
+}
+
+func TestM0FrontierCalibrationOrdinalsV1RequiresExactFrozenSet(t *testing.T) {
+	ordinals := make([]int, 0)
+	for ordinal := 0; ordinal < 1000; ordinal++ {
+		if localHNSWCalibrationOrdinalV1(ordinal) {
+			ordinals = append(ordinals, ordinal)
+		}
+	}
+	if err := m0FrontierCalibrationOrdinalsV1(ordinals, 1000); err != nil {
+		t.Fatal(err)
+	}
+	ordinals[1] = ordinals[0]
+	if err := m0FrontierCalibrationOrdinalsV1(ordinals, 1000); err == nil {
+		t.Fatal("accepted duplicate calibration ordinal")
+	}
+}
+
+func TestM0FrontierLineageV1RejectsDifferentFixtureSource(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	fixture := fixtureManifest{Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"}
+	source := vectorpartition.Source{SourceID: "m0_fixture:" + hash, Checksum: strings.Repeat("b", 64), Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, Metric: fixture.Metric}
+	artifact := vectorpartition.Artifact{Source: source}
+	descriptor := m3VariantDescriptorV1{FixtureChecksum: hash, GraphArtifactSHA256: hash, Source: source}
+	account := m0MembershipAccountV1{GraphArtifactSHA256: hash}
+	if !m0FrontierLineageV1(descriptor, artifact, account, fixture, uint64(fixture.Vectors)) {
+		t.Fatal("valid frontier lineage rejected")
+	}
+	artifact.Source.Checksum = strings.Repeat("c", 64)
+	if m0FrontierLineageV1(descriptor, artifact, account, fixture, uint64(fixture.Vectors)) {
+		t.Fatal("different fixture source accepted")
 	}
 }
 

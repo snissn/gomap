@@ -118,7 +118,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if len(split.Ordinals) != 806 || split.DatasetChecksum != fixture.Checksum || split.Selection != localHNSWQuerySplitSelectionV1 {
+	if len(split.Ordinals) != 806 || split.DatasetChecksum != fixture.Checksum || split.Selection != localHNSWQuerySplitSelectionV1 || m0FrontierCalibrationOrdinalsV1(split.Ordinals, fixture.Queries) != nil {
 		return errors.New("M0 calibration split identity")
 	}
 	queries := qualificationQueriesV1(fixture)
@@ -142,7 +142,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, account, selected, h); e != nil {
+	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, account, selected, fixture, h); e != nil {
 		return e
 	}
 	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
@@ -549,7 +549,27 @@ func m0FrontierMembershipOracleV1(h *m8ProductionMultiGroupAssetsV1) (map[string
 	return members, nil
 }
 
-func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, selected m0MembershipModeV1, h *m8ProductionMultiGroupAssetsV1) error {
+func m0FrontierCalibrationOrdinalsV1(ordinals []int, queryCount int) error {
+	if queryCount < 1 {
+		return errors.New("M0 calibration split ordinals")
+	}
+	at := 0
+	for ordinal := 0; ordinal < queryCount; ordinal++ {
+		if !localHNSWCalibrationOrdinalV1(ordinal) {
+			continue
+		}
+		if at >= len(ordinals) || ordinals[at] != ordinal {
+			return errors.New("M0 calibration split ordinals")
+		}
+		at++
+	}
+	if at != len(ordinals) {
+		return errors.New("M0 calibration split ordinals")
+	}
+	return nil
+}
+
+func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, selected m0MembershipModeV1, fixture fixtureManifest, h *m8ProductionMultiGroupAssetsV1) error {
 	raw, err := os.ReadFile(path)
 	if err != nil || m0SHA256V1(raw) != account.AssignmentArtifactSHA256 {
 		return errors.New("M0 frontier assignment artifact binding")
@@ -562,7 +582,7 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 	if err != nil {
 		return err
 	}
-	if descriptor.Source != artifact.Source || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+	if !m0FrontierLineageV1(descriptor, artifact, account, fixture, h.manifest.SourceRowCount) {
 		return errors.New("M0 frontier assignment artifact lineage")
 	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
@@ -606,6 +626,11 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 		return fmt.Errorf("M0 frontier overlap topology: %w", err)
 	}
 	return nil
+}
+
+func m0FrontierLineageV1(descriptor m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1, fixture fixtureManifest, sourceRows uint64) bool {
+	return descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
+		artifact.Source.SourceID == "m0_fixture:"+fixture.Checksum && artifact.Source.Vectors == fixture.Vectors && artifact.Source.Dimensions == fixture.Dimensions && artifact.Source.Metric == fixture.Metric && sourceRows == uint64(fixture.Vectors)
 }
 
 func m0FrontierManifestMembershipsEqualV1(left, right []collections.VectorPartitionMembershipV1) error {

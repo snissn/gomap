@@ -100,7 +100,7 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if calibration.Artifact != artifactSHA || holdout.Artifact != artifactSHA {
 		return errors.New("capture graph artifact identity")
 	}
-	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v1", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
+	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v2", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
 	identity, err := m0IdentityPermutationsV1(holdout)
 	if err != nil {
 		return err
@@ -180,7 +180,7 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
-	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v1" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
+	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v2" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
 	return capture, m0SHA256V1(raw), nil
@@ -260,7 +260,7 @@ func m0IdentityPermutationsV1(capture m0LocalityCaptureV1) (map[uint32]m0Permuta
 }
 
 func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1) error {
-	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighbors) || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
+	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorOffset == 0 || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighbors) || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
 		return errors.New("snapshot geometry")
 	}
 	for layer, offsets := range snapshot.LayerOffsets {
@@ -476,11 +476,22 @@ func m0EvaluatePermutationsV1(capture m0LocalityCaptureV1, permutations map[uint
 			if !ok {
 				return m0LocalityObjectiveV1{}, errors.New("holdout snapshot")
 			}
+			if len(partitionTrace.LevelOrdinals) != 1 || int(partitionTrace.LevelOrdinals[0]) != snapshot.EntryOrdinal {
+				return m0LocalityObjectiveV1{}, errors.New("missing level read")
+			}
 			permutation, ok := permutations[partitionTrace.Partition]
 			if !ok || len(permutation) != snapshot.Rows {
 				return m0LocalityObjectiveV1{}, errors.New("permutation")
 			}
 			starts := startsByPartition[partitionTrace.Partition]
+			for _, ordinal := range partitionTrace.LevelOrdinals {
+				if int(ordinal) >= snapshot.Rows {
+					return m0LocalityObjectiveV1{}, errors.New("level ordinal")
+				}
+				if err := m0AddRangeV1(tokens, snapshot, snapshot.LevelsOffset+uint64(permutation[ordinal])*2, 2); err != nil {
+					return m0LocalityObjectiveV1{}, err
+				}
+			}
 			for _, ordinal := range partitionTrace.ScoreOrdinals {
 				if int(ordinal) >= snapshot.Rows {
 					return m0LocalityObjectiveV1{}, errors.New("score ordinal")

@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -179,8 +180,8 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 		layer0 = layer0 || read.Layer == 0 && !read.Auxiliary
 		auxiliary = auxiliary || read.Auxiliary
 	}
-	if len(attribution.ScoreOrdinals) == 0 || !upper || !layer0 || !auxiliary {
-		t.Fatalf("incomplete read trace scores=%v reads=%+v", attribution.ScoreOrdinals, attribution.AdjacencyReads)
+	if len(attribution.LevelOrdinals) != 1 || len(attribution.ScoreOrdinals) == 0 || !upper || !layer0 || !auxiliary {
+		t.Fatalf("incomplete read trace levels=%v scores=%v reads=%+v", attribution.LevelOrdinals, attribution.ScoreOrdinals, attribution.AdjacencyReads)
 	}
 	pages, pageErr := searcher.PageAttributionForTraceV1(attribution, 64)
 	if pageErr != nil || pages.UniquePages != 4 || pages.VectorPages != 2 || pages.AdjacencyPages != 3 {
@@ -212,8 +213,13 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 		t.Fatal("accepted duplicate ordinal map")
 	}
 	snapshot, err := searcher.PackLayoutSnapshotV1(ordinals)
-	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
+	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	finePages, err := searcher.PageAttributionForTraceV1(attribution, 2)
+	levelPage := (snapshot.BaseOffset + snapshot.LevelsOffset + uint64(snapshot.EntryOrdinal)*2) / 2
+	if err != nil || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage}) {
+		t.Fatalf("isolated level page %d absent from %+v: %v", levelPage, finePages.Tokens, err)
 	}
 	manager := mappedresource.NewManager()
 	key := testColumnHNSWSearchPackMappedResourceKey2314(17, int64(len(raw)), page.Checksum(raw))

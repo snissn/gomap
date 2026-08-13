@@ -72,6 +72,7 @@ type columnHNSWSearchPackPageRead struct {
 }
 type columnHNSWSearchPackAttributionTrace struct {
 	Termination    string
+	LevelOrdinals  []uint32
 	ScoreOrdinals  []uint32
 	AdjacencyReads []columnHNSWSearchPackPageRead
 }
@@ -192,6 +193,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	}
 	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
 	if opts.CandidateLimit == 0 {
+		if trace != nil {
+			trace.LevelOrdinals = append(trace.LevelOrdinals, uint32(entryOrdinal))
+		}
 		maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
 		if err != nil {
 			return nil, stats, err

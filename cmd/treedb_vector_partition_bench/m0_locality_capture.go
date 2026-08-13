@@ -28,6 +28,7 @@ type m0LocalityCaptureRowV1 struct {
 }
 type m0LocalityTracePartitionV1 struct {
 	Partition      uint32                                        `json:"partition"`
+	LevelOrdinals  []uint32                                      `json:"level_ordinals"`
 	ScoreOrdinals  []uint32                                      `json:"score_ordinals"`
 	AdjacencyReads []collections.VectorPartitionSearchPageReadV1 `json:"adjacency_reads"`
 }
@@ -161,7 +162,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			snapshots[uint32(p)] = snapshot
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v2", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")
@@ -192,7 +193,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 					row.Edges += m.Edges
 					row.AdjacencyPageAccesses += pages.AdjacencyPageAccesses
 					if rawTraces {
-						traceRow.Partitions = append(traceRow.Partitions, m0LocalityTracePartitionV1{Partition: p, ScoreOrdinals: append([]uint32(nil), t.ScoreOrdinals...), AdjacencyReads: append([]collections.VectorPartitionSearchPageReadV1(nil), t.AdjacencyReads...)})
+						traceRow.Partitions = append(traceRow.Partitions, m0LocalityTracePartitionV1{Partition: p, LevelOrdinals: append([]uint32(nil), t.LevelOrdinals...), ScoreOrdinals: append([]uint32(nil), t.ScoreOrdinals...), AdjacencyReads: append([]collections.VectorPartitionSearchPageReadV1(nil), t.AdjacencyReads...)})
 					}
 				}
 			}
