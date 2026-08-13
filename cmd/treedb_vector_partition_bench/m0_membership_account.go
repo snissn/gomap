@@ -123,7 +123,7 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 		if err := os.MkdirAll(filepath.Dir(assignmentOut), 0755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(assignmentOut, assignmentRaw, 0644); err != nil {
+		if err := writeVectorPartitionSystemBytesExclusiveV1(assignmentOut, assignmentRaw); err != nil {
 			return err
 		}
 	}

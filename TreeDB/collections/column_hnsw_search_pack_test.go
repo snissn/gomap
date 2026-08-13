@@ -216,10 +216,10 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}
-	finePages, err := searcher.PageAttributionForTraceV1(attribution, 2)
-	levelPage := (snapshot.BaseOffset + snapshot.LevelsOffset + uint64(snapshot.EntryOrdinal)*2) / 2
-	if err != nil || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage}) {
-		t.Fatalf("isolated level page %d absent from %+v: %v", levelPage, finePages.Tokens, err)
+	finePages, err := searcher.PageAttributionForTraceV1(attribution, 1)
+	levelPage := snapshot.BaseOffset + snapshot.LevelsOffset + uint64(snapshot.EntryOrdinal)*2
+	if err != nil || finePages.UniquePages != finePages.VectorPages+finePages.AdjacencyPages+2 || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage}) || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage + 1}) {
+		t.Fatalf("isolated level pages [%d,%d] absent from %+v: %v", levelPage, levelPage+1, finePages, err)
 	}
 	manager := mappedresource.NewManager()
 	key := testColumnHNSWSearchPackMappedResourceKey2314(17, int64(len(raw)), page.Checksum(raw))

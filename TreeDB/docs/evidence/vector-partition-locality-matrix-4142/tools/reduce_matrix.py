@@ -39,8 +39,9 @@ def load(path: Path) -> dict[str, Any]:
 REQUIRED = {
     "schema_version", "result_kind", "row_id", "terminal", "source_head",
     "binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256",
-    "membership_sha256", "router_sha256", "query_union_sha256", "layout",
-    "partitions", "overlap", "probes", "ef", "split", "metrics",
+    "membership_sha256", "router_sha256", "query_union_sha256",
+    "query_split_sha256", "layout", "partitions", "overlap", "probes",
+    "ef", "split", "metrics",
 }
 
 
@@ -49,8 +50,9 @@ CAMPAIGN_IDENTITIES = ("source_head", "binary_sha256", "dataset_sha256", "truth_
 PREFLIGHT_FIELDS = {
     "schema_version", "result_kind", "source_head", "binary_sha256",
     "frozen_head", "campaign_sha256", "descriptor_sha256", "descriptor_head",
-    "dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256",
-    "binary_vcs_revision", "binary_vcs_modified", "status",
+    "dataset_sha256", "truth_sha256", "graph_sha256", "calibration_sha256",
+    "holdout_sha256", "query_union_sha256", "binary_vcs_revision",
+    "binary_vcs_modified", "status",
 }
 
 
@@ -74,7 +76,7 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(row["schema_version"] == 1 and row["result_kind"] == "vector_partition_locality_matrix_row_v1", "row schema is invalid")
     require(row["terminal"] is True and isinstance(row["row_id"], str) and row["row_id"], "row is nonterminal or unnamed")
     require(isinstance(row["source_head"], str) and len(row["source_head"]) == 40 and all(c in "0123456789abcdef" for c in row["source_head"]), "source_head is not a git revision")
-    for field in ("binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256"):
+    for field in ("binary_sha256", "dataset_sha256", "truth_sha256", "graph_sha256", "membership_sha256", "router_sha256", "query_union_sha256", "query_split_sha256"):
         value = row[field]
         require(isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value), f"{field} is not sha256")
     for field in CAMPAIGN_IDENTITIES:
@@ -84,10 +86,13 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(row["overlap"] in ("exact-20%", "useful-only-20%-cap", "zero"), "overlap is invalid")
     require(row["probes"] in (1, 2, 4) and row["ef"] in (64, 80, 96, 128, 256), "search budget is invalid")
     require(row["split"] in ("train", "holdout"), "split is invalid")
+    split_field = "calibration_sha256" if row["split"] == "train" else "holdout_sha256"
+    require(row["query_split_sha256"] == expected[split_field], "mixed identity: query split")
     metrics = row["metrics"]
-    require(isinstance(metrics, dict) and isinstance(metrics.get("filler_replicas"), int) and not isinstance(metrics.get("filler_replicas"), bool) and isinstance(metrics.get("unique_pages_per_query"), (int, float)) and not isinstance(metrics.get("unique_pages_per_query"), bool), "metrics are incomplete")
+    require(isinstance(metrics, dict) and isinstance(metrics.get("queries"), int) and not isinstance(metrics.get("queries"), bool) and isinstance(metrics.get("filler_replicas"), int) and not isinstance(metrics.get("filler_replicas"), bool) and isinstance(metrics.get("unique_pages_per_query"), (int, float)) and not isinstance(metrics.get("unique_pages_per_query"), bool), "metrics are incomplete")
     for name, value in metrics.items():
         require(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0, f"invalid metric: {name}")
+    require(metrics["queries"] > 0 and metrics["unique_pages_per_query"] > 0, "terminal row has no measured pages")
     if row["overlap"] in ("zero", "useful-only-20%-cap"):
         require(metrics["filler_replicas"] == 0, "selected useful/zero overlap has filler")
 
@@ -109,7 +114,7 @@ def validate_preflight(path: Path) -> dict[str, Any]:
         "preflight is not ready or pinned",
     )
     require(isinstance(value["binary_sha256"], str) and len(value["binary_sha256"]) == 64 and all(c in "0123456789abcdef" for c in value["binary_sha256"]), "preflight binary_sha256 is invalid")
-    for field in ("dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256"):
+    for field in ("dataset_sha256", "truth_sha256", "graph_sha256", "calibration_sha256", "holdout_sha256", "query_union_sha256"):
         require(value[field] == getattr(preflight_contract, f"FROZEN_{field.upper()}"), f"preflight {field} is not pinned")
     return value
 
@@ -118,7 +123,7 @@ def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
     require(paths, "matrix has no rows")
     preflight = validate_preflight(preflight_path)
     rows = [load(path) for path in paths]
-    expected = {field: preflight[field] for field in CAMPAIGN_IDENTITIES}
+    expected = {field: preflight[field] for field in (*CAMPAIGN_IDENTITIES, "calibration_sha256", "holdout_sha256")}
     seen: set[str] = set()
     coordinates: set[tuple[Any, ...]] = set()
     topology_identities: dict[tuple[Any, ...], tuple[str, str]] = {}

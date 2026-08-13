@@ -108,6 +108,8 @@ def main() -> None:
         "dataset_sha256": dataset_sha,
         "truth_sha256": truth_sha,
         "graph_sha256": descriptor_value.get("graph_artifact_sha256"),
+        "calibration_sha256": calibration_sha,
+        "holdout_sha256": holdout_sha,
         "query_union_sha256": query_union_sha,
         "binary_vcs_revision": vcs.get("vcs.revision"),
         "binary_vcs_modified": vcs.get("vcs.modified"),

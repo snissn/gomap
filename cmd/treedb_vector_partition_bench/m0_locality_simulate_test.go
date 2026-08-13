@@ -21,6 +21,12 @@ func TestM0EvidenceOutputPreservesExistingFile(t *testing.T) {
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != "retain" {
 		t.Fatalf("existing evidence=%q err=%v", raw, err)
 	}
+	if err := writeVectorPartitionSystemBytesExclusiveV1(path, []byte("replace")); err == nil {
+		t.Fatal("replaced existing assignment artifact")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "retain" {
+		t.Fatalf("existing assignment=%q err=%v", raw, err)
+	}
 }
 
 func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {

@@ -25,8 +25,9 @@ def row(row_id: str) -> dict:
         "dataset_sha256": preflight_contract.FROZEN_DATASET_SHA256, "truth_sha256": preflight_contract.FROZEN_TRUTH_SHA256,
         "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256, "membership_sha256": IDENTITY, "router_sha256": IDENTITY,
         "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
+        "query_split_sha256": preflight_contract.FROZEN_HOLDOUT_SHA256,
         "layout": "entry-first-bfs", "partitions": 16, "overlap": "zero", "probes": 2, "ef": 96, "split": "holdout",
-        "metrics": {"filler_replicas": 0, "unique_pages_per_query": 1.0},
+        "metrics": {"queries": 194, "filler_replicas": 0, "unique_pages_per_query": 1.0},
     }
 
 
@@ -35,6 +36,9 @@ def complete_rows() -> list[dict]:
     for index, point in enumerate(sorted(reducer.AUTHORIZED_COORDINATES)):
         value = row(f"{index:04d}")
         value["layout"], value["partitions"], value["overlap"], value["probes"], value["ef"], value["split"] = point
+        if value["split"] == "train":
+            value["query_split_sha256"] = preflight_contract.FROZEN_CALIBRATION_SHA256
+            value["metrics"]["queries"] = 806
         if value["overlap"] == "exact-20%":
             value["metrics"]["filler_replicas"] = 1
         rows.append(value)
@@ -54,11 +58,17 @@ def preflight() -> dict:
         "dataset_sha256": preflight_contract.FROZEN_DATASET_SHA256,
         "truth_sha256": preflight_contract.FROZEN_TRUTH_SHA256,
         "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256,
+        "calibration_sha256": preflight_contract.FROZEN_CALIBRATION_SHA256,
+        "holdout_sha256": preflight_contract.FROZEN_HOLDOUT_SHA256,
         "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
         "binary_vcs_revision": preflight_contract.MEASURED_SOURCE_HEAD,
         "binary_vcs_modified": "false",
         "status": "ready",
     }
+
+
+def expected_identity() -> dict:
+    return {key: preflight()[key] for key in (*reducer.CAMPAIGN_IDENTITIES, "calibration_sha256", "holdout_sha256")}
 
 
 class ReducerTest(unittest.TestCase):
@@ -76,7 +86,7 @@ class ReducerTest(unittest.TestCase):
 
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
-        expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
+        expected = expected_identity()
         reducer.validate_row(value, expected)
         for mutate, message in ((lambda x: x.update(source_head="b" * 40), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "filler")):
             changed = copy.deepcopy(value)
@@ -123,7 +133,7 @@ class ReducerTest(unittest.TestCase):
         value["metrics"]["filler_replicas"] = 3
         value["membership_sha256"] = "b" * 64
         value["router_sha256"] = "c" * 64
-        expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
+        expected = expected_identity()
         reducer.validate_row(value, expected)
 
     def test_rejects_invalid_numeric_metrics(self) -> None:
@@ -131,8 +141,19 @@ class ReducerTest(unittest.TestCase):
             changed = row("metric")
             changed["metrics"]["unique_pages_per_query"] = value
             with self.assertRaisesRegex(reducer.ContractError, "metric"):
-                expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
-                reducer.validate_row(changed, expected)
+                reducer.validate_row(changed, expected_identity())
+
+    def test_rejects_wrong_split_identity_and_empty_measurement(self) -> None:
+        expected = expected_identity()
+        wrong_split = row("wrong-split")
+        wrong_split["query_split_sha256"] = preflight_contract.FROZEN_CALIBRATION_SHA256
+        with self.assertRaisesRegex(reducer.ContractError, "query split"):
+            reducer.validate_row(wrong_split, expected)
+        for metric in ("queries", "unique_pages_per_query"):
+            empty = row("empty")
+            empty["metrics"][metric] = 0
+            with self.assertRaisesRegex(reducer.ContractError, "no measured pages"):
+                reducer.validate_row(empty, expected)
 
 
 if __name__ == "__main__":
