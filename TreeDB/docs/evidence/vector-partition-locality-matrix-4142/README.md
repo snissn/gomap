@@ -26,6 +26,10 @@ python3 TreeDB/docs/evidence/vector-partition-locality-matrix-4142/tools/preflig
   --source-evidence TreeDB/docs/evidence/vector-partition-qualification-4027/eed54bc0 \
   --source-checkout /mnt/fast4tb/gomap-4135-combined-measure-runtime/e2e/source \
   --binary /mnt/fast4tb/gomap-4135-combined-measure-runtime/e2e/bin/treedb_vector_partition_bench \
+  --dataset-manifest /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/dataset/fixture_manifest.json \
+  --truth-artifact /mnt/fast4tb/gomap-4027-qualification-campaign-eed54bc0/250k/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json \
+  --calibration /mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-calibration-manifest.json \
+  --holdout /mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-holdout-manifest.json \
   --out /mnt/fast4tb/gomap-4142-locality-matrix-evidence/preflight.json
 ```
 

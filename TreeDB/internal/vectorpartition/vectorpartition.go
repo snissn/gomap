@@ -240,7 +240,11 @@ func RepartitionArtifact(in Artifact, partitions int, backend Partitioner) (Arti
 	if _, err := validateAssignment(assignment, len(in.IDs), cfg); err != nil {
 		return Artifact{}, fmt.Errorf("partition backend assignment: %w", err)
 	}
-	out := Artifact{SchemaVersion: SchemaVersion, Backend: name, BackendLicense: license, Source: in.Source, Config: cfg, IDs: append([]string(nil), in.IDs...), Graph: in.Graph, Assignment: assignment}
+	outGraph, err := cloneGraphBounded(in.Graph, cfg.MaxEdges)
+	if err != nil {
+		return Artifact{}, err
+	}
+	out := Artifact{SchemaVersion: SchemaVersion, Backend: name, BackendLicense: license, Source: in.Source, Config: cfg, IDs: append([]string(nil), in.IDs...), Graph: outGraph, Assignment: assignment}
 	out.Metrics = metrics(out)
 	if err := ValidateArtifact(out); err != nil {
 		return Artifact{}, err

@@ -1181,6 +1181,10 @@ func TestRepartitionArtifactReusesCanonicalGraph(t *testing.T) {
 	if err := ValidateArtifact(out); err != nil {
 		t.Fatal(err)
 	}
+	out.Graph.Neighbors[0][0] = 99
+	if in.Graph.Neighbors[0][0] == 99 {
+		t.Fatal("repartitioned graph aliases input graph")
+	}
 }
 
 func TestRepartitionArtifactFailsClosedAfterMutatingBackend(t *testing.T) {

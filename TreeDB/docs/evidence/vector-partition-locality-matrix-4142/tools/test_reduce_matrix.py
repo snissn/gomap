@@ -20,8 +20,10 @@ IDENTITY = "a" * 64
 def row(row_id: str) -> dict:
     return {
         "schema_version": 1, "result_kind": "vector_partition_locality_matrix_row_v1", "row_id": row_id, "terminal": True,
-        "source_head": preflight_contract.MEASURED_SOURCE_HEAD, "binary_sha256": IDENTITY, "dataset_sha256": IDENTITY, "truth_sha256": IDENTITY,
-        "graph_sha256": IDENTITY, "membership_sha256": IDENTITY, "router_sha256": IDENTITY, "query_union_sha256": IDENTITY,
+        "source_head": preflight_contract.MEASURED_SOURCE_HEAD, "binary_sha256": IDENTITY,
+        "dataset_sha256": preflight_contract.FROZEN_DATASET_SHA256, "truth_sha256": preflight_contract.FROZEN_TRUTH_SHA256,
+        "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256, "membership_sha256": IDENTITY, "router_sha256": IDENTITY,
+        "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
         "layout": "entry-first-bfs", "partitions": 16, "overlap": "zero", "probes": 2, "ef": 96, "split": "holdout",
         "metrics": {"filler_replicas": 0, "unique_pages_per_query": 1.0},
     }
@@ -48,6 +50,10 @@ def preflight() -> dict:
         "campaign_sha256": preflight_contract.FROZEN_CAMPAIGN_SHA256,
         "descriptor_sha256": preflight_contract.FROZEN_DESCRIPTOR_SHA256,
         "descriptor_head": preflight_contract.FROZEN_INPUT_HEAD,
+        "dataset_sha256": preflight_contract.FROZEN_DATASET_SHA256,
+        "truth_sha256": preflight_contract.FROZEN_TRUTH_SHA256,
+        "graph_sha256": preflight_contract.FROZEN_GRAPH_SHA256,
+        "query_union_sha256": preflight_contract.FROZEN_QUERY_UNION_SHA256,
         "binary_vcs_revision": preflight_contract.MEASURED_SOURCE_HEAD,
         "binary_vcs_modified": "false",
         "status": "ready",
@@ -55,10 +61,21 @@ def preflight() -> dict:
 
 
 class ReducerTest(unittest.TestCase):
+    def test_query_union_is_complete_and_disjoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [Path(directory) / name for name in ("calibration.json", "holdout.json")]
+            for path, ordinals in zip(paths, (list(range(806)), list(range(806, 1000)))):
+                path.write_text(json.dumps({"schema": "vector_partition_4105_query_split_v1", "ordinals": ordinals}), encoding="utf-8")
+            self.assertEqual(preflight_contract.query_union(*paths), preflight_contract.FROZEN_QUERY_UNION_SHA256)
+            value = json.loads(paths[1].read_text(encoding="utf-8"))
+            value["ordinals"][0] = 0
+            paths[1].write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "complete disjoint"):
+                preflight_contract.query_union(*paths)
+
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
-        expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
-        expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+        expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
         reducer.validate_row(value, expected)
         for mutate, message in ((lambda x: x.update(source_head="b" * 40), "mixed identity"), (lambda x: x.update(terminal=False), "nonterminal"), (lambda x: x["metrics"].update(filler_replicas=1), "filler")):
             changed = copy.deepcopy(value)
@@ -101,8 +118,7 @@ class ReducerTest(unittest.TestCase):
         value["metrics"]["filler_replicas"] = 3
         value["membership_sha256"] = "b" * 64
         value["router_sha256"] = "c" * 64
-        expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
-        expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+        expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
         reducer.validate_row(value, expected)
 
     def test_rejects_invalid_numeric_metrics(self) -> None:
@@ -110,8 +126,7 @@ class ReducerTest(unittest.TestCase):
             changed = row("metric")
             changed["metrics"]["unique_pages_per_query"] = value
             with self.assertRaisesRegex(reducer.ContractError, "metric"):
-                expected = {key: IDENTITY for key in reducer.CAMPAIGN_IDENTITIES}
-                expected["source_head"] = preflight_contract.MEASURED_SOURCE_HEAD
+                expected = {key: preflight()[key] for key in reducer.CAMPAIGN_IDENTITIES}
                 reducer.validate_row(changed, expected)
 
 

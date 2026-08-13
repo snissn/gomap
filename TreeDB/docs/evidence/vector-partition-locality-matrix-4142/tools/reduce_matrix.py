@@ -48,6 +48,7 @@ CAMPAIGN_IDENTITIES = ("source_head", "binary_sha256", "dataset_sha256", "truth_
 PREFLIGHT_FIELDS = {
     "schema_version", "result_kind", "source_head", "binary_sha256",
     "frozen_head", "campaign_sha256", "descriptor_sha256", "descriptor_head",
+    "dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256",
     "binary_vcs_revision", "binary_vcs_modified", "status",
 }
 
@@ -107,6 +108,8 @@ def validate_preflight(path: Path) -> dict[str, Any]:
         "preflight is not ready or pinned",
     )
     require(isinstance(value["binary_sha256"], str) and len(value["binary_sha256"]) == 64 and all(c in "0123456789abcdef" for c in value["binary_sha256"]), "preflight binary_sha256 is invalid")
+    for field in ("dataset_sha256", "truth_sha256", "graph_sha256", "query_union_sha256"):
+        require(value[field] == getattr(preflight_contract, f"FROZEN_{field.upper()}"), f"preflight {field} is not pinned")
     return value
 
 
@@ -114,10 +117,7 @@ def reduce_rows(paths: list[Path], preflight_path: Path) -> dict[str, Any]:
     require(paths, "matrix has no rows")
     preflight = validate_preflight(preflight_path)
     rows = [load(path) for path in paths]
-    first = rows[0]
-    require(set(first) == REQUIRED, "row fields are not exact")
-    expected = {field: first[field] for field in CAMPAIGN_IDENTITIES}
-    expected.update(source_head=preflight["source_head"], binary_sha256=preflight["binary_sha256"])
+    expected = {field: preflight[field] for field in CAMPAIGN_IDENTITIES}
     seen: set[str] = set()
     coordinates: set[tuple[Any, ...]] = set()
     topology_identities: dict[tuple[Any, ...], tuple[str, str]] = {}
