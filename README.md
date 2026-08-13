@@ -150,23 +150,29 @@ the displayed secondary-index count is `0`.
 Source:
 [June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
 
-### Vector Search External Snapshot
+### Vector Search Server Matched-Recall Matrix
 
-Local Apple M3 snapshot for `10k x 1536` vectors, `topK=10`, `M=16`,
-`efConstruction=128`, and `efSearch=128`. TreeDB rows use DB-demo no-document
-search; USearch is an in-memory library comparator; pgvector is a PostgreSQL
-server HNSW comparator.
+Current-main Linux/amd64 snapshot for deterministic `100k` and `250k`, 128d
+cosine top-10 corpora. Each row selects the lowest tested `efSearch` whose
+median recall@10 is at least `.90`; each cell is the median of three serialized,
+counterbalanced repetitions with 1,000 measured queries. Search QPS excludes
+index construction.
 
-| system | recall@10 | c=1 avg / QPS | c=8 avg / QPS |
-| --- | ---: | ---: | ---: |
-| TreeDB exact FP32 | 0.9859 | 418 µs / 2,391 | 852 µs / 9,386 |
-| TreeDB scalar_u8 rerank32 | 0.9828 | 165 µs / 6,072 | 511 µs / 15,571 |
-| USearch f32 HNSW | 0.8938 | 725 µs / 1,380 | 160 µs / 6,259 |
-| PostgreSQL+pgvector HNSW | 0.9859 | 2.67 ms / 374 | 4.29 ms / 1,864 |
+| system | corpus | selected EF | recall@10 | c=1 QPS / p95 | c=32 QPS / p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| TreeDB single daemon / four groups | 100k | 64 | .9525 | 2,198.0 / 0.537 ms | 10,852.5 / 4.866 ms |
+| pgvector | 100k | 64 | .9251 | 1,255.6 / 0.965 ms | 3,745.6 / 15.390 ms |
+| Milvus Standalone | 100k | 64 | .9210 | 644.8 / 1.931 ms | 2,256.7 / 25.410 ms |
+| TreeDB single daemon / four groups | 250k | 128 | .9580 | 1,525.3 / 0.791 ms | 6,220.6 / 8.466 ms |
+| pgvector | 250k | 128 | .9229 | 385.5 / 3.580 ms | 1,712.9 / 36.690 ms |
+| Milvus Standalone | 250k | 128 | .9336 | 559.8 / 1.997 ms | 2,141.3 / 26.670 ms |
 
-USearch c=1/c=8 averages are from batch searches with `threads=1/8`, while
-TreeDB and pgvector report per-query latency samples. Source and caveats:
-[June 8 vector external comparison](docs/benchmarks/treedb_vector_external_compare_2026-06-08.md).
+TreeDB uses one OS daemon with one public coordinator and four logical serving
+groups; pgvector uses one PostgreSQL container; Milvus uses Standalone plus
+etcd and MinIO. Full EF curves, repetition ranges, topology, resource controls,
+and caveats are in the
+[August 12 matched-recall report](docs/benchmarks/treedb_vector_server_matched_recall_2026-08-12.md)
+and its [machine-readable result](docs/benchmarks/treedb_vector_server_matched_recall_2026-08-12.json).
 
 TreeDB is also wired into `snissn/vectordbbench` through the document service.
 Those rows measure Python/client/HTTP/service overhead and are separate from

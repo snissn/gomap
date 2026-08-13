@@ -1,0 +1,832 @@
+{
+  "inputs": {
+    "verified-runs/milvus_standalone/100k/repeat-1/search.json": "22af7bad0e3e7ca4159be376d1fb683674627ec39f9a69a40ec0c47b14ca00e9",
+    "verified-runs/milvus_standalone/100k/repeat-2/search.json": "dbd1d46b49c4605b6921c7ecd52d10b6366033ad58fe9d7739687a0e4007fd5c",
+    "verified-runs/milvus_standalone/100k/repeat-3/search.json": "1dbf87d05dc5c5e06e31834848c1979935fc18e25d99aedc0f7a070fb635827e",
+    "verified-runs/milvus_standalone/250k/repeat-1/search.json": "e47a3c7e8526aa6eb82644a749a003718d1d31c4e4e9467b419c1c1f7a254ace",
+    "verified-runs/milvus_standalone/250k/repeat-2/search.json": "285cf35af220c45a1e87e8be0c78b4684e6a07004a2f0ca99ec05c4bd507c6cf",
+    "verified-runs/milvus_standalone/250k/repeat-3/search.json": "6e24c9312ad4cda93f9e14b037fa2115759f4c9780013a8a98d29a4e01da2ffd",
+    "verified-runs/pgvector/100k/repeat-1/search.json": "e1f7096c6a845d60cda536760a0b71fd977739cb5a539ac0a874a03fbb87b809",
+    "verified-runs/pgvector/100k/repeat-2/search.json": "f4b2220cdff8f35d154bb8f431bde7e19cf980a1a2b230e7b0b40da3968f7a4e",
+    "verified-runs/pgvector/100k/repeat-3/search.json": "688a90e93c243a177bd2d46a1e15d6acf88ebd8e021a52f7d995bf919d525081",
+    "verified-runs/pgvector/250k/repeat-1/search.json": "14b79c79179c99376129d8afc69ee7d53352f0d15ecda91333f36b0e390d86a5",
+    "verified-runs/pgvector/250k/repeat-2/search.json": "8c5d6b2ed58b0256bfec8d288bcf0a3890411a4aa40c1ec7e0da7ebdfbca8f88",
+    "verified-runs/pgvector/250k/repeat-3/search.json": "65762eb32d1a592103bab48b45ffbcdcdfbe29a4a682ea2f05b6fa3fc717cf8e",
+    "verified-runs/treedb_single/100k/repeat-1/search-ef128.json": "47791f3d1acc13229e4c3c108b9bf1294302d391ff8bf529f78750eeaf59ed31",
+    "verified-runs/treedb_single/100k/repeat-1/search-ef256.json": "df771b5d33d3b57b7e0d7aac049117431a73b73c03d702344c40bba52e6e5276",
+    "verified-runs/treedb_single/100k/repeat-1/search-ef64.json": "c93ba32ba6c02c3f26514a8c21bd93d2db5f4cec007a09a9c2ca4b15786eed82",
+    "verified-runs/treedb_single/100k/repeat-2/search-ef128.json": "00116bf5348f90c08fa88a59f5cd1b108716489328d49edc52dff6f7dbe52dc6",
+    "verified-runs/treedb_single/100k/repeat-2/search-ef256.json": "456a913a19d13c288416c950cd87235f62c21f7c9d37bcdc940b23e8f1ed1c8b",
+    "verified-runs/treedb_single/100k/repeat-2/search-ef64.json": "6d80a0ff96ea8e96bf01e4ca9dc1870103254b505d17f73d140cb5b1b0ca3c6f",
+    "verified-runs/treedb_single/100k/repeat-3/search-ef128.json": "eddd5c59d3ef733f01d536b3907483790d525077f213f4f236f6b0cf2918897c",
+    "verified-runs/treedb_single/100k/repeat-3/search-ef256.json": "ed76fc47ee0b047a6ff3d488d3015ea44b0cc2ce7423bbc37fea7f3d2890ce03",
+    "verified-runs/treedb_single/100k/repeat-3/search-ef64.json": "75789c72f03c3f8c1d2f0082084b5daef89272e38c1e4a874cd3b76ad56d580f",
+    "verified-runs/treedb_single/250k/repeat-1/search-ef128.json": "a4372b42e9b89aaa99c1e0e36790b5cfa9b537a300211c7379827309c2a73e1e",
+    "verified-runs/treedb_single/250k/repeat-1/search-ef256.json": "8df32d79376f08845e0ba513f49293bbce6de0a26f69c4f899f7950bede8583e",
+    "verified-runs/treedb_single/250k/repeat-1/search-ef64.json": "2f10362af85c66d6facd12fa4ca486ec62da89b73a20d546b2d3f485755879c8",
+    "verified-runs/treedb_single/250k/repeat-2/search-ef128.json": "fabba5b304fc8c774ce55d941f84b255e88b301e5e1d209b87c1c7a723a446ca",
+    "verified-runs/treedb_single/250k/repeat-2/search-ef256.json": "e6ce4d766c1affaa163347d48c0c3498748f8a420941f9530af252192d5c1abb",
+    "verified-runs/treedb_single/250k/repeat-2/search-ef64.json": "c0aeb11c443ee8c40252c12ed2653b9e43bdf7f3a48f9cfe8274e36ab6af074c",
+    "verified-runs/treedb_single/250k/repeat-3/search-ef128.json": "c808dc3f8932eda81ab0ebd40bff108b7f00deab409b387bc007c3e03bdfaa2c",
+    "verified-runs/treedb_single/250k/repeat-3/search-ef256.json": "22235d1a18f75985fc32de04b56ddd4bc49afdca8a37cba3ae3aef1e3355aec4",
+    "verified-runs/treedb_single/250k/repeat-3/search-ef64.json": "f23cd4cefaa94350a8d64e17f29a361dcd88e5b4406a85c703a7c9a84f625430"
+  },
+  "recall_floor": 0.9,
+  "result_kind": "vector_single_daemon_matched_recall_matrix_v1",
+  "schema_version": 1,
+  "source_revision": "21a57f937f88ff7b3b2746848efa40433a84389d",
+  "systems": {
+    "milvus": {
+      "100k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 3172399,
+                "p95_nanos_median": 2595920,
+                "p95_nanos_min": 2019891,
+                "qps_max": 588.2479293749423,
+                "qps_median": 526.5149606476136,
+                "qps_min": 417.7358769744224
+              },
+              "32": {
+                "p95_nanos_max": 30500763,
+                "p95_nanos_median": 26818562,
+                "p95_nanos_min": 25384242,
+                "qps_max": 2291.0523324419637,
+                "qps_median": 2154.3836487045205,
+                "qps_min": 1828.6696007941373
+              }
+            },
+            "recall": 0.9837
+          },
+          "16": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2837672,
+                "p95_nanos_median": 1834953,
+                "p95_nanos_min": 1651944,
+                "qps_max": 729.4280401491249,
+                "qps_median": 712.5981072808157,
+                "qps_min": 453.59498810486826
+              },
+              "32": {
+                "p95_nanos_max": 27004937,
+                "p95_nanos_median": 23517617,
+                "p95_nanos_min": 22584359,
+                "qps_max": 2405.524111155013,
+                "qps_median": 2381.535959164271,
+                "qps_min": 2049.746074305852
+              }
+            },
+            "recall": 0.6061
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2700734,
+                "p95_nanos_median": 2324714,
+                "p95_nanos_min": 1993547,
+                "qps_max": 566.2753861702079,
+                "qps_median": 520.4162010422831,
+                "qps_min": 470.3662381071131
+              },
+              "32": {
+                "p95_nanos_max": 26389213,
+                "p95_nanos_median": 25542791,
+                "p95_nanos_min": 25079192,
+                "qps_max": 2221.076047698819,
+                "qps_median": 2208.2275947589037,
+                "qps_min": 2164.653071139747
+              }
+            },
+            "recall": 0.9967
+          },
+          "32": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 5626785,
+                "p95_nanos_median": 1729134,
+                "p95_nanos_min": 1584662,
+                "qps_max": 725.5323272527936,
+                "qps_median": 682.795385159713,
+                "qps_min": 340.2910897531751
+              },
+              "32": {
+                "p95_nanos_max": 24143555,
+                "p95_nanos_median": 23975635,
+                "p95_nanos_min": 23299371,
+                "qps_max": 2440.572039393017,
+                "qps_median": 2397.6506533572697,
+                "qps_min": 2369.395468791307
+              }
+            },
+            "recall": 0.7749
+          },
+          "512": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 3224718,
+                "p95_nanos_median": 2737277,
+                "p95_nanos_min": 2251501,
+                "qps_max": 508.6452521327604,
+                "qps_median": 456.71888423373946,
+                "qps_min": 379.0139409401863
+              },
+              "32": {
+                "p95_nanos_max": 33534850,
+                "p95_nanos_median": 28428798,
+                "p95_nanos_min": 25838192,
+                "qps_max": 2195.3196241930737,
+                "qps_median": 1969.5348263253786,
+                "qps_min": 1740.7428771430536
+              }
+            },
+            "recall": 0.9988
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2214443,
+                "p95_nanos_median": 1931232,
+                "p95_nanos_min": 1823255,
+                "qps_max": 664.6833530233954,
+                "qps_median": 644.8295043147632,
+                "qps_min": 536.9849094661541
+              },
+              "32": {
+                "p95_nanos_max": 26805445,
+                "p95_nanos_median": 25410411,
+                "p95_nanos_min": 23632104,
+                "qps_max": 2421.6918692056893,
+                "qps_median": 2256.7175788883974,
+                "qps_min": 2214.6342256737503
+              }
+            },
+            "recall": 0.921
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 2214443,
+              "p95_nanos_median": 1931232,
+              "p95_nanos_min": 1823255,
+              "qps_max": 664.6833530233954,
+              "qps_median": 644.8295043147632,
+              "qps_min": 536.9849094661541
+            },
+            "32": {
+              "p95_nanos_max": 26805445,
+              "p95_nanos_median": 25410411,
+              "p95_nanos_min": 23632104,
+              "qps_max": 2421.6918692056893,
+              "qps_median": 2256.7175788883974,
+              "qps_min": 2214.6342256737503
+            }
+          },
+          "recall": 0.921
+        },
+        "selected_ef": 64
+      },
+      "250k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2073992,
+                "p95_nanos_median": 1997051,
+                "p95_nanos_min": 1943739,
+                "qps_max": 579.32142462036,
+                "qps_median": 559.7774048362717,
+                "qps_min": 559.5675811307876
+              },
+              "32": {
+                "p95_nanos_max": 28920680,
+                "p95_nanos_median": 26669818,
+                "p95_nanos_min": 24825873,
+                "qps_max": 2217.771579130445,
+                "qps_median": 2141.292252413251,
+                "qps_min": 2014.08234306868
+              }
+            },
+            "recall": 0.9336
+          },
+          "16": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1899439,
+                "p95_nanos_median": 1839555,
+                "p95_nanos_min": 1814139,
+                "qps_max": 717.7063412151799,
+                "qps_median": 679.7669333060869,
+                "qps_min": 655.9414123513957
+              },
+              "32": {
+                "p95_nanos_max": 25411811,
+                "p95_nanos_median": 25347125,
+                "p95_nanos_min": 24032985,
+                "qps_max": 2338.9196945080344,
+                "qps_median": 2289.897265016251,
+                "qps_min": 2284.880803489416
+              }
+            },
+            "recall": 0.5117
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2685202,
+                "p95_nanos_median": 2666462,
+                "p95_nanos_min": 2439467,
+                "qps_max": 483.7408206729364,
+                "qps_median": 478.239805038869,
+                "qps_min": 456.4193474585982
+              },
+              "32": {
+                "p95_nanos_max": 28507807,
+                "p95_nanos_median": 28170739,
+                "p95_nanos_min": 28019238,
+                "qps_max": 2027.1642158279433,
+                "qps_median": 1983.7659267634997,
+                "qps_min": 1923.6341368959377
+              }
+            },
+            "recall": 0.9789
+          },
+          "32": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1852243,
+                "p95_nanos_median": 1671128,
+                "p95_nanos_min": 1615159,
+                "qps_max": 703.7985934700047,
+                "qps_median": 695.7805866937082,
+                "qps_min": 672.4780534208039
+              },
+              "32": {
+                "p95_nanos_max": 26616612,
+                "p95_nanos_median": 24895522,
+                "p95_nanos_min": 23454612,
+                "qps_max": 2398.1324424014188,
+                "qps_median": 2354.4219074966145,
+                "qps_min": 2195.5988587724946
+              }
+            },
+            "recall": 0.6762
+          },
+          "512": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2999873,
+                "p95_nanos_median": 2718778,
+                "p95_nanos_min": 2650454,
+                "qps_max": 411.41940250686713,
+                "qps_median": 408.8199523129682,
+                "qps_min": 378.4422215612353
+              },
+              "32": {
+                "p95_nanos_max": 33070434,
+                "p95_nanos_median": 31424327,
+                "p95_nanos_min": 31168420,
+                "qps_max": 1815.4551300651372,
+                "qps_median": 1805.4718483296726,
+                "qps_min": 1767.624229833005
+              }
+            },
+            "recall": 0.9913
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2289903,
+                "p95_nanos_median": 2022089,
+                "p95_nanos_min": 1834093,
+                "qps_max": 645.5966624398789,
+                "qps_median": 628.0272625619417,
+                "qps_min": 533.2035612334919
+              },
+              "32": {
+                "p95_nanos_max": 28303435,
+                "p95_nanos_median": 26236158,
+                "p95_nanos_min": 24969709,
+                "qps_max": 2322.7050440814646,
+                "qps_median": 2157.611337531246,
+                "qps_min": 2044.9924349368775
+              }
+            },
+            "recall": 0.828
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 2073992,
+              "p95_nanos_median": 1997051,
+              "p95_nanos_min": 1943739,
+              "qps_max": 579.32142462036,
+              "qps_median": 559.7774048362717,
+              "qps_min": 559.5675811307876
+            },
+            "32": {
+              "p95_nanos_max": 28920680,
+              "p95_nanos_median": 26669818,
+              "p95_nanos_min": 24825873,
+              "qps_max": 2217.771579130445,
+              "qps_median": 2141.292252413251,
+              "qps_min": 2014.08234306868
+            }
+          },
+          "recall": 0.9336
+        },
+        "selected_ef": 128
+      }
+    },
+    "pgvector": {
+      "100k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 3133640,
+                "p95_nanos_median": 1798997,
+                "p95_nanos_min": 1280791,
+                "qps_max": 906.5328604576525,
+                "qps_median": 775.964728416755,
+                "qps_min": 474.8763914457023
+              },
+              "32": {
+                "p95_nanos_max": 28107185,
+                "p95_nanos_median": 18114313,
+                "p95_nanos_min": 15900567,
+                "qps_max": 3669.0817703556004,
+                "qps_median": 3596.280927538706,
+                "qps_min": 2436.6489377841363
+              }
+            },
+            "recall": 0.9793
+          },
+          "16": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 664925,
+                "p95_nanos_median": 664565,
+                "p95_nanos_min": 445361,
+                "qps_max": 2649.2996169378434,
+                "qps_median": 2008.8079720928265,
+                "qps_min": 1927.1922717815062
+              },
+              "32": {
+                "p95_nanos_max": 13755161,
+                "p95_nanos_median": 9922246,
+                "p95_nanos_min": 8394306,
+                "qps_max": 7117.032067320511,
+                "qps_median": 5789.397958833605,
+                "qps_min": 4639.319861672036
+              }
+            },
+            "recall": 0.6247
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2459453,
+                "p95_nanos_median": 2409703,
+                "p95_nanos_min": 2099482,
+                "qps_max": 620.3148692453302,
+                "qps_median": 562.228344257575,
+                "qps_min": 547.5203420497268
+              },
+              "32": {
+                "p95_nanos_max": 24309102,
+                "p95_nanos_median": 19745849,
+                "p95_nanos_min": 17507608,
+                "qps_max": 3252.9476629818223,
+                "qps_median": 2957.0704018354736,
+                "qps_min": 2761.555403304142
+              }
+            },
+            "recall": 0.9905
+          },
+          "32": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 885983,
+                "p95_nanos_median": 843582,
+                "p95_nanos_min": 624424,
+                "qps_max": 1928.8857954983848,
+                "qps_median": 1630.7975095946026,
+                "qps_min": 1610.7615671472813
+              },
+              "32": {
+                "p95_nanos_max": 15654717,
+                "p95_nanos_median": 11196490,
+                "p95_nanos_min": 9482703,
+                "qps_max": 6349.508621017469,
+                "qps_median": 5231.084243467827,
+                "qps_min": 4253.132733878213
+              }
+            },
+            "recall": 0.7906
+          },
+          "512": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 4072522,
+                "p95_nanos_median": 3078140,
+                "p95_nanos_min": 2897741,
+                "qps_max": 448.60815195466284,
+                "qps_median": 436.8139206699613,
+                "qps_min": 362.70535913425397
+              },
+              "32": {
+                "p95_nanos_max": 31004114,
+                "p95_nanos_median": 22701761,
+                "p95_nanos_min": 21478744,
+                "qps_max": 2702.094885316007,
+                "qps_median": 2418.912495665277,
+                "qps_min": 1887.1757131102759
+              }
+            },
+            "recall": 0.9953
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1712856,
+                "p95_nanos_median": 965189,
+                "p95_nanos_min": 860930,
+                "qps_max": 1359.9806270155307,
+                "qps_median": 1255.624002757625,
+                "qps_min": 789.3902265278994
+              },
+              "32": {
+                "p95_nanos_max": 17104772,
+                "p95_nanos_median": 15389593,
+                "p95_nanos_min": 11268623,
+                "qps_max": 5021.4534328480195,
+                "qps_median": 3745.632817020793,
+                "qps_min": 3540.7941879314494
+              }
+            },
+            "recall": 0.9251
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 1712856,
+              "p95_nanos_median": 965189,
+              "p95_nanos_min": 860930,
+              "qps_max": 1359.9806270155307,
+              "qps_median": 1255.624002757625,
+              "qps_min": 789.3902265278994
+            },
+            "32": {
+              "p95_nanos_max": 17104772,
+              "p95_nanos_median": 15389593,
+              "p95_nanos_min": 11268623,
+              "qps_max": 5021.4534328480195,
+              "qps_median": 3745.632817020793,
+              "qps_min": 3540.7941879314494
+            }
+          },
+          "recall": 0.9251
+        },
+        "selected_ef": 64
+      },
+      "250k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 4037161,
+                "p95_nanos_median": 3580480,
+                "p95_nanos_min": 3555934,
+                "qps_max": 395.409516785235,
+                "qps_median": 385.51570969687975,
+                "qps_min": 348.85340893432897
+              },
+              "32": {
+                "p95_nanos_max": 37427499,
+                "p95_nanos_median": 36690009,
+                "p95_nanos_min": 33072043,
+                "qps_max": 1884.9415640581076,
+                "qps_median": 1712.8571332721344,
+                "qps_min": 1698.544358507653
+              }
+            },
+            "recall": 0.9229
+          },
+          "16": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1069104,
+                "p95_nanos_median": 1054094,
+                "p95_nanos_min": 901752,
+                "qps_max": 1550.0342013049371,
+                "qps_median": 1402.7771975060707,
+                "qps_min": 1362.6734735763366
+              },
+              "32": {
+                "p95_nanos_max": 12982367,
+                "p95_nanos_median": 12776477,
+                "p95_nanos_min": 11495298,
+                "qps_max": 5256.715653783334,
+                "qps_median": 5245.525231546483,
+                "qps_min": 5143.00710255647
+              }
+            },
+            "recall": 0.4744
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 5936227,
+                "p95_nanos_median": 5926655,
+                "p95_nanos_min": 5648518,
+                "qps_max": 252.0314159374898,
+                "qps_median": 242.49306661240493,
+                "qps_min": 242.11874263414566
+              },
+              "32": {
+                "p95_nanos_max": 64500534,
+                "p95_nanos_median": 50080339,
+                "p95_nanos_min": 45041483,
+                "qps_max": 1320.9142805212364,
+                "qps_median": 1239.702708725497,
+                "qps_min": 1000.4309866214642
+              }
+            },
+            "recall": 0.9712
+          },
+          "32": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1722279,
+                "p95_nanos_median": 1285143,
+                "p95_nanos_min": 1283530,
+                "qps_max": 1067.0015082512816,
+                "qps_median": 1054.8205046821017,
+                "qps_min": 847.4782224092634
+              },
+              "32": {
+                "p95_nanos_max": 17703367,
+                "p95_nanos_median": 15606928,
+                "p95_nanos_min": 14406238,
+                "qps_max": 4295.117487668309,
+                "qps_median": 4121.319172402256,
+                "qps_min": 3819.7386793618352
+              }
+            },
+            "recall": 0.6458
+          },
+          "512": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 8641358,
+                "p95_nanos_median": 8349688,
+                "p95_nanos_min": 8166701,
+                "qps_max": 175.47024276664774,
+                "qps_median": 171.69554576148724,
+                "qps_min": 168.93138368504663
+              },
+              "32": {
+                "p95_nanos_max": 69112698,
+                "p95_nanos_median": 68531106,
+                "p95_nanos_min": 65379360,
+                "qps_max": 886.6629920636475,
+                "qps_median": 859.3807454923736,
+                "qps_min": 845.6184979611885
+              }
+            },
+            "recall": 0.9866
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 2775129,
+                "p95_nanos_median": 2284718,
+                "p95_nanos_min": 2034994,
+                "qps_max": 663.5263204222489,
+                "qps_median": 606.8407159546193,
+                "qps_min": 534.7693805025027
+              },
+              "32": {
+                "p95_nanos_max": 26796800,
+                "p95_nanos_median": 24377390,
+                "p95_nanos_min": 21944522,
+                "qps_max": 3029.9082503145614,
+                "qps_median": 2771.6968908596377,
+                "qps_min": 2323.98441735318
+              }
+            },
+            "recall": 0.8122
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 4037161,
+              "p95_nanos_median": 3580480,
+              "p95_nanos_min": 3555934,
+              "qps_max": 395.409516785235,
+              "qps_median": 385.51570969687975,
+              "qps_min": 348.85340893432897
+            },
+            "32": {
+              "p95_nanos_max": 37427499,
+              "p95_nanos_median": 36690009,
+              "p95_nanos_min": 33072043,
+              "qps_max": 1884.9415640581076,
+              "qps_median": 1712.8571332721344,
+              "qps_min": 1698.544358507653
+            }
+          },
+          "recall": 0.9229
+        },
+        "selected_ef": 128
+      }
+    },
+    "treedb_single": {
+      "100k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 746237,
+                "p95_nanos_median": 729080,
+                "p95_nanos_min": 723159,
+                "qps_max": 1744.81673182234,
+                "qps_median": 1721.2355539669086,
+                "qps_min": 1690.638812017186
+              },
+              "32": {
+                "p95_nanos_max": 6833746,
+                "p95_nanos_median": 6238453,
+                "p95_nanos_min": 6129847,
+                "qps_max": 8151.13382393758,
+                "qps_median": 7917.074785274285,
+                "qps_min": 7764.484609157081
+              }
+            },
+            "recall": 0.9909999999999988
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1043907,
+                "p95_nanos_median": 1012974,
+                "p95_nanos_min": 1007814,
+                "qps_max": 1318.2578907700793,
+                "qps_median": 1305.6430347631883,
+                "qps_min": 1286.8354922426547
+              },
+              "32": {
+                "p95_nanos_max": 9222398,
+                "p95_nanos_median": 9052892,
+                "p95_nanos_min": 8780161,
+                "qps_max": 5885.976452150587,
+                "qps_median": 5673.212466487271,
+                "qps_min": 5669.185561400737
+              }
+            },
+            "recall": 0.9970999999999998
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 624773,
+                "p95_nanos_median": 537239,
+                "p95_nanos_min": 523954,
+                "qps_max": 2200.282244725394,
+                "qps_median": 2198.0434511867084,
+                "qps_min": 2051.869660454208
+              },
+              "32": {
+                "p95_nanos_max": 5951278,
+                "p95_nanos_median": 4865854,
+                "p95_nanos_min": 4852339,
+                "qps_max": 10976.84117026738,
+                "qps_median": 10852.515326003537,
+                "qps_min": 10174.006956640042
+              }
+            },
+            "recall": 0.9524999999999946
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 624773,
+              "p95_nanos_median": 537239,
+              "p95_nanos_min": 523954,
+              "qps_max": 2200.282244725394,
+              "qps_median": 2198.0434511867084,
+              "qps_min": 2051.869660454208
+            },
+            "32": {
+              "p95_nanos_max": 5951278,
+              "p95_nanos_median": 4865854,
+              "p95_nanos_min": 4852339,
+              "qps_max": 10976.84117026738,
+              "qps_median": 10852.515326003537,
+              "qps_min": 10174.006956640042
+            }
+          },
+          "recall": 0.9524999999999946
+        },
+        "selected_ef": 64
+      },
+      "250k": {
+        "curve": {
+          "128": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 813167,
+                "p95_nanos_median": 791461,
+                "p95_nanos_min": 744413,
+                "qps_max": 1581.6757224139367,
+                "qps_median": 1525.2556846733132,
+                "qps_min": 1515.0184093068453
+              },
+              "32": {
+                "p95_nanos_max": 8931377,
+                "p95_nanos_median": 8465981,
+                "p95_nanos_min": 6817015,
+                "qps_max": 7529.384892774105,
+                "qps_median": 6220.608248088606,
+                "qps_min": 6069.391670578087
+              }
+            },
+            "recall": 0.9579999999999946
+          },
+          "256": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 1213557,
+                "p95_nanos_median": 1198812,
+                "p95_nanos_min": 1197866,
+                "qps_max": 1102.5978441219697,
+                "qps_median": 1096.570686159237,
+                "qps_min": 1090.2333567420608
+              },
+              "32": {
+                "p95_nanos_max": 13824562,
+                "p95_nanos_median": 11110631,
+                "p95_nanos_min": 11008740,
+                "qps_max": 4531.263636979517,
+                "qps_median": 4524.961058524503,
+                "qps_min": 3903.348378893749
+              }
+            },
+            "recall": 0.9893999999999987
+          },
+          "64": {
+            "concurrency": {
+              "1": {
+                "p95_nanos_max": 556612,
+                "p95_nanos_median": 549980,
+                "p95_nanos_min": 540361,
+                "qps_max": 2095.117974741807,
+                "qps_median": 2089.993686024575,
+                "qps_min": 2076.737687987412
+              },
+              "32": {
+                "p95_nanos_max": 5958096,
+                "p95_nanos_median": 5267564,
+                "p95_nanos_min": 5190270,
+                "qps_max": 10291.910486314384,
+                "qps_median": 10215.61401847032,
+                "qps_min": 9046.500887185819
+              }
+            },
+            "recall": 0.8646999999999934
+          }
+        },
+        "selected": {
+          "concurrency": {
+            "1": {
+              "p95_nanos_max": 813167,
+              "p95_nanos_median": 791461,
+              "p95_nanos_min": 744413,
+              "qps_max": 1581.6757224139367,
+              "qps_median": 1525.2556846733132,
+              "qps_min": 1515.0184093068453
+            },
+            "32": {
+              "p95_nanos_max": 8931377,
+              "p95_nanos_median": 8465981,
+              "p95_nanos_min": 6817015,
+              "qps_max": 7529.384892774105,
+              "qps_median": 6220.608248088606,
+              "qps_min": 6069.391670578087
+            }
+          },
+          "recall": 0.9579999999999946
+        },
+        "selected_ef": 128
+      }
+    }
+  }
+}
