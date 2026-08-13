@@ -125,3 +125,32 @@ has not started.
 The issue dependency route is `#4142 -> #4143 -> #4144 -> #4146 -> #4141`,
 with conditional route `#4144 -> #4145 -> #4146`. This checkpoint is not a
 production-default, persistent-format, traversal, membership, or router change.
+
+## p40 strict accounting checkpoint
+
+After c256 restored routing coverage but failed the EF96 recall gate, the
+remaining authorized M0 calibration point is p40. Its strict graph-preserving
+KaHIP assignment and account are complete, but **no p40 clone or materialized
+pack exists**. They used the same frozen graph artifact and the pinned KaHIP
+Python 3.25 executable/adapter (SHA-256
+`7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86` /
+`ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825`).
+
+The persisted assignment is `membership/250k-p40-assignment-v1.json`
+(`b07ab6272598447ee517d41665305af776ba806bb94033046b687e283a786040`);
+the strict account is `membership/250k-p40-membership-v1.json`
+(`15ba48e82841c4154e97f88501721cd37b6afdb4243571561265575e92c0816e`).
+It validates the frozen source, IDs, graph, and p40 request configuration.
+Its max partition size is 6,561 under cap 6,563; edge cut is 1,046,273;
+overlap capacity is 7,500 and exact-20 budget is 50,000. Zero has no overlap
+(`3218f36b395897430cd34ee77504aa40a7f7aad5f747bbb00e50153abb2fcb33`).
+Useful-only-20 has 50,000 useful and zero filler memberships
+(`188f6f44fba75a086cd18749bd66be799489311fc111c44f66d86f5f988a56e3`);
+exact-20 is byte-identical, so it is not a separate materialization candidate.
+
+The exact command, stdout, time, and before/after host snapshots are retained
+beside those files. It completed in 47.67 seconds with 1,368,896 KiB maximum
+RSS. An unrelated Lean process overlapped the assignment, so those resource
+figures are provenance only; the canonical assignment/account hashes and
+dispositions are the authoritative outcome. Review is required before any
+p40 clone, materialization, frontier, holdout, or descendant work.
