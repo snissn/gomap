@@ -1,12 +1,22 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
+
+func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
+	base := []string{"-db", "db", "-dataset", "dataset", "-calibration", "calibration", "-truth-cache", "truth", "-membership-report", "membership", "-assignment-artifact", "assignment", "-out", t.TempDir() + "/report.json"}
+	for _, override := range [][]string{{"-probes", "2,3,4"}, {"-ef", "64,80,128,256"}} {
+		if err := runM0CalibrationFrontierV1(append(base, override...), io.Discard); err == nil || !strings.Contains(err.Error(), "requires probes 1,2,4 and EFs 64,80,96,128") {
+			t.Fatalf("override %v error = %v", override, err)
+		}
+	}
+}
 
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
 	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}

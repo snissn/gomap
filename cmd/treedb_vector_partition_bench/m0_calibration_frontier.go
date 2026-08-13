@@ -109,8 +109,8 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if len(probes) != 3 || len(efs) != 4 {
-		return errors.New("M0 frontier requires 3 probes and 4 EFs")
+	if len(probes) != 3 || probes[0] != 1 || probes[1] != 2 || probes[2] != 4 || len(efs) != 4 || efs[0] != 64 || efs[1] != 80 || efs[2] != 96 || efs[3] != 128 {
+		return errors.New("M0 frontier requires probes 1,2,4 and EFs 64,80,96,128")
 	}
 	fixture, e := loadFixture(dataset)
 	if e != nil {
