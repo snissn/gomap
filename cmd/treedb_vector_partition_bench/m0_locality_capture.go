@@ -24,17 +24,29 @@ type m0LocalityCaptureRowV1 struct {
 	Edges                 uint64 `json:"edges"`
 	AdjacencyPageAccesses uint64 `json:"adjacency_page_accesses"`
 }
+type m0LocalityTracePartitionV1 struct {
+	Partition      uint32                                        `json:"partition"`
+	ScoreOrdinals  []uint32                                      `json:"score_ordinals"`
+	AdjacencyReads []collections.VectorPartitionSearchPageReadV1 `json:"adjacency_reads"`
+}
+type m0LocalityTraceRowV1 struct {
+	Query      int                          `json:"query_ordinal"`
+	Route      []uint32                     `json:"route"`
+	Partitions []m0LocalityTracePartitionV1 `json:"partitions"`
+}
 type m0LocalityCaptureV1 struct {
-	Schema           string                   `json:"schema"`
-	DB               string                   `json:"retained_db"`
-	Split            string                   `json:"split_sha256"`
-	Probes           int                      `json:"probes"`
-	RouterCandidates int                      `json:"router_candidates"`
-	EF               int                      `json:"ef_search"`
-	PageScope        string                   `json:"page_scope"`
-	MedianPages      uint64                   `json:"median_unique_graph_vector_pages"`
-	P95Pages         uint64                   `json:"p95_unique_graph_vector_pages"`
-	Rows             []m0LocalityCaptureRowV1 `json:"rows"`
+	Schema           string                                                     `json:"schema"`
+	DB               string                                                     `json:"retained_db"`
+	Split            string                                                     `json:"split_sha256"`
+	Probes           int                                                        `json:"probes"`
+	RouterCandidates int                                                        `json:"router_candidates"`
+	EF               int                                                        `json:"ef_search"`
+	PageScope        string                                                     `json:"page_scope"`
+	MedianPages      uint64                                                     `json:"median_unique_graph_vector_pages"`
+	P95Pages         uint64                                                     `json:"p95_unique_graph_vector_pages"`
+	Rows             []m0LocalityCaptureRowV1                                   `json:"rows"`
+	Traces           []m0LocalityTraceRowV1                                     `json:"traces,omitempty"`
+	Snapshots        map[uint32]collections.VectorPartitionPackLayoutSnapshotV1 `json:"snapshots,omitempty"`
 }
 
 func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
@@ -42,6 +54,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	var dataset, db, splitPath, out string
 	var probes, candidates, ef int
+	var rawTraces bool
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&db, "retained-db", "", "read-only retained M3 DB")
 	fs.StringVar(&splitPath, "split", "", "frozen query split manifest")
@@ -49,6 +62,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs.IntVar(&probes, "probes", 2, "router partition probes")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidate budget")
 	fs.IntVar(&ef, "ef-search", 128, "native ef search")
+	fs.BoolVar(&rawTraces, "raw-traces", false, "persist offline trace events and pack layout snapshots")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,7 +105,17 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			return err
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization"}
+	snapshots := map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{}
+	if rawTraces {
+		for p, s := range searchers {
+			snapshot, e := s.PackLayoutSnapshotV1()
+			if e != nil {
+				return e
+			}
+			snapshots[uint32(p)] = snapshot
+		}
+	}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")
@@ -102,6 +126,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			return err
 		}
 		row := m0LocalityCaptureRowV1{Query: ordinal}
+		traceRow := m0LocalityTraceRowV1{Query: ordinal, Route: append([]uint32(nil), route...)}
 		tokens := map[collections.VectorPartitionSearchPageTokenV1]struct{}{}
 		for _, p := range route {
 			if int(p) >= len(searchers) || searchers[p] == nil {
@@ -120,6 +145,9 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 					row.Expanded += uint64(len(t.AdjacencyReads))
 					row.Edges += m.Edges
 					row.AdjacencyPageAccesses += pages.AdjacencyPageAccesses
+					if rawTraces {
+						traceRow.Partitions = append(traceRow.Partitions, m0LocalityTracePartitionV1{Partition: p, ScoreOrdinals: append([]uint32(nil), t.ScoreOrdinals...), AdjacencyReads: append([]collections.VectorPartitionSearchPageReadV1(nil), t.AdjacencyReads...)})
+					}
 				}
 			}
 			if e != nil {
@@ -128,6 +156,9 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		}
 		row.Pages = uint64(len(tokens))
 		report.Rows = append(report.Rows, row)
+		if rawTraces {
+			report.Traces = append(report.Traces, traceRow)
+		}
 	}
 	values := make([]uint64, len(report.Rows))
 	for i, row := range report.Rows {
