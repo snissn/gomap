@@ -555,7 +555,7 @@ func requirePublicBatchWriteSyncPhasePartitions(t *testing.T, stats map[string]s
 
 func TestPublicBatchWriteSyncPhaseStatsMakesNestedPreparationExclusive(t *testing.T) {
 	var phases publicBatchWriteSyncPhaseStats
-	phases.observe(time.Now(), nil, publicBatchWriteSyncPhaseSample{
+	phases.observe(time.Now().Add(-time.Millisecond), nil, publicBatchWriteSyncPhaseSample{
 		// Backend planning begins before the public preparation callback, so
 		// this 100ns interval contains the 30ns preparation interval.
 		commandCallback:                           100 * time.Nanosecond,
@@ -576,7 +576,7 @@ func TestPublicBatchWriteSyncPhaseStatsMakesNestedPreparationExclusive(t *testin
 
 func TestPublicBatchWriteSyncPhaseStatsSignalsMalformedNestedTiming(t *testing.T) {
 	var phases publicBatchWriteSyncPhaseStats
-	phases.observe(time.Now(), nil, publicBatchWriteSyncPhaseSample{
+	phases.observe(time.Now().Add(-time.Millisecond), nil, publicBatchWriteSyncPhaseSample{
 		// This cannot arise from either measured command-WAL construction path:
 		// backend timing starts before preparation and ends after it. Keep the
 		// overrun visible instead of manufacturing a negative backend phase if
