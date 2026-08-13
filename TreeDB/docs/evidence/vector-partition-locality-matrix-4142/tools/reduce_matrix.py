@@ -119,6 +119,7 @@ def validate_preflight(path: Path) -> dict[str, Any]:
     for field in ("dataset_sha256", "truth_sha256", "graph_sha256", "calibration_sha256", "holdout_sha256", "query_union_sha256"):
         require(value[field] == getattr(preflight_contract, f"FROZEN_{field.upper()}"), f"preflight {field} is not pinned")
     require(isinstance(value["topology_contract_sha256"], str) and len(value["topology_contract_sha256"]) == 64 and all(char in "0123456789abcdef" for char in value["topology_contract_sha256"]), "preflight topology contract is invalid")
+    require(preflight_contract.topology_contract_is_approved(value["topology_contract_sha256"]), "preflight topology contract is not approved")
     return value
 
 

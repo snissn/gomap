@@ -13,7 +13,7 @@ The reducer schema reserves the required 16/32/40 × overlap × probe × EF ×
 layout rows and binds source, executable, dataset, truth, graph, membership,
 router, and query-union identities. It requires a ready pinned preflight and
 an explicit complete topology contract (each layout/partition/overlap tuple's
-authoritative membership and router hashes),
+membership and router hashes) whose SHA-256 is pinned in reviewed code,
 every explicitly authorized coordinate, and stable membership/router identity
 within each topology; it rejects nonterminal, mixed, duplicate-coordinate,
 reordered, incomplete, invalid-numeric, or filler-containing rows. The
@@ -38,8 +38,11 @@ python3 TreeDB/docs/evidence/vector-partition-locality-matrix-4142/tools/preflig
   --out /mnt/fast4tb/gomap-4142-locality-matrix-evidence/preflight.json
 ```
 
-The expected disposition is `ready` when the #4140 source and binary plus the
-complete authoritative topology contract are supplied. The retained #4027 descriptor is source-older and is used only as a
+`APPROVED_TOPOLOGY_CONTRACT_SHA256` is intentionally unset because no complete
+18-topology contract has received a provenance review. Consequently the
+production preflight fails closed as `blocked_topology_contract`; a later
+reviewed commit may pin that digest only after validating the materialized
+membership/router provenance. The retained #4027 descriptor is source-older and is used only as a
 frozen input anchor; it is never passed off as fresh matrix evidence. No target
 byte/row, probe, overlap, or page-objective contract is selected by this
 scaffold.
@@ -222,7 +225,9 @@ allowed EF96**. The report's three-repetition recall/work/result identities are
 invariant, but QPS/latency are non-authoritative: concurrent Lean work caused
 up to 89.92% per-cell QPS spread. No QPS selection claim is made.
 
-The final search holdout remains sealed. Do not start #4143, #4144, #4145, or
-#4146: the dependency checkpoint remains
-`#4142 -> #4143 -> #4144 -> #4146 -> #4141`, conditional
-`#4144 -> #4145 -> #4146`, and #4142 has failed closed before its entry gate.
+The original EF96 gate remains failed; it is not relabeled as a pass. The
+owner waiver in [#4142 comment 5286009582](https://github.com/snissn/gomap/issues/4142#issuecomment-5286009582)
+permits #4143 to progress after this PR merges. The final search holdout remains
+sealed, and #4144, #4145, and #4146 retain their dependency and final-gate
+requirements: `#4142 -> #4143 -> #4144 -> #4146 -> #4141`, conditional
+`#4144 -> #4145 -> #4146`.

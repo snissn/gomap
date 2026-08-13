@@ -20,6 +20,9 @@ FROZEN_GRAPH_SHA256 = "57ad36d923c5fdb701a082727fd24efdcf0c6ac0e24efeda28ca11f23
 FROZEN_CALIBRATION_SHA256 = "077ec68492638dfe4f3cd589e125a769149130666533491e50143767f28ea46f"
 FROZEN_HOLDOUT_SHA256 = "b25cc80df7d03294949f3ce3ef70f14e10692d1127d14e45b9081e07e8196e28"
 FROZEN_QUERY_UNION_SHA256 = "b1c32e2197c96b83093960b247b9a8eac730c9527f14fa7691c116b77d679a63"
+# Deliberately unset: no complete 18-topology contract has yet received a
+# provenance review. A later reviewed change must pin its SHA-256 here.
+APPROVED_TOPOLOGY_CONTRACT_SHA256 = ""
 
 TOPOLOGY_CONTRACT_FIELDS = {"schema_version", "result_kind", "graph_sha256", "topologies"}
 TOPOLOGY_FIELDS = {"layout", "partitions", "overlap", "membership_sha256", "router_sha256"}
@@ -33,6 +36,16 @@ TOPOLOGY_COORDINATES = frozenset(
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def topology_contract_is_approved(value: str) -> bool:
+    approved = APPROVED_TOPOLOGY_CONTRACT_SHA256
+    return (
+        isinstance(approved, str)
+        and len(approved) == 64
+        and all(char in "0123456789abcdef" for char in approved)
+        and value == approved
+    )
 
 
 def write_json_exclusive(path: Path, value: dict) -> None:
@@ -93,7 +106,7 @@ def main() -> None:
     parser.add_argument("--truth-artifact", type=Path, required=True)
     parser.add_argument("--calibration", type=Path, required=True)
     parser.add_argument("--holdout", type=Path, required=True)
-    parser.add_argument("--topology-contract", type=Path, required=True, help="authoritative membership/router topology mapping")
+    parser.add_argument("--topology-contract", type=Path, required=True, help="candidate membership/router topology mapping")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     campaign = args.source_evidence / "campaign.json"
@@ -119,6 +132,7 @@ def main() -> None:
     calibration_sha = digest(args.calibration)
     holdout_sha = digest(args.holdout)
     query_union_sha = query_union(args.calibration, args.holdout)
+    topology_contract_sha = digest(args.topology_contract)
     ready = (
         source_head == MEASURED_SOURCE_HEAD
         and source.get("head_sha") == FROZEN_INPUT_HEAD
@@ -134,6 +148,7 @@ def main() -> None:
         and descriptor_value.get("graph_artifact_sha256") == FROZEN_GRAPH_SHA256
         and vcs.get("vcs.revision") == source_head
         and vcs.get("vcs.modified") == "false"
+        and topology_contract_is_approved(topology_contract_sha)
     )
     result = {
         "schema_version": 1,
@@ -150,14 +165,18 @@ def main() -> None:
         "calibration_sha256": calibration_sha,
         "holdout_sha256": holdout_sha,
         "query_union_sha256": query_union_sha,
-        "topology_contract_sha256": digest(args.topology_contract),
+        "topology_contract_sha256": topology_contract_sha,
         "binary_vcs_revision": vcs.get("vcs.revision"),
         "binary_vcs_modified": vcs.get("vcs.modified"),
-        "status": "ready" if ready else "blocked_source_identity",
+        "status": "ready" if ready else (
+            "blocked_topology_contract"
+            if not topology_contract_is_approved(topology_contract_sha)
+            else "blocked_source_identity"
+        ),
     }
     write_json_exclusive(args.out, result)
     if result["status"] != "ready":
-        raise SystemExit("source identity differs from #4140 measured source; rebuild exact assets before matrix execution")
+        raise SystemExit("preflight is not ready; pin a reviewed topology contract and rebuild exact assets before matrix execution")
 
 
 if __name__ == "__main__":

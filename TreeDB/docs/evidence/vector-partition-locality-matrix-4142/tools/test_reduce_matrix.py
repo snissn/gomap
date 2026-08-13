@@ -136,42 +136,52 @@ class ReducerTest(unittest.TestCase):
             value["topology_contract_sha256"] = reducer.sha256(contract_path)
             preflight_path.write_text(json.dumps(value), encoding="utf-8")
             paths = [write(f"{value['row_id']}.json", value) for value in complete_rows()]
-            self.assertEqual(reducer.reduce_rows(paths, preflight_path, contract_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
-            summary_path = root / "summary.json"
-            with mock.patch.object(sys, "argv", ["reduce_matrix.py", "--preflight", str(preflight_path), "--topology-contract", str(contract_path), "--out", str(summary_path), *map(str, paths)]):
-                reducer.main()
-            self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["rows"], len(reducer.AUTHORIZED_COORDINATES))
-            changed_contract = topology_contract()
-            changed_contract["topologies"][0]["router_sha256"] = "f" * 64
-            with self.assertRaisesRegex(reducer.ContractError, "does not match preflight"):
-                reducer.reduce_rows(paths, preflight_path, write("changed-topology-contract.json", changed_contract))
-            with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
-                reducer.reduce_rows(paths[:-1], preflight_path, contract_path)
-            with self.assertRaisesRegex(reducer.ContractError, "duplicate"):
-                reducer.reduce_rows(paths + [paths[0]], preflight_path, contract_path)
-            with self.assertRaisesRegex(reducer.ContractError, "reordered"):
-                reducer.reduce_rows([paths[1], paths[0]] + paths[2:], preflight_path, contract_path)
-            mixed = complete_rows()[-1]
-            mixed["dataset_sha256"] = "b" * 64
-            with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
-                reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)], preflight_path, contract_path)
-            mixed_topology = complete_rows()[-1]
-            mixed_topology["membership_sha256"] = "b" * 64
-            with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
-                reducer.reduce_rows(paths[:-1] + [write("mixed-topology.json", mixed_topology)], preflight_path, contract_path)
-            consistently_mislabeled = complete_rows()
-            source = ("source-order", 16, "zero")
-            replacement = topology_identity("entry-first-bfs", 16, "zero")
-            for value in consistently_mislabeled:
-                if (value["layout"], value["partitions"], value["overlap"]) == source:
-                    value["membership_sha256"], value["router_sha256"] = replacement
-            mislabeled_paths = [write(f"mislabeled-{value['row_id']}.json", value) for value in consistently_mislabeled]
-            with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
-                reducer.reduce_rows(mislabeled_paths, preflight_path, contract_path)
-            blocked = preflight()
-            blocked["status"] = "blocked_source_identity"
-            with self.assertRaisesRegex(reducer.ContractError, "preflight"):
-                reducer.reduce_rows(paths, write("blocked.json", blocked), contract_path)
+            self.assertFalse(preflight_contract.topology_contract_is_approved(value["topology_contract_sha256"]))
+            with mock.patch.object(preflight_contract, "APPROVED_TOPOLOGY_CONTRACT_SHA256", value["topology_contract_sha256"]):
+                self.assertEqual(reducer.reduce_rows(paths, preflight_path, contract_path)["rows"], len(reducer.AUTHORIZED_COORDINATES))
+                summary_path = root / "summary.json"
+                with mock.patch.object(sys, "argv", ["reduce_matrix.py", "--preflight", str(preflight_path), "--topology-contract", str(contract_path), "--out", str(summary_path), *map(str, paths)]):
+                    reducer.main()
+                self.assertEqual(json.loads(summary_path.read_text(encoding="utf-8"))["rows"], len(reducer.AUTHORIZED_COORDINATES))
+                changed_contract = topology_contract()
+                changed_contract["topologies"][0]["router_sha256"] = "f" * 64
+                with self.assertRaisesRegex(reducer.ContractError, "does not match preflight"):
+                    reducer.reduce_rows(paths, preflight_path, write("changed-topology-contract.json", changed_contract))
+                with self.assertRaisesRegex(reducer.ContractError, "incomplete"):
+                    reducer.reduce_rows(paths[:-1], preflight_path, contract_path)
+                with self.assertRaisesRegex(reducer.ContractError, "duplicate"):
+                    reducer.reduce_rows(paths + [paths[0]], preflight_path, contract_path)
+                duplicate_coordinate = copy.deepcopy(complete_rows()[0])
+                duplicate_coordinate["row_id"] = "distinct-duplicate"
+                with self.assertRaisesRegex(reducer.ContractError, "duplicate coordinate"):
+                    reducer.reduce_rows(paths + [write("duplicate-coordinate.json", duplicate_coordinate)], preflight_path, contract_path)
+                unauthorized_coordinate = copy.deepcopy(complete_rows()[0])
+                with mock.patch.object(reducer, "AUTHORIZED_COORDINATES", reducer.AUTHORIZED_COORDINATES - {reducer.coordinate(unauthorized_coordinate)}):
+                    with self.assertRaisesRegex(reducer.ContractError, "unauthorized coordinate"):
+                        reducer.reduce_rows(paths, preflight_path, contract_path)
+                with self.assertRaisesRegex(reducer.ContractError, "reordered"):
+                    reducer.reduce_rows([paths[1], paths[0]] + paths[2:], preflight_path, contract_path)
+                mixed = complete_rows()[-1]
+                mixed["dataset_sha256"] = "b" * 64
+                with self.assertRaisesRegex(reducer.ContractError, "mixed identity"):
+                    reducer.reduce_rows(paths[:-1] + [write("mixed.json", mixed)], preflight_path, contract_path)
+                mixed_topology = complete_rows()[-1]
+                mixed_topology["membership_sha256"] = "b" * 64
+                with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
+                    reducer.reduce_rows(paths[:-1] + [write("mixed-topology.json", mixed_topology)], preflight_path, contract_path)
+                consistently_mislabeled = complete_rows()
+                source = ("source-order", 16, "zero")
+                replacement = topology_identity("entry-first-bfs", 16, "zero")
+                for value in consistently_mislabeled:
+                    if (value["layout"], value["partitions"], value["overlap"]) == source:
+                        value["membership_sha256"], value["router_sha256"] = replacement
+                mislabeled_paths = [write(f"mislabeled-{value['row_id']}.json", value) for value in consistently_mislabeled]
+                with self.assertRaisesRegex(reducer.ContractError, "pinned contract"):
+                    reducer.reduce_rows(mislabeled_paths, preflight_path, contract_path)
+                blocked = preflight()
+                blocked["status"] = "blocked_source_identity"
+                with self.assertRaisesRegex(reducer.ContractError, "preflight"):
+                    reducer.reduce_rows(paths, write("blocked.json", blocked), contract_path)
 
     def test_variant_identities_and_exact_baseline_filler_are_permitted(self) -> None:
         value = row("exact")
