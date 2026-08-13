@@ -105,6 +105,9 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if err := validateFixture(fixture); err != nil {
+		return err
+	}
 	_, queries := fixtureData(fixture)
 	split, splitSHA, err := loadLocalHNSWQuerySplitV1(splitPath)
 	if err != nil {
