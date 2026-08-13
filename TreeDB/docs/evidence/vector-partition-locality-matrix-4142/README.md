@@ -43,31 +43,35 @@ scaffold.
 
 ## M0 page-objective checkpoint
 
-The v5 offline trace/simulation is a held-out graph+vector page selection
+The v6 trace/v10 simulation is a held-out graph+vector page selection
 only, not a recall, throughput, or production-layout result. It uses the
 frozen 250k graph artifact and frozen calibration/holdout manifests; snapshots
 bind each pack document ID to the artifact ordinal and the simulator fails
 closed unless the trusted dataset manifest proves complete disjoint query-split
 coverage and identity remapping reproduces every captured holdout page count.
 Each capture also binds the retained source, descriptor, ready manifest, and
-router model before tracing.
+router model before tracing. The exact page mapper includes normalized-vector,
+HNSW-level, adjacency-offset, and adjacency-neighbor reads.
 
 | held-out objective | median pages | p95 pages |
 | --- | ---: | ---: |
-| identity current / BFS | 1892 | 2347 |
-| source | 2496 | 3057 |
-| edge window | 1843 | 2323 |
-| Gorder-like | 1791 | 2224 |
-| co-visitation | 1583 | 2057 |
-| hybrid | 1604 | 2066 |
+| identity current / BFS | 1894 | 2349 |
+| source | 2498 | 3059 |
+| edge window | 1845 | 2325 |
+| Gorder-like | 1793 | 2225 |
+| co-visitation | 1584 | 2059 |
+| hybrid | 1604 | 2068 |
 
-`co-visitation` is the provisional M0 page-objective leader: -16.33% held-out
+`co-visitation` is the provisional M0 page-objective leader: -16.37% held-out
 median pages versus identity/BFS. Second-corpus/query-distribution sensitivity
 and integrated construction remain required before selecting a contract. The raw calibration capture SHA-256 is
-`99d6b81f776476afb66e958dc30b24ce3af52c6e66f36e65749c3f3a8f426ce7`,
-holdout is `6fb2f93b0ee18cdb2bae0e9926fbad7710ae78f916787615c7e5aae8694a41fd`,
+`21fbf06bd683724e252fa77546ed1651d9b9ad26edd558d697288b80a5db3d58`,
+holdout is `d9af732cb0a749c8a1127d3cdcbad04d6b7e59cc20296ba97a5615b45a6b90e8`,
 and the reduced simulation is
-`eb377416652c84ee59e8ed5627bb56896b5910bdd08dcdffdffd657022e526f1`.
+`981a9e37ea6b6f2d692a198e436ef1c4f5eb24acdca571056d612c6af8d3f3b9`.
+The clean capture/simulation binary is bound to source
+`41a7df66ded8374989ac8d755cd98a32b91c8d96` with SHA-256
+`93cc8cf4665ec0c5da54dbe6d8d6414aa8944e5e070f8dde26a64431fe419c4a`.
 All raw artifacts remain under the task-specific `/mnt/fast4tb` root.
 
 ## Clean checkpoint: p32 membership and routing
