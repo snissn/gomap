@@ -152,14 +152,10 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	report := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw), RepartitionedArtifactSHA256: digest, Backend: candidate.Backend, Partitions: candidate.Config.Partitions, Cap: candidate.Metrics.Cap, OverlapCapacity: capacity, OverlapBudget: int(math.Floor(m0OverlapRatioV1 * float64(len(candidate.IDs)))), MaxPartitionSize: candidate.Metrics.MaxPartitionSize, EdgeCut: candidate.Metrics.EdgeCut, Modes: modes}
-	raw, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
-	if err = os.WriteFile(out, append(raw, '\n'), 0644); err != nil {
+	if err = writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "m0_membership_account=%s partitions=%d\n", out, report.Partitions)

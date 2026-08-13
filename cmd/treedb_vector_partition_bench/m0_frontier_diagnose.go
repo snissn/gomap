@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -273,14 +272,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	encoded, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
-	if err = os.WriteFile(out, append(encoded, '\n'), 0644); err != nil {
+	if err = writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "m0_frontier_diagnostic=%s queries=%d\n", out, len(report.Queries))
