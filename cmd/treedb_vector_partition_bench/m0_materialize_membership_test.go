@@ -9,10 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
@@ -76,6 +80,9 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 }
 
 func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-useful-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
