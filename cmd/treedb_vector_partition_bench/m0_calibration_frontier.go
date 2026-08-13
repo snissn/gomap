@@ -63,6 +63,8 @@ type m0FrontierReportV1 struct {
 	AssignmentArtifactSHA256 string             `json:"assignment_artifact_sha256"`
 	DatasetManifestSHA256    string             `json:"dataset_manifest_sha256"`
 	BinarySHA256             string             `json:"binary_sha256"`
+	SourceRevision           string             `json:"source_revision"`
+	VCSModified              bool               `json:"vcs_modified"`
 	CalibrationSHA256        string             `json:"calibration_sha256"`
 	TruthSHA256              string             `json:"truth_sha256"`
 	RouterCandidates         int                `json:"router_candidates"`
@@ -172,7 +174,11 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: binarySHA, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
+	revision, modified := vectorPartitionSystemBuildVCSIdentityV1()
+	if !validLowerSHA(revision) || modified {
+		return errors.New("M0 frontier binary is not a clean VCS build")
+	}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: binarySHA, SourceRevision: revision, VCSModified: modified, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
 	for _, a := range h.manifest.Assets {
 		report.PackBytes += a.Bytes
 	}
@@ -208,14 +214,10 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if !validateM0FrontierReportV1(report, probes, efs, candidates) {
 		return errors.New("M0 frontier report validation")
 	}
-	raw, e := json.MarshalIndent(report, "", "  ")
-	if e != nil {
-		return e
-	}
 	if e = os.MkdirAll(filepath.Dir(out), 0755); e != nil {
 		return e
 	}
-	if e = os.WriteFile(out, append(raw, '\n'), 0644); e != nil {
+	if e = writeVectorPartitionSystemJSONExclusiveV1(out, report); e != nil {
 		return e
 	}
 	_, e = fmt.Fprintf(stdout, "m0_calibration_frontier=%s cells=%d\n", out, len(report.Cells))
@@ -273,7 +275,7 @@ func m0FrontierModeV1(mode string, zero, useful, exact m0MembershipModeV1, overl
 }
 
 func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int, candidates int) bool {
-	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount < 4 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.PackBytes == 0 || report.RouterCandidates != candidates || candidates < 1 || report.TopK != 10 || (report.Mode != "zero" && report.Mode != "useful_only_20") || (report.Mode == "zero" && report.OverlapCount != 0) || (report.Mode == "useful_only_20" && report.OverlapCount == 0) || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
+	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount < 4 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.PackBytes == 0 || report.RouterCandidates != candidates || candidates < 1 || report.TopK != 10 || !validLowerSHA(report.SourceRevision) || report.VCSModified || (report.Mode != "zero" && report.Mode != "useful_only_20") || (report.Mode == "zero" && report.OverlapCount != 0) || (report.Mode == "useful_only_20" && report.OverlapCount == 0) || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
 		return false
 	}
 	for _, id := range []string{report.ManifestIntegrity, report.ReadySet, report.AssetChecksumsSHA256, report.RouterModelDigest, report.MembershipSHA256, report.MembershipReportSHA256, report.GraphArtifactSHA256, report.AssignmentArtifactSHA256, report.DatasetManifestSHA256, report.BinarySHA256, report.CalibrationSHA256, report.TruthSHA256} {
