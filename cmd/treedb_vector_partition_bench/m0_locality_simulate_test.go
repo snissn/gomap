@@ -1,12 +1,27 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestM0EvidenceOutputPreservesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.json")
+	if err := os.WriteFile(path, []byte("retain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeVectorPartitionSystemJSONExclusiveV1(path, struct{}{}); err == nil {
+		t.Fatal("replaced existing evidence")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "retain" {
+		t.Fatalf("existing evidence=%q err=%v", raw, err)
+	}
+}
 
 func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 	var calibration, holdout m0LocalityCaptureV1

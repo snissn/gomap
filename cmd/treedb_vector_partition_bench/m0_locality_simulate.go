@@ -132,14 +132,10 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 		result.Name = objective
 		report.Objectives = append(report.Objectives, result)
 	}
-	raw, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(out, append(raw, '\n'), 0o644); err != nil {
+	if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "m0_locality_simulation=%s objectives=%d\n", out, len(report.Objectives))

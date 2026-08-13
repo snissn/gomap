@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -216,15 +215,10 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		report.MedianPages = values[len(values)/2]
 		report.P95Pages = values[(len(values)*95+99)/100-1]
 	}
-	raw, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
-	raw = append(raw, '\n')
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}
-	if err = os.WriteFile(out, raw, 0644); err != nil {
+	if err = writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "m0_locality_capture=%s queries=%d median_pages=%d p95_pages=%d\n", out, len(report.Rows), report.MedianPages, report.P95Pages)
