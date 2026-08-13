@@ -43,10 +43,11 @@ type m0MembershipModeV1 struct {
 func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-membership-account", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var graphPath, assignmentPath, out, pythonPath, scriptPath string
+	var graphPath, assignmentPath, assignmentOut, out, pythonPath, scriptPath string
 	partitions := 0
 	fs.StringVar(&graphPath, "artifact", "", "canonical graph artifact")
 	fs.StringVar(&assignmentPath, "assignment", "", "KaHIP assignment artifact")
+	fs.StringVar(&assignmentOut, "assignment-out", "", "persisted canonical assignment artifact")
 	fs.StringVar(&out, "out", "", "fresh JSON output")
 	fs.StringVar(&pythonPath, "kahip-python", "", "pinned KaHIP Python")
 	fs.StringVar(&scriptPath, "kahip-script", "", "pinned KaHIP adapter")
@@ -54,7 +55,7 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || graphPath == "" || out == "" || partitions < 1 || assignmentPath != "" && (pythonPath != "" || scriptPath != "") || assignmentPath == "" && (pythonPath == "" || scriptPath == "") {
+	if fs.NArg() != 0 || graphPath == "" || out == "" || partitions < 1 || assignmentPath != "" && (pythonPath != "" || scriptPath != "") || assignmentPath == "" && (pythonPath == "" || scriptPath == "") || assignmentPath != "" && assignmentOut != "" {
 		return errors.New("m0-membership-account requires artifact, partitions, output, and either assignment or pinned KaHIP paths")
 	}
 	graphRaw, err := os.ReadFile(graphPath)
@@ -109,6 +110,14 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	}
 	if err := m0ValidateAssignmentArtifactV1(graph, request, candidate); err != nil {
 		return err
+	}
+	if assignmentOut != "" {
+		if err := os.MkdirAll(filepath.Dir(assignmentOut), 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(assignmentOut, assignmentRaw, 0644); err != nil {
+			return err
+		}
 	}
 	digest, err := vectorpartition.Digest(candidate)
 	if err != nil {
