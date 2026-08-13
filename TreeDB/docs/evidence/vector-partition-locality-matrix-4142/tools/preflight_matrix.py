@@ -26,6 +26,13 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def write_json_exclusive(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as output:
+        json.dump(value, output, indent=2, sort_keys=True)
+        output.write("\n")
+
+
 def build_vcs(binary: Path) -> dict[str, str]:
     output = subprocess.check_output(("go", "version", "-m", str(binary)), text=True)
     values: dict[str, str] = {}
@@ -115,8 +122,7 @@ def main() -> None:
         "binary_vcs_modified": vcs.get("vcs.modified"),
         "status": "ready" if ready else "blocked_source_identity",
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_exclusive(args.out, result)
     if result["status"] != "ready":
         raise SystemExit("source identity differs from #4140 measured source; rebuild exact assets before matrix execution")
 

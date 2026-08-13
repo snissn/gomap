@@ -92,7 +92,9 @@ def validate_row(row: dict[str, Any], expected: dict[str, Any]) -> None:
     require(isinstance(metrics, dict) and isinstance(metrics.get("queries"), int) and not isinstance(metrics.get("queries"), bool) and isinstance(metrics.get("filler_replicas"), int) and not isinstance(metrics.get("filler_replicas"), bool) and isinstance(metrics.get("unique_pages_per_query"), (int, float)) and not isinstance(metrics.get("unique_pages_per_query"), bool), "metrics are incomplete")
     for name, value in metrics.items():
         require(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0, f"invalid metric: {name}")
-    require(metrics["queries"] > 0 and metrics["unique_pages_per_query"] > 0, "terminal row has no measured pages")
+    required_queries = 806 if row["split"] == "train" else 194
+    require(metrics["queries"] == required_queries, "row does not cover the full frozen split")
+    require(metrics["unique_pages_per_query"] > 0, "terminal row has no measured pages")
     if row["overlap"] in ("zero", "useful-only-20%-cap"):
         require(metrics["filler_replicas"] == 0, "selected useful/zero overlap has filler")
 
@@ -150,8 +152,7 @@ def main() -> None:
     parser.add_argument("rows", type=Path, nargs="+")
     args = parser.parse_args()
     summary = reduce_rows(args.rows, args.preflight)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    preflight_contract.write_json_exclusive(args.out, summary)
 
 
 if __name__ == "__main__":

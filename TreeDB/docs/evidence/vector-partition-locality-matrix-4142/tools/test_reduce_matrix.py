@@ -84,6 +84,14 @@ class ReducerTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "complete disjoint"):
                 preflight_contract.query_union(*paths)
 
+    def test_evidence_output_preserves_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "evidence.json"
+            path.write_text("retain", encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                preflight_contract.write_json_exclusive(path, {})
+            self.assertEqual(path.read_text(encoding="utf-8"), "retain")
+
     def test_row_identity_and_accounting_are_required(self) -> None:
         value = row("a")
         expected = expected_identity()
@@ -149,7 +157,11 @@ class ReducerTest(unittest.TestCase):
         wrong_split["query_split_sha256"] = preflight_contract.FROZEN_CALIBRATION_SHA256
         with self.assertRaisesRegex(reducer.ContractError, "query split"):
             reducer.validate_row(wrong_split, expected)
-        for metric in ("queries", "unique_pages_per_query"):
+        empty = row("incomplete")
+        empty["metrics"]["queries"] = 1
+        with self.assertRaisesRegex(reducer.ContractError, "full frozen split"):
+            reducer.validate_row(empty, expected)
+        for metric in ("unique_pages_per_query",):
             empty = row("empty")
             empty["metrics"][metric] = 0
             with self.assertRaisesRegex(reducer.ContractError, "no measured pages"):
