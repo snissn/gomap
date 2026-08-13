@@ -150,6 +150,9 @@ func m0ValidateCaptureSplitPairV1(calibration, holdout m0LocalityCaptureV1, quer
 	if queryCount < 1 || calibration.Split == "" || calibration.Split == holdout.Split || len(calibration.Rows) == 0 || len(holdout.Rows) == 0 || len(calibration.Rows)+len(holdout.Rows) != queryCount {
 		return errors.New("capture split identity")
 	}
+	if calibration.DB != holdout.DB || calibration.Artifact != holdout.Artifact || calibration.Descriptor != holdout.Descriptor || calibration.Source != holdout.Source || calibration.Manifest != holdout.Manifest || calibration.ReadySet != holdout.ReadySet || calibration.RouterModel != holdout.RouterModel || calibration.Probes != holdout.Probes || calibration.RouterCandidates != holdout.RouterCandidates || calibration.EF != holdout.EF || calibration.PageScope != holdout.PageScope {
+		return errors.New("capture retained input identity")
+	}
 	seen := make([]bool, queryCount)
 	for kind, capture := range []m0LocalityCaptureV1{calibration, holdout} {
 		for i, row := range capture.Rows {
@@ -177,7 +180,7 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
-	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v1" || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
+	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v1" || !validLowerSHA(capture.Artifact) || !validLowerSHA(capture.Descriptor) || capture.Source.SourceID == "" || !validLowerSHA(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !validLowerSHA(capture.Manifest) || !validLowerSHA(capture.ReadySet) || !validLowerSHA(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
 	return capture, m0SHA256V1(raw), nil

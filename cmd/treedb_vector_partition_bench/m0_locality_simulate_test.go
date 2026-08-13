@@ -28,6 +28,9 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 		"same identity": func(c, h *m0LocalityCaptureV1) { h.Split = c.Split },
 		"overlap":       func(c, h *m0LocalityCaptureV1) { h.Rows[0] = c.Rows[0] },
 		"wrong split":   func(c, h *m0LocalityCaptureV1) { c.Rows[0], h.Rows[0] = h.Rows[0], c.Rows[0] },
+		"wrong retained input": func(c, h *m0LocalityCaptureV1) {
+			h.Descriptor = "different"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, h := calibration, holdout

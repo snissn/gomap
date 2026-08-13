@@ -558,6 +558,13 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
 		return errors.New("M0 frontier assignment artifact")
 	}
+	descriptor, err := m3ReadVariantDescriptorV1(h.dir)
+	if err != nil {
+		return err
+	}
+	if descriptor.Source != artifact.Source || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+		return errors.New("M0 frontier assignment artifact lineage")
+	}
 	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
 	if err != nil {
 		return err
@@ -582,13 +589,23 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 	if err != nil {
 		return err
 	}
-	expected := make([]collections.VectorPartitionMembershipV1, 0, overlap.Used)
+	home := make([]collections.VectorPartitionMembershipV1, 0, len(artifact.Assignment))
+	replicas := make([]collections.VectorPartitionMembershipV1, 0, overlap.Used)
 	for _, membership := range overlap.Memberships {
-		if !membership.Home {
-			expected = append(expected, collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[membership.VectorOrdinal]), PartitionID: uint32(membership.Partition)})
+		converted := collections.VectorPartitionMembershipV1{VectorOrdinal: uint64(sourceOrdinals[membership.VectorOrdinal]), PartitionID: uint32(membership.Partition)}
+		if membership.Home {
+			home = append(home, converted)
+		} else {
+			replicas = append(replicas, converted)
 		}
 	}
-	return m0FrontierManifestMembershipsEqualV1(expected, h.manifest.OverlapMemberships)
+	if err := m0FrontierManifestMembershipsEqualV1(home, h.manifest.Memberships); err != nil {
+		return fmt.Errorf("M0 frontier home topology: %w", err)
+	}
+	if err := m0FrontierManifestMembershipsEqualV1(replicas, h.manifest.OverlapMemberships); err != nil {
+		return fmt.Errorf("M0 frontier overlap topology: %w", err)
+	}
+	return nil
 }
 
 func m0FrontierManifestMembershipsEqualV1(left, right []collections.VectorPartitionMembershipV1) error {
@@ -602,11 +619,11 @@ func m0FrontierManifestMembershipsEqualV1(left, right []collections.VectorPartit
 	less(left)
 	less(right)
 	if len(left) != len(right) {
-		return errors.New("M0 frontier materialized overlap count")
+		return errors.New("M0 frontier materialized membership count")
 	}
 	for i := range left {
 		if left[i] != right[i] {
-			return errors.New("M0 frontier materialized overlap membership")
+			return errors.New("M0 frontier materialized membership")
 		}
 	}
 	return nil

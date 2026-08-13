@@ -41,6 +41,11 @@ type m0LocalityCaptureV1 struct {
 	DB               string                                                     `json:"retained_db"`
 	Split            string                                                     `json:"split_sha256"`
 	Artifact         string                                                     `json:"graph_artifact_sha256,omitempty"`
+	Descriptor       string                                                     `json:"descriptor_sha256,omitempty"`
+	Source           vectorpartition.Source                                     `json:"source,omitempty"`
+	Manifest         string                                                     `json:"manifest_integrity_digest,omitempty"`
+	ReadySet         string                                                     `json:"ready_set_digest,omitempty"`
+	RouterModel      string                                                     `json:"router_model_digest,omitempty"`
 	Probes           int                                                        `json:"probes"`
 	RouterCandidates int                                                        `json:"router_candidates"`
 	EF               int                                                        `json:"ef_search"`
@@ -74,6 +79,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-candidates/ef")
 	}
 	ordinals := map[string]uint32{}
+	var artifact vectorpartition.Artifact
 	artifactSHA := ""
 	if rawTraces {
 		if artifactPath == "" {
@@ -83,7 +89,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		if e != nil {
 			return e
 		}
-		artifact, e := vectorpartition.DecodeArtifact(raw, len(raw))
+		artifact, e = vectorpartition.DecodeArtifact(raw, len(raw))
 		if e != nil {
 			return e
 		}
@@ -112,6 +118,20 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer assets.Close()
+	descriptor, err := m3ReadVariantDescriptorV1(db)
+	if err != nil {
+		return err
+	}
+	descriptorSHA, err := localHNSWAttributionRegularFileSHA256V1(filepath.Join(db, m3VariantDescriptorFileV1), m3VariantDescriptorMaxBytesV1)
+	if err != nil {
+		return err
+	}
+	if rawTraces && (descriptor.Source != artifact.Source || descriptor.GraphArtifactSHA256 != artifactSHA) {
+		return errors.New("retained capture source does not match graph artifact")
+	}
+	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, assets.manifest, assets.status.ModelDigest, assets.status.Config); err != nil {
+		return fmt.Errorf("retained capture descriptor: %w", err)
+	}
 	if int(assets.manifest.PartitionCount) < probes {
 		return errors.New("probes exceed retained partitions")
 	}
@@ -141,7 +161,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 			snapshots[uint32(p)] = snapshot
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Artifact: artifactSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Artifact: artifactSHA, Descriptor: descriptorSHA, Source: descriptor.Source, Manifest: assets.manifest.IntegrityDigest, ReadySet: assets.manifest.ReadySetDigest, RouterModel: assets.status.ModelDigest, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")

@@ -70,6 +70,13 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("M0 assignment/report binding: %w", err)
 	}
+	d, err := m3ReadVariantDescriptorV1(sourceDB)
+	if err != nil {
+		return err
+	}
+	if d.Source != artifact.Source || d.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+		return errors.New("retained source does not match assignment artifact lineage")
+	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
@@ -94,10 +101,6 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, h.Close()) }()
-	d, err := m3ReadVariantDescriptorV1(sourceDB)
-	if err != nil {
-		return err
-	}
 	source, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
 		return err
