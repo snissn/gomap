@@ -180,7 +180,7 @@ func m0ReadCaptureV1(path string) (m0LocalityCaptureV1, string, error) {
 	if err := json.Unmarshal(raw, &capture); err != nil {
 		return m0LocalityCaptureV1{}, "", err
 	}
-	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v1" || !validLowerSHA(capture.Artifact) || !validLowerSHA(capture.Descriptor) || capture.Source.SourceID == "" || !validLowerSHA(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !validLowerSHA(capture.Manifest) || !validLowerSHA(capture.ReadySet) || !validLowerSHA(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
+	if capture.Schema != "treedb_vector_partition_m0_exact_pack_trace_v1" || !m8SHA256V1(capture.Artifact) || !m8SHA256V1(capture.Descriptor) || capture.Source.SourceID == "" || !m8SHA256V1(capture.Source.Checksum) || capture.Source.Vectors < 1 || capture.Source.Dimensions < 1 || capture.Source.Metric == "" || !m8SHA256V1(capture.Manifest) || !m8SHA256V1(capture.ReadySet) || !m8SHA256V1(capture.RouterModel) || len(capture.Traces) == 0 || len(capture.Snapshots) == 0 || len(capture.Traces) != len(capture.Rows) {
 		return m0LocalityCaptureV1{}, "", errors.New("raw capture schema or trace payload")
 	}
 	return capture, m0SHA256V1(raw), nil
