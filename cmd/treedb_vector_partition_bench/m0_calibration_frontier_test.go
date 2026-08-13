@@ -66,7 +66,7 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 			}
 		}
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", ManifestIntegrity: sha, ReadySet: sha, PackBytes: 1, AssetChecksumsSHA256: sha, SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 2, PartitionCount: 32, RouterModelDigest: sha, MembershipReportSHA256: sha, GraphArtifactSHA256: sha, AssignmentArtifactSHA256: sha, DatasetManifestSHA256: sha, BinarySHA256: sha, CalibrationSHA256: sha, TruthSHA256: sha, RouterCandidates: 256, TopK: 10, Measurements: measurements, Cells: canonical}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", ManifestIntegrity: sha, ReadySet: sha, PackBytes: 1, AssetChecksumsSHA256: sha, SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 2, PartitionCount: 32, RouterModelDigest: sha, Mode: "zero", MembershipSHA256: sha, MembershipReportSHA256: sha, GraphArtifactSHA256: sha, AssignmentArtifactSHA256: sha, DatasetManifestSHA256: sha, BinarySHA256: sha, CalibrationSHA256: sha, TruthSHA256: sha, RouterCandidates: 256, TopK: 10, Measurements: measurements, Cells: canonical}
 	if !validateM0FrontierReportV1(report, probes, efs, 256) {
 		t.Fatal("valid report rejected")
 	}
@@ -76,6 +76,21 @@ func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
 	report.Measurements[0].ResultSHA256 = strings.Repeat("b", 64)
 	if validateM0FrontierReportV1(report, probes, efs, 256) {
 		t.Fatal("mixed measurement identity accepted")
+	}
+}
+
+func TestM0FrontierModeV1AcceptsP40UsefulOnly(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	zero := m0MembershipModeV1{Name: "zero", Materialize: true, MembershipSHA256: sha}
+	useful := m0MembershipModeV1{Name: "useful_only_20", Used: 50_000, Useful: 50_000, Materialize: true, MembershipSHA256: sha}
+	exact := m0MembershipModeV1{Name: "exact_20", Used: 50_000, Useful: 50_000, Materialize: true, MembershipSHA256: sha}
+	selected, err := m0FrontierModeV1("useful_only_20", zero, useful, exact, 50_000)
+	if err != nil || selected != useful {
+		t.Fatalf("selected=%+v err=%v", selected, err)
+	}
+	useful.Filler = 1
+	if _, err = m0FrontierModeV1("useful_only_20", zero, useful, exact, 50_000); err == nil {
+		t.Fatal("filler useful mode accepted")
 	}
 }
 
