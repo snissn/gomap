@@ -168,19 +168,22 @@ The retained source ordinal digest remained
 before and after. P40 zero and duplicate exact-20 were not run: the promoted
 useful topology failed its first local-recall gate.
 
-The frozen-calibration c256 frontier is
-`frontier/p40-useful-v1/250k-p40-useful-c256-calibration-v1.json`
-(`2c7d84b6c2b4c44f7ed3d945d8f3de4294747c04cd8ac5e2a2f82d9ae36c1429`).
+The review-hardened frozen-calibration c256 frontier is
+`frontier/p40-useful-v2/250k-p40-useful-c256-calibration-v2.json`
+(`f3883ddefdd5ef3e31d96e73b9f5c8a12973810173a300d2260c6835e56b6f97`).
 It binds the p40 assignment/account above, binary
-`033a62db624d1778572fb694a84d3aebb24156dc1561157884ea943515b62acd`,
-frozen graph, calibration split, truth, manifest, and ready-set identities.
+`4730cf61fee28aaea46325aeeebc181f2f74af6ba8038023baa4ad167475b8a3`,
+frozen graph, calibration split, truth, manifest, and ready-set identities. It
+also reconstructs the selected overlap from the strict assignment, compares
+the concrete materialized topology, and includes overlap replicas in the
+routing oracle.
 
 | probes | EF | recall | correct / 8060 | routing misses |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 64 | 0.7678660049 | 6189 | 2684 |
-| 1 | 80 | 0.7991315136 | 6441 | 2684 |
-| 1 | 96 | 0.8176178660 | 6590 | 2684 |
-| 1 | 128 | 0.8389578164 | 6762 | 2684 |
+| 1 | 64 | 0.7678660049 | 6189 | 1069 |
+| 1 | 80 | 0.7991315136 | 6441 | 1069 |
+| 1 | 96 | 0.8176178660 | 6590 | 1069 |
+| 1 | 128 | 0.8389578164 | 6762 | 1069 |
 | 2 | 64 | 0.9031017370 | 7279 | 0 |
 | 2 | 80 | 0.9310173697 | 7504 | 0 |
 | 2 | 96 | 0.9496277916 | 7654 | 0 |
@@ -195,8 +198,8 @@ achieved 7654/8060, three short, despite zero routing misses. Therefore the
 single M0 blocker is **local-pack approximate HNSW recall at the maximum
 allowed EF96**. The report's three-repetition recall/work/result identities are
 invariant, but QPS/latency are non-authoritative: unrelated Lean/git work
-overlapped the capture and per-cell QPS spread was 9.89--54.89%. No QPS
-selection claim is made.
+affected the earlier capture, and the review-hardened rerun still had up to
+13.28% per-cell QPS spread. No QPS selection claim is made.
 
 The final search holdout remains sealed. Do not start #4143, #4144, #4145, or
 #4146: the dependency checkpoint remains
