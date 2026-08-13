@@ -184,10 +184,12 @@ before and after. P40 zero and duplicate exact-20 were not run: the promoted
 useful topology failed its first local-recall gate.
 
 The final review-hardened frozen-calibration c256 frontier is
-`frontier/p40-useful-v3/250k-p40-useful-c256-calibration-v3.json`
-(`0a7f9ddd5269816bae7460cc9f152817f8b9996fcc860872734cb70d29ad8200`).
+`frontier/p40-useful-v4/250k-p40-useful-c256-calibration-v4.json`
+(`4bd8bd8e1d30c8756a1cff08ec5632960d596e74baf77cb6ed23d8106955bb19`).
 It binds the p40 assignment/account above, binary
-`bfa0bbdb52d52135aaa811feb4e80c11b25bdb9503061cfe2658839e4bd19096`,
+`621d0434d8b9dacb885dcbcaa8b78577af3480dc3d08092cd04700c3bb30c430`,
+clean source revision `a9291c1fe5bb0cf638738230e0bdf024873c5e57`
+(`vcs.modified=false`),
 frozen graph, calibration split, truth, manifest, and ready-set identities. It
 also reconstructs the selected overlap from the strict assignment, compares
 the concrete materialized topology, and includes overlap replicas in the
@@ -214,8 +216,8 @@ The required EF96 threshold is 0.9500 = 7657/8060 correct. Both p2 and p4
 achieved 7654/8060, three short, despite zero routing misses. Therefore the
 single M0 blocker is **local-pack approximate HNSW recall at the maximum
 allowed EF96**. The report's three-repetition recall/work/result identities are
-invariant, but QPS/latency are non-authoritative: the final rerun still had up
-to 10.65% per-cell QPS spread. No QPS selection claim is made.
+invariant, but QPS/latency are non-authoritative: concurrent Lean work caused
+up to 89.92% per-cell QPS spread. No QPS selection claim is made.
 
 The final search holdout remains sealed. Do not start #4143, #4144, #4145, or
 #4146: the dependency checkpoint remains
