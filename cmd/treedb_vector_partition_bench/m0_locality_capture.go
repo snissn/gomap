@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 // m0-locality-capture is read-only, offline evidence. The reported page scope
@@ -38,6 +40,7 @@ type m0LocalityCaptureV1 struct {
 	Schema           string                                                     `json:"schema"`
 	DB               string                                                     `json:"retained_db"`
 	Split            string                                                     `json:"split_sha256"`
+	Artifact         string                                                     `json:"graph_artifact_sha256,omitempty"`
 	Probes           int                                                        `json:"probes"`
 	RouterCandidates int                                                        `json:"router_candidates"`
 	EF               int                                                        `json:"ef_search"`
@@ -52,13 +55,14 @@ type m0LocalityCaptureV1 struct {
 func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-locality-capture", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, db, splitPath, out string
+	var dataset, db, splitPath, out, artifactPath string
 	var probes, candidates, ef int
 	var rawTraces bool
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&db, "retained-db", "", "read-only retained M3 DB")
 	fs.StringVar(&splitPath, "split", "", "frozen query split manifest")
 	fs.StringVar(&out, "out", "", "fresh JSON output")
+	fs.StringVar(&artifactPath, "artifact", "", "frozen graph artifact for raw layout identity")
 	fs.IntVar(&probes, "probes", 2, "router partition probes")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidate budget")
 	fs.IntVar(&ef, "ef-search", 128, "native ef search")
@@ -68,6 +72,28 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	}
 	if fs.NArg() != 0 || dataset == "" || db == "" || splitPath == "" || out == "" || probes < 1 || candidates < probes || ef < 1 {
 		return errors.New("m0-locality-capture requires frozen inputs and positive bounded probes/router-candidates/ef")
+	}
+	ordinals := map[string]uint32{}
+	artifactSHA := ""
+	if rawTraces {
+		if artifactPath == "" {
+			return errors.New("raw traces require frozen graph artifact")
+		}
+		raw, e := os.ReadFile(artifactPath)
+		if e != nil {
+			return e
+		}
+		artifact, e := vectorpartition.DecodeArtifact(raw, len(raw))
+		if e != nil {
+			return e
+		}
+		artifactSHA = fmt.Sprintf("%x", sha256.Sum256(raw))
+		for ordinal, id := range artifact.IDs {
+			if _, duplicate := ordinals[id]; duplicate {
+				return errors.New("duplicate graph artifact ID")
+			}
+			ordinals[id] = uint32(ordinal)
+		}
 	}
 	fixture, err := loadFixture(dataset)
 	if err != nil {
@@ -108,14 +134,14 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 	snapshots := map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{}
 	if rawTraces {
 		for p, s := range searchers {
-			snapshot, e := s.PackLayoutSnapshotV1()
+			snapshot, e := s.PackLayoutSnapshotV1(ordinals)
 			if e != nil {
 				return e
 			}
 			snapshots[uint32(p)] = snapshot
 		}
 	}
-	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
+	report := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v1", DB: db, Split: splitSHA, Artifact: artifactSHA, Probes: probes, RouterCandidates: candidates, EF: ef, PageScope: "unique 4KiB graph+vector pack pages/query; excludes document-ID result materialization", Snapshots: snapshots}
 	for _, ordinal := range split.Ordinals {
 		if ordinal < 0 || ordinal >= len(queries) {
 			return errors.New("split ordinal")

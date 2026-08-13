@@ -189,7 +189,11 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if _, err := searcher.PageAttributionForTraceV1(VectorPartitionSearchAttributionV1{}, 64); err == nil {
 		t.Fatal("accepted empty trace")
 	}
-	snapshot, err := searcher.PackLayoutSnapshotV1()
+	ordinals := make(map[string]uint32, view.Header.Rows)
+	for ordinal := 0; ordinal < view.Header.Rows; ordinal++ {
+		ordinals[string(view.DocumentIDBytes[view.DocumentIDOffsets[ordinal]:view.DocumentIDOffsets[ordinal+1]])] = uint32(ordinal)
+	}
+	snapshot, err := searcher.PackLayoutSnapshotV1(ordinals)
 	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}

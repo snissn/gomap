@@ -1311,7 +1311,7 @@ type VectorPartitionPackLayoutSnapshotV1 struct {
 	AuxiliaryNeighborOffset       uint64     `json:"auxiliary_neighbor_offset,omitempty"`
 }
 
-func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartitionPackLayoutSnapshotV1, error) {
+func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1(ordinals map[string]uint32) (VectorPartitionPackLayoutSnapshotV1, error) {
 	if s == nil {
 		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 	}
@@ -1342,11 +1342,24 @@ func (s *VectorPartitionLocalSearcherV1) PackLayoutSnapshotV1() (VectorPartition
 		LayerOffsetsSectionOffsets: make([]uint64, len(pack.AdjacencyLayers)),
 		LayerNeighborOffsets:       make([]uint64, len(pack.AdjacencyLayers)),
 	}
-	for ordinal, row := range pack.RowRefRowIndexes {
-		if row < 0 || uint64(row) > uint64(^uint32(0)) {
+	if len(ordinals) == 0 {
+		return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	seen := make(map[uint32]struct{}, pack.Header.Rows)
+	for ordinal := range out.RowOrdinals {
+		start, end := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
+		if end < start || end > uint64(len(pack.DocumentIDBytes)) {
 			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
 		}
-		out.RowOrdinals[ordinal] = uint32(row)
+		row, ok := ordinals[string(pack.DocumentIDBytes[start:end])]
+		if !ok {
+			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if _, duplicate := seen[row]; duplicate {
+			return VectorPartitionPackLayoutSnapshotV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		seen[row] = struct{}{}
+		out.RowOrdinals[ordinal] = row
 	}
 	for _, x := range pack.Sections {
 		if x.Kind == columnHNSWSearchPackSectionNormalizedVectors {

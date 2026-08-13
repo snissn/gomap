@@ -70,6 +70,9 @@ func runM0LocalitySimulateV1(args []string, stdout io.Writer) error {
 	if _, err := vectorpartition.DecodeArtifact(artifactRaw, len(artifactRaw)); err != nil {
 		return err
 	}
+	if calibration.Artifact != artifactSHA || holdout.Artifact != artifactSHA {
+		return errors.New("capture graph artifact identity")
+	}
 	report := m0LocalitySimulationV1{Schema: "treedb_vector_partition_m0_layout_simulation_v1", Calibration: calibrationSHA, Holdout: holdoutSHA, Artifact: artifactSHA, PageScope: calibration.PageScope}
 	identity, err := m0IdentityPermutationsV1(holdout)
 	if err != nil {
