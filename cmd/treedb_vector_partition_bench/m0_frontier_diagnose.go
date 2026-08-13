@@ -176,7 +176,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 				}
 			}
 		}
-		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: 64, PartitionProbes: 4})
+		if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) {
+			return errors.New("M0 diagnostic exact router representatives")
+		}
+		exact, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), PartitionProbes: 4})
 		if err != nil || len(exact.Partitions) != 4 {
 			return errors.New("M0 diagnostic exact route")
 		}
