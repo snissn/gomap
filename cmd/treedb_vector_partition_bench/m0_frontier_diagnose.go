@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
@@ -35,6 +36,18 @@ type m0FrontierDiagnosticBindingV1 struct {
 	AssignedPack    int    `json:"assigned_pack"`
 	ManifestPack    uint32 `json:"manifest_pack"`
 }
+type m0FrontierRouterSweepCellV1 struct {
+	Mode            string    `json:"mode"`
+	CandidateBudget int       `json:"candidate_budget"`
+	Probes          int       `json:"probes"`
+	Queries         int       `json:"queries"`
+	TruthRankSlots  [5]uint64 `json:"truth_slots_at_route_rank"`
+	Candidates      uint64    `json:"router_candidates"`
+	Edges           uint64    `json:"router_edges"`
+	ElapsedNanos    uint64    `json:"router_elapsed_nanos"`
+	P50Nanos        uint64    `json:"router_p50_nanos"`
+	P95Nanos        uint64    `json:"router_p95_nanos"`
+}
 type m0FrontierDiagnosticV1 struct {
 	Schema                    string                          `json:"schema"`
 	CalibrationSHA256         string                          `json:"calibration_sha256"`
@@ -48,6 +61,7 @@ type m0FrontierDiagnosticV1 struct {
 	Top10ChangedQueries       [5]uint64                       `json:"top10_changed_queries_at_route_rank"`
 	NewTop10IDs               [5]uint64                       `json:"new_top10_ids_at_route_rank"`
 	NewTruthIDs               [5]uint64                       `json:"new_truth_ids_at_route_rank"`
+	RouterSweep               []m0FrontierRouterSweepCellV1   `json:"router_sweep"`
 	Bindings                  []m0FrontierDiagnosticBindingV1 `json:"binding_spot_checks"`
 	Queries                   []m0FrontierDiagnosticQueryV1   `json:"queries"`
 }
@@ -146,6 +160,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	report := m0FrontierDiagnosticV1{Schema: "treedb_vector_partition_m0_frontier_diagnostic_v1", CalibrationSHA256: splitSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentSHA256: account.AssignmentArtifactSHA256, ManifestIntegrity: h.manifest.IntegrityDigest, EFSearch: ef}
+	report.RouterSweep, err = m0FrontierRouterSweepV1(h, split.Ordinals, queries, truth, members)
+	if err != nil || !m0FrontierRouterSweepCompleteV1(report.RouterSweep) {
+		return errors.New("M0 diagnostic router sweep")
+	}
 	for _, ordinal := range split.Ordinals {
 		q := m8Query32V1(queries[ordinal])
 		routed, err := h.router.SearchWithContextV1(context.Background(), q, collections.VectorPartitionRouterSearchOptionsV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: 64, PartitionProbes: 4})
@@ -254,6 +272,67 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "m0_frontier_diagnostic=%s queries=%d\n", out, len(report.Queries))
 	return err
+}
+
+func m0FrontierRouterSweepV1(h *m8ProductionMultiGroupAssetsV1, ordinals []int, queries [][]float64, truth [][]m8CanonicalResultV1, members map[string][]uint32) ([]m0FrontierRouterSweepCellV1, error) {
+	if h.status.Representatives == 0 || h.status.Representatives > uint64(^uint(0)>>1) {
+		return nil, errors.New("M0 diagnostic router sweep status")
+	}
+	cells := make([]m0FrontierRouterSweepCellV1, 0, 12)
+	for _, budget := range []int{64, 128, 256} {
+		for _, probes := range []int{1, 2, 4} {
+			cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeApproxV1, CandidateBudget: budget, Probes: probes})
+		}
+	}
+	for _, probes := range []int{1, 2, 4} {
+		cells = append(cells, m0FrontierRouterSweepCellV1{Mode: collections.VectorPartitionRouterModeExactV1, CandidateBudget: int(h.status.Representatives), Probes: probes})
+	}
+	for i := range cells {
+		lat := make([]uint64, 0, len(ordinals))
+		for _, ordinal := range ordinals {
+			started := time.Now()
+			route, err := h.router.SearchWithContextV1(context.Background(), m8Query32V1(queries[ordinal]), collections.VectorPartitionRouterSearchOptionsV1{Mode: cells[i].Mode, CandidateBudget: cells[i].CandidateBudget, PartitionProbes: cells[i].Probes})
+			elapsed := uint64(time.Since(started).Nanoseconds())
+			if err != nil || len(route.Partitions) != cells[i].Probes {
+				return nil, errors.New("M0 diagnostic sweep route")
+			}
+			lat = append(lat, elapsed)
+			cells[i].ElapsedNanos += elapsed
+			cells[i].Candidates += route.Status.Candidates
+			cells[i].Edges += route.Status.Edges
+			for _, want := range truth[ordinal] {
+				rank := 0
+				for pos, p := range route.Partitions {
+					for _, member := range members[want.ID] {
+						if member == p.PartitionID && rank == 0 {
+							rank = pos + 1
+						}
+					}
+				}
+				cells[i].TruthRankSlots[rank]++
+			}
+		}
+		sort.Slice(lat, func(a, b int) bool { return lat[a] < lat[b] })
+		cells[i].Queries = len(ordinals)
+		cells[i].P50Nanos = lat[len(lat)/2]
+		cells[i].P95Nanos = lat[(len(lat)*95+99)/100-1]
+	}
+	return cells, nil
+}
+
+func m0FrontierRouterSweepCompleteV1(cells []m0FrontierRouterSweepCellV1) bool {
+	if len(cells) != 12 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, c := range cells {
+		key := fmt.Sprintf("%s/%d/%d", c.Mode, c.CandidateBudget, c.Probes)
+		if seen[key] || c.Queries != 806 || c.Candidates == 0 || c.ElapsedNanos == 0 || c.P50Nanos == 0 || c.P95Nanos < c.P50Nanos {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 func m0FrontierSameIDsV1(a, b []m8CanonicalResultV1) bool {
