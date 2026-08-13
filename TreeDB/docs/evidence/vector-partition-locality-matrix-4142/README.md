@@ -109,18 +109,12 @@ non-authoritative: the sibling `.noise.txt` records sustained unrelated
 Lean/lake CI load during the capture. This report is diagnostic only and makes
 no QPS selection claim.
 
-The selected next step is one quiet-host c256 **calibration-only** frontier,
-not a holdout or p40 run. It must use the head-pinned binary
-`frontier/bin/treedb_vector_partition_bench-c256-c0a56597`
-(`cbc147522165f16c989fa28f522eee6246b0e7061f2024ed5c8ad064e835a7ba`),
-the frozen calibration manifest
-`/mnt/fast4tb/gomap-4105-runtime/artifacts/250k-query-calibration-manifest.json`,
-and fresh output
-`frontier/reports/250k-p32-c256-calibration-v1.json`. The exact command is
-preserved in the adjacent
-`frontier/reports/250k-p32-c256-calibration-v1.command.txt`; it specifies all
-three probes, all four EFs, c256, and top-k 10. Holdout remains sealed and p40
-has not started.
+The completed p32 c256 calibration report is
+`frontier/reports/250k-p32-c256-calibration-v1.json`
+(`a65c9d397e7df0f8814095df3835388027c2e751ff804605059d1f44b58e0c86`).
+It restored routing coverage (zero routing misses) but did not reach 0.950 at
+EF96: recall was 0.9277915633, reaching 0.9589330025 only at EF128. Its later
+Lean overlap means timing is not used for a QPS selection claim.
 
 The issue dependency route is `#4142 -> #4143 -> #4144 -> #4146 -> #4141`,
 with conditional route `#4144 -> #4145 -> #4146`. This checkpoint is not a
@@ -128,10 +122,9 @@ production-default, persistent-format, traversal, membership, or router change.
 
 ## p40 strict accounting checkpoint
 
-After c256 restored routing coverage but failed the EF96 recall gate, the
-remaining authorized M0 calibration point is p40. Its strict graph-preserving
-KaHIP assignment and account are complete, but **no p40 clone or materialized
-pack exists**. They used the same frozen graph artifact and the pinned KaHIP
+After p32 c256 failed the EF96 recall gate, p40 was the remaining authorized
+M0 calibration point. Its strict graph-preserving KaHIP assignment and account
+used the same frozen graph artifact and the pinned KaHIP
 Python 3.25 executable/adapter (SHA-256
 `7d51cd6b48b521277f5caa4610a82126e315fa2be4df069823a8b1eeb5bd4a86` /
 `ae4ca8f5f26bd510a507a0f4ba50adaf1e5514ee9e20340cb9d494aba8f54825`).
@@ -152,5 +145,56 @@ The exact command, stdout, time, and before/after host snapshots are retained
 beside those files. It completed in 47.67 seconds with 1,368,896 KiB maximum
 RSS. An unrelated Lean process overlapped the assignment, so those resource
 figures are provenance only; the canonical assignment/account hashes and
-dispositions are the authoritative outcome. Review is required before any
-p40 clone, materialization, frontier, holdout, or descendant work.
+dispositions are the authoritative outcome.
+
+## Final M0 disposition: fail closed
+
+Only p40 `useful_only_20` was promoted. Its disposable clone is
+`materialized/p40-useful-v1/m0-membership-4223625656`; materialization report
+SHA-256 is `3912fbb2545fe595f47e381a7d958712ed4cdc7bda35f8e97be2ba979c00df94`.
+It reopened active/ready at generation 2 with 40 partitions and 50,000 overlap
+memberships, selected membership SHA-256
+`188f6f44fba75a086cd18749bd66be799489311fc111c44f66d86f5f988a56e3`,
+224,093,976 pack bytes, 1,300,142,344 logical clone bytes, manifest digest
+`e9cc640645c6506b73a8f04f610593657ed3063c6133c8ed4ad269b1317f52d5`,
+and ready-set digest
+`36cb1a9933b7d07709d8c44cc0b4646a41233ba132c55c24d4a714f76a7693d3`.
+The retained source ordinal digest remained
+`79653ed96e52602ec25696de96ef2af4be933f1bbf7cbe18f62a46a18f60418a`
+before and after. P40 zero and duplicate exact-20 were not run: the promoted
+useful topology failed its first local-recall gate.
+
+The frozen-calibration c256 frontier is
+`frontier/p40-useful-v1/250k-p40-useful-c256-calibration-v1.json`
+(`2c7d84b6c2b4c44f7ed3d945d8f3de4294747c04cd8ac5e2a2f82d9ae36c1429`).
+It binds the p40 assignment/account above, binary
+`033a62db624d1778572fb694a84d3aebb24156dc1561157884ea943515b62acd`,
+frozen graph, calibration split, truth, manifest, and ready-set identities.
+
+| probes | EF | recall | correct / 8060 | routing misses |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 64 | 0.7678660049 | 6189 | 2684 |
+| 1 | 80 | 0.7991315136 | 6441 | 2684 |
+| 1 | 96 | 0.8176178660 | 6590 | 2684 |
+| 1 | 128 | 0.8389578164 | 6762 | 2684 |
+| 2 | 64 | 0.9031017370 | 7279 | 0 |
+| 2 | 80 | 0.9310173697 | 7504 | 0 |
+| 2 | 96 | 0.9496277916 | 7654 | 0 |
+| 2 | 128 | 0.9700992556 | 7819 | 0 |
+| 4 | 64 | 0.9031017370 | 7279 | 0 |
+| 4 | 80 | 0.9310173697 | 7504 | 0 |
+| 4 | 96 | 0.9496277916 | 7654 | 0 |
+| 4 | 128 | 0.9700992556 | 7819 | 0 |
+
+The required EF96 threshold is 0.9500 = 7657/8060 correct. Both p2 and p4
+achieved 7654/8060, three short, despite zero routing misses. Therefore the
+single M0 blocker is **local-pack approximate HNSW recall at the maximum
+allowed EF96**. The report's three-repetition recall/work/result identities are
+invariant, but QPS/latency are non-authoritative: unrelated Lean/git work
+overlapped the capture and per-cell QPS spread was 9.89--54.89%. No QPS
+selection claim is made.
+
+The final search holdout remains sealed. Do not start #4143, #4144, #4145, or
+#4146: the dependency checkpoint remains
+`#4142 -> #4143 -> #4144 -> #4146 -> #4141`, conditional
+`#4144 -> #4145 -> #4146`, and #4142 has failed closed before its entry gate.
