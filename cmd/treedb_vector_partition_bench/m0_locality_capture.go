@@ -18,10 +18,11 @@ import (
 // is graph+vector pack sections; document-ID result materialization is out of
 // scope because M0 selects traversal/layout locality, not result encoding.
 type m0LocalityCaptureRowV1 struct {
-	Query    int    `json:"query_ordinal"`
-	Pages    uint64 `json:"unique_graph_vector_pages"`
-	Expanded uint64 `json:"expanded_neighbor_lists"`
-	Edges    uint64 `json:"edges"`
+	Query                 int    `json:"query_ordinal"`
+	Pages                 uint64 `json:"unique_graph_vector_pages"`
+	Expanded              uint64 `json:"expanded_neighbor_lists"`
+	Edges                 uint64 `json:"edges"`
+	AdjacencyPageAccesses uint64 `json:"adjacency_page_accesses"`
 }
 type m0LocalityCaptureV1 struct {
 	Schema           string                   `json:"schema"`
@@ -118,6 +119,7 @@ func runM0LocalityCaptureV1(args []string, stdout io.Writer) error {
 					}
 					row.Expanded += uint64(len(t.AdjacencyReads))
 					row.Edges += m.Edges
+					row.AdjacencyPageAccesses += pages.AdjacencyPageAccesses
 				}
 			}
 			if e != nil {

@@ -186,6 +186,9 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if pageErr != nil || pages.UniquePages != 4 || pages.VectorPages != 2 || pages.AdjacencyPages != 3 {
 		t.Fatalf("page mapping=%+v err=%v", pages, pageErr)
 	}
+	if _, err := searcher.PageAttributionForTraceV1(VectorPartitionSearchAttributionV1{}, 64); err == nil {
+		t.Fatal("accepted empty trace")
+	}
 	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
 	if err != nil || seed != 1 {
 		t.Fatalf("upper descent seed=%d err=%v", seed, err)

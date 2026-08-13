@@ -1276,11 +1276,12 @@ type VectorPartitionSearchPageReadV1 struct {
 	Auxiliary bool
 }
 type VectorPartitionSearchPageAttributionV1 struct {
-	PageBytes      uint64                             `json:"page_bytes"`
-	UniquePages    uint64                             `json:"unique_pages"`
-	VectorPages    uint64                             `json:"vector_pages"`
-	AdjacencyPages uint64                             `json:"adjacency_pages"`
-	Tokens         []VectorPartitionSearchPageTokenV1 `json:"-"`
+	PageBytes             uint64                             `json:"page_bytes"`
+	UniquePages           uint64                             `json:"unique_pages"`
+	VectorPages           uint64                             `json:"vector_pages"`
+	AdjacencyPages        uint64                             `json:"adjacency_pages"`
+	AdjacencyPageAccesses uint64                             `json:"adjacency_page_accesses"`
+	Tokens                []VectorPartitionSearchPageTokenV1 `json:"-"`
 }
 type VectorPartitionSearchPageTokenV1 struct {
 	Namespace string
@@ -1295,7 +1296,7 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 	if s == nil || pageBytes == 0 {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
-	if len(trace.ScoreOrdinals) == 0 || len(trace.AdjacencyReads) == 0 {
+	if trace.Schema != "treedb_vector_partition_search_attribution_v1" || len(trace.ScoreOrdinals) == 0 || len(trace.AdjacencyReads) == 0 {
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	if err := s.Acquire(); err != nil {
@@ -1325,6 +1326,7 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		return VectorPartitionSearchPageAttributionV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	all, vs, as := map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}, map[VectorPartitionSearchPageTokenV1]struct{}{}
+	var adjacencyAccesses uint64
 	add := func(set map[VectorPartitionSearchPageTokenV1]struct{}, start, length uint64) error {
 		if length == 0 {
 			return nil
@@ -1393,6 +1395,19 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		if err := add(as, neighbors.Offset+start*4, (end-start)*4); err != nil {
 			return VectorPartitionSearchPageAttributionV1{}, err
 		}
+		local := map[VectorPartitionSearchPageTokenV1]struct{}{}
+		addLocal := func(start, length uint64) {
+			if length == 0 {
+				return
+			}
+			physical := uint64(key.Offset) + start
+			for p := physical / pageBytes; p <= (physical+length-1)/pageBytes; p++ {
+				local[VectorPartitionSearchPageTokenV1{Namespace: key.Namespace, FileID: key.FileID, Page: p}] = struct{}{}
+			}
+		}
+		addLocal(offs.Offset+uint64(read.Ordinal)*8, 16)
+		addLocal(neighbors.Offset+start*4, (end-start)*4)
+		adjacencyAccesses += uint64(len(local))
 	}
 	tokens := make([]VectorPartitionSearchPageTokenV1, 0, len(all))
 	for token := range all {
@@ -1407,7 +1422,7 @@ func (s *VectorPartitionLocalSearcherV1) PageAttributionForTraceV1(trace VectorP
 		}
 		return tokens[i].Page < tokens[j].Page
 	})
-	return VectorPartitionSearchPageAttributionV1{PageBytes: pageBytes, UniquePages: uint64(len(all)), VectorPages: uint64(len(vs)), AdjacencyPages: uint64(len(as)), Tokens: tokens}, nil
+	return VectorPartitionSearchPageAttributionV1{PageBytes: pageBytes, UniquePages: uint64(len(all)), VectorPages: uint64(len(vs)), AdjacencyPages: uint64(len(as)), AdjacencyPageAccesses: adjacencyAccesses, Tokens: tokens}, nil
 }
 
 // SearchWithAttributionV1 runs the offline prepared-pack attribution path.
