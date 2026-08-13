@@ -553,6 +553,52 @@ func requirePublicBatchWriteSyncPhasePartitions(t *testing.T, stats map[string]s
 	}
 }
 
+func TestPublicBatchWriteSyncPhaseStatsMakesNestedPreparationExclusive(t *testing.T) {
+	var phases publicBatchWriteSyncPhaseStats
+	phases.observe(time.Now().Add(-time.Millisecond), nil, publicBatchWriteSyncPhaseSample{
+		// Backend planning begins before the public preparation callback, so
+		// this 100ns interval contains the 30ns preparation interval.
+		commandCallback:                           100 * time.Nanosecond,
+		commandPublicPayloadEntryScanPreparation:  30 * time.Nanosecond,
+		commandPublicPreparationObserved:          true,
+		commandBackendIntentPlanningSerialization: 100 * time.Nanosecond,
+		commandBackendIntentPlanningObserved:      true,
+	})
+
+	stats := make(map[string]string)
+	publicBatchWriteSyncPhaseStatsInto(stats, true, &phases)
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := statMapUint64(t, stats, prefix+"command_backend_intent_planning_serialization.ns_total"); got != 70 {
+		t.Fatalf("exclusive backend planning ns=%d, want 70 after removing nested preparation (stats=%#v)", got, stats)
+	}
+	requirePublicBatchWriteSyncPhasePartitions(t, stats)
+}
+
+func TestPublicBatchWriteSyncPhaseStatsSignalsMalformedNestedTiming(t *testing.T) {
+	var phases publicBatchWriteSyncPhaseStats
+	phases.observe(time.Now().Add(-time.Millisecond), nil, publicBatchWriteSyncPhaseSample{
+		// This cannot arise from either measured command-WAL construction path:
+		// backend timing starts before preparation and ends after it. Keep the
+		// overrun visible instead of manufacturing a negative backend phase if
+		// a future source violates that containment contract.
+		commandCallback:                           100 * time.Nanosecond,
+		commandPublicPayloadEntryScanPreparation:  101 * time.Nanosecond,
+		commandPublicPreparationObserved:          true,
+		commandBackendIntentPlanningSerialization: 100 * time.Nanosecond,
+		commandBackendIntentPlanningObserved:      true,
+	})
+
+	stats := make(map[string]string)
+	publicBatchWriteSyncPhaseStatsInto(stats, true, &phases)
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := statMapUint64(t, stats, prefix+"command_backend_intent_planning_serialization.ns_total"); got != 100 {
+		t.Fatalf("malformed backend planning ns=%d, want unmodified 100 (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_partition_overruns_total"); got != 1 {
+		t.Fatalf("malformed timing overruns=%d, want 1 (stats=%#v)", got, stats)
+	}
+}
+
 func requirePublicCommandWALNoCheckpointSince(t *testing.T, db *DB, before map[string]string) {
 	t.Helper()
 	after := db.Stats()
