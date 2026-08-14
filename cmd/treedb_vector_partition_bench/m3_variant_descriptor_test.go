@@ -224,7 +224,7 @@ func testM3ByteBoundedDescriptorV1(t *testing.T, dir string) m3VariantDescriptor
 	t.Helper()
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
-		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)

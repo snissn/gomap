@@ -35,7 +35,7 @@ func TestPlanByteBoundedShardsV1Deterministic100k250kEnvelope(t *testing.T) {
 			if first.Partitions != fixture.wantPartitions || first.HomeCapacity != fixture.wantHomeCapacity || first.OverlapCapacity != fixture.wantOverlapCapacity || first.MaxMembershipsPerPack != 7500 || first.RequestedOverlap != fixture.wantRequested || first.PlannedMemberships != fixture.wantPlanned {
 				t.Fatalf("plan=%+v", first)
 			}
-			if first.TargetHotBytes != SelectedTargetHotBytesV1 || first.TraversalRowBytes != 128*FP32BytesPerDimensionV1 || first.GraphIdentityOverhead != GraphIdentityOverheadBytesV1 {
+			if first.TargetHotBytes != SelectedTargetHotBytesV1 || first.TraversalRowBytes != 128*FP32BytesPerDimensionV1 || first.GraphIdentityOverhead != GraphIdentityOverheadBytesV1 || first.PackFixedOverhead != PackFixedOverheadBytesV1 {
 				t.Fatalf("accounting=%+v", first)
 			}
 		})
@@ -55,9 +55,9 @@ func TestPlanByteBoundedShardsV1FailsClosedBeforeAllocation(t *testing.T) {
 	outOfBounds.Vectors = math.MaxInt
 	outOfBounds.OverlapRatio = 1
 	undersized := base
-	undersized.TargetHotBytes = uint64(128*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1 - 1)
+	undersized.TargetHotBytes = uint64(PackFixedOverheadBytesV1 + 128*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1 - 1)
 	impossible := base
-	impossible.TargetHotBytes = uint64(128*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1)
+	impossible.TargetHotBytes = uint64(PackFixedOverheadBytesV1 + 128*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1)
 	nan := base
 	nan.OverlapRatio = math.NaN()
 	zero := base

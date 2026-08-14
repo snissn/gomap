@@ -48,6 +48,27 @@ func TestM8BenchmarkExecutableSHA256BindsBytesV1(t *testing.T) {
 	}
 }
 
+func TestM8RetainedSidecarBytesV1StatsBothFiles(t *testing.T) {
+	dir := t.TempDir()
+	descriptor := testM3VariantDescriptorV1(dir)
+	descriptor.ShardGenerationBytes = 3
+	if err := os.WriteFile(filepath.Join(dir, m3ShardGenerationFileV1), []byte("gen"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, m3VariantDescriptorFileV1), []byte("variant"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assets := &m8ProductionMultiGroupAssetsV1{dir: dir, descriptor: &descriptor}
+	generation, variant, err := m8RetainedSidecarBytesV1(assets)
+	if err != nil || generation != 3 || variant != 7 {
+		t.Fatalf("generation=%d variant=%d err=%v", generation, variant, err)
+	}
+	descriptor.ShardGenerationBytes++
+	if _, _, err := m8RetainedSidecarBytesV1(assets); err == nil {
+		t.Fatal("accepted descriptor generation size that differs from disk")
+	}
+}
+
 func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
 	cfg := config{baseSHA: descriptor.BaseSHA, headSHA: descriptor.HeadSHA}

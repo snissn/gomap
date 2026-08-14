@@ -338,7 +338,7 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 	// A materialized row occupies its padded stride, so the plan must charge the
 	// aligned width rather than dimensions*4.
 	alignedTraversal, alignedOK := vectorpartition.AlignedTraversalRowBytesV1(plan.Dimensions)
-	if !alignedOK || plan.TraversalRowBytes != alignedTraversal || rowBytes < 1 || plan.MaxMembershipsPerPack < 1 {
+	if !alignedOK || plan.TraversalRowBytes != alignedTraversal || rowBytes < 1 || plan.PackFixedOverhead < 1 || plan.MaxMembershipsPerPack < 1 || uint64(plan.PackFixedOverhead) > plan.TargetHotBytes {
 		return errors.New("M3 variant shard plan row-byte accounting is malformed")
 	}
 	if uint64(plan.Vectors) != d.SourceRows || plan.Dimensions != d.Source.Dimensions ||
@@ -347,7 +347,7 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 		return errors.New("M3 variant shard plan does not bind the realized build")
 	}
 	for partition, load := range d.PartitionLoads {
-		if load > plan.MaxMembershipsPerPack || uint64(load) > plan.TargetHotBytes/uint64(rowBytes) {
+		if load > plan.MaxMembershipsPerPack || uint64(load) > (plan.TargetHotBytes-uint64(plan.PackFixedOverhead))/uint64(rowBytes) {
 			return fmt.Errorf("M3 variant pack %d load=%d exceeds the byte-bounded plan", partition, load)
 		}
 	}

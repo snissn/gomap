@@ -112,7 +112,7 @@ func TestM3ShardPlanRejectsUngovernedArtifactV1(t *testing.T) {
 func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
-		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +157,7 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
-		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 func TestM3ShardGenerationInputsValidateWithoutEncodingV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
-		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)

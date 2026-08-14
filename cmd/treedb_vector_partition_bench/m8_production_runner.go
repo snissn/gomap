@@ -2892,6 +2892,13 @@ func m8RetainedSidecarBytesV1(assets *m8ProductionMultiGroupAssetsV1) (generatio
 	if assets == nil || assets.descriptor == nil {
 		return 0, 0, nil
 	}
+	generationInfo, statErr := os.Stat(filepath.Join(assets.dir, m3ShardGenerationFileV1))
+	if statErr != nil {
+		return 0, 0, fmt.Errorf("stat retained shard generation: %w", statErr)
+	}
+	if generationInfo.Size() < 0 || uint64(generationInfo.Size()) != assets.descriptor.ShardGenerationBytes {
+		return 0, 0, errors.New("retained shard generation size does not match its descriptor")
+	}
 	info, statErr := os.Stat(filepath.Join(assets.dir, m3VariantDescriptorFileV1))
 	if statErr != nil {
 		return 0, 0, fmt.Errorf("stat retained variant descriptor: %w", statErr)
@@ -2899,7 +2906,7 @@ func m8RetainedSidecarBytesV1(assets *m8ProductionMultiGroupAssetsV1) (generatio
 	if info.Size() < 0 {
 		return 0, 0, errors.New("retained variant descriptor has a negative size")
 	}
-	return assets.descriptor.ShardGenerationBytes, uint64(info.Size()), nil
+	return uint64(generationInfo.Size()), uint64(info.Size()), nil
 }
 
 func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, untimed m8ProductionResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, failure m8ProductionResourceBoundaryV1) m8ProductionResourceEvidenceV1 {

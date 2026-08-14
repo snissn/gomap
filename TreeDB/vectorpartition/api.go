@@ -52,6 +52,7 @@ const (
 	FP32VectorSectionAlignmentBytesV1 = internal.FP32VectorSectionAlignmentBytesV1
 	GraphIdentityOverheadPerRowV1     = internal.GraphIdentityOverheadPerRowV1
 	GraphIdentityOverheadBytesV1      = internal.GraphIdentityOverheadBytesV1
+	PackFixedOverheadBytesV1          = internal.PackFixedOverheadBytesV1
 	DefaultFP32DimensionsV1           = internal.DefaultFP32DimensionsV1
 	DefaultTargetHotBytesV1           = internal.DefaultTargetHotBytesV1
 	SelectedTargetHotBytesV1          = internal.SelectedTargetHotBytesV1

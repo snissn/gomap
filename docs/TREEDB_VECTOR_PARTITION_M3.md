@@ -73,10 +73,12 @@ runner re-derives per-pack home/overlap/total loads from the realized
 membership list and rejects any pack outside the planned home capacity,
 membership capacity, or hot-byte budget.
 
-For the selected 128-dimensional contract at the portable default budget
-(7500 rows of 128-d FP32 plus 512 B fixed per-row overhead = 7,680,000 B),
-100k rows plan to 16 partitions and 250k rows plan to 40 partitions, both at
-7500 memberships per pack. `-shard-plan off` (the default) keeps `-partitions`
+For the selected 128-dimensional contract, the portable default total budget
+is 7,696,384 B: 7500 rows of 128-d FP32 plus 512 B fixed per-row overhead
+(7,680,000 B), and a conservative 16 KiB reserve for the pack header, section
+directory, and alignment. Thus 100k rows plan to 16 partitions and 250k rows
+plan to 40 partitions, both at 7500 memberships per pack. `-shard-plan off`
+(the default) keeps `-partitions`
 authoritative and persists no plan; a descriptor written without the planner
 carries an entirely zero `shard_plan` rather than a reverse-engineered one.
 

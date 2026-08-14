@@ -23,6 +23,11 @@ const (
 	// adjacency, level metadata, and stable identity. It is not derived
 	// from host LLC or runtime pack inspection.
 	GraphIdentityOverheadPerRowV1 = 512
+	// PackFixedOverheadBytesV1 reserves format framing that is not attributable
+	// to a row: the V3 header, section directory, and alignment padding. The
+	// collections format test pins this conservative reserve above the encoder's
+	// maximum framing requirement.
+	PackFixedOverheadBytesV1 = 16 << 10
 	// SelectedOverlapRatioV1 is the #4142 useful-only overlap cap.
 	SelectedOverlapRatioV1 = 0.2
 	// SelectedRouterCandidatesV1 is the #4142 c256 router budget.
@@ -31,9 +36,9 @@ const (
 	SelectedPartitionProbesV1 = 2
 	// SelectedSearchableRowsPerPackV1 is the #4142 per-pack membership cap.
 	SelectedSearchableRowsPerPackV1 = 7500
-	// DefaultTargetHotBytesV1 is the portable #4142 per-pack budget:
-	// 7500 rows * (128-dim FP32 + fixed per-row overhead).
-	DefaultTargetHotBytesV1 = uint64(SelectedSearchableRowsPerPackV1 * (DefaultFP32DimensionsV1*FP32BytesPerDimensionV1 + GraphIdentityOverheadPerRowV1))
+	// DefaultTargetHotBytesV1 preserves the selected 7500-row geometry while
+	// making the advertised total budget include fixed pack framing.
+	DefaultTargetHotBytesV1 = uint64(PackFixedOverheadBytesV1 + SelectedSearchableRowsPerPackV1*(DefaultFP32DimensionsV1*FP32BytesPerDimensionV1+GraphIdentityOverheadPerRowV1))
 )
 
 // Aliases keep earlier contract names compiling against the selected defaults.
@@ -143,10 +148,11 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 	if !ok {
 		return ShardPlanV1{}, errors.New("vectorpartition: row-byte accounting overflow")
 	}
-	if in.TargetHotBytes < uint64(rowBytes) {
-		return ShardPlanV1{}, fmt.Errorf("vectorpartition: target-hot-bytes %d undersized versus one row %d", in.TargetHotBytes, rowBytes)
+	minimumBytes, ok := checkedAddInt(PackFixedOverheadBytesV1, rowBytes)
+	if !ok || in.TargetHotBytes < uint64(minimumBytes) {
+		return ShardPlanV1{}, fmt.Errorf("vectorpartition: target-hot-bytes %d undersized versus framing plus one row %d", in.TargetHotBytes, minimumBytes)
 	}
-	maxMemberships := in.TargetHotBytes / uint64(rowBytes)
+	maxMemberships := (in.TargetHotBytes - uint64(PackFixedOverheadBytesV1)) / uint64(rowBytes)
 	if maxMemberships < 1 || maxMemberships > uint64(math.MaxInt) {
 		return ShardPlanV1{}, errors.New("vectorpartition: target-hot-bytes undersized")
 	}
@@ -187,6 +193,7 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 				TargetHotBytes:        in.TargetHotBytes,
 				TraversalRowBytes:     traversal,
 				GraphIdentityOverhead: GraphIdentityOverheadPerRowV1,
+				PackFixedOverhead:     PackFixedOverheadBytesV1,
 				MaxPackBytes:          in.TargetHotBytes,
 				OverlapRatio:          in.OverlapRatio,
 				Imbalance:             in.Imbalance,
@@ -241,7 +248,7 @@ func SelectedOverlapConfigV1(capacity int) OverlapConfig {
 func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
 	if plan.Partitions < 1 || plan.Partitions > maxPartitions || plan.Vectors < 1 || plan.Vectors > maxVectors ||
 		plan.HomeCapacity < 1 || plan.OverlapCapacity < plan.HomeCapacity || plan.MaxMembershipsPerPack < 1 ||
-		plan.TraversalRowBytes < 1 || plan.PlannedMemberships < plan.Vectors {
+		plan.TraversalRowBytes < 1 || plan.PackFixedOverhead < 1 || plan.MaxPackBytes != plan.TargetHotBytes || plan.PlannedMemberships < plan.Vectors {
 		return nil, errors.New("vectorpartition: invalid shard pack accounting inputs")
 	}
 	rowBytes, ok := checkedAddInt(plan.TraversalRowBytes, plan.GraphIdentityOverhead)
@@ -292,8 +299,12 @@ func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPac
 		if summary.HomeRows > plan.HomeCapacity || summary.Rows > plan.OverlapCapacity || summary.Rows > plan.MaxMembershipsPerPack {
 			return nil, fmt.Errorf("vectorpartition: pack %d home=%d rows=%d exceed planned capacity", partition, summary.HomeRows, summary.Rows)
 		}
-		hotBytes, ok := mulUint64(uint64(summary.Rows), uint64(rowBytes))
-		if !ok || hotBytes > plan.TargetHotBytes {
+		rowHotBytes, ok := mulUint64(uint64(summary.Rows), uint64(rowBytes))
+		if !ok || plan.PackFixedOverhead < 0 || uint64(plan.PackFixedOverhead) > math.MaxUint64-rowHotBytes {
+			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow", partition)
+		}
+		hotBytes := rowHotBytes + uint64(plan.PackFixedOverhead)
+		if hotBytes > plan.TargetHotBytes {
 			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow or exceed target", partition)
 		}
 		summary.Bytes = hotBytes
