@@ -61,6 +61,14 @@ func TestApplyVectorPartitionLayoutV1PreservesGraphAndEntry(t *testing.T) {
 	if !reflect.DeepEqual(gotAux.Offsets, []uint64{0, 1, 3, 4}) || !reflect.DeepEqual(gotAux.Neighbors, []uint32{1, 2, 0, 1}) {
 		t.Fatalf("auxiliary=%+v", gotAux)
 	}
+	nativeOffsets := []uint64{0, 1, 3, 4}
+	nativeNeighbors := []uint32{1, 2, 0, 1}
+	if err := validateVectorPartitionPreservedAuxiliaryNavigationV1(3, entry, nativeOffsets, nativeNeighbors, gotAux); err != nil {
+		t.Fatalf("preserved auxiliary validation: %v", err)
+	}
+	if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(3, entry, []uint16{0, 0, 0}, nativeOffsets, nativeNeighbors, gotAux); err == nil {
+		t.Fatal("ordinal-derived validation unexpectedly accepted remapped auxiliary graph")
+	}
 	if _, _, _, err := applyVectorPartitionLayoutV1(rows, aux, []string{"a", "a", "c"}); err == nil {
 		t.Fatal("duplicate layout order accepted")
 	}

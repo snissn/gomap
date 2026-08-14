@@ -80,8 +80,9 @@ const (
 	columnHNSWSearchPackMetricCosineNormalizedDot = uint16(1)
 	columnHNSWSearchPackEncodingFloat32           = uint16(1)
 
-	columnHNSWSearchPackNoEntryOrdinal = ^uint64(0)
-	columnHNSWSearchPackNoMaxLayer     = ^uint32(0)
+	columnHNSWSearchPackNoEntryOrdinal         = ^uint64(0)
+	columnHNSWSearchPackNoMaxLayer             = ^uint32(0)
+	columnHNSWSearchPackFlagPreservedAuxiliary = uint16(1)
 
 	columnHNSWSearchPackMaxRowsDefault          = uint64(1 << 26)
 	columnHNSWSearchPackMaxDimensionsDefault    = uint32(1 << 15)
@@ -166,8 +167,9 @@ type columnHNSWSearchPackBuildInput struct {
 	MembershipDigest [sha256.Size]byte
 	// HasAuxiliaryNavigation requires wire version 3 even when its CSR is
 	// empty, so connected partition packs cannot silently lose the channel.
-	HasAuxiliaryNavigation bool
-	AuxiliaryNavigation    columnHNSWSearchPackLayerInput
+	HasAuxiliaryNavigation       bool
+	PreservedAuxiliaryNavigation bool
+	AuxiliaryNavigation          columnHNSWSearchPackLayerInput
 
 	NormalizedVectors       []float32
 	Levels                  []uint16
@@ -212,23 +214,24 @@ type columnHNSWSearchPack struct {
 }
 
 type columnHNSWSearchPackHeader struct {
-	Rows                   int
-	Dimensions             int
-	VectorStride           int
-	M                      int
-	EfConstruction         int
-	EfSearch               int
-	EntryOrdinal           int
-	MaxLayer               int
-	AdjacencyLayerCount    int
-	BaseManifestGeneration uint64
-	BaseManifestChecksum   uint64
-	BaseSchemaHash         uint64
-	MembershipDigest       [sha256.Size]byte
-	HasAuxiliaryNavigation bool
-	TotalLength            uint64
-	DataOffset             uint64
-	DataLength             uint64
+	Rows                         int
+	Dimensions                   int
+	VectorStride                 int
+	M                            int
+	EfConstruction               int
+	EfSearch                     int
+	EntryOrdinal                 int
+	MaxLayer                     int
+	AdjacencyLayerCount          int
+	BaseManifestGeneration       uint64
+	BaseManifestChecksum         uint64
+	BaseSchemaHash               uint64
+	MembershipDigest             [sha256.Size]byte
+	HasAuxiliaryNavigation       bool
+	PreservedAuxiliaryNavigation bool
+	TotalLength                  uint64
+	DataOffset                   uint64
+	DataLength                   uint64
 }
 
 type columnHNSWSearchPackLayer struct {
@@ -345,7 +348,11 @@ func encodeColumnHNSWSearchPack(input columnHNSWSearchPackBuildInput) ([]byte, e
 	putHNSWPackU16(raw, columnHNSWSearchPackHeaderVersionOffset, version)
 	putHNSWPackU16(raw, columnHNSWSearchPackHeaderHeaderSizeOffset, uint16(headerSize))
 	putHNSWPackU16(raw, columnHNSWSearchPackHeaderSectionEntrySizeOffset, columnHNSWSearchPackSectionEntrySize)
-	putHNSWPackU16(raw, columnHNSWSearchPackHeaderFlagsOffset, 0)
+	flags := uint16(0)
+	if input.PreservedAuxiliaryNavigation {
+		flags = columnHNSWSearchPackFlagPreservedAuxiliary
+	}
+	putHNSWPackU16(raw, columnHNSWSearchPackHeaderFlagsOffset, flags)
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset, uint64(len(raw)))
 	putHNSWPackU32(raw, columnHNSWSearchPackHeaderSectionCountOffset, uint32(len(sections)))
 	putHNSWPackU64(raw, columnHNSWSearchPackHeaderRowsOffset, uint64(input.Rows))
@@ -407,7 +414,8 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	if got := hnswPackU16(raw, columnHNSWSearchPackHeaderSectionEntrySizeOffset); got != columnHNSWSearchPackSectionEntrySize {
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: hnsw_search_pack_v1 section_entry_size=%d want %d", got, columnHNSWSearchPackSectionEntrySize)
 	}
-	if flags := hnswPackU16(raw, columnHNSWSearchPackHeaderFlagsOffset); flags != 0 {
+	flags := hnswPackU16(raw, columnHNSWSearchPackHeaderFlagsOffset)
+	if flags&^columnHNSWSearchPackFlagPreservedAuxiliary != 0 || flags != 0 && version != columnHNSWSearchPackVersionV3 {
 		return columnHNSWSearchPack{}, fmt.Errorf("collections: hnsw_search_pack_v1 unsupported flags=0x%x", flags)
 	}
 	totalLength := hnswPackU64(raw, columnHNSWSearchPackHeaderTotalLengthOffset)
@@ -525,23 +533,24 @@ func decodeColumnHNSWSearchPack(raw []byte, opts columnHNSWSearchPackDecodeOptio
 	}
 	pack := columnHNSWSearchPack{
 		Header: columnHNSWSearchPackHeader{
-			Rows:                   int(rows64),
-			Dimensions:             int(dims32),
-			VectorStride:           int(stride32),
-			M:                      int(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset)),
-			EfConstruction:         int(hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset)),
-			EfSearch:               int(hnswPackU32(raw, columnHNSWSearchPackHeaderEfSearchOffset)),
-			EntryOrdinal:           int(hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset)),
-			MaxLayer:               int(maxLayer32),
-			AdjacencyLayerCount:    int(layerCount32),
-			BaseManifestGeneration: baseIdentity.ManifestGeneration,
-			BaseManifestChecksum:   baseIdentity.ManifestChecksum,
-			BaseSchemaHash:         baseIdentity.SchemaHash,
-			MembershipDigest:       membershipDigest,
-			HasAuxiliaryNavigation: version == columnHNSWSearchPackVersionV3,
-			TotalLength:            totalLength,
-			DataOffset:             dataOffset,
-			DataLength:             dataLength,
+			Rows:                         int(rows64),
+			Dimensions:                   int(dims32),
+			VectorStride:                 int(stride32),
+			M:                            int(hnswPackU32(raw, columnHNSWSearchPackHeaderMOffset)),
+			EfConstruction:               int(hnswPackU32(raw, columnHNSWSearchPackHeaderEfConstructionOffset)),
+			EfSearch:                     int(hnswPackU32(raw, columnHNSWSearchPackHeaderEfSearchOffset)),
+			EntryOrdinal:                 int(hnswPackU64(raw, columnHNSWSearchPackHeaderEntryOrdinalOffset)),
+			MaxLayer:                     int(maxLayer32),
+			AdjacencyLayerCount:          int(layerCount32),
+			BaseManifestGeneration:       baseIdentity.ManifestGeneration,
+			BaseManifestChecksum:         baseIdentity.ManifestChecksum,
+			BaseSchemaHash:               baseIdentity.SchemaHash,
+			MembershipDigest:             membershipDigest,
+			HasAuxiliaryNavigation:       version == columnHNSWSearchPackVersionV3,
+			PreservedAuxiliaryNavigation: flags&columnHNSWSearchPackFlagPreservedAuxiliary != 0,
+			TotalLength:                  totalLength,
+			DataOffset:                   dataOffset,
+			DataLength:                   dataLength,
 		},
 		Sections: sections,
 	}
@@ -647,11 +656,20 @@ func validateColumnHNSWSearchPackBuildInput(input columnHNSWSearchPackBuildInput
 		if len(input.AdjacencyLayers) != 0 {
 			native = input.AdjacencyLayers[0]
 		}
-		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(input.Rows, input.EntryOrdinal, input.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}); err != nil {
+		auxiliary := vectorPartitionLocalAuxiliaryNavigationV1{Offsets: input.AuxiliaryNavigation.Offsets, Neighbors: input.AuxiliaryNavigation.Neighbors}
+		var err error
+		if input.PreservedAuxiliaryNavigation {
+			err = validateVectorPartitionPreservedAuxiliaryNavigationV1(input.Rows, input.EntryOrdinal, native.Offsets, native.Neighbors, auxiliary)
+		} else {
+			err = validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(input.Rows, input.EntryOrdinal, input.Levels, native.Offsets, native.Neighbors, auxiliary)
+		}
+		if err != nil {
 			return fmt.Errorf("collections: hnsw search pack auxiliary navigation: %w", err)
 		}
 	} else if len(input.AuxiliaryNavigation.Offsets) != 0 || len(input.AuxiliaryNavigation.Neighbors) != 0 {
 		return errors.New("collections: hnsw search pack auxiliary navigation without version 3")
+	} else if input.PreservedAuxiliaryNavigation {
+		return errors.New("collections: hnsw search pack preserved auxiliary navigation without auxiliary CSR")
 	}
 	if len(input.RowRefGenerations) != input.Rows || len(input.RowRefPartIDs) != input.Rows || len(input.RowRefRowIndexes) != input.Rows || len(input.RowRefAppliedCommandLSN) != input.Rows {
 		return errors.New("collections: hnsw search pack row-ref section row counts must match")
@@ -805,8 +823,15 @@ func decodeColumnHNSWSearchPackSections(raw []byte, opts columnHNSWSearchPackDec
 		if len(pack.AdjacencyLayers) != 0 {
 			native = pack.AdjacencyLayers[0]
 		}
-		if err := validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(pack.Header.Rows, pack.Header.EntryOrdinal, pack.Levels, native.Offsets, native.Neighbors, vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}); err != nil {
-			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary navigation: %w", err)
+		auxiliary := vectorPartitionLocalAuxiliaryNavigationV1{Offsets: offsets, Neighbors: neighbors}
+		var validationErr error
+		if pack.Header.PreservedAuxiliaryNavigation {
+			validationErr = validateVectorPartitionPreservedAuxiliaryNavigationV1(pack.Header.Rows, pack.Header.EntryOrdinal, native.Offsets, native.Neighbors, auxiliary)
+		} else {
+			validationErr = validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(pack.Header.Rows, pack.Header.EntryOrdinal, pack.Levels, native.Offsets, native.Neighbors, auxiliary)
+		}
+		if validationErr != nil {
+			return fmt.Errorf("collections: hnsw_search_pack_v1 auxiliary navigation: %w", validationErr)
 		}
 		pack.AuxiliaryNavigation = columnHNSWSearchPackLayer{Offsets: offsets, Neighbors: neighbors}
 	}

@@ -613,6 +613,9 @@ func TestVectorPartitionLayoutPlanSearchParityV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer layout.Close()
+	if baseline.prepared.Header.PreservedAuxiliaryNavigation || !layout.prepared.Header.PreservedAuxiliaryNavigation {
+		t.Fatal("layout auxiliary preservation flag")
+	}
 	opts := VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 96}
 	for _, row := range rows {
 		want, wantMetrics, err := baseline.SearchWithOptionsV1(t.Context(), row.vector, opts)

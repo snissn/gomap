@@ -244,6 +244,46 @@ func validateVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV
 	return nil
 }
 
+func validateVectorPartitionPreservedAuxiliaryNavigationV1(rows, entryOrdinal int, nativeOffsets []uint64, nativeNeighbors []uint32, auxiliary vectorPartitionLocalAuxiliaryNavigationV1) error {
+	if rows < 0 || entryOrdinal < 0 || entryOrdinal >= rows || validateColumnHNSWSearchPackAdjacency(0, uint64(rows), nativeOffsets, nativeNeighbors) != nil || validateColumnHNSWSearchPackAdjacency(0, uint64(rows), auxiliary.Offsets, auxiliary.Neighbors) != nil {
+		return errors.New("partition-local preserved auxiliary navigation shape")
+	}
+	for row := 0; row < rows; row++ {
+		start, end := auxiliary.Offsets[row], auxiliary.Offsets[row+1]
+		if end-start > vectorPartitionLocalNavigationBranchV1+1 {
+			return errors.New("partition-local preserved auxiliary navigation degree")
+		}
+		for i := start; i < end; i++ {
+			if auxiliary.Neighbors[i] == uint32(row) {
+				return errors.New("partition-local preserved auxiliary navigation self edge")
+			}
+			for j := start; j < i; j++ {
+				if auxiliary.Neighbors[j] == auxiliary.Neighbors[i] {
+					return errors.New("partition-local preserved auxiliary navigation duplicate edge")
+				}
+			}
+		}
+	}
+	seen := make([]bool, rows)
+	queue := []int{entryOrdinal}
+	seen[entryOrdinal] = true
+	for head := 0; head < len(queue); head++ {
+		row := queue[head]
+		for _, adjacency := range []vectorPartitionLocalAuxiliaryNavigationV1{{Offsets: nativeOffsets, Neighbors: nativeNeighbors}, auxiliary} {
+			for _, neighbor := range adjacency.Neighbors[adjacency.Offsets[row]:adjacency.Offsets[row+1]] {
+				if !seen[neighbor] {
+					seen[neighbor] = true
+					queue = append(queue, int(neighbor))
+				}
+			}
+		}
+	}
+	if len(queue) != rows {
+		return errors.New("partition-local preserved auxiliary navigation reachability")
+	}
+	return nil
+}
+
 // VectorPartitionLocalGraphVariantV1 selects the partition-local graph build
 // used for offline causal attribution. Callers must bind the selected variant
 // into their pack identity before comparing results.
@@ -1221,6 +1261,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		pack.MembershipDigest = vectorPartitionLayoutMembershipDigestV1(vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant), manifest.LayoutPlanDigest)
 		if hasAuxiliaryNavigation {
 			pack.HasAuxiliaryNavigation = true
+			pack.PreservedAuxiliaryNavigation = layout != nil
 			pack.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: auxiliary.Offsets, Neighbors: auxiliary.Neighbors}
 		}
 		raw, err := encodeColumnHNSWSearchPack(pack)
