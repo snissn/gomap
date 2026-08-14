@@ -7,6 +7,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+func alignedRowBytesForTest(dimensions int) int {
+	traversal, ok := vectorpartition.AlignedTraversalRowBytesV1(dimensions)
+	if !ok {
+		panic("aligned traversal charge")
+	}
+	return traversal
+}
+
 func byteBoundedShardPlanConfigV1() config {
 	return config{
 		shardPlanMode:  shardPlanModeByteBoundedV1,
@@ -104,7 +112,7 @@ func TestM3ShardPlanRejectsUngovernedArtifactV1(t *testing.T) {
 func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
-		TargetHotBytes: 3 * (2*vectorpartition.FP32BytesPerDimensionV1 + vectorpartition.GraphIdentityOverheadPerRowV1),
+		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +157,7 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
-		TargetHotBytes: 3 * (2*vectorpartition.FP32BytesPerDimensionV1 + vectorpartition.GraphIdentityOverheadPerRowV1),
+		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -249,5 +257,35 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	// -shard-plan off retains no record rather than an unbound one.
 	if raw, digest, err := m3ShardGenerationRecordV1(vectorpartition.ShardPlanV1{}, 0, overlap); err != nil || raw != nil || digest != "" {
 		t.Fatalf("unplanned build produced a record bytes=%d digest=%q err=%v", len(raw), digest, err)
+	}
+}
+
+// TestM3ShardGenerationMembershipsBindMaterializationV1 pins the membership-pair
+// binding. Aggregate per-partition loads cannot separate two assignments that
+// share them, so a record that swaps equal numbers of vectors between packs
+// must still be rejected against what materialized the packs.
+func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
+	record := vectorpartition.ShardGenerationDescriptorV1{
+		Memberships: []vectorpartition.Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true},
+			{VectorOrdinal: 1, Partition: 0, Home: true},
+			{VectorOrdinal: 2, Partition: 1, Home: true},
+			{VectorOrdinal: 3, Partition: 1, Home: true},
+		},
+		PackSummaries: []vectorpartition.ShardPackSummaryV1{{Partition: 0, Rows: 2}, {Partition: 1, Rows: 2}},
+	}
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}, {2, 3}}); err != nil {
+		t.Fatalf("matching memberships rejected: %v", err)
+	}
+	// Same per-partition counts, different vectors: the aggregate checks cannot
+	// see this, so the pair comparison has to.
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 2}, {1, 3}}); err == nil {
+		t.Fatal("accepted a record that swapped vectors between packs")
+	}
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1, 2}, {3}}); err == nil {
+		t.Fatal("accepted a record whose pack sizes disagree with materialization")
+	}
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}}); err == nil {
+		t.Fatal("accepted a record covering more packs than materialization")
 	}
 }

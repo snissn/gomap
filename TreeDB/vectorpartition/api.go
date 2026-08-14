@@ -49,6 +49,7 @@ const (
 	ReplicaUtilityPositiveGainV1      = internal.ReplicaUtilityPositiveGainV1
 	ReplicaUtilityZeroUtilityV1       = internal.ReplicaUtilityZeroUtilityV1
 	FP32BytesPerDimensionV1           = internal.FP32BytesPerDimensionV1
+	FP32VectorSectionAlignmentBytesV1 = internal.FP32VectorSectionAlignmentBytesV1
 	GraphIdentityOverheadPerRowV1     = internal.GraphIdentityOverheadPerRowV1
 	GraphIdentityOverheadBytesV1      = internal.GraphIdentityOverheadBytesV1
 	DefaultFP32DimensionsV1           = internal.DefaultFP32DimensionsV1
@@ -124,6 +125,9 @@ func DefaultShardPlanInputV1(vectors, dimensions int) ShardPlanInputV1 {
 }
 func SelectedShardPlanRequestV1(sourceRows, dimensions int) ShardPlanRequestV1 {
 	return internal.SelectedShardPlanRequestV1(sourceRows, dimensions)
+}
+func AlignedTraversalRowBytesV1(dimensions int) (int, bool) {
+	return internal.AlignedTraversalRowBytesV1(dimensions)
 }
 func PlanByteBoundedShardsV1(in ShardPlanRequestV1) (ShardPlanV1, error) {
 	return internal.PlanByteBoundedShardsV1(in)

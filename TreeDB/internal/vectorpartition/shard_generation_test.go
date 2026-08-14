@@ -12,7 +12,11 @@ func testShardRequestV1(a Artifact, ratio float64) ShardPlanRequestV1 {
 	req := SelectedShardPlanRequestV1(len(a.IDs), a.Source.Dimensions)
 	req.OverlapRatio = ratio
 	req.Imbalance = a.Config.Imbalance
-	req.TargetHotBytes = uint64(3 * (a.Source.Dimensions*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1))
+	traversal, ok := AlignedTraversalRowBytesV1(a.Source.Dimensions)
+	if !ok {
+		panic("aligned traversal charge")
+	}
+	req.TargetHotBytes = uint64(3 * (traversal + GraphIdentityOverheadBytesV1))
 	return req
 }
 
@@ -228,7 +232,7 @@ func TestAccountShardPacksRejectsPerVectorOverlapCapV1(t *testing.T) {
 	vectors := MaxOverlapMembershipsPerVector + 4
 	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{
 		Vectors: vectors, Dimensions: 2, OverlapRatio: 1, Imbalance: 1,
-		TargetHotBytes: uint64(2 * (2*FP32BytesPerDimensionV1 + GraphIdentityOverheadPerRowV1)),
+		TargetHotBytes: uint64(2 * (alignedRowBytesForTest(2) + GraphIdentityOverheadPerRowV1)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -266,4 +270,12 @@ func sortMembershipsForTest(m []Membership) {
 		}
 		return m[i].Partition < m[j].Partition
 	})
+}
+
+func alignedRowBytesForTest(dimensions int) int {
+	traversal, ok := AlignedTraversalRowBytesV1(dimensions)
+	if !ok {
+		panic("aligned traversal charge")
+	}
+	return traversal
 }

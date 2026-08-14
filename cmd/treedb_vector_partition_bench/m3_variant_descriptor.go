@@ -333,7 +333,10 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 		return errors.New("M3 variant shard plan does not match its own recorded inputs")
 	}
 	rowBytes := plan.TraversalRowBytes + plan.GraphIdentityOverhead
-	if plan.TraversalRowBytes != plan.Dimensions*vectorpartition.FP32BytesPerDimensionV1 || rowBytes < 1 || plan.MaxMembershipsPerPack < 1 {
+	// A materialized row occupies its padded stride, so the plan must charge the
+	// aligned width rather than dimensions*4.
+	alignedTraversal, alignedOK := vectorpartition.AlignedTraversalRowBytesV1(plan.Dimensions)
+	if !alignedOK || plan.TraversalRowBytes != alignedTraversal || rowBytes < 1 || plan.MaxMembershipsPerPack < 1 {
 		return errors.New("M3 variant shard plan row-byte accounting is malformed")
 	}
 	if uint64(plan.Vectors) != d.SourceRows || plan.Dimensions != d.Source.Dimensions ||

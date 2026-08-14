@@ -781,6 +781,19 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
+		// -shard-plan off retains no record, so there is nothing to bind.
+		if shardGenerationDigest != "" {
+			retained, err := m3ReadShardGenerationDescriptorV1(dir, shardGenerationDigest)
+			if err != nil {
+				return m3PartitionIndexRow{}, err
+			}
+			// Aggregate loads cannot distinguish two assignments that share them,
+			// and the membership lists are only both in scope here, so bind the
+			// record's actual pairs to what materialized the packs.
+			if err := m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals); err != nil {
+				return m3PartitionIndexRow{}, err
+			}
+		}
 		row.ShardGenerationBytes = int64(len(shardGenerationRaw))
 	}
 	return row, nil

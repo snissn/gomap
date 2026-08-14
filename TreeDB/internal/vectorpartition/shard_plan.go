@@ -11,6 +11,14 @@ const (
 	FP32BytesPerDimensionV1 = 4
 	// DefaultFP32DimensionsV1 is the selected 128-d FP32 traversal plane.
 	DefaultFP32DimensionsV1 = 128
+	// FP32VectorSectionAlignmentBytesV1 mirrors the persisted search pack's
+	// vector-section alignment (collections.columnHNSWSearchPackVectorSectionAlignment).
+	// A materialized row occupies its padded stride, not dimensions*4, so the
+	// planner charges the padded width. vectorpartition cannot import
+	// collections (collections imports this package), so the invariant is
+	// pinned by TestSearchPackVectorStrideMatchesShardPlanChargeV1 in
+	// TreeDB/collections.
+	FP32VectorSectionAlignmentBytesV1 = 16
 	// GraphIdentityOverheadPerRowV1 is a fixed per-row charge for HNSW
 	// adjacency, level metadata, and stable identity. It is not derived
 	// from host LLC or runtime pack inspection.
@@ -71,6 +79,27 @@ type ShardPlanV1 struct {
 // HomeCap is a compatibility alias used by some tests.
 func (p ShardPlanV1) HomeCap() int { return p.HomeCapacity }
 
+// AlignedTraversalRowBytesV1 returns the bytes one traversal row occupies in a
+// materialized search pack: dimensions*4 rounded up to the pack's vector
+// section alignment. Charging dimensions*4 directly understates every row whose
+// width is not already aligned, which would let a tight target admit packs
+// above their advertised hot-byte budget.
+func AlignedTraversalRowBytesV1(dimensions int) (int, bool) {
+	if dimensions < 1 || dimensions > math.MaxInt/FP32BytesPerDimensionV1 {
+		return 0, false
+	}
+	traversal := dimensions * FP32BytesPerDimensionV1
+	remainder := traversal % FP32VectorSectionAlignmentBytesV1
+	if remainder == 0 {
+		return traversal, true
+	}
+	padded, ok := checkedAddInt(traversal, FP32VectorSectionAlignmentBytesV1-remainder)
+	if !ok {
+		return 0, false
+	}
+	return padded, true
+}
+
 // DefaultShardPlanInputV1 returns the portable #4142 defaults for one corpus.
 func DefaultShardPlanInputV1(vectors, dimensions int) ShardPlanInputV1 {
 	return ShardPlanInputV1{
@@ -106,10 +135,10 @@ func PlanByteBoundedShardsV1(in ShardPlanInputV1) (ShardPlanV1, error) {
 	if math.IsNaN(in.Imbalance) || math.IsInf(in.Imbalance, 0) || in.Imbalance < 0 || in.Imbalance > 1 {
 		return ShardPlanV1{}, errors.New("vectorpartition: imbalance must be finite in [0,1]")
 	}
-	if in.Dimensions > math.MaxInt/FP32BytesPerDimensionV1 {
+	traversal, ok := AlignedTraversalRowBytesV1(in.Dimensions)
+	if !ok {
 		return ShardPlanV1{}, errors.New("vectorpartition: traversal-row byte overflow")
 	}
-	traversal := in.Dimensions * FP32BytesPerDimensionV1
 	rowBytes, ok := checkedAddInt(traversal, GraphIdentityOverheadPerRowV1)
 	if !ok {
 		return ShardPlanV1{}, errors.New("vectorpartition: row-byte accounting overflow")

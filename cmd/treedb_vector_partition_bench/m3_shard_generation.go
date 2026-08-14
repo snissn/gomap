@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
@@ -113,6 +114,44 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	}
 	if uint64(record.Plan.Vectors) != d.SourceRows {
 		return fmt.Errorf("retained shard generation record covers %d vectors, descriptor declares %d source rows", record.Plan.Vectors, d.SourceRows)
+	}
+	return nil
+}
+
+// m3VerifyShardGenerationMembershipsV1 compares the record's individual
+// membership pairs against the per-partition artifact ordinals that actually
+// materialized the packs.
+//
+// The aggregate checks in m3VerifyRetainedShardGenerationV1 cannot separate two
+// assignments that happen to share per-partition loads and overlap totals, so
+// swapping equal numbers of vectors between partitions would survive them. The
+// membership lists are only both in scope during construction — a reopen has
+// neither the manifest nor the artifact/source ordinal mapping — so this is the
+// build-time half of the binding.
+func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGenerationDescriptorV1, membershipOrdinals [][]int) error {
+	if len(membershipOrdinals) != len(record.PackSummaries) {
+		return fmt.Errorf("shard generation record covers %d packs, materialization used %d", len(record.PackSummaries), len(membershipOrdinals))
+	}
+	perPartition := make([][]int, len(membershipOrdinals))
+	for _, membership := range record.Memberships {
+		if membership.Partition < 0 || membership.Partition >= len(perPartition) {
+			return fmt.Errorf("shard generation membership names partition %d outside the materialized %d", membership.Partition, len(perPartition))
+		}
+		perPartition[membership.Partition] = append(perPartition[membership.Partition], membership.VectorOrdinal)
+	}
+	for partition, want := range membershipOrdinals {
+		got := perPartition[partition]
+		if len(got) != len(want) {
+			return fmt.Errorf("shard generation pack %d lists %d memberships, materialization used %d", partition, len(got), len(want))
+		}
+		sorted := append([]int(nil), want...)
+		sort.Ints(sorted)
+		sort.Ints(got)
+		for i := range sorted {
+			if got[i] != sorted[i] {
+				return fmt.Errorf("shard generation pack %d membership %d is vector %d, materialization used %d", partition, i, got[i], sorted[i])
+			}
+		}
 	}
 	return nil
 }

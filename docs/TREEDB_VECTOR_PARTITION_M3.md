@@ -40,8 +40,16 @@ pre-alpha and does not migrate old generation descriptors.
 `-shard-plan byte_bounded` makes an explicit per-pack hot-byte budget
 authoritative over partition construction. `PlanByteBoundedShardsV1` derives
 the partition count, home capacity, and per-pack membership capacity from the
-authoritative fixture row count and dimensions, current FP32 traversal-row
-bytes, and fixed graph/identity overhead. The planner never reads host LLC,
+authoritative fixture row count and dimensions, the FP32 traversal-row width a
+row actually occupies, and fixed graph/identity overhead. The traversal charge
+is `dimensions * 4` rounded up to the search pack's 16-byte vector-section
+alignment, because a materialized row occupies its padded stride; charging the
+unpadded width would let a tight target admit packs above their advertised
+budget for any dimension count not already aligned. `vectorpartition` cannot
+import `collections` (the dependency runs the other way), so the alignment is
+pinned by `TestSearchPackVectorStrideMatchesShardPlanChargeV1` in
+`TreeDB/collections`. The selected 128-d contract is already aligned, so its
+plan is unchanged. The planner never reads host LLC,
 and it fails closed before any allocation on overflow, an undersized target,
 or an impossible balance.
 
