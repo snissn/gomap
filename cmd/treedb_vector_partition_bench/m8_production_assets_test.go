@@ -67,6 +67,14 @@ func TestM8RetainedSidecarBytesV1StatsBothFiles(t *testing.T) {
 	if _, _, err := m8RetainedSidecarBytesV1(assets); err == nil {
 		t.Fatal("accepted descriptor generation size that differs from disk")
 	}
+	if err := os.Remove(filepath.Join(dir, m3ShardGenerationFileV1)); err != nil {
+		t.Fatal(err)
+	}
+	descriptor.ShardGenerationBytes = 0
+	generation, variant, err = m8RetainedSidecarBytesV1(assets)
+	if err != nil || generation != 0 || variant != 7 {
+		t.Fatalf("unplanned generation=%d variant=%d err=%v", generation, variant, err)
+	}
 }
 
 func TestM8RetainedM3ProvenanceRejectsMixedBuildV1(t *testing.T) {
@@ -274,6 +282,11 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	testM8CompleteResourceLimitsV1(t, &report)
 	if err := testM8ValidateProductionReportV1(report); err != nil {
 		t.Fatalf("valid endpoint coverage rejected: %v", err)
+	}
+	missingDescriptorBytes := report
+	missingDescriptorBytes.Resources.VariantDescriptorBytes = 0
+	if err := testM8ValidateProductionReportV1(missingDescriptorBytes); err == nil {
+		t.Fatal("accepted report without retained variant descriptor bytes")
 	}
 	for name, mutate := range map[string]func(*m8ProductionReportV1){
 		"duplicate_cell": func(invalid *m8ProductionReportV1) {
@@ -545,9 +558,21 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 
 func testM8CompleteResourceLimitsV1(t *testing.T, report *m8ProductionReportV1) {
 	t.Helper()
+	if report.Variant != nil {
+		raw, err := m3VariantDescriptorJSONV1(*report.Variant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report.Resources.VariantDescriptorBytes = uint64(len(raw))
+	}
 	if report.Resources.PersistentAssetCap == 0 {
 		report.Resources.PersistentAssetCap = 1
 	}
+	durable, err := m8DurableAssetBytesV1(report.Resources.PersistentAssetBytes, report.Resources.ShardGenerationBytes, report.Resources.VariantDescriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Resources.PersistentAssetCap = max(report.Resources.PersistentAssetCap, durable)
 	if report.Resources.PeakRSSCapBytes == 0 {
 		report.Resources.PeakRSSCapBytes = 1
 	}

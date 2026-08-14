@@ -2884,20 +2884,11 @@ func m8DurableAssetBytesV1(manifestAssetBytes, shardGenerationBytes, variantDesc
 	return total, nil
 }
 
-// m8RetainedSidecarBytesV1 returns the on-disk sizes of the two files a
-// retained M3 database needs before any of its assets can be used. Both are
-// read from the directory rather than trusted from the descriptor, and the
-// variant descriptor cannot record its own size.
+// m8RetainedSidecarBytesV1 returns the on-disk sizes of the retained M3
+// descriptor and its optional planned-generation record.
 func m8RetainedSidecarBytesV1(assets *m8ProductionMultiGroupAssetsV1) (generation, descriptor uint64, err error) {
 	if assets == nil || assets.descriptor == nil {
 		return 0, 0, nil
-	}
-	generationInfo, statErr := os.Stat(filepath.Join(assets.dir, m3ShardGenerationFileV1))
-	if statErr != nil {
-		return 0, 0, fmt.Errorf("stat retained shard generation: %w", statErr)
-	}
-	if generationInfo.Size() < 0 || uint64(generationInfo.Size()) != assets.descriptor.ShardGenerationBytes {
-		return 0, 0, errors.New("retained shard generation size does not match its descriptor")
 	}
 	info, statErr := os.Stat(filepath.Join(assets.dir, m3VariantDescriptorFileV1))
 	if statErr != nil {
@@ -2905,6 +2896,16 @@ func m8RetainedSidecarBytesV1(assets *m8ProductionMultiGroupAssetsV1) (generatio
 	}
 	if info.Size() < 0 {
 		return 0, 0, errors.New("retained variant descriptor has a negative size")
+	}
+	if assets.descriptor.ShardGenerationBytes == 0 {
+		return 0, uint64(info.Size()), nil
+	}
+	generationInfo, statErr := os.Stat(filepath.Join(assets.dir, m3ShardGenerationFileV1))
+	if statErr != nil {
+		return 0, 0, fmt.Errorf("stat retained shard generation: %w", statErr)
+	}
+	if generationInfo.Size() < 0 || uint64(generationInfo.Size()) != assets.descriptor.ShardGenerationBytes {
+		return 0, 0, errors.New("retained shard generation size does not match its descriptor")
 	}
 	return uint64(generationInfo.Size()), uint64(info.Size()), nil
 }
@@ -4161,11 +4162,12 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		return errors.New("M8 canonical truth-cache evidence is not identity-bound")
 	}
 	if report.Variant != nil {
+		variantRaw, encodeErr := m3VariantDescriptorJSONV1(*report.Variant)
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
 			report.Variant.RouterRepresentatives != report.RouterRepresentatives ||
 			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes ||
-			report.Variant.ShardGenerationBytes != report.Resources.ShardGenerationBytes ||
+			report.Variant.ShardGenerationBytes != report.Resources.ShardGenerationBytes || encodeErr != nil || uint64(len(variantRaw)) != report.Resources.VariantDescriptorBytes ||
 			!m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant, report.Topology.ReadySetDigest) {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
 		}

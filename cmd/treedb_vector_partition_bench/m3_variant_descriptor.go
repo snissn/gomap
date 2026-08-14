@@ -187,13 +187,9 @@ func m3WriteVariantDescriptorV1(dir string, descriptor m3VariantDescriptorV1) er
 	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(descriptor, "", "  ")
+	raw, err := m3VariantDescriptorJSONV1(descriptor)
 	if err != nil {
 		return err
-	}
-	raw = append(raw, '\n')
-	if len(raw) > m3VariantDescriptorMaxBytesV1 {
-		return errors.New("M3 variant descriptor exceeds byte cap")
 	}
 	path := filepath.Join(dir, m3VariantDescriptorFileV1)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -205,6 +201,18 @@ func m3WriteVariantDescriptorV1(dir string, descriptor m3VariantDescriptorV1) er
 		writeErr = file.Sync()
 	}
 	return errors.Join(writeErr, file.Close())
+}
+
+func m3VariantDescriptorJSONV1(descriptor m3VariantDescriptorV1) ([]byte, error) {
+	raw, err := json.MarshalIndent(descriptor, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	raw = append(raw, '\n')
+	if len(raw) > m3VariantDescriptorMaxBytesV1 {
+		return nil, errors.New("M3 variant descriptor exceeds byte cap")
+	}
+	return raw, nil
 }
 
 func m3ReadVariantDescriptorV1(dir string) (m3VariantDescriptorV1, error) {
