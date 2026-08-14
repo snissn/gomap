@@ -583,8 +583,12 @@ func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureM
 	// database, so it is durable storage the comparison must account for. It
 	// also scales with realized memberships, which is exactly the quantity this
 	// ratio is measuring.
-	disjointBytes := byID["graph-disjoint-v1"].Resources.PersistentAssetBytes + byID["graph-disjoint-v1"].Resources.ShardGenerationBytes
-	overlapBytes := byID["graph-overlap-020-v1"].Resources.PersistentAssetBytes + byID["graph-overlap-020-v1"].Resources.ShardGenerationBytes
+	disjointDurable, disjointErr := m8DurableAssetBytesV1(byID["graph-disjoint-v1"].Resources.PersistentAssetBytes, byID["graph-disjoint-v1"].Resources.ShardGenerationBytes, byID["graph-disjoint-v1"].Resources.VariantDescriptorBytes)
+	overlapDurable, overlapErr := m8DurableAssetBytesV1(byID["graph-overlap-020-v1"].Resources.PersistentAssetBytes, byID["graph-overlap-020-v1"].Resources.ShardGenerationBytes, byID["graph-overlap-020-v1"].Resources.VariantDescriptorBytes)
+	if disjointErr != nil || overlapErr != nil {
+		return m8ProductionMatrixV1{}, errors.New("M8 matrix durable byte accounting overflow")
+	}
+	disjointBytes, overlapBytes := disjointDurable, overlapDurable
 	if disjointBytes == 0 {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix disjoint persistent bytes are zero")
 	}
