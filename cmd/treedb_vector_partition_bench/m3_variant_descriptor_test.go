@@ -18,7 +18,7 @@ func testM3VariantDescriptorV1(dir string) m3VariantDescriptorV1 {
 	partitionConfig.MaxDistanceWork = 20_000_000_000
 	routerConfig := vectorpartition.DefaultRouterConfigV1()
 	d := m3VariantDescriptorV1{
-		SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: "graph-overlap-020-v1",
+		SchemaVersion: 6, ResultKind: "m3_persistent_variant_descriptor_v6", VariantID: "graph-overlap-020-v1",
 		AssignmentBasis: partitionAssignmentGraphV1, OverlapRatio: .2,
 		BaseSHA: strings.Repeat("b", 40), HeadSHA: strings.Repeat("c", 40),
 		FixtureChecksum: hash, ExecutableSHA256: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, GraphBuildSHA256: hash, ArtifactBackend: "reference", Source: vectorpartition.Source{SourceID: "fixture", Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"},
@@ -126,15 +126,30 @@ func TestM3VariantDescriptorRejectsMalformedOverlapPolicyAccountingV1(t *testing
 	}
 }
 
-func TestM3VariantDescriptorRequiresDerivedExactTargetV1(t *testing.T) {
+func TestM3VariantDescriptorAllowsUsefulOnlyShortfallV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
-	d.OverlapRequested = 0
 	d.OverlapRealized = 0
+	d.OverlapRejected = d.OverlapRequested
+	d.OverlapUseful = 0
+	d.OverlapFiller = 0
 	d.OverlapMemberships = 0
+	d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows)
+	d.PartitionLoads = []int{2, 2, 2, 2}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
-	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: 0, Realized: 0, BuildIdentityDigest: d.BuildIdentityDigest})
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: 0, Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		t.Fatalf("useful-only shortfall rejected: %v", err)
+	}
+}
+
+func TestM3VariantDescriptorRejectsFillerReplicasV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	d.OverlapUseful = 0
+	d.OverlapFiller = d.OverlapRealized
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), BuildIdentityDigest: d.BuildIdentityDigest})
 	if err := validateM3VariantDescriptorV1(d); err == nil {
-		t.Fatal("accepted descriptor whose self-consistent accounting misses the ratio-derived target")
+		t.Fatal("accepted filler replicas in useful-only descriptor")
 	}
 }
 
@@ -199,6 +214,126 @@ func TestM3VariantBuildIdentityBindsOverlapInputsAndOutcomesV1(t *testing.T) {
 				t.Fatalf("outcome identity baseline=%s changed=%s err=%v", baseline, changed, err)
 			}
 		})
+	}
+}
+
+// testM3ByteBoundedDescriptorV1 rebuilds the shared fixture at a shape the
+// byte-bounded planner actually produces, so the persisted plan describes the
+// packs the descriptor claims.
+func testM3ByteBoundedDescriptorV1(t *testing.T, dir string) m3VariantDescriptorV1 {
+	t.Helper()
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Partitions != 3 || plan.OverlapCapacity != 3 {
+		t.Fatalf("unexpected fixture plan=%+v", plan)
+	}
+	d := testM3VariantDescriptorV1(dir)
+	d.ShardPlan = plan
+	d.Partitions = uint32(plan.Partitions)
+	d.PartitionConfig.Partitions = plan.Partitions
+	d.Capacity = plan.OverlapCapacity
+	d.PartitionLoads = []int{3, 3, 3}
+	d.ShardGenerationDigest = strings.Repeat("d", 64)
+	d.ShardGenerationBytes = 4096
+	d.OverlapUnusedCapacity = plan.OverlapCapacity*plan.Partitions - int(d.SourceRows) - d.OverlapRealized
+	refreshTestM3DescriptorIdentityV1(t, &d)
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		t.Fatalf("byte-bounded fixture rejected: %v", err)
+	}
+	return d
+}
+
+func refreshTestM3DescriptorIdentityV1(t *testing.T, d *m3VariantDescriptorV1) {
+	t.Helper()
+	var err error
+	if d.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(*d); err != nil {
+		t.Fatal(err)
+	}
+	if d.OverlapPolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
+		Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized),
+		Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestM3VariantBuildIdentityBindsShardPlanV1(t *testing.T) {
+	d := testM3ByteBoundedDescriptorV1(t, t.TempDir())
+	baseline, err := m3VariantBuildIdentityDigestV1(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"cleared plan":   func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan = vectorpartition.ShardPlanV1{} },
+		"hot bytes":      func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.TargetHotBytes++ },
+		"partitions":     func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.Partitions++ },
+		"pack capacity":  func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.MaxMembershipsPerPack++ },
+		"home capacity":  func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.HomeCapacity++ },
+		"planned rows":   func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.PlannedMemberships++ },
+		"planned ratio":  func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.OverlapRatio += .1 },
+		"row byte width": func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.TraversalRowBytes++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := d
+			mutate(&candidate)
+			changed, err := m3VariantBuildIdentityDigestV1(candidate)
+			if err != nil || changed == baseline {
+				t.Fatalf("shard-plan identity baseline=%s changed=%s err=%v", baseline, changed, err)
+			}
+		})
+	}
+}
+
+// TestM3VariantDescriptorValidatesPersistedShardPlanV1 rejects a stale, zeroed,
+// or edited plan on reopen even after its build-identity digest is recomputed,
+// so the recorded byte bound cannot drift away from the packs it describes.
+func TestM3VariantDescriptorValidatesPersistedShardPlanV1(t *testing.T) {
+	d := testM3ByteBoundedDescriptorV1(t, t.TempDir())
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"stale hot bytes":      func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.TargetHotBytes *= 2 },
+		"partition mismatch":   func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.Partitions++ },
+		"capacity mismatch":    func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.OverlapCapacity++ },
+		"row mismatch":         func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.Vectors++ },
+		"dimension mismatch":   func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.Dimensions++ },
+		"imbalance mismatch":   func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.Imbalance += .01 },
+		"row byte mismatch":    func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.TraversalRowBytes++ },
+		"unprovisioned ratio":  func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.OverlapRatio = .1 },
+		"pack budget mismatch": func(candidate *m3VariantDescriptorV1) { candidate.ShardPlan.MaxMembershipsPerPack = 2 },
+		"partial plan": func(candidate *m3VariantDescriptorV1) {
+			candidate.ShardPlan = vectorpartition.ShardPlanV1{Partitions: candidate.ShardPlan.Partitions}
+		},
+		"missing generation digest": func(candidate *m3VariantDescriptorV1) { candidate.ShardGenerationDigest = "" },
+		"missing generation size":   func(candidate *m3VariantDescriptorV1) { candidate.ShardGenerationBytes = 0 },
+		"malformed generation digest": func(candidate *m3VariantDescriptorV1) {
+			candidate.ShardGenerationDigest = "not-a-sha"
+		},
+		"generation digest without a plan": func(candidate *m3VariantDescriptorV1) {
+			candidate.ShardPlan = vectorpartition.ShardPlanV1{}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := d
+			mutate(&candidate)
+			refreshTestM3DescriptorIdentityV1(t, &candidate)
+			if err := validateM3VariantDescriptorV1(candidate); err == nil {
+				t.Fatalf("accepted %s: %+v", name, candidate.ShardPlan)
+			}
+		})
+	}
+	// A build that never opted into the planner records no plan at all, and an
+	// absent plan stays absent rather than being partially believed.
+	unplanned := d
+	unplanned.ShardPlan = vectorpartition.ShardPlanV1{}
+	unplanned.ShardGenerationDigest = ""
+	unplanned.ShardGenerationBytes = 0
+	refreshTestM3DescriptorIdentityV1(t, &unplanned)
+	if err := validateM3VariantDescriptorV1(unplanned); err != nil {
+		t.Fatalf("unplanned descriptor rejected: %v", err)
 	}
 }
 

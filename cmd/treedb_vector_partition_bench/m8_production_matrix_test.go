@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescriptorV1) {
@@ -1098,39 +1099,87 @@ func TestM8VariantProcessArgsForceFreshSingleVariantV1(t *testing.T) {
 	}
 }
 
-func TestM8ProductionMatrixRejectsUnderMaterializedOverlapDescriptorV1(t *testing.T) {
+// TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV1
+// pins the useful-only contract boundary. A shortfall is legal: once no
+// cut-reducing proposal remains, requested overlap capacity stays unused and
+// zero filler is realized. Declaring more realized overlap than the retained
+// membership list materialized is not legal, and remains rejected.
+func TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV1(t *testing.T) {
 	hash := strings.Repeat("a", 40)
 	fixture := fixtureManifest{Checksum: strings.Repeat("b", 64)}
 	cfg := config{baseSHA: hash, headSHA: hash, partitions: 16, command: []string{"bench"}}
 	common := m8ProductionConfigEvidenceV1{RaftGroups: 4, RaftNodesPerGroup: 3, Partitions: 16, Probes: []int{4}, TopK: 10, RecallTarget: .9, Concurrency: []int{1}, Warmup: 1, EfSearch: []int{128}, RouterCandidates: 1024, Seed: 1}
 	pass := m8ProductionGateLedgerV1{ExhaustiveParity: "pass", FailureHonesty: "pass", PartitionPackReachability: "pass", Recall: "pass", ProbeReduction: "pass", EndToEndQPS: "pass", TailLatency: "pass", Balance: "pass", ResourceBounds: "pass"}
-	reports := make([]m8ProductionReportV1, 0, 3)
-	for _, variant := range []struct {
-		id, assignment string
-		overlap        float64
-		memberships    int
-	}{
-		{"graph-disjoint-v1", partitionAssignmentGraphV1, 0, 0},
-		{"graph-overlap-020-v1", partitionAssignmentGraphV1, .2, 1},
-		{"stable-id-hash-disjoint-v1", partitionAssignmentStableIDHashV1, 0, 0},
-	} {
-		descriptor := testM3VariantDescriptorV1(t.TempDir())
-		descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
-		descriptor.SourceRows, descriptor.OverlapMemberships = 10, variant.memberships
-		if variant.assignment == partitionAssignmentStableIDHashV1 {
-			descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+	// Ten rows at ratio .2 request two overlap memberships; the graph variant
+	// realizes one useful replica and leaves the rest of the budget unspent.
+	buildReports := func(overDeclare bool) []m8ProductionReportV1 {
+		reports := make([]m8ProductionReportV1, 0, 3)
+		for _, variant := range []struct {
+			id, assignment string
+			overlap        float64
+			memberships    int
+		}{
+			{"graph-disjoint-v1", partitionAssignmentGraphV1, 0, 0},
+			{"graph-overlap-020-v1", partitionAssignmentGraphV1, .2, 1},
+			{"stable-id-hash-disjoint-v1", partitionAssignmentStableIDHashV1, 0, 0},
+		} {
+			descriptor := testM3VariantDescriptorV1(t.TempDir())
+			descriptor.VariantID, descriptor.AssignmentBasis, descriptor.OverlapRatio = variant.id, variant.assignment, variant.overlap
+			descriptor.SourceRows, descriptor.OverlapMemberships = 10, variant.memberships
+			if variant.assignment == partitionAssignmentStableIDHashV1 {
+				descriptor.ArtifactSHA256 = strings.Repeat("c", 64)
+			}
+			refreshTestM3VariantIdentityV1(t, &descriptor)
+			if overDeclare && variant.overlap != 0 {
+				descriptor.OverlapRealized = descriptor.OverlapMemberships + 1
+				descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
+				descriptor.OverlapUseful = descriptor.OverlapRealized
+				// Keep the unused-capacity accounting consistent with the
+				// over-declared count so the membership/realized mismatch is the
+				// only rule the descriptor still breaks.
+				descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
+				descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(descriptor)
+				descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
+					Capacity: uint64(descriptor.Capacity), Budget: uint64(descriptor.OverlapRequested),
+					Realized: uint64(descriptor.OverlapRealized), Unspent: uint64(descriptor.OverlapRejected),
+					BuildIdentityDigest: descriptor.BuildIdentityDigest,
+				})
+			}
+			config := common
+			config.Overlap = []float64{variant.overlap}
+			reports = append(reports, m8ProductionReportV1{
+				ExecutableSHA256: strings.Repeat("a", 64),
+				BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
+				Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 100},
+				Rows: []m8ProductionRowV1{
+					// Candidate operating point and the exhaustive all-partition
+					// baseline the coupled-graph gate compares it against, so the
+					// matrix can actually reach local_gate_pass here.
+					{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1, RecallAtK: .95, QPS: 200, P95Nanos: 1000},
+					{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 1, RecallAtK: .95, QPS: 100, P95Nanos: 2000,
+						Attribution: m8ProductionAttributionV1{ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExhaustivePartitionRecallAtK: 1}},
+				},
+			})
 		}
-		refreshTestM3VariantIdentityV1(t, &descriptor)
-		config := common
-		config.Overlap = []float64{variant.overlap}
-		reports = append(reports, m8ProductionReportV1{
-			ExecutableSHA256: strings.Repeat("a", 64),
-			BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
-			Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 100},
-			Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1}},
-		})
+		return reports
 	}
-	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, reports)
+	shortfall, err := m8BuildProductionMatrixV1(cfg, fixture, buildReports(false))
+	if err != nil {
+		t.Fatalf("useful-only overlap shortfall rejected: %v", err)
+	}
+	// A shortfall is a legal useful-only outcome, so the matrix must account it
+	// rather than treating it as an unmaterialized overlap. Requiring exact fill
+	// here would make every zero-cut corpus unable to pass the matrix.
+	if !shortfall.OverlapDiagnostics.Accounted {
+		t.Fatalf("useful-only shortfall not accounted: %+v", shortfall.OverlapDiagnostics)
+	}
+	if shortfall.Gates.RequiredVariants != "pass" || shortfall.Gates.OverlapStorage != "pass" {
+		t.Fatalf("useful-only shortfall gates required=%q overlap_storage=%q", shortfall.Gates.RequiredVariants, shortfall.Gates.OverlapStorage)
+	}
+	if shortfall.Status != "local_gate_pass" {
+		t.Fatalf("useful-only shortfall matrix status=%q", shortfall.Status)
+	}
+	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, buildReports(true))
 	if err == nil || !strings.Contains(err.Error(), "malformed M3 variant descriptor") {
 		t.Fatalf("under-materialized overlap err=%v matrix=%+v", err, matrix)
 	}
@@ -1254,5 +1303,60 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 				t.Fatal("accepted mixed retained variant builds")
 			}
 		})
+	}
+}
+
+// TestM8MatrixRequiresOneShardPlanAcrossVariantsV1 pins the geometry contract
+// for comparison variants. Equal partition counts are not equal geometry: two
+// valid byte-bounded plans can round to the same partition count and the same
+// capacity from different hot-byte envelopes, which changes what
+// capacity-constrained overlap construction can realize and confounds a
+// supposedly like-for-like comparison.
+func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
+	variants := make([]m3VariantDescriptorV1, 0, len(m8RequiredVariantIDsV1))
+	for _, id := range m8RequiredVariantIDsV1 {
+		d := testM3ByteBoundedDescriptorV1(t, t.TempDir())
+		d.VariantID = id
+		switch id {
+		case "stable-id-hash-disjoint-v1":
+			d.AssignmentBasis, d.OverlapRatio = partitionAssignmentStableIDHashV1, 0
+			d.ArtifactSHA256 = strings.Repeat("e", 64)
+		case "graph-disjoint-v1":
+			d.OverlapRatio = 0
+		}
+		d.OverlapRequested = int(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
+		d.OverlapRealized, d.OverlapUseful, d.OverlapMemberships = d.OverlapRequested, d.OverlapRequested, d.OverlapRequested
+		d.OverlapRejected = 0
+		d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows) - d.OverlapRealized
+		// Loads must total the realized memberships and stay inside capacity.
+		loads := make([]int, d.Partitions)
+		for i := 0; i < int(d.SourceRows)+d.OverlapRealized; i++ {
+			loads[i%len(loads)]++
+		}
+		d.PartitionLoads = loads
+		refreshTestM3DescriptorIdentityV1(t, &d)
+		variants = append(variants, d)
+	}
+	if err := m8ValidateVariantBuildCompatibilityV1(variants); err != nil {
+		t.Fatalf("variants sharing one plan rejected: %v", err)
+	}
+	// A different but equally valid envelope: same partition count and same
+	// capacity, larger per-pack membership budget.
+	wider, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 4*(alignedRowBytesForTest(2)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := variants[0].ShardPlan
+	if wider == base || wider.Partitions != base.Partitions || wider.OverlapCapacity != base.OverlapCapacity {
+		t.Fatalf("fixture needs a distinct plan at the same count/capacity: base=%+v wider=%+v", base, wider)
+	}
+	divergent := append([]m3VariantDescriptorV1(nil), variants...)
+	divergent[1].ShardPlan = wider
+	refreshTestM3DescriptorIdentityV1(t, &divergent[1])
+	if err := m8ValidateVariantBuildCompatibilityV1(divergent); err == nil {
+		t.Fatal("accepted comparison variants built on different shard plans")
 	}
 }

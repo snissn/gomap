@@ -117,6 +117,8 @@ type m3PartitionIndexRow struct {
 	CorruptAssets                uint64             `json:"corrupt_assets"`
 	StaleAssets                  uint64             `json:"stale_assets"`
 	PersistentDBDir              string             `json:"persistent_db_dir,omitempty"`
+	ShardGenerationBytes         int64              `json:"shard_generation_bytes,omitempty"`
+	VariantDescriptorBytes       int64              `json:"variant_descriptor_bytes,omitempty"`
 }
 
 type m3OverlapReplica struct {
@@ -153,14 +155,20 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	if fixture.Vectors >= 1_000_000 {
 		report.MillionCorpus = "measured from supplied 1M corpus"
 	}
+	if err := m3ValidateShardPlanGovernsArtifactV1(cfg.shardPlan, artifact, ratios); err != nil {
+		return err
+	}
 	for i, ratio := range ratios {
-		capacity, err := m3OverlapCapacityV1(artifact, ratio)
+		capacity, err := m3OverlapCapacityForPlanV1(cfg.shardPlan, artifact, ratio)
 		if err != nil {
 			return fmt.Errorf("derive exact overlap capacity ratio %.4f: %w", ratio, err)
 		}
-		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, RequireExact: true})
+		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, UsefulOnly: true})
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
+		}
+		if err := m3ValidateShardPackBudgetV1(cfg.shardPlan, overlap); err != nil {
+			return fmt.Errorf("account byte-bounded packs ratio %.4f: %w", ratio, err)
 		}
 		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, graphArtifactDigest, graphBuildDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
 		if err != nil {
@@ -188,6 +196,61 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	}
 	_, err = fmt.Fprintf(stdout, "m3 partition packs=%s rows=%d replication_gate=%s\n", path, len(report.Rows), report.ReplicationGate)
 	return err
+}
+
+// m3ValidateShardPlanGovernsArtifactV1 fails closed when a byte-bounded plan
+// did not actually govern the artifact it is about to describe. The plan is
+// derived before construction, so any disagreement here means the partition
+// geometry was built from something other than the advertised hot-byte budget
+// and the persisted plan would be circular rather than authoritative.
+func m3ValidateShardPlanGovernsArtifactV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, ratios []float64) error {
+	if plan.Partitions == 0 {
+		return nil
+	}
+	if plan.Vectors != len(artifact.IDs) || plan.Dimensions != artifact.Source.Dimensions ||
+		plan.Partitions != artifact.Config.Partitions || plan.Imbalance != artifact.Config.Imbalance ||
+		plan.HomeCapacity != artifact.Metrics.Cap {
+		return fmt.Errorf("byte-bounded plan %+v does not govern artifact rows=%d dimensions=%d partitions=%d cap=%d", plan, len(artifact.IDs), artifact.Source.Dimensions, artifact.Config.Partitions, artifact.Metrics.Cap)
+	}
+	for _, ratio := range ratios {
+		if ratio > plan.OverlapRatio {
+			return fmt.Errorf("overlap ratio %.4f exceeds the planned ratio %.4f", ratio, plan.OverlapRatio)
+		}
+	}
+	return nil
+}
+
+// m3ValidateShardPackBudgetV1 re-derives the per-pack accounting from the
+// realized memberships and rejects any pack outside the planned home,
+// membership, or hot-byte budget before the packs are materialized.
+func m3ValidateShardPackBudgetV1(plan vectorpartition.ShardPlanV1, overlap vectorpartition.OverlapResult) error {
+	if plan.Partitions == 0 {
+		return nil
+	}
+	summaries, err := vectorpartition.AccountShardPacksV1(plan, overlap.Memberships)
+	if err != nil {
+		return err
+	}
+	if len(summaries) != len(overlap.Loads) {
+		return fmt.Errorf("planned packs=%d realized loads=%d", len(summaries), len(overlap.Loads))
+	}
+	for partition, summary := range summaries {
+		if summary.Rows != overlap.Loads[partition] {
+			return fmt.Errorf("pack %d membership rows=%d does not match realized load=%d", partition, summary.Rows, overlap.Loads[partition])
+		}
+	}
+	return nil
+}
+
+// m3OverlapCapacityForPlanV1 declares the per-partition total-membership
+// capacity for one overlap ratio. Under a byte-bounded plan the capacity is the
+// planned one, so packs cannot exceed the advertised hot-byte budget; otherwise
+// it falls back to the operator-declared exact global target.
+func m3OverlapCapacityForPlanV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, ratio float64) (int, error) {
+	if plan.Partitions != 0 {
+		return plan.OverlapCapacity, nil
+	}
+	return m3OverlapCapacityV1(artifact, ratio)
 }
 
 // m3OverlapCapacityV1 keeps the immutable M2 home assignment and its
@@ -311,7 +374,27 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
 		OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler,
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
+		ShardPlan: cfg.shardPlan,
 	}
+	// Only a retained run keeps the record, and encoding it copies every
+	// membership and marshals an O(rows + overlap) payload — tens of megabytes
+	// at the supported shapes. A temporary run would pay that allocation and
+	// then discard the result, inflating the process high-water mark that
+	// m3PeakRSS publishes as evidence.
+	var shardGenerationRaw []byte
+	var shardGenerationDigest string
+	if !cleanup {
+		shardGenerationRaw, shardGenerationDigest, err = m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap)
+		if err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+	} else if err := m3ValidateShardGenerationInputsV1(cfg.shardPlan, ratio, overlap); err != nil {
+		// A temporary run still fails closed on a record it could not have
+		// retained, so -m3-persist-db is not the first thing to discover it.
+		return m3PartitionIndexRow{}, err
+	}
+	identityDescriptor.ShardGenerationDigest = shardGenerationDigest
+	identityDescriptor.ShardGenerationBytes = uint64(len(shardGenerationRaw))
 	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -457,6 +540,15 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	dbOpen = false
+	// The generation record stays in the retained directory, and at the selected
+	// 250k shape it holds 300k membership entries. Write it before the final
+	// directory measurement so the reported footprint and bytes-per-source-vector
+	// include it instead of undercounting the retained database.
+	if !cleanup {
+		if err := m3WriteShardGenerationRecordV1(dir, shardGenerationRaw, shardGenerationDigest); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+	}
 	finalTotalPhysicalBytes, err := m3DirectoryBytes(dir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -668,7 +760,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
-			SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: variantID,
+			SchemaVersion: 6, ResultKind: "m3_persistent_variant_descriptor_v6", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
 			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ExecutableSHA256: executableSHA256, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, KaHIPPythonSHA256: cfg.kahipPythonSHA256, KaHIPAdapterSHA256: cfg.kahipAdapterSHA256, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
@@ -689,6 +781,9 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			M3MaxBenchmarkVisits:     cfg.m3MaxBenchmarkVisits,
 			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
+			ShardPlan:                cfg.shardPlan,
+			ShardGenerationDigest:    shardGenerationDigest,
+			ShardGenerationBytes:     uint64(len(shardGenerationRaw)),
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest, routerRuntime.Config); err != nil {
 			return m3PartitionIndexRow{}, err
@@ -696,6 +791,44 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
+		// The variant descriptor is only writable here, after the reopen supplies
+		// the manifest and router identities, so it lands after the final
+		// directory measurement. Fold its actual size into the reported
+		// footprint rather than publishing a figure for a directory smaller
+		// than the one this run leaves behind.
+		descriptorInfo, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1))
+		if statErr != nil {
+			return m3PartitionIndexRow{}, fmt.Errorf("stat retained variant descriptor: %w", statErr)
+		}
+		if descriptorInfo.Size() < 0 || descriptorInfo.Size() > math.MaxInt64-row.FinalDerivedPhysicalBytes {
+			return m3PartitionIndexRow{}, errors.New("retained variant descriptor byte accounting overflow")
+		}
+		row.FinalDerivedPhysicalBytes += descriptorInfo.Size()
+		if row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes {
+			row.PeakDerivedTemporaryBytes = row.FinalDerivedPhysicalBytes
+		}
+		row.PhysicalBytesPerSourceVector = float64(row.FinalDerivedPhysicalBytes) / float64(len(vectors))
+		row.VariantDescriptorBytes = descriptorInfo.Size()
+		// The record is already on disk and the descriptor is complete, so
+		// verify the pairing here rather than letting the first reopen be what
+		// discovers a retained database no consumer can open.
+		if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		// -shard-plan off retains no record, so there is nothing to bind.
+		if shardGenerationDigest != "" {
+			retained, err := m3ReadShardGenerationDescriptorV1(dir, shardGenerationDigest)
+			if err != nil {
+				return m3PartitionIndexRow{}, err
+			}
+			// Aggregate loads cannot distinguish two assignments that share them,
+			// and the membership lists are only both in scope here, so bind the
+			// record's actual pairs to what materialized the packs.
+			if err := m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals, artifact.Assignment); err != nil {
+				return m3PartitionIndexRow{}, err
+			}
+		}
+		row.ShardGenerationBytes = int64(len(shardGenerationRaw))
 	}
 	return row, nil
 }
@@ -1024,7 +1157,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if row.OverlapUseful > 0 {
 			wantCutReductionPerUseful = float64(row.EdgeCutBefore-row.EdgeCutAfter) / float64(row.OverlapUseful)
 		}
-		if row.Budget != wantBudget || row.Used != wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != wantBudget || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapRejected != 0 || row.OverlapUseful < 0 || row.OverlapFiller < 0 || row.OverlapUseful+row.OverlapFiller != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {

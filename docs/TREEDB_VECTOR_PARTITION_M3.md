@@ -21,20 +21,93 @@ applying it. The result enforces:
 - edge cut after overlap no greater than the disjoint edge cut.
 
 The production M3 runner derives the narrow target-aware capacity
-`max(m2_cap, ceil((source_count + requested)/partitions))` and requires exact
-realization. If affinity or the per-vector cap still prevents the target, the
-build fails closed with requested, realized, rejected, and capacity evidence;
-it never publishes a silently under-filled overlap variant. Exact M3 builds
-first prioritize cut-reducing memberships, then deterministically fill any
-remaining legal non-home slots in canonical ID/partition order. Those fills
-cannot increase edge cut and make the declared global target materially mean
-the requested membership count rather than only the graph's affinity gain.
-Ratio zero emits
-only home memberships and therefore preserves exact M2 partition loads and
-edge cut. The integrity-bound M1 `BalancePolicy`, retained M3 descriptor, and
-machine report carry requested, realized, rejected, and declared-capacity
-accounting; the target and capacity are also part of the variant build
-identity.
+`max(m2_cap, ceil((source_count + requested)/partitions))` and admits only
+useful overlap (`UsefulOnly`). Useful proposals stop when declared
+cut-reduction utility is exhausted. Leftover budget stays unspent; filler
+replicas are rejected. `RequireExact` remains available for diagnostic
+exact-fill experiments, is mutually exclusive with useful-only, and keeps its
+strict behavior: an unrealizable global target fails closed rather than
+reporting a shortfall. Ratio zero emits only home memberships and therefore
+preserves exact M2 partition loads and edge cut. The integrity-bound M1
+`BalancePolicy`, retained M3 descriptor (`shard_plan`), and versioned
+`treedb_vector_partition_shard_generation_v1` record carry requested,
+realized, rejected, useful/filler, per-pack row/byte, and declared-capacity
+accounting. Unknown generation-descriptor versions fail closed; TreeDB is
+pre-alpha and does not migrate old generation descriptors.
+
+### Byte-bounded shard planning
+
+`-shard-plan byte_bounded` makes an explicit per-pack hot-byte budget
+authoritative over partition construction. `PlanByteBoundedShardsV1` derives
+the partition count, home capacity, and per-pack membership capacity from the
+authoritative fixture row count and dimensions, the FP32 traversal-row width a
+row actually occupies, and fixed graph/identity overhead. The traversal charge
+is `dimensions * 4` rounded up to the search pack's 16-byte vector-section
+alignment, because a materialized row occupies its padded stride; charging the
+unpadded width would let a tight target admit packs above their advertised
+budget for any dimension count not already aligned. `vectorpartition` cannot
+import `collections` (the dependency runs the other way), so the alignment is
+pinned by `TestSearchPackVectorStrideMatchesShardPlanChargeV1` in
+`TreeDB/collections`. The selected 128-d contract is already aligned, so its
+plan is unchanged. The planner never reads host LLC,
+and it fails closed before any allocation on overflow, an undersized target,
+or an impossible balance.
+
+The plan is derived before the artifact is built, so the packs the benchmark
+materializes are the packs the persisted plan describes. `-partitions` may be
+omitted, in which case the planned count is used; supplying a count that
+contradicts the plan fails closed rather than silently building a different
+geometry.
+
+The plan provisions an overlap *envelope*, which is derived from the largest
+requested `-overlap` value unless `-shard-plan-overlap-ratio` names one
+explicitly. A variant may materialize less than the envelope but never more, so
+comparison variants that materialize different ratios can share one geometry:
+a disjoint variant built with `-overlap 0 -shard-plan-overlap-ratio .2` gets the
+same partition count and per-pack capacity as the 0.20 variant, which is what
+the strict M8 matrix requires. Persistent M3 builds retain a single ratio, so
+without that flag a disjoint build would plan a different geometry (100k rows
+plan to 14 partitions at ratio 0 versus 16 at ratio 0.20; 250k to 35 versus
+40). Before materialization the
+runner re-derives per-pack home/overlap/total loads from the realized
+membership list and rejects any pack outside the planned home capacity,
+membership capacity, or hot-byte budget.
+
+For the selected 128-dimensional contract, the portable default total budget
+is 7,696,384 B: 7500 rows of 128-d FP32 plus 512 B fixed per-row overhead
+(7,680,000 B), and a conservative 16 KiB reserve for the pack header, section
+directory, and alignment. Thus 100k rows plan to 16 partitions and 250k rows
+plan to 40 partitions, both at 7500 memberships per pack. `-shard-plan off`
+(the default) keeps `-partitions`
+authoritative and persists no plan; a descriptor written without the planner
+carries an entirely zero `shard_plan` rather than a reverse-engineered one.
+
+The plan is part of the M3 variant build-identity digest and is revalidated on
+reopen against the descriptor's own source rows, dimensions, partition count,
+capacity, imbalance, overlap ratio, and per-partition loads, so a zero, stale,
+or edited plan cannot survive reopen validation.
+
+Because the plan changed both the descriptor shape and its integrity binding,
+the retained M3 variant descriptor is now
+`m3_persistent_variant_descriptor_v6`. Version 5 descriptors fail closed;
+TreeDB is pre-alpha and does not migrate retained M3 databases, so an older
+retained database must be rebuilt rather than reinterpreted.
+
+A byte-bounded build with `-m3-persist-db` also writes
+`vector_partition_shard_generation_v1.json` beside the variant descriptor. It
+is the only artifact carrying the realized membership list, its digest, and the
+membership-derived per-pack home/overlap/total row and byte summaries, so it is
+what the decode-time integrity checks actually protect. The record is written
+immutably, before the final directory measurement so the reported footprint
+includes it, and is immediately reopened through the same validation, so a
+database is never retained with a record that could not be reopened.
+
+Its SHA-256 is recorded in the variant descriptor as `shard_generation_digest`
+and is part of the build-identity digest. Every retained-database consumer
+reopens through `m3ReadVariantDescriptorV1`, which requires a descriptor
+carrying a nonzero shard plan to present the matching record: deleting or
+editing it after construction makes the database fail closed instead of being
+accepted with unprotected evidence.
 
 ## Native pack construction and reopen
 

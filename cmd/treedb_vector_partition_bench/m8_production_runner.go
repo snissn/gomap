@@ -345,18 +345,20 @@ type m8ProductionHostEvidenceV1 struct {
 }
 
 type m8ProductionResourceEvidenceV1 struct {
-	PersistentAssetBytes uint64                                  `json:"persistent_asset_bytes"`
-	PersistentAssetCap   uint64                                  `json:"persistent_asset_cap_bytes"`
-	PartitionLoads       []uint64                                `json:"partition_loads"`
-	PeakRSSBytes         int64                                   `json:"peak_rss_bytes,omitempty"`
-	PeakRSSCapBytes      uint64                                  `json:"peak_rss_cap_bytes"`
-	PeakRSSMeasured      bool                                    `json:"peak_rss_measured"`
-	PeakRSSScope         string                                  `json:"peak_rss_scope,omitempty"`
-	OverlapMemberships   int                                     `json:"overlap_memberships"`
-	MaxPartitionLoad     uint64                                  `json:"max_partition_load"`
-	BalanceHardCap       uint64                                  `json:"balance_hard_cap"`
-	MmapStatus           string                                  `json:"mmap_status"`
-	LimitComparisons     []m8ProductionResourceLimitComparisonV1 `json:"limit_comparisons"`
+	PersistentAssetBytes   uint64                                  `json:"persistent_asset_bytes"`
+	ShardGenerationBytes   uint64                                  `json:"shard_generation_bytes,omitempty"`
+	VariantDescriptorBytes uint64                                  `json:"variant_descriptor_bytes,omitempty"`
+	PersistentAssetCap     uint64                                  `json:"persistent_asset_cap_bytes"`
+	PartitionLoads         []uint64                                `json:"partition_loads"`
+	PeakRSSBytes           int64                                   `json:"peak_rss_bytes,omitempty"`
+	PeakRSSCapBytes        uint64                                  `json:"peak_rss_cap_bytes"`
+	PeakRSSMeasured        bool                                    `json:"peak_rss_measured"`
+	PeakRSSScope           string                                  `json:"peak_rss_scope,omitempty"`
+	OverlapMemberships     int                                     `json:"overlap_memberships"`
+	MaxPartitionLoad       uint64                                  `json:"max_partition_load"`
+	BalanceHardCap         uint64                                  `json:"balance_hard_cap"`
+	MmapStatus             string                                  `json:"mmap_status"`
+	LimitComparisons       []m8ProductionResourceLimitComparisonV1 `json:"limit_comparisons"`
 }
 
 type m8ProductionResourceLimitComparisonV1 struct {
@@ -444,8 +446,20 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return errors.New("M8 persistent router byte accounting overflow")
 	}
 	persistentAssetBytes += assets.manifest.RouterAsset.Bytes
-	if persistentAssetBytes > cfg.m8MaxAssetBytes {
-		return fmt.Errorf("M8 persistent assets=%d exceed configured cap=%d", persistentAssetBytes, cfg.m8MaxAssetBytes)
+	// The generation record is durable storage the retained database needs to
+	// reopen, so it belongs in the hard bound here rather than only in the
+	// post-measurement evidence — otherwise a run that should be rejected
+	// consumes the full benchmark before anyone notices.
+	shardGenerationBytes, variantDescriptorBytes, sidecarErr := m8RetainedSidecarBytesV1(assets)
+	if sidecarErr != nil {
+		return sidecarErr
+	}
+	durablePreflightBytes, durablePreflightErr := m8DurableAssetBytesV1(persistentAssetBytes, shardGenerationBytes, variantDescriptorBytes)
+	if durablePreflightErr != nil {
+		return durablePreflightErr
+	}
+	if durablePreflightBytes > cfg.m8MaxAssetBytes {
+		return fmt.Errorf("M8 durable assets=%d (manifest=%d generation=%d variant=%d) exceed configured cap=%d", durablePreflightBytes, persistentAssetBytes, shardGenerationBytes, variantDescriptorBytes, cfg.m8MaxAssetBytes)
 	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
@@ -2855,15 +2869,75 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	return boundary, nil
 }
 
+// m8DurableAssetBytesV1 is the durable storage a retained database needs: the
+// manifest assets plus the generation record that reopening requires. Every
+// accumulation is overflow-checked so a wrapped sum can never present itself as
+// inside the configured cap.
+func m8DurableAssetBytesV1(manifestAssetBytes, shardGenerationBytes, variantDescriptorBytes uint64) (uint64, error) {
+	total := manifestAssetBytes
+	for _, part := range [...]uint64{shardGenerationBytes, variantDescriptorBytes} {
+		if part > ^uint64(0)-total {
+			return 0, errors.New("M8 durable asset byte accounting overflow")
+		}
+		total += part
+	}
+	return total, nil
+}
+
+// m8RetainedSidecarBytesV1 returns the on-disk sizes of the retained M3
+// descriptor and its optional planned-generation record.
+func m8RetainedSidecarBytesV1(assets *m8ProductionMultiGroupAssetsV1) (generation, descriptor uint64, err error) {
+	if assets == nil || assets.descriptor == nil {
+		return 0, 0, nil
+	}
+	info, statErr := os.Stat(filepath.Join(assets.dir, m3VariantDescriptorFileV1))
+	if statErr != nil {
+		return 0, 0, fmt.Errorf("stat retained variant descriptor: %w", statErr)
+	}
+	if info.Size() < 0 {
+		return 0, 0, errors.New("retained variant descriptor has a negative size")
+	}
+	if assets.descriptor.ShardGenerationBytes == 0 {
+		return 0, uint64(info.Size()), nil
+	}
+	generationInfo, statErr := os.Stat(filepath.Join(assets.dir, m3ShardGenerationFileV1))
+	if statErr != nil {
+		return 0, 0, fmt.Errorf("stat retained shard generation: %w", statErr)
+	}
+	if generationInfo.Size() < 0 || uint64(generationInfo.Size()) != assets.descriptor.ShardGenerationBytes {
+		return 0, 0, errors.New("retained shard generation size does not match its descriptor")
+	}
+	return uint64(generationInfo.Size()), uint64(info.Size()), nil
+}
+
 func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, untimed m8ProductionResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, failure m8ProductionResourceBoundaryV1) m8ProductionResourceEvidenceV1 {
 	out := m8ProductionResourceEvidenceV1{PersistentAssetCap: cfg.m8MaxAssetBytes, PeakRSSCapBytes: cfg.m8MaxRSSBytes}
 	if assets == nil {
 		return out
 	}
 	for _, asset := range assets.manifest.Assets {
+		if asset.Bytes > ^uint64(0)-out.PersistentAssetBytes {
+			out.PersistentAssetBytes = ^uint64(0)
+			break
+		}
 		out.PersistentAssetBytes += asset.Bytes
 	}
-	out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	if assets.manifest.RouterAsset.Bytes > ^uint64(0)-out.PersistentAssetBytes {
+		out.PersistentAssetBytes = ^uint64(0)
+	} else {
+		out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	}
+	// PersistentAssetBytes stays the manifest asset sum, which the retained
+	// descriptor binds. The generation record is durable bytes the database
+	// needs to reopen but is not a manifest asset, so it is tracked separately
+	// and folded into the capped durable total.
+	if generationBytes, descriptorBytes, sidecarErr := m8RetainedSidecarBytesV1(assets); sidecarErr == nil {
+		out.ShardGenerationBytes, out.VariantDescriptorBytes = generationBytes, descriptorBytes
+	} else {
+		// Force the durable comparison red rather than publishing a total that
+		// silently omits a file the retained database needs to open.
+		out.ShardGenerationBytes, out.VariantDescriptorBytes = ^uint64(0), ^uint64(0)
+	}
 	out.OverlapMemberships = len(assets.manifest.OverlapMemberships)
 	loads, loadErr := m8PartitionLoadsV1(assets.manifest)
 	if loadErr != nil {
@@ -2918,7 +2992,13 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
 	}
-	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, out.PersistentAssetBytes, "bytes", true)
+	durableAssetBytes, durableErr := m8DurableAssetBytesV1(out.PersistentAssetBytes, out.ShardGenerationBytes, out.VariantDescriptorBytes)
+	if durableErr != nil {
+		// Force the comparison red rather than publishing a wrapped total that
+		// would look like it fits the cap.
+		durableAssetBytes = ^uint64(0)
+	}
+	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, durableAssetBytes, "bytes", true)
 	peak := uint64(0)
 	if out.PeakRSSMeasured && out.PeakRSSBytes > 0 {
 		peak = uint64(out.PeakRSSBytes)
@@ -3659,8 +3739,12 @@ func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[str
 			maxTotalNanos = max(maxTotalNanos, row.MaxTotalNanos)
 		}
 	}
+	expectedDurableAssetBytes, durableErr := m8DurableAssetBytesV1(report.Resources.PersistentAssetBytes, report.Resources.ShardGenerationBytes, report.Resources.VariantDescriptorBytes)
+	if durableErr != nil {
+		expectedDurableAssetBytes = ^uint64(0)
+	}
 	return map[string]uint64{
-		"persistent_asset_bytes":                         report.Resources.PersistentAssetBytes,
+		"persistent_asset_bytes":                         expectedDurableAssetBytes,
 		"process_peak_rss":                               peakRSS,
 		"coordinator_selected_partitions":                probes,
 		"coordinator_groups":                             uint64(report.Config.RaftGroups),
@@ -4078,10 +4162,12 @@ func validateM8ProductionReportWithProfilesV1(report m8ProductionReportV1, caps 
 		return errors.New("M8 canonical truth-cache evidence is not identity-bound")
 	}
 	if report.Variant != nil {
+		variantRaw, encodeErr := m3VariantDescriptorJSONV1(*report.Variant)
 		if err := validateM3VariantDescriptorV1(*report.Variant); err != nil || len(report.Config.Overlap) != 1 ||
 			report.Config.Overlap[0] != report.Variant.OverlapRatio || report.Variant.FixtureChecksum != report.Dataset.Checksum ||
 			report.Variant.RouterRepresentatives != report.RouterRepresentatives ||
 			uint64(report.Variant.Partitions) != uint64(report.Config.Partitions) || report.Variant.PersistentAssetBytes != report.Resources.PersistentAssetBytes ||
+			report.Variant.ShardGenerationBytes != report.Resources.ShardGenerationBytes || encodeErr != nil || uint64(len(variantRaw)) != report.Resources.VariantDescriptorBytes ||
 			!m8RouterSessionsMatchVariantV1(report.RouterSessions, *report.Variant, report.Topology.ReadySetDigest) {
 			return errors.New("M8 report variant identity is not bound to its configuration and resources")
 		}

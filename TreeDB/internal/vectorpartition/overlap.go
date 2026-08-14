@@ -11,10 +11,13 @@ import (
 // membership ratio: floor(Ratio * source rows) memberships are requested.
 // Capacity is the declared per-partition total-membership cap; zero retains
 // the disjoint artifact cap. RequireExact makes any shortfall fail closed.
+// UsefulOnly stops when cut-reducing proposals are exhausted and forbids
+// filler replicas. UsefulOnly and RequireExact are mutually exclusive.
 type OverlapConfig struct {
 	Ratio        float64
 	Capacity     int
 	RequireExact bool
+	UsefulOnly   bool
 }
 
 // Membership is a stable vector ordinal paired with one logical partition.
@@ -87,6 +90,9 @@ const MaxOverlapMembershipsPerVector = 16
 // winning proposals in that order.  Consequently scheduler timing cannot
 // affect the result.
 func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
+	if cfg.UsefulOnly && cfg.RequireExact {
+		return OverlapResult{}, errors.New("useful-only overlap cannot require exact fill")
+	}
 	if err := ValidateArtifact(a); err != nil {
 		return OverlapResult{}, err
 	}
@@ -118,6 +124,12 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		node, part, gain int
 		id               string
 	}
+	// Per-round scratch reused across nodes: gains is indexed by partition and
+	// reset through touched, so scoring stays proportional to a node's distinct
+	// neighbor partitions rather than the partition count.
+	gains := make([]int, a.Config.Partitions)
+	touched := make([]int, 0, a.Config.Partitions)
+	neighborScratch := make([]int, 0, 2*a.Config.Degree)
 	for used < budget {
 		// This proposal set is the bulk-synchronous round snapshot.
 		ps := make([]proposal, 0, n)
@@ -125,33 +137,47 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if len(members[i])-1 >= MaxOverlapMembershipsPerVector {
 				continue
 			}
-			counts := make([]int, a.Config.Partitions)
-			for _, j := range ns {
-				for p := range members[j] {
-					counts[p]++
-				}
+			// Rank destinations by the directed cut edges each one newly
+			// satisfies, not by raw neighbor-membership count: a plurality
+			// destination can have zero marginal reduction once earlier
+			// replicas already colocated those neighbors, and picking it first
+			// would discard a lower-count destination that still reduces the
+			// cut.
+			//
+			// A neighbor contributes to a destination exactly when it does not
+			// already share a partition with this node, which is the same test
+			// overlapCutReduction applies for both edge directions. Scoring
+			// every destination in one neighbor pass therefore costs what the
+			// old plurality count cost, instead of one reduction scan per
+			// candidate partition.
+			for _, p := range touched {
+				gains[p] = 0
 			}
-			for _, j := range incoming[i] {
+			touched = touched[:0]
+			neighborScratch = append(neighborScratch[:0], ns...)
+			neighborScratch = append(neighborScratch, incoming[i]...)
+			for _, j := range neighborScratch {
+				if overlapMembersShare(members[i], members[j]) {
+					continue
+				}
 				for p := range members[j] {
-					counts[p]++
+					if gains[p] == 0 {
+						touched = append(touched, p)
+					}
+					gains[p]++
 				}
 			}
 			best, gain := -1, 0
-			for p, count := range counts {
-				if _, exists := members[i][p]; exists || count == 0 || loads[p] >= capacity {
+			for _, p := range touched {
+				if _, exists := members[i][p]; exists || loads[p] >= capacity {
 					continue
 				}
-				if count > gain || count == gain && (best < 0 || p < best) {
-					best, gain = p, count
+				if gains[p] > gain || gains[p] == gain && best >= 0 && p < best {
+					best, gain = p, gains[p]
 				}
 			}
-			if best >= 0 {
-				// A plurality alone is insufficient: score only directed cut
-				// edges newly satisfied by this membership.
-				reduction := overlapCutReduction(members, i, best, ns, incoming[i])
-				if reduction > 0 {
-					ps = append(ps, proposal{i, best, reduction, a.IDs[i]})
-				}
+			if best >= 0 && gain > 0 {
+				ps = append(ps, proposal{i, best, gain, a.IDs[i]})
 			}
 		}
 		sort.Slice(ps, func(i, j int) bool {
@@ -255,6 +281,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 	if cfg.RequireExact && out.Unspent != 0 {
 		return OverlapResult{}, &OverlapShortfallError{Requested: out.Budget, Realized: out.Used, Rejected: out.Unspent, Capacity: out.Capacity}
 	}
+	if cfg.UsefulOnly && out.Filler != 0 {
+		return OverlapResult{}, errors.New("useful-only overlap realized filler replicas")
+	}
 	if err := ValidateOverlap(a, cfg, out); err != nil {
 		return OverlapResult{}, err
 	}
@@ -301,6 +330,21 @@ func fillExactOverlapSlotsWithReplicas(a Artifact, members []map[int]struct{}, i
 		}
 	}
 	return used, useful, filler
+}
+
+// overlapMembersShare reports whether two membership sets already intersect,
+// which is the condition under which an edge between them is not cut and no
+// additional membership can reduce it.
+func overlapMembersShare(a, b map[int]struct{}) bool {
+	if len(b) < len(a) {
+		a, b = b, a
+	}
+	for p := range a {
+		if _, ok := b[p]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // overlapCutReduction scores every directed cut edge that membership in
@@ -358,8 +402,14 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || len(r.Replicas) != r.Used || len(r.DestinationDiversity) != a.Config.Partitions || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
+	if cfg.UsefulOnly && cfg.RequireExact {
+		return errors.New("useful-only overlap cannot require exact fill")
+	}
 	if cfg.RequireExact && r.Unspent != 0 {
 		return &OverlapShortfallError{Requested: r.Budget, Realized: r.Used, Rejected: r.Unspent, Capacity: r.Capacity}
+	}
+	if cfg.UsefulOnly && (r.Filler != 0 || r.Useful != r.Used) {
+		return errors.New("useful-only overlap realized filler replicas")
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
 	replicas := make(map[[2]int]Replica, len(r.Replicas))

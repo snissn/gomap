@@ -37,12 +37,31 @@ type Replica = internal.Replica
 type ReplicaUtilityClassV1 = internal.ReplicaUtilityClassV1
 type OverlapResult = internal.OverlapResult
 type OverlapShortfallError = internal.OverlapShortfallError
+type ShardPlanInputV1 = internal.ShardPlanInputV1
+type ShardPlanRequestV1 = internal.ShardPlanRequestV1
+type ShardPlanV1 = internal.ShardPlanV1
+type ShardPackSummaryV1 = internal.ShardPackSummaryV1
+type ShardGenerationDescriptorV1 = internal.ShardGenerationDescriptorV1
 
 const (
-	SchemaVersion                  = internal.SchemaVersion
-	MaxOverlapMembershipsPerVector = internal.MaxOverlapMembershipsPerVector
-	ReplicaUtilityPositiveGainV1   = internal.ReplicaUtilityPositiveGainV1
-	ReplicaUtilityZeroUtilityV1    = internal.ReplicaUtilityZeroUtilityV1
+	SchemaVersion                     = internal.SchemaVersion
+	MaxOverlapMembershipsPerVector    = internal.MaxOverlapMembershipsPerVector
+	ReplicaUtilityPositiveGainV1      = internal.ReplicaUtilityPositiveGainV1
+	ReplicaUtilityZeroUtilityV1       = internal.ReplicaUtilityZeroUtilityV1
+	FP32BytesPerDimensionV1           = internal.FP32BytesPerDimensionV1
+	FP32VectorSectionAlignmentBytesV1 = internal.FP32VectorSectionAlignmentBytesV1
+	GraphIdentityOverheadPerRowV1     = internal.GraphIdentityOverheadPerRowV1
+	GraphIdentityOverheadBytesV1      = internal.GraphIdentityOverheadBytesV1
+	PackFixedOverheadBytesV1          = internal.PackFixedOverheadBytesV1
+	DefaultFP32DimensionsV1           = internal.DefaultFP32DimensionsV1
+	DefaultTargetHotBytesV1           = internal.DefaultTargetHotBytesV1
+	SelectedTargetHotBytesV1          = internal.SelectedTargetHotBytesV1
+	SelectedOverlapRatioV1            = internal.SelectedOverlapRatioV1
+	SelectedRouterCandidatesV1        = internal.SelectedRouterCandidatesV1
+	SelectedPartitionProbesV1         = internal.SelectedPartitionProbesV1
+	SelectedSearchableRowsPerPackV1   = internal.SelectedSearchableRowsPerPackV1
+	ShardGenerationDescriptorSchemaV1 = internal.ShardGenerationDescriptorSchemaV1
+	ShardGenerationDescriptorKindV1   = internal.ShardGenerationDescriptorKindV1
 )
 
 func DefaultConfig() Config         { return internal.DefaultConfig() }
@@ -101,6 +120,42 @@ func BuildStableIDHashBaseline(a Artifact) (Artifact, error) {
 }
 func BuildOverlap(a Artifact, c OverlapConfig) (OverlapResult, error) {
 	return internal.BuildOverlap(a, c)
+}
+func DefaultShardPlanInputV1(vectors, dimensions int) ShardPlanInputV1 {
+	return internal.DefaultShardPlanInputV1(vectors, dimensions)
+}
+func SelectedShardPlanRequestV1(sourceRows, dimensions int) ShardPlanRequestV1 {
+	return internal.SelectedShardPlanRequestV1(sourceRows, dimensions)
+}
+func AlignedTraversalRowBytesV1(dimensions int) (int, bool) {
+	return internal.AlignedTraversalRowBytesV1(dimensions)
+}
+func PlanByteBoundedShardsV1(in ShardPlanRequestV1) (ShardPlanV1, error) {
+	return internal.PlanByteBoundedShardsV1(in)
+}
+func SelectedOverlapConfigV1(capacity int) OverlapConfig {
+	return internal.SelectedOverlapConfigV1(capacity)
+}
+func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
+	return internal.AccountShardPacksV1(plan, memberships)
+}
+func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
+	return internal.NewShardGenerationDescriptorV1(plan, cfg, overlap)
+}
+func CanonicalShardGenerationJSONV1(d ShardGenerationDescriptorV1) ([]byte, error) {
+	return internal.CanonicalShardGenerationJSONV1(d)
+}
+func DecodeShardGenerationDescriptorV1(raw []byte, maxBytes int) (ShardGenerationDescriptorV1, error) {
+	return internal.DecodeShardGenerationDescriptorV1(raw, maxBytes)
+}
+func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
+	return internal.ValidateShardGenerationDescriptorV1(d)
+}
+func MembershipDigestV1(memberships []Membership) (string, error) {
+	return internal.MembershipDigestV1(memberships)
+}
+func RouterPartitionsFromMembershipsV1(memberships []Membership, values [][]float32, partitions int) ([]RouterPartitionV1, error) {
+	return internal.RouterPartitionsFromMembershipsV1(memberships, values, partitions)
 }
 func ValidateOverlap(a Artifact, c OverlapConfig, r OverlapResult) error {
 	return internal.ValidateOverlap(a, c, r)

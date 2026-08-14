@@ -213,7 +213,11 @@ func m0BuildPermutationsV1(capture m0LocalityCaptureV1, objective string) (map[u
 			}
 			sequence := partitionTrace.ScoreOrdinals
 			rows := capture.Snapshots[partitionTrace.Partition].Rows
-			window := max(1, int(m0PageBytesV1)/(capture.Snapshots[partitionTrace.Partition].VectorStride*4))
+			stride := capture.Snapshots[partitionTrace.Partition].VectorStride
+			if stride < 1 || stride > int(^uint(0)>>1)/4 {
+				return nil, errors.New("vector stride overflow")
+			}
+			window := max(1, int(m0PageBytesV1)/(stride*4))
 			for i, left := range sequence {
 				if int(left) >= rows {
 					return nil, errors.New("trace ordinal")
@@ -263,7 +267,7 @@ func m0IdentityPermutationsV1(capture m0LocalityCaptureV1) (map[uint32]m0Permuta
 }
 
 func m0ValidateSnapshotV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1) error {
-	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorOffset == 0 || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighbors) || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
+	if snapshot.Rows < 1 || snapshot.EntryOrdinal < 0 || snapshot.EntryOrdinal >= snapshot.Rows || len(snapshot.RowOrdinals) != snapshot.Rows || snapshot.VectorStride < 1 || snapshot.VectorStride > int(^uint(0)>>1)/4 || snapshot.VectorOffset == 0 || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) == 0 || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighbors) || len(snapshot.LayerOffsets) != len(snapshot.LayerOffsetsSectionOffsets) || len(snapshot.LayerOffsets) != len(snapshot.LayerNeighborOffsets) {
 		return errors.New("snapshot geometry")
 	}
 	for layer, offsets := range snapshot.LayerOffsets {
@@ -343,6 +347,9 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 }
 
 func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, neighbors [][]int, pairs map[[2]int]uint32, objective string) []int {
+	if snapshot.VectorStride < 1 || snapshot.VectorStride > int(^uint(0)>>1)/4 {
+		return nil
+	}
 	window := max(1, int(m0PageBytesV1)/(snapshot.VectorStride*4))
 	placed := make([]bool, snapshot.Rows)
 	pairNeighbors := make([]map[int]uint32, snapshot.Rows)

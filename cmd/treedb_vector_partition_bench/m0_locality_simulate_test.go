@@ -152,6 +152,17 @@ func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 	}
 }
 
+func TestM0SnapshotRejectsOverflowingVectorStride(t *testing.T) {
+	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{
+		Rows: 1, RowOrdinals: []uint32{0}, VectorStride: int(^uint(0)>>1)/4 + 1, VectorOffset: 1, LevelsOffset: 2,
+		LayerOffsets: [][]uint64{{0, 0}}, LayerNeighbors: [][]uint32{{}},
+		LayerOffsetsSectionOffsets: []uint64{3}, LayerNeighborOffsets: []uint64{4},
+	}
+	if err := m0ValidateSnapshotV1(snapshot); err == nil {
+		t.Fatal("accepted overflowing vector stride")
+	}
+}
+
 func TestM0EdgeWindowExpiresOldPlacement(t *testing.T) {
 	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{
 		Rows: 5, EntryOrdinal: 0, RowOrdinals: []uint32{0, 1, 2, 3, 4}, VectorStride: 512, VectorOffset: 1,

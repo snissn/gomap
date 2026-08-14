@@ -2701,6 +2701,41 @@ Recovery parser may accept historical value-log and commit-log file names before
 shared `commit-l<lane>-<seq>.log` segment family and old raw batch payloads are
 unsupported.
 
+## 10.1 Retained Vector-Partition Benchmark Sidecars
+
+Two JSON files may sit at the root of a *retained* M3 benchmark database
+directory (one produced with `-m3-persist-db`). They are not engine structures:
+no TreeDB read or write path consults them, and an ordinary database never
+contains them. They are documented here because they are immutable on-disk
+files inside a database directory, and because the second one is required for
+that directory to reopen through the benchmark's retained-variant path.
+
+- `vector_partition_variant_v1.json` — the retained variant descriptor,
+  `m3_persistent_variant_descriptor_v6`, capped at 1 MiB. Carries the build
+  identity, source/artifact/router identities, overlap accounting, partition
+  loads, and (for byte-bounded builds) the shard plan, the SHA-256 of the
+  generation record, and that record's byte length.
+- `vector_partition_shard_generation_v1.json` — the shard generation record,
+  `treedb_vector_partition_shard_generation_v1` schema 1, capped at 256 MiB.
+  Carries the byte-bounded plan, the overlap config, the full realized
+  membership list, its SHA-256, and the membership-derived per-pack
+  home/overlap/total row and byte summaries. Roughly 5 MB at 100k rows and
+  15 MB at 250k rows with the selected 0.2 overlap ratio.
+
+Both are written once with `O_EXCL` and `fsync`, and are never rewritten in
+place; a rebuild uses a fresh directory. The pair is fail-closed on reopen: a
+variant descriptor carrying a non-zero `shard_plan` must be accompanied by a
+generation record whose file SHA-256 equals the descriptor's
+`shard_generation_digest`, whose plan equals the descriptor's plan, and whose
+membership-derived accounting matches the descriptor's ratio, capacity,
+per-partition loads, realized overlap, and source row count. A descriptor with
+no plan must carry neither digest nor size. Deleting or editing either file
+makes the directory fail to reopen rather than reopening with unverified
+evidence.
+
+Unknown schema versions fail closed. TreeDB is pre-alpha: retained benchmark
+databases from earlier descriptor versions are rebuilt, not migrated.
+
 ## 11. Storage Compaction Lifecycle
 
 `DB.CompactStorage` is the canonical online storage compaction entry point. It
