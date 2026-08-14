@@ -118,6 +118,7 @@ type m3PartitionIndexRow struct {
 	StaleAssets                  uint64             `json:"stale_assets"`
 	PersistentDBDir              string             `json:"persistent_db_dir,omitempty"`
 	ShardGenerationBytes         int64              `json:"shard_generation_bytes,omitempty"`
+	VariantDescriptorBytes       int64              `json:"variant_descriptor_bytes,omitempty"`
 }
 
 type m3OverlapReplica struct {
@@ -790,6 +791,24 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
+		// The variant descriptor is only writable here, after the reopen supplies
+		// the manifest and router identities, so it lands after the final
+		// directory measurement. Fold its actual size into the reported
+		// footprint rather than publishing a figure for a directory smaller
+		// than the one this run leaves behind.
+		descriptorInfo, statErr := os.Stat(filepath.Join(dir, m3VariantDescriptorFileV1))
+		if statErr != nil {
+			return m3PartitionIndexRow{}, fmt.Errorf("stat retained variant descriptor: %w", statErr)
+		}
+		if descriptorInfo.Size() < 0 || descriptorInfo.Size() > math.MaxInt64-row.FinalDerivedPhysicalBytes {
+			return m3PartitionIndexRow{}, errors.New("retained variant descriptor byte accounting overflow")
+		}
+		row.FinalDerivedPhysicalBytes += descriptorInfo.Size()
+		if row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes {
+			row.PeakDerivedTemporaryBytes = row.FinalDerivedPhysicalBytes
+		}
+		row.PhysicalBytesPerSourceVector = float64(row.FinalDerivedPhysicalBytes) / float64(len(vectors))
+		row.VariantDescriptorBytes = descriptorInfo.Size()
 		// The record is already on disk and the descriptor is complete, so
 		// verify the pairing here rather than letting the first reopen be what
 		// discovers a retained database no consumer can open.

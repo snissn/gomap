@@ -445,8 +445,20 @@ func runM8ProductionSingleVariantV1(cfg config, fixture fixtureManifest, vectors
 		return errors.New("M8 persistent router byte accounting overflow")
 	}
 	persistentAssetBytes += assets.manifest.RouterAsset.Bytes
-	if persistentAssetBytes > cfg.m8MaxAssetBytes {
-		return fmt.Errorf("M8 persistent assets=%d exceed configured cap=%d", persistentAssetBytes, cfg.m8MaxAssetBytes)
+	// The generation record is durable storage the retained database needs to
+	// reopen, so it belongs in the hard bound here rather than only in the
+	// post-measurement evidence — otherwise a run that should be rejected
+	// consumes the full benchmark before anyone notices.
+	var shardGenerationBytes uint64
+	if assets.descriptor != nil {
+		shardGenerationBytes = assets.descriptor.ShardGenerationBytes
+	}
+	durablePreflightBytes, durablePreflightErr := m8DurableAssetBytesV1(persistentAssetBytes, shardGenerationBytes)
+	if durablePreflightErr != nil {
+		return durablePreflightErr
+	}
+	if durablePreflightBytes > cfg.m8MaxAssetBytes {
+		return fmt.Errorf("M8 durable assets=%d (manifest=%d generation=%d) exceed configured cap=%d", durablePreflightBytes, persistentAssetBytes, shardGenerationBytes, cfg.m8MaxAssetBytes)
 	}
 	topologyCtx, cancelTopology := context.WithTimeout(context.Background(), 2*time.Minute)
 	topology, err := nativewire.NewVectorPartitionM8ProductionMultiGroupV1(topologyCtx, nativewire.VectorPartitionM8ProductionMultiGroupOptionsV1{
@@ -2856,15 +2868,34 @@ func m8WarmProductionTopologyV1(ctx context.Context, coordinator *nativewire.Vec
 	return boundary, nil
 }
 
+// m8DurableAssetBytesV1 is the durable storage a retained database needs: the
+// manifest assets plus the generation record that reopening requires. Every
+// accumulation is overflow-checked so a wrapped sum can never present itself as
+// inside the configured cap.
+func m8DurableAssetBytesV1(manifestAssetBytes, shardGenerationBytes uint64) (uint64, error) {
+	if shardGenerationBytes > ^uint64(0)-manifestAssetBytes {
+		return 0, errors.New("M8 durable asset byte accounting overflow")
+	}
+	return manifestAssetBytes + shardGenerationBytes, nil
+}
+
 func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8ProductionMultiGroupAssetsV1, rows []m8ProductionRowV1, untimed m8ProductionResourceBoundaryV1, topology nativewire.VectorPartitionM8ProductionMultiGroupEvidenceV1, failure m8ProductionResourceBoundaryV1) m8ProductionResourceEvidenceV1 {
 	out := m8ProductionResourceEvidenceV1{PersistentAssetCap: cfg.m8MaxAssetBytes, PeakRSSCapBytes: cfg.m8MaxRSSBytes}
 	if assets == nil {
 		return out
 	}
 	for _, asset := range assets.manifest.Assets {
+		if asset.Bytes > ^uint64(0)-out.PersistentAssetBytes {
+			out.PersistentAssetBytes = ^uint64(0)
+			break
+		}
 		out.PersistentAssetBytes += asset.Bytes
 	}
-	out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	if assets.manifest.RouterAsset.Bytes > ^uint64(0)-out.PersistentAssetBytes {
+		out.PersistentAssetBytes = ^uint64(0)
+	} else {
+		out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	}
 	// PersistentAssetBytes stays the manifest asset sum, which the retained
 	// descriptor binds. The generation record is durable bytes the database
 	// needs to reopen but is not a manifest asset, so it is tracked separately
@@ -2926,7 +2957,13 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
 	}
-	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, out.PersistentAssetBytes+out.ShardGenerationBytes, "bytes", true)
+	durableAssetBytes, durableErr := m8DurableAssetBytesV1(out.PersistentAssetBytes, out.ShardGenerationBytes)
+	if durableErr != nil {
+		// Force the comparison red rather than publishing a wrapped total that
+		// would look like it fits the cap.
+		durableAssetBytes = ^uint64(0)
+	}
+	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, durableAssetBytes, "bytes", true)
 	peak := uint64(0)
 	if out.PeakRSSMeasured && out.PeakRSSBytes > 0 {
 		peak = uint64(out.PeakRSSBytes)
@@ -3667,8 +3704,12 @@ func m8ExpectedResourceLimitObservationsV1(report m8ProductionReportV1) (map[str
 			maxTotalNanos = max(maxTotalNanos, row.MaxTotalNanos)
 		}
 	}
+	expectedDurableAssetBytes, durableErr := m8DurableAssetBytesV1(report.Resources.PersistentAssetBytes, report.Resources.ShardGenerationBytes)
+	if durableErr != nil {
+		expectedDurableAssetBytes = ^uint64(0)
+	}
 	return map[string]uint64{
-		"persistent_asset_bytes":                         report.Resources.PersistentAssetBytes,
+		"persistent_asset_bytes":                         expectedDurableAssetBytes,
 		"process_peak_rss":                               peakRSS,
 		"coordinator_selected_partitions":                probes,
 		"coordinator_groups":                             uint64(report.Config.RaftGroups),
