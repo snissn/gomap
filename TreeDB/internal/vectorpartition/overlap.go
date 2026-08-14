@@ -142,22 +142,25 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 					counts[p]++
 				}
 			}
+			// Rank destinations by the directed cut edges each one newly
+			// satisfies, not by raw neighbor-membership count. A plurality
+			// destination can have zero marginal reduction once earlier
+			// replicas already colocated those neighbors, and picking it first
+			// would discard a lower-count destination that still reduces the
+			// cut. Only partitions holding at least one neighbor can reduce
+			// anything, so counts still bounds the candidate set.
 			best, gain := -1, 0
 			for p, count := range counts {
 				if _, exists := members[i][p]; exists || count == 0 || loads[p] >= capacity {
 					continue
 				}
-				if count > gain || count == gain && (best < 0 || p < best) {
-					best, gain = p, count
+				reduction := overlapCutReduction(members, i, p, ns, incoming[i])
+				if reduction > gain || reduction == gain && reduction > 0 && (best < 0 || p < best) {
+					best, gain = p, reduction
 				}
 			}
 			if best >= 0 {
-				// A plurality alone is insufficient: score only directed cut
-				// edges newly satisfied by this membership.
-				reduction := overlapCutReduction(members, i, best, ns, incoming[i])
-				if reduction > 0 {
-					ps = append(ps, proposal{i, best, reduction, a.IDs[i]})
-				}
+				ps = append(ps, proposal{i, best, gain, a.IDs[i]})
 			}
 		}
 		sort.Slice(ps, func(i, j int) bool {

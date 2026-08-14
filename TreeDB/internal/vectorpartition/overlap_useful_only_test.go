@@ -82,6 +82,46 @@ func TestOverlapUsefulOnlyRespectsCapsAndTieOrder(t *testing.T) {
 	}
 }
 
+// TestOverlapUsefulOnlyScoresEveryDestinationBeforeStopping pins the ranking
+// contract. Once earlier replicas colocate a node's neighbors, the destination
+// holding the most neighbor memberships can have zero marginal cut reduction
+// while a lower-count destination still reduces the cut. Selecting by raw count
+// first discarded that node entirely and ended the round early, which under
+// useful-only is an authoritative stop with budget left unspent.
+func TestOverlapUsefulOnlyScoresEveryDestinationBeforeStopping(t *testing.T) {
+	ids := []string{"a", "b", "c", "d"}
+	c := Config{Metric: "cosine", Seed: 1, Repetitions: 1, Pivots: 2, MaxLeafBucket: 2, Degree: 3, Partitions: 3, Imbalance: 1, MaxVectors: 4, MaxEdges: 12}
+	v := []Vector{{"a", []float64{1}}, {"b", []float64{.9}}, {"c", []float64{.8}}, {"d", []float64{.7}}}
+	built, err := Build(v, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Directed edges 0->3, 1->0, 1->2, 2->1, 3->2 over assignment [0,0,1,2].
+	a := Artifact{
+		SchemaVersion: SchemaVersion, Backend: "test", BackendLicense: "test", Source: built.Source, Config: c, IDs: ids,
+		Graph: Graph{Neighbors: [][]int{{3}, {0, 2}, {1}, {2}}}, Assignment: []int{0, 0, 1, 2},
+	}
+	a.Metrics = metrics(a)
+	if err := ValidateArtifact(a); err != nil {
+		t.Fatal(err)
+	}
+	got, err := BuildOverlap(a, OverlapConfig{Ratio: 1, Capacity: 4, UsefulOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EdgeCutBefore != 4 || got.EdgeCutAfter != 0 {
+		t.Fatalf("useful-only left a reducible cut edge: before=%d after=%d used=%d unspent=%d", got.EdgeCutBefore, got.EdgeCutAfter, got.Used, got.Unspent)
+	}
+	if got.Used != 3 || got.Useful != 3 || got.Filler != 0 {
+		t.Fatalf("useful-only accounting=%+v", got)
+	}
+	for _, replica := range got.Replicas {
+		if replica.Gain <= 0 || replica.Class != ReplicaUtilityPositiveGainV1 {
+			t.Fatalf("replica without positive declared utility: %+v", replica)
+		}
+	}
+}
+
 func TestOverlapUsefulOnlyRejectsExactFillConflict(t *testing.T) {
 	a := usefulOnlyArtifact(t, [][]int{{}, {}, {}, {}}, []int{0, 0, 1, 1})
 	got, err := BuildOverlap(a, OverlapConfig{Ratio: .5, Capacity: 3, RequireExact: true, UsefulOnly: true})
