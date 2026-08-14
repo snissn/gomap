@@ -76,8 +76,12 @@ func m3WriteShardGenerationRecordV1(dir string, raw []byte, digest string) error
 }
 
 // m3VerifyRetainedShardGenerationV1 requires a byte-bounded retained database to
-// still carry the generation record its variant descriptor was built with, and
-// requires the record's plan to match the descriptor's.
+// still carry the generation record its variant descriptor was built with.
+//
+// Comparison variants deliberately share one plan, so matching the plan alone
+// would accept a valid record belonging to a different variant. Every
+// membership fact the record carries is therefore cross-checked against the
+// descriptor's own accounting, which the build-identity digest already binds.
 func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) error {
 	if d.ShardPlan == (vectorpartition.ShardPlanV1{}) {
 		return nil
@@ -88,6 +92,27 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 	}
 	if record.Plan != d.ShardPlan {
 		return errors.New("retained shard generation record does not describe the descriptor's plan")
+	}
+	if record.OverlapConfig.Ratio != d.OverlapRatio || record.OverlapConfig.Capacity != d.Capacity {
+		return fmt.Errorf("retained shard generation record requests ratio %v capacity %d, descriptor declares %v/%d",
+			record.OverlapConfig.Ratio, record.OverlapConfig.Capacity, d.OverlapRatio, d.Capacity)
+	}
+	if len(record.PackSummaries) != len(d.PartitionLoads) {
+		return fmt.Errorf("retained shard generation record covers %d packs, descriptor declares %d", len(record.PackSummaries), len(d.PartitionLoads))
+	}
+	realizedOverlap := 0
+	for partition, summary := range record.PackSummaries {
+		if summary.Rows != d.PartitionLoads[partition] {
+			return fmt.Errorf("retained shard generation pack %d holds %d rows, descriptor declares %d", partition, summary.Rows, d.PartitionLoads[partition])
+		}
+		realizedOverlap += summary.OverlapRows
+	}
+	if realizedOverlap != d.OverlapRealized || realizedOverlap != d.OverlapMemberships {
+		return fmt.Errorf("retained shard generation record realizes %d non-home memberships, descriptor declares realized=%d memberships=%d",
+			realizedOverlap, d.OverlapRealized, d.OverlapMemberships)
+	}
+	if uint64(record.Plan.Vectors) != d.SourceRows {
+		return fmt.Errorf("retained shard generation record covers %d vectors, descriptor declares %d source rows", record.Plan.Vectors, d.SourceRows)
 	}
 	return nil
 }

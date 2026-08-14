@@ -218,6 +218,34 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	if _, _, err := m3ShardGenerationRecordV1(plan, 0, overlap); err == nil {
 		t.Fatal("accepted replicas under a ratio that requests none")
 	}
+	// A record from another variant that shares this plan must not be accepted
+	// for a descriptor whose own accounting disagrees with it.
+	descriptor := m3VariantDescriptorV1{
+		ShardPlan: plan, ShardGenerationDigest: digest, OverlapRatio: plan.OverlapRatio,
+		Capacity: plan.OverlapCapacity, PartitionLoads: []int{3, 2},
+		OverlapRealized: 1, OverlapMemberships: 1, SourceRows: uint64(plan.Vectors),
+	}
+	if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
+		t.Fatalf("matching record rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*m3VariantDescriptorV1){
+		"ratio":       func(c *m3VariantDescriptorV1) { c.OverlapRatio = 0 },
+		"capacity":    func(c *m3VariantDescriptorV1) { c.Capacity++ },
+		"loads":       func(c *m3VariantDescriptorV1) { c.PartitionLoads = []int{2, 3} },
+		"pack count":  func(c *m3VariantDescriptorV1) { c.PartitionLoads = []int{3} },
+		"realized":    func(c *m3VariantDescriptorV1) { c.OverlapRealized = 0 },
+		"memberships": func(c *m3VariantDescriptorV1) { c.OverlapMemberships = 0 },
+		"source rows": func(c *m3VariantDescriptorV1) { c.SourceRows++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := descriptor
+			candidate.PartitionLoads = append([]int(nil), descriptor.PartitionLoads...)
+			mutate(&candidate)
+			if err := m3VerifyRetainedShardGenerationV1(dir, candidate); err == nil {
+				t.Fatalf("accepted a record whose %s disagrees with the descriptor", name)
+			}
+		})
+	}
 	// -shard-plan off retains no record rather than an unbound one.
 	if raw, digest, err := m3ShardGenerationRecordV1(vectorpartition.ShardPlanV1{}, 0, overlap); err != nil || raw != nil || digest != "" {
 		t.Fatalf("unplanned build produced a record bytes=%d digest=%q err=%v", len(raw), digest, err)
