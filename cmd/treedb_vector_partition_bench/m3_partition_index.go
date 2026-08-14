@@ -153,14 +153,20 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	if fixture.Vectors >= 1_000_000 {
 		report.MillionCorpus = "measured from supplied 1M corpus"
 	}
+	if err := m3ValidateShardPlanGovernsArtifactV1(cfg.shardPlan, artifact, ratios); err != nil {
+		return err
+	}
 	for i, ratio := range ratios {
-		capacity, err := m3OverlapCapacityV1(artifact, ratio)
+		capacity, err := m3OverlapCapacityForPlanV1(cfg.shardPlan, artifact, ratio)
 		if err != nil {
 			return fmt.Errorf("derive exact overlap capacity ratio %.4f: %w", ratio, err)
 		}
 		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, UsefulOnly: true})
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
+		}
+		if err := m3ValidateShardPackBudgetV1(cfg.shardPlan, overlap); err != nil {
+			return fmt.Errorf("account byte-bounded packs ratio %.4f: %w", ratio, err)
 		}
 		row, err := benchmarkM3PartitionIndexRow(cfg, fixture, artifactDigest, graphArtifactDigest, graphBuildDigest, vectors, queries, artifact, overlap, ratio, uint64(i+1))
 		if err != nil {
@@ -190,29 +196,67 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	return err
 }
 
+// m3ValidateShardPlanGovernsArtifactV1 fails closed when a byte-bounded plan
+// did not actually govern the artifact it is about to describe. The plan is
+// derived before construction, so any disagreement here means the partition
+// geometry was built from something other than the advertised hot-byte budget
+// and the persisted plan would be circular rather than authoritative.
+func m3ValidateShardPlanGovernsArtifactV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, ratios []float64) error {
+	if plan.Partitions == 0 {
+		return nil
+	}
+	if plan.Vectors != len(artifact.IDs) || plan.Dimensions != artifact.Source.Dimensions ||
+		plan.Partitions != artifact.Config.Partitions || plan.Imbalance != artifact.Config.Imbalance ||
+		plan.HomeCapacity != artifact.Metrics.Cap {
+		return fmt.Errorf("byte-bounded plan %+v does not govern artifact rows=%d dimensions=%d partitions=%d cap=%d", plan, len(artifact.IDs), artifact.Source.Dimensions, artifact.Config.Partitions, artifact.Metrics.Cap)
+	}
+	for _, ratio := range ratios {
+		if ratio > plan.OverlapRatio {
+			return fmt.Errorf("overlap ratio %.4f exceeds the planned ratio %.4f", ratio, plan.OverlapRatio)
+		}
+	}
+	return nil
+}
+
+// m3ValidateShardPackBudgetV1 re-derives the per-pack accounting from the
+// realized memberships and rejects any pack outside the planned home,
+// membership, or hot-byte budget before the packs are materialized.
+func m3ValidateShardPackBudgetV1(plan vectorpartition.ShardPlanV1, overlap vectorpartition.OverlapResult) error {
+	if plan.Partitions == 0 {
+		return nil
+	}
+	summaries, err := vectorpartition.AccountShardPacksV1(plan, overlap.Memberships)
+	if err != nil {
+		return err
+	}
+	if len(summaries) != len(overlap.Loads) {
+		return fmt.Errorf("planned packs=%d realized loads=%d", len(summaries), len(overlap.Loads))
+	}
+	for partition, summary := range summaries {
+		if summary.Rows != overlap.Loads[partition] {
+			return fmt.Errorf("pack %d membership rows=%d does not match realized load=%d", partition, summary.Rows, overlap.Loads[partition])
+		}
+	}
+	return nil
+}
+
+// m3OverlapCapacityForPlanV1 declares the per-partition total-membership
+// capacity for one overlap ratio. Under a byte-bounded plan the capacity is the
+// planned one, so packs cannot exceed the advertised hot-byte budget; otherwise
+// it falls back to the operator-declared exact global target.
+func m3OverlapCapacityForPlanV1(plan vectorpartition.ShardPlanV1, artifact vectorpartition.Artifact, ratio float64) (int, error) {
+	if plan.Partitions != 0 {
+		return plan.OverlapCapacity, nil
+	}
+	return m3OverlapCapacityV1(artifact, ratio)
+}
+
 // m3OverlapCapacityV1 keeps the immutable M2 home assignment and its
 // disjoint epsilon cap intact. For an overlap variant it declares the narrow
 // per-partition total-membership capacity that can hold the requested global
 // extra-membership target: ceil((source rows + requested extras)/partitions).
 // Exact construction still fails closed when affinity/per-vector constraints
 // cannot realize that target.
-func m3ShardPlanForArtifactV1(artifact vectorpartition.Artifact, ratio float64, overlap vectorpartition.OverlapResult) vectorpartition.ShardPlanV1 {
-	in := vectorpartition.DefaultShardPlanInputV1(len(artifact.IDs), artifact.Source.Dimensions)
-	in.OverlapRatio = ratio
-	in.Imbalance = artifact.Config.Imbalance
-	if overlap.Capacity > 0 && artifact.Source.Dimensions > 0 {
-		rowBytes := artifact.Source.Dimensions*vectorpartition.FP32BytesPerDimensionV1 + vectorpartition.GraphIdentityOverheadPerRowV1
-		if rowBytes > 0 {
-			in.TargetHotBytes = uint64(overlap.Capacity) * uint64(rowBytes)
-		}
-	}
-	plan, err := vectorpartition.PlanByteBoundedShardsV1(in)
-	if err != nil {
-		return vectorpartition.ShardPlanV1{}
-	}
-	return plan
-}
-
 func m3OverlapCapacityV1(artifact vectorpartition.Artifact, ratio float64) (int, error) {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 || artifact.Config.Partitions < 1 {
 		return 0, errors.New("invalid M3 overlap capacity inputs")
@@ -328,6 +372,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		Capacity: overlap.Capacity, OverlapRequested: overlap.Budget,
 		OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler,
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
+		ShardPlan: cfg.shardPlan,
 	}
 	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
 	if err != nil {
@@ -685,7 +730,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	}
 	if !cleanup {
 		descriptor := m3VariantDescriptorV1{
-			SchemaVersion: 5, ResultKind: "m3_persistent_variant_descriptor_v5", VariantID: variantID,
+			SchemaVersion: 6, ResultKind: "m3_persistent_variant_descriptor_v6", VariantID: variantID,
 			AssignmentBasis: cfg.partitionAssignment, OverlapRatio: ratio, OverlapPolicy: manifest.BalancePolicy,
 			FixtureChecksum: fixture.Checksum, BaseSHA: cfg.baseSHA, HeadSHA: cfg.headSHA, BuildDirty: cfg.m3BuildDirty, ExecutableSHA256: executableSHA256, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphArtifactDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, KaHIPPythonSHA256: cfg.kahipPythonSHA256, KaHIPAdapterSHA256: cfg.kahipAdapterSHA256, Source: artifact.Source,
 			BuildIdentityDigest: buildIdentityDigest,
@@ -706,7 +751,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			M3MaxBenchmarkVisits:     cfg.m3MaxBenchmarkVisits,
 			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
-			ShardPlan:                m3ShardPlanForArtifactV1(artifact, ratio, overlap),
+			ShardPlan:                cfg.shardPlan,
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest, routerRuntime.Config); err != nil {
 			return m3PartitionIndexRow{}, err

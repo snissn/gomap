@@ -103,6 +103,64 @@ func TestShardGenerationDescriptorRejectsStaleVersionAndConfigV1(t *testing.T) {
 	}
 }
 
+func TestShardGenerationSummariesAreDerivedFromMembershipsV1(t *testing.T) {
+	a := usefulOnlyArtifact(t, [][]int{{1, 2}, {0, 2}, {0, 1, 3}, {2}}, []int{0, 0, 1, 1})
+	plan, err := PlanByteBoundedShardsV1(testShardRequestV1(a, .5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := OverlapConfig{Ratio: .5, Capacity: plan.OverlapCapacity, UsefulOnly: true}
+	overlap, err := BuildOverlap(a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := NewShardGenerationDescriptorV1(plan, cfg, overlap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desc.PackSummaries) != plan.Partitions {
+		t.Fatalf("summaries=%d want planned partitions=%d", len(desc.PackSummaries), plan.Partitions)
+	}
+	var homeRows, overlapRows int
+	for _, summary := range desc.PackSummaries {
+		homeRows += summary.HomeRows
+		overlapRows += summary.OverlapRows
+	}
+	if homeRows != plan.Vectors || overlapRows != overlap.Used {
+		t.Fatalf("derived home=%d overlap=%d want %d/%d", homeRows, overlapRows, plan.Vectors, overlap.Used)
+	}
+	for name, mutate := range map[string]func(*ShardGenerationDescriptorV1){
+		"omitted pack": func(candidate *ShardGenerationDescriptorV1) {
+			candidate.PackSummaries = candidate.PackSummaries[:len(candidate.PackSummaries)-1]
+		},
+		"unrelated load": func(candidate *ShardGenerationDescriptorV1) {
+			candidate.PackSummaries[0].OverlapRows++
+			candidate.PackSummaries[0].Rows++
+		},
+		"unrelated bytes": func(candidate *ShardGenerationDescriptorV1) {
+			candidate.PackSummaries[0].Bytes++
+		},
+		"dropped membership": func(candidate *ShardGenerationDescriptorV1) {
+			candidate.Memberships = candidate.Memberships[:len(candidate.Memberships)-1]
+			candidate.MembershipDigest, _ = MembershipDigestV1(candidate.Memberships)
+		},
+		"duplicated membership": func(candidate *ShardGenerationDescriptorV1) {
+			candidate.Memberships[1] = candidate.Memberships[0]
+			candidate.MembershipDigest, _ = MembershipDigestV1(candidate.Memberships)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := desc
+			candidate.Memberships = append([]Membership(nil), desc.Memberships...)
+			candidate.PackSummaries = append([]ShardPackSummaryV1(nil), desc.PackSummaries...)
+			mutate(&candidate)
+			if err := ValidateShardGenerationDescriptorV1(candidate); err == nil {
+				t.Fatalf("accepted %s: %+v", name, candidate.PackSummaries)
+			}
+		})
+	}
+}
+
 func TestRouterPartitionsContainExactlyRealizedMembershipV1(t *testing.T) {
 	a := usefulOnlyArtifact(t, [][]int{{1, 2}, {0, 2}, {0, 1, 3}, {2}}, []int{0, 0, 1, 1})
 	overlap, err := BuildOverlap(a, OverlapConfig{Ratio: .5, Capacity: 3, UsefulOnly: true})

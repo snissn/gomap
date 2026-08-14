@@ -22,19 +22,56 @@ applying it. The result enforces:
 
 The production M3 runner derives the narrow target-aware capacity
 `max(m2_cap, ceil((source_count + requested)/partitions))` and admits only
-useful overlap (`UsefulOnly`). Partition count and that capacity are planned
-from an explicit target-hot-byte budget, current FP32 traversal-row bytes,
-and fixed graph/identity overhead; the planner never reads host LLC. Useful
-proposals stop when declared cut-reduction utility is exhausted. Leftover
-budget stays unspent; filler replicas are rejected. `RequireExact` remains
-available for diagnostic exact-fill experiments and is mutually exclusive
-with useful-only. Ratio zero emits only home memberships and therefore
+useful overlap (`UsefulOnly`). Useful proposals stop when declared
+cut-reduction utility is exhausted. Leftover budget stays unspent; filler
+replicas are rejected. `RequireExact` remains available for diagnostic
+exact-fill experiments, is mutually exclusive with useful-only, and keeps its
+strict behavior: an unrealizable global target fails closed rather than
+reporting a shortfall. Ratio zero emits only home memberships and therefore
 preserves exact M2 partition loads and edge cut. The integrity-bound M1
 `BalancePolicy`, retained M3 descriptor (`shard_plan`), and versioned
 `treedb_vector_partition_shard_generation_v1` record carry requested,
 realized, rejected, useful/filler, per-pack row/byte, and declared-capacity
 accounting. Unknown generation-descriptor versions fail closed; TreeDB is
 pre-alpha and does not migrate old generation descriptors.
+
+### Byte-bounded shard planning
+
+`-shard-plan byte_bounded` makes an explicit per-pack hot-byte budget
+authoritative over partition construction. `PlanByteBoundedShardsV1` derives
+the partition count, home capacity, and per-pack membership capacity from the
+authoritative fixture row count and dimensions, current FP32 traversal-row
+bytes, and fixed graph/identity overhead. The planner never reads host LLC,
+and it fails closed before any allocation on overflow, an undersized target,
+or an impossible balance.
+
+The plan is derived before the artifact is built, so the packs the benchmark
+materializes are the packs the persisted plan describes. `-partitions` may be
+omitted, in which case the planned count is used; supplying a count that
+contradicts the plan fails closed rather than silently building a different
+geometry. One artifact serves every requested overlap ratio in a run, so the
+plan is derived at the largest requested ratio. Before materialization the
+runner re-derives per-pack home/overlap/total loads from the realized
+membership list and rejects any pack outside the planned home capacity,
+membership capacity, or hot-byte budget.
+
+For the selected 128-dimensional contract at the portable default budget
+(7500 rows of 128-d FP32 plus 512 B fixed per-row overhead = 7,680,000 B),
+100k rows plan to 16 partitions and 250k rows plan to 40 partitions, both at
+7500 memberships per pack. `-shard-plan off` (the default) keeps `-partitions`
+authoritative and persists no plan; a descriptor written without the planner
+carries an entirely zero `shard_plan` rather than a reverse-engineered one.
+
+The plan is part of the M3 variant build-identity digest and is revalidated on
+reopen against the descriptor's own source rows, dimensions, partition count,
+capacity, imbalance, overlap ratio, and per-partition loads, so a zero, stale,
+or edited plan cannot survive reopen validation.
+
+Because the plan changed both the descriptor shape and its integrity binding,
+the retained M3 variant descriptor is now
+`m3_persistent_variant_descriptor_v6`. Version 5 descriptors fail closed;
+TreeDB is pre-alpha and does not migrate retained M3 databases, so an older
+retained database must be rebuilt rather than reinterpreted.
 
 ## Native pack construction and reopen
 

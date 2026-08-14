@@ -34,9 +34,19 @@ func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap
 	if err != nil {
 		return ShardGenerationDescriptorV1{}, err
 	}
-	summaries, err := AccountShardPacksV1(plan, overlap.Loads)
+	summaries, err := AccountShardPacksV1(plan, overlap.Memberships)
 	if err != nil {
 		return ShardGenerationDescriptorV1{}, err
+	}
+	// The builder's own realized loads are evidence, not authority: reject a
+	// result whose declared loads disagree with the memberships it published.
+	if len(overlap.Loads) != len(summaries) {
+		return ShardGenerationDescriptorV1{}, errors.New("vectorpartition: overlap loads do not cover every planned pack")
+	}
+	for partition, load := range overlap.Loads {
+		if load != summaries[partition].Rows {
+			return ShardGenerationDescriptorV1{}, fmt.Errorf("vectorpartition: pack %d load=%d does not match membership-derived rows=%d", partition, load, summaries[partition].Rows)
+		}
 	}
 	out := ShardGenerationDescriptorV1{
 		SchemaVersion:    ShardGenerationDescriptorSchemaV1,
@@ -100,17 +110,23 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 	if recomputed != d.Plan {
 		return errors.New("vectorpartition: shard generation plan does not match selected inputs")
 	}
-	summaries, err := AccountShardPacksV1(d.Plan, loadsFromSummariesV1(d.PackSummaries))
+	if d.OverlapConfig.Capacity != d.Plan.OverlapCapacity {
+		return errors.New("vectorpartition: shard generation overlap capacity does not match the plan")
+	}
+	// Pack summaries are re-derived from the memberships, never revalidated
+	// against themselves, so an omitted pack or an unrelated declared load
+	// cannot survive by recomputing the membership digest.
+	summaries, err := AccountShardPacksV1(d.Plan, d.Memberships)
 	if err != nil {
 		return err
 	}
-	rawWant, err := json.Marshal(summaries)
-	if err != nil {
-		return err
+	if len(d.PackSummaries) != len(summaries) {
+		return fmt.Errorf("vectorpartition: shard generation declares %d pack summaries, plan requires %d", len(d.PackSummaries), len(summaries))
 	}
-	rawGot, err := json.Marshal(d.PackSummaries)
-	if err != nil || !bytes.Equal(rawWant, rawGot) {
-		return errors.New("vectorpartition: shard generation pack summaries mismatch")
+	for partition, want := range summaries {
+		if d.PackSummaries[partition] != want {
+			return fmt.Errorf("vectorpartition: shard generation pack %d summary=%+v does not match membership-derived %+v", partition, d.PackSummaries[partition], want)
+		}
 	}
 	digest, err := MembershipDigestV1(d.Memberships)
 	if err != nil {
@@ -129,12 +145,4 @@ func MembershipDigestV1(memberships []Membership) (string, error) {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-func loadsFromSummariesV1(summaries []ShardPackSummaryV1) []int {
-	loads := make([]int, len(summaries))
-	for i, summary := range summaries {
-		loads[i] = summary.Rows
-	}
-	return loads
 }

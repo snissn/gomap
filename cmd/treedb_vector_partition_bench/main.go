@@ -72,6 +72,12 @@ const (
 	m8BenchmarkWorkScope                    = "m8_query_passes_v1: measured coordinator requests, warmup/endpoint preflight, cached exhaustive attribution, and exact/approximate/local-HNSW attribution passes; excludes the pre-existing canonical source oracle and engine-internal HNSW work"
 	partitionAssignmentGraphV1              = "graph"
 	partitionAssignmentStableIDHashV1       = "stable_id_hash"
+	// shardPlanModeOffV1 keeps the operator-declared partition count
+	// authoritative and persists no shard plan. shardPlanModeByteBoundedV1
+	// makes the explicit hot-byte budget authoritative: the partition count and
+	// per-pack capacity are derived before any artifact is built.
+	shardPlanModeOffV1         = "off"
+	shardPlanModeByteBoundedV1 = "byte_bounded"
 	// The canonical M8 corpus permits up to maxVectors primary memberships and
 	// up to one full duplicate membership per source row. At 64 conservative
 	// candidate bytes per membership, 128 MiB keeps that complete comparison
@@ -105,6 +111,9 @@ type config struct {
 	m8VariantDBs          []string
 	partitionAssignment   string
 	partitionTruthOracle  bool
+	shardPlanMode         string
+	shardPlanTargetBytes  uint64
+	shardPlan             vectorpartition.ShardPlanV1
 	kahipPython           string
 	kahipPythonSHA256     string
 	kahipScript           string
@@ -717,6 +726,9 @@ func runWithRuntimeCapabilities(args []string, stdout io.Writer, capabilities be
 	if err != nil {
 		return err
 	}
+	if cfg, err = applyByteBoundedShardPlanV1(cfg, fixture); err != nil {
+		return err
+	}
 	if cfg.kahipPython != "" {
 		if err := validateKaHIPSeedV1(fixture.Seed); err != nil {
 			return err
@@ -888,6 +900,7 @@ func parseConfig(args []string) (config, error) {
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
 		warmup:              1,
 		partitionAssignment: partitionAssignmentGraphV1,
+		shardPlanMode:       shardPlanModeOffV1,
 		kahipTimeout:        kahipDefaultTimeout,
 		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
@@ -932,6 +945,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.m8TruthCache, "m8-truth-cache", "", "external canonical exact-truth cache directory; identity-bound and fail-closed")
 	fs.StringVar(&cfg.m8TruthCacheSHA256, "m8-truth-cache-sha256", "", "independently trusted SHA-256 of the canonical truth-cache artifact required for cache reuse")
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
+	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
+	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "trusted local offline Python for KaHIP 3.25 partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
 	fs.StringVar(&cfg.kahipScript, "partition-kahip-script", "", "explicit offline KaHIP adapter script path required with -partition-kahip-python")
@@ -1035,7 +1050,21 @@ func parseConfig(args []string) (config, error) {
 			cfg.m8VariantDBs = append(cfg.m8VariantDBs, item)
 		}
 	}
-	if cfg.dataset == "" || cfg.out == "" || cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
+	// The byte-bounded planner owns the partition count. It needs the
+	// authoritative fixture row count and dimensions, which are only loaded
+	// after parsing, so leaving -partitions unset defers both the count and
+	// every partition-relative bound to applyByteBoundedShardPlanV1.
+	if cfg.shardPlanMode != shardPlanModeOffV1 && cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
+		return config{}, fmt.Errorf("-shard-plan must be %q or %q", shardPlanModeOffV1, shardPlanModeByteBoundedV1)
+	}
+	if cfg.shardPlanMode == shardPlanModeByteBoundedV1 && cfg.stage != "overlap,partition_index" {
+		return config{}, errors.New("-shard-plan byte_bounded applies only to -stage overlap,partition_index")
+	}
+	if cfg.shardPlanTargetBytes != 0 && cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
+		return config{}, errors.New("-shard-plan-target-hot-bytes requires -shard-plan byte_bounded")
+	}
+	plannedPartitions := cfg.shardPlanMode == shardPlanModeByteBoundedV1 && cfg.partitions == 0
+	if cfg.dataset == "" || cfg.out == "" || !plannedPartitions && cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
 		return config{}, errors.New("dataset, out, positive bounded partitions/top-k, and json|text format are required")
 	}
 	if err := validateSourceHNSWDegree(cfg.sourceHNSWDegree); err != nil {
@@ -1044,9 +1073,9 @@ func parseConfig(args []string) (config, error) {
 	if len(cfg.probes) == 0 || len(cfg.overlaps) == 0 || math.IsNaN(cfg.recallTarget) || math.IsInf(cfg.recallTarget, 0) || cfg.recallTarget < 0 || cfg.recallTarget > 1 {
 		return config{}, errors.New("probes/overlap must be non-empty and recall target must be in [0,1]")
 	}
-	for _, p := range cfg.probes {
-		if p < 1 || p > cfg.partitions {
-			return config{}, errors.New("each probe count must be within partitions")
+	if !plannedPartitions {
+		if err := validateProbesWithinPartitionsV1(cfg.probes, cfg.partitions); err != nil {
+			return config{}, err
 		}
 	}
 	for _, x := range cfg.overlaps {
@@ -1223,6 +1252,54 @@ func parseConfig(args []string) (config, error) {
 	if maxEdgesForInput > 0 && maxEdgesForInput < int64(cfg.partition.MaxEdges) {
 		cfg.partition.MaxEdges = int(maxEdgesForInput)
 	}
+	return cfg, nil
+}
+
+func validateProbesWithinPartitionsV1(probes []int, partitions int) error {
+	for _, p := range probes {
+		if p < 1 || p > partitions {
+			return errors.New("each probe count must be within partitions")
+		}
+	}
+	return nil
+}
+
+// applyByteBoundedShardPlanV1 makes the explicit hot-byte budget authoritative
+// over partition construction. The plan is derived from the authoritative
+// fixture row count and dimensions before any artifact, pack, or router asset
+// exists, so the packs the benchmark materializes are exactly the packs the
+// persisted plan describes. One artifact serves every requested overlap ratio,
+// so the plan is derived at the largest requested ratio: a smaller ratio fits
+// the same geometry with room to spare, while a larger one would not.
+func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, error) {
+	if cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
+		return cfg, nil
+	}
+	planningRatio := 0.0
+	for _, ratio := range cfg.overlaps {
+		if ratio > planningRatio {
+			planningRatio = ratio
+		}
+	}
+	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
+	in.OverlapRatio = planningRatio
+	in.Imbalance = cfg.partition.Imbalance
+	if cfg.shardPlanTargetBytes != 0 {
+		in.TargetHotBytes = cfg.shardPlanTargetBytes
+	}
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(in)
+	if err != nil {
+		return config{}, fmt.Errorf("plan byte-bounded shards: %w", err)
+	}
+	if cfg.partitions != 0 && cfg.partitions != plan.Partitions {
+		return config{}, fmt.Errorf("-partitions %d contradicts the byte-bounded plan: %d rows at %d target hot bytes require %d partitions", cfg.partitions, fixture.Vectors, plan.TargetHotBytes, plan.Partitions)
+	}
+	if err := validateProbesWithinPartitionsV1(cfg.probes, plan.Partitions); err != nil {
+		return config{}, err
+	}
+	cfg.partitions = plan.Partitions
+	cfg.partition.Partitions = plan.Partitions
+	cfg.shardPlan = plan
 	return cfg, nil
 }
 

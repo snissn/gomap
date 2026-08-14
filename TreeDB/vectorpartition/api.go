@@ -131,8 +131,8 @@ func PlanByteBoundedShardsV1(in ShardPlanRequestV1) (ShardPlanV1, error) {
 func SelectedOverlapConfigV1(capacity int) OverlapConfig {
 	return internal.SelectedOverlapConfigV1(capacity)
 }
-func AccountShardPacksV1(plan ShardPlanV1, loads []int) ([]ShardPackSummaryV1, error) {
-	return internal.AccountShardPacksV1(plan, loads)
+func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
+	return internal.AccountShardPacksV1(plan, memberships)
 }
 func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
 	return internal.NewShardGenerationDescriptorV1(plan, cfg, overlap)

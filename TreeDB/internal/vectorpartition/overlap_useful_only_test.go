@@ -1,6 +1,7 @@
 package vectorpartition
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,8 +70,15 @@ func TestOverlapUsefulOnlyRespectsCapsAndTieOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if capped.Used != 0 || capped.Filler != 0 || !reflect.DeepEqual(capped.Loads, []int{2, 2}) {
+	if capped.Used != 0 || capped.Filler != 0 || capped.Unspent != capped.Budget || !reflect.DeepEqual(capped.Loads, []int{2, 2}) {
 		t.Fatalf("capacity-capped useful-only=%+v", capped)
+	}
+	// The same capacity under exact-fill diagnostics stays strict: an
+	// unrealizable global target fails closed instead of reporting a shortfall.
+	exact, exactErr := BuildOverlap(a, OverlapConfig{Ratio: .5, Capacity: 2, RequireExact: true})
+	var shortfall *OverlapShortfallError
+	if !errors.As(exactErr, &shortfall) || shortfall.Realized != 0 || shortfall.Rejected != capped.Budget {
+		t.Fatalf("exact-fill shortfall got=%+v err=%v", exact, exactErr)
 	}
 }
 

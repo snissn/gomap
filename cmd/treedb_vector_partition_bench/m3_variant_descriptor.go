@@ -128,6 +128,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		OverlapFiller            int
 		EdgeCutBefore            int
 		EdgeCutAfter             int
+		ShardPlan                vectorpartition.ShardPlanV1
 	}{
 		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, ExecutableSHA256: d.ExecutableSHA256, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend, KaHIPPythonSHA256: d.KaHIPPythonSHA256, KaHIPAdapterSHA256: d.KaHIPAdapterSHA256,
@@ -137,6 +138,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		Capacity:             d.Capacity, OverlapRequested: d.OverlapRequested,
 		OverlapUseful: d.OverlapUseful, OverlapFiller: d.OverlapFiller,
 		EdgeCutBefore: d.EdgeCutBefore, EdgeCutAfter: d.EdgeCutAfter,
+		ShardPlan: d.ShardPlan,
 	}
 	raw, err := json.Marshal(identity)
 	if err != nil {
@@ -254,7 +256,7 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	if usedCapacity < d.SourceRows || usedCapacity > totalCapacity || totalCapacity-usedCapacity > uint64(math.MaxInt) {
 		return errors.New("malformed M3 variant descriptor")
 	}
-	if d.SchemaVersion != 5 || d.ResultKind != "m3_persistent_variant_descriptor_v5" || d.VariantID != wantVariant ||
+	if d.SchemaVersion != 6 || d.ResultKind != "m3_persistent_variant_descriptor_v6" || d.VariantID != wantVariant ||
 		!m8SHA256V1(d.FixtureChecksum) || !validSHA(d.BaseSHA) || !validSHA(d.HeadSHA) || !m8SHA256V1(d.ExecutableSHA256) || !m8SHA256V1(d.ArtifactSHA256) || !m8SHA256V1(d.GraphArtifactSHA256) || d.ArtifactBackend == "" ||
 		!m8SHA256V1(d.GraphBuildSHA256) || !m8SHA256V1(d.BuildIdentityDigest) || d.BuildIdentityDigest != wantBuildIdentity ||
 		!m8SHA256V1(d.Source.Checksum) || !m8SHA256V1(d.SourceOrdinalDigest) || d.DatabaseDirectory == "" || !m8SHA256V1(d.ManifestIntegrity) || !m8SHA256V1(d.ReadySetDigest) ||
@@ -287,6 +289,45 @@ func validateM3VariantDescriptorV1(d m3VariantDescriptorV1) error {
 	}
 	if loadTotal != usedCapacity {
 		return errors.New("M3 variant descriptor partition loads do not match memberships")
+	}
+	return m3ValidateDescriptorShardPlanV1(d)
+}
+
+// m3ValidateDescriptorShardPlanV1 revalidates the persisted byte-bounded plan
+// against the authoritative descriptor fields on reopen. The plan is also part
+// of the build-identity digest, so an edited plan additionally breaks that
+// digest; this check rejects the plan on its own terms so a stale or
+// self-consistent-but-unrelated plan cannot survive either.
+func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
+	plan := d.ShardPlan
+	if plan == (vectorpartition.ShardPlanV1{}) {
+		// -shard-plan off never derives a plan, and a partially populated one is
+		// never produced: an absent plan must be absent in every field.
+		return nil
+	}
+	recomputed, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: plan.Vectors, Dimensions: plan.Dimensions, OverlapRatio: plan.OverlapRatio,
+		Imbalance: plan.Imbalance, TargetHotBytes: plan.TargetHotBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("M3 variant shard plan is not reproducible: %w", err)
+	}
+	if recomputed != plan {
+		return errors.New("M3 variant shard plan does not match its own recorded inputs")
+	}
+	rowBytes := plan.TraversalRowBytes + plan.GraphIdentityOverhead
+	if plan.TraversalRowBytes != plan.Dimensions*vectorpartition.FP32BytesPerDimensionV1 || rowBytes < 1 || plan.MaxMembershipsPerPack < 1 {
+		return errors.New("M3 variant shard plan row-byte accounting is malformed")
+	}
+	if uint64(plan.Vectors) != d.SourceRows || plan.Dimensions != d.Source.Dimensions ||
+		plan.Partitions != int(d.Partitions) || plan.OverlapCapacity != d.Capacity ||
+		plan.Imbalance != d.PartitionConfig.Imbalance || plan.OverlapRatio < d.OverlapRatio {
+		return errors.New("M3 variant shard plan does not bind the realized build")
+	}
+	for partition, load := range d.PartitionLoads {
+		if load > plan.MaxMembershipsPerPack || uint64(load) > plan.TargetHotBytes/uint64(rowBytes) {
+			return fmt.Errorf("M3 variant pack %d load=%d exceeds the byte-bounded plan", partition, load)
+		}
 	}
 	return nil
 }

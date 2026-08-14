@@ -186,10 +186,14 @@ func (p ShardPlanV1) request() ShardPlanInputV1 { return p.input() }
 
 // ShardPackSummaryV1 records realized memberships and charged hot bytes for
 // one partition pack. Bytes use the planner's portable row charge, not host LLC.
+// Every field is derived from the realized membership list; none of them is
+// trusted from a decoded descriptor.
 type ShardPackSummaryV1 struct {
-	Partition int    `json:"partition"`
-	Rows      int    `json:"rows"`
-	Bytes     uint64 `json:"bytes"`
+	Partition   int    `json:"partition"`
+	HomeRows    int    `json:"home_rows"`
+	OverlapRows int    `json:"overlap_rows"`
+	Rows        int    `json:"rows"`
+	Bytes       uint64 `json:"bytes"`
 }
 
 // SelectedOverlapConfigV1 is the #4143 useful-only overlap contract. Callers
@@ -198,26 +202,62 @@ func SelectedOverlapConfigV1(capacity int) OverlapConfig {
 	return OverlapConfig{Ratio: SelectedOverlapRatioV1, Capacity: capacity, UsefulOnly: true}
 }
 
-// AccountShardPacksV1 converts realized partition loads into per-pack byte
-// summaries and fails closed when any pack exceeds the planned budget.
-func AccountShardPacksV1(plan ShardPlanV1, loads []int) ([]ShardPackSummaryV1, error) {
-	if plan.MaxMembershipsPerPack < 1 || plan.TraversalRowBytes < 1 || len(loads) == 0 || len(loads) > maxPartitions {
+// AccountShardPacksV1 derives the authoritative per-pack accounting from the
+// realized membership list alone. It always returns exactly plan.Partitions
+// summaries in canonical partition order, so a descriptor cannot omit a pack or
+// publish loads unrelated to its memberships. It fails closed on a noncanonical
+// or duplicate membership, an out-of-range ordinal or partition, a vector
+// without exactly one home, and on any pack that exceeds the planned home
+// capacity, membership capacity, or hot-byte budget.
+func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPackSummaryV1, error) {
+	if plan.Partitions < 1 || plan.Partitions > maxPartitions || plan.Vectors < 1 || plan.Vectors > maxVectors ||
+		plan.HomeCapacity < 1 || plan.OverlapCapacity < plan.HomeCapacity || plan.MaxMembershipsPerPack < 1 ||
+		plan.TraversalRowBytes < 1 || plan.PlannedMemberships < plan.Vectors {
 		return nil, errors.New("vectorpartition: invalid shard pack accounting inputs")
 	}
 	rowBytes, ok := checkedAddInt(plan.TraversalRowBytes, plan.GraphIdentityOverhead)
-	if !ok {
+	if !ok || rowBytes < 1 {
 		return nil, errors.New("vectorpartition: pack row-byte overflow")
 	}
-	out := make([]ShardPackSummaryV1, len(loads))
-	for i, rows := range loads {
-		if rows < 0 || rows > plan.MaxMembershipsPerPack || rows > plan.OverlapCapacity {
-			return nil, fmt.Errorf("vectorpartition: pack %d rows=%d exceed planned capacity", i, rows)
+	if len(memberships) < plan.Vectors || len(memberships) > plan.PlannedMemberships {
+		return nil, fmt.Errorf("vectorpartition: realized memberships %d outside planned [%d,%d]", len(memberships), plan.Vectors, plan.PlannedMemberships)
+	}
+	homes := make([]int, plan.Vectors)
+	out := make([]ShardPackSummaryV1, plan.Partitions)
+	for partition := range out {
+		out[partition].Partition = partition
+	}
+	for i, membership := range memberships {
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= plan.Vectors || membership.Partition < 0 || membership.Partition >= plan.Partitions {
+			return nil, errors.New("vectorpartition: shard membership is outside planned bounds")
 		}
-		hotBytes, ok := mulUint64(uint64(rows), uint64(rowBytes))
+		if i > 0 && (membership.VectorOrdinal < memberships[i-1].VectorOrdinal ||
+			membership.VectorOrdinal == memberships[i-1].VectorOrdinal && membership.Partition <= memberships[i-1].Partition) {
+			return nil, errors.New("vectorpartition: noncanonical or duplicate shard membership")
+		}
+		if membership.Home {
+			homes[membership.VectorOrdinal]++
+			out[membership.Partition].HomeRows++
+		} else {
+			out[membership.Partition].OverlapRows++
+		}
+		out[membership.Partition].Rows++
+	}
+	for ordinal, count := range homes {
+		if count != 1 {
+			return nil, fmt.Errorf("vectorpartition: vector %d has %d home memberships", ordinal, count)
+		}
+	}
+	for partition := range out {
+		summary := &out[partition]
+		if summary.HomeRows > plan.HomeCapacity || summary.Rows > plan.OverlapCapacity || summary.Rows > plan.MaxMembershipsPerPack {
+			return nil, fmt.Errorf("vectorpartition: pack %d home=%d rows=%d exceed planned capacity", partition, summary.HomeRows, summary.Rows)
+		}
+		hotBytes, ok := mulUint64(uint64(summary.Rows), uint64(rowBytes))
 		if !ok || hotBytes > plan.TargetHotBytes {
-			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow or exceed target", i)
+			return nil, fmt.Errorf("vectorpartition: pack %d hot-bytes overflow or exceed target", partition)
 		}
-		out[i] = ShardPackSummaryV1{Partition: i, Rows: rows, Bytes: hotBytes}
+		summary.Bytes = hotBytes
 	}
 	return out, nil
 }
