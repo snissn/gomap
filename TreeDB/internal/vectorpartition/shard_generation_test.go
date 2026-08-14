@@ -3,6 +3,7 @@ package vectorpartition
 import (
 	"bytes"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -215,4 +216,54 @@ func TestRouterPartitionsContainExactlyRealizedMembershipV1(t *testing.T) {
 			t.Fatalf("missing realized membership %+v", membership)
 		}
 	}
+}
+
+// TestAccountShardPacksRejectsPerVectorOverlapCapV1 pins the durable per-vector
+// membership cap on the decode path. BuildOverlap enforces it while building,
+// but a persisted descriptor is only ever checked through AccountShardPacksV1,
+// so without this a self-consistent record could replicate one ordinal into
+// more partitions than the builder could ever produce while every pack total
+// stayed inside capacity.
+func TestAccountShardPacksRejectsPerVectorOverlapCapV1(t *testing.T) {
+	vectors := MaxOverlapMembershipsPerVector + 4
+	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{
+		Vectors: vectors, Dimensions: 2, OverlapRatio: 1, Imbalance: 1,
+		TargetHotBytes: uint64(2 * (2*FP32BytesPerDimensionV1 + GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Partitions < MaxOverlapMembershipsPerVector+2 {
+		t.Fatalf("fixture needs more partitions than the cap: %+v", plan)
+	}
+	// One home per vector, then replicate ordinal 0 into as many partitions as
+	// the cap allows. Every pack stays far inside its capacity.
+	base := make([]Membership, 0, vectors+MaxOverlapMembershipsPerVector+1)
+	for ordinal := 0; ordinal < vectors; ordinal++ {
+		base = append(base, Membership{VectorOrdinal: ordinal, Partition: ordinal % plan.Partitions, Home: true})
+	}
+	replicate := func(count int) []Membership {
+		out := make([]Membership, 0, len(base)+count)
+		for partition := 1; partition <= count; partition++ {
+			out = append(out, Membership{VectorOrdinal: 0, Partition: partition})
+		}
+		out = append(out, base...)
+		sortMembershipsForTest(out)
+		return out
+	}
+	if _, err := AccountShardPacksV1(plan, replicate(MaxOverlapMembershipsPerVector)); err != nil {
+		t.Fatalf("rejected a vector at exactly the cap: %v", err)
+	}
+	if _, err := AccountShardPacksV1(plan, replicate(MaxOverlapMembershipsPerVector+1)); err == nil {
+		t.Fatalf("accepted %d non-home memberships for one vector", MaxOverlapMembershipsPerVector+1)
+	}
+}
+
+func sortMembershipsForTest(m []Membership) {
+	sort.Slice(m, func(i, j int) bool {
+		if m[i].VectorOrdinal != m[j].VectorOrdinal {
+			return m[i].VectorOrdinal < m[j].VectorOrdinal
+		}
+		return m[i].Partition < m[j].Partition
+	})
 }

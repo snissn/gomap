@@ -223,6 +223,7 @@ func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPac
 		return nil, fmt.Errorf("vectorpartition: realized memberships %d outside planned [%d,%d]", len(memberships), plan.Vectors, plan.PlannedMemberships)
 	}
 	homes := make([]int, plan.Vectors)
+	extras := make([]int, plan.Vectors)
 	out := make([]ShardPackSummaryV1, plan.Partitions)
 	for partition := range out {
 		out[partition].Partition = partition
@@ -239,6 +240,15 @@ func AccountShardPacksV1(plan ShardPlanV1, memberships []Membership) ([]ShardPac
 			homes[membership.VectorOrdinal]++
 			out[membership.Partition].HomeRows++
 		} else {
+			// BuildOverlap enforces the durable per-vector cap while building,
+			// but a decoded descriptor is only ever checked here. Without this
+			// a self-consistent record could replicate one ordinal into more
+			// partitions than the builder could ever produce while every pack
+			// total stayed inside capacity.
+			extras[membership.VectorOrdinal]++
+			if extras[membership.VectorOrdinal] > MaxOverlapMembershipsPerVector {
+				return nil, fmt.Errorf("vectorpartition: vector %d holds %d non-home memberships above the %d cap", membership.VectorOrdinal, extras[membership.VectorOrdinal], MaxOverlapMembershipsPerVector)
+			}
 			out[membership.Partition].OverlapRows++
 		}
 		out[membership.Partition].Rows++

@@ -775,6 +775,12 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
+		// The record is already on disk and the descriptor is complete, so
+		// verify the pairing here rather than letting the first reopen be what
+		// discovers a retained database no consumer can open.
+		if err := m3VerifyRetainedShardGenerationV1(dir, descriptor); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
 		row.ShardGenerationBytes = int64(len(shardGenerationRaw))
 	}
 	return row, nil
