@@ -790,7 +790,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			// Aggregate loads cannot distinguish two assignments that share them,
 			// and the membership lists are only both in scope here, so bind the
 			// record's actual pairs to what materialized the packs.
-			if err := m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals); err != nil {
+			if err := m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals, artifact.Assignment); err != nil {
 				return m3PartitionIndexRow{}, err
 			}
 		}

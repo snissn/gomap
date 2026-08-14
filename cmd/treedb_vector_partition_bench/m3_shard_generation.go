@@ -124,11 +124,13 @@ func m3VerifyRetainedShardGenerationV1(dir string, d m3VariantDescriptorV1) erro
 //
 // The aggregate checks in m3VerifyRetainedShardGenerationV1 cannot separate two
 // assignments that happen to share per-partition loads and overlap totals, so
-// swapping equal numbers of vectors between partitions would survive them. The
-// membership lists are only both in scope during construction — a reopen has
-// neither the manifest nor the artifact/source ordinal mapping — so this is the
-// build-time half of the binding.
-func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGenerationDescriptorV1, membershipOrdinals [][]int) error {
+// swapping equal numbers of vectors between partitions would survive them, as
+// would moving a vector's home flag onto one of its own overlap partitions.
+// Both the pair and its home/overlap classification are therefore bound here,
+// the latter against the immutable M2 assignment. These inputs are only in
+// scope during construction — a reopen has neither the manifest nor the
+// artifact/source ordinal mapping — so this is the build-time half.
+func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGenerationDescriptorV1, membershipOrdinals [][]int, assignment []int) error {
 	if len(membershipOrdinals) != len(record.PackSummaries) {
 		return fmt.Errorf("shard generation record covers %d packs, materialization used %d", len(record.PackSummaries), len(membershipOrdinals))
 	}
@@ -136,6 +138,17 @@ func m3VerifyShardGenerationMembershipsV1(record vectorpartition.ShardGeneration
 	for _, membership := range record.Memberships {
 		if membership.Partition < 0 || membership.Partition >= len(perPartition) {
 			return fmt.Errorf("shard generation membership names partition %d outside the materialized %d", membership.Partition, len(perPartition))
+		}
+		if membership.VectorOrdinal < 0 || membership.VectorOrdinal >= len(assignment) {
+			return fmt.Errorf("shard generation membership names vector %d outside the assigned %d", membership.VectorOrdinal, len(assignment))
+		}
+		// Home status is not free to move between a vector's partitions: the M2
+		// assignment is immutable. Comparing only the (vector, partition) pairs
+		// would let a record flip a vector's home onto one of its overlap
+		// partitions with every pack row count and the overlap total unchanged.
+		if membership.Home != (membership.Partition == assignment[membership.VectorOrdinal]) {
+			return fmt.Errorf("shard generation membership vector %d partition %d declares home=%v against assignment %d",
+				membership.VectorOrdinal, membership.Partition, membership.Home, assignment[membership.VectorOrdinal])
 		}
 		perPartition[membership.Partition] = append(perPartition[membership.Partition], membership.VectorOrdinal)
 	}

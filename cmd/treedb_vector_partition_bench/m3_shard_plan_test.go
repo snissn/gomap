@@ -274,18 +274,39 @@ func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 		},
 		PackSummaries: []vectorpartition.ShardPackSummaryV1{{Partition: 0, Rows: 2}, {Partition: 1, Rows: 2}},
 	}
-	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}, {2, 3}}); err != nil {
+	assignment := []int{0, 0, 1, 1}
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}, {2, 3}}, assignment); err != nil {
 		t.Fatalf("matching memberships rejected: %v", err)
 	}
 	// Same per-partition counts, different vectors: the aggregate checks cannot
 	// see this, so the pair comparison has to.
-	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 2}, {1, 3}}); err == nil {
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 2}, {1, 3}}, assignment); err == nil {
 		t.Fatal("accepted a record that swapped vectors between packs")
 	}
-	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1, 2}, {3}}); err == nil {
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1, 2}, {3}}, assignment); err == nil {
 		t.Fatal("accepted a record whose pack sizes disagree with materialization")
 	}
-	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}}); err == nil {
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}}, assignment); err == nil {
 		t.Fatal("accepted a record covering more packs than materialization")
+	}
+
+	// Moving a vector's home onto one of its own overlap partitions preserves
+	// every (vector, partition) pair, every pack row count, and the overlap
+	// total, so the home/overlap classification has to be bound too.
+	flipped := vectorpartition.ShardGenerationDescriptorV1{
+		Memberships: []vectorpartition.Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true},
+			{VectorOrdinal: 1, Partition: 0},
+			{VectorOrdinal: 1, Partition: 1, Home: true},
+			{VectorOrdinal: 2, Partition: 1, Home: true},
+		},
+		PackSummaries: []vectorpartition.ShardPackSummaryV1{{Partition: 0, Rows: 2}, {Partition: 1, Rows: 2}},
+	}
+	// Vector 1's true home is partition 0, so this record is a home flip.
+	if err := m3VerifyShardGenerationMembershipsV1(flipped, [][]int{{0, 1}, {1, 2}}, []int{0, 0, 1}); err == nil {
+		t.Fatal("accepted a record that moved a home onto an overlap partition")
+	}
+	if err := m3VerifyShardGenerationMembershipsV1(record, [][]int{{0, 1}, {2, 3}}, []int{0, 0, 1}); err == nil {
+		t.Fatal("accepted a membership naming a vector outside the assignment")
 	}
 }
