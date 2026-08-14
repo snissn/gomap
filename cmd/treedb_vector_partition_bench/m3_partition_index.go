@@ -375,6 +375,11 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
 		ShardPlan: cfg.shardPlan,
 	}
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap)
+	if err != nil {
+		return m3PartitionIndexRow{}, err
+	}
+	identityDescriptor.ShardGenerationDigest = shardGenerationDigest
 	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -520,6 +525,15 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	dbOpen = false
+	// The generation record stays in the retained directory, and at the selected
+	// 250k shape it holds 300k membership entries. Write it before the final
+	// directory measurement so the reported footprint and bytes-per-source-vector
+	// include it instead of undercounting the retained database.
+	if !cleanup {
+		if err := m3WriteShardGenerationRecordV1(dir, shardGenerationRaw, shardGenerationDigest); err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+	}
 	finalTotalPhysicalBytes, err := m3DirectoryBytes(dir)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -753,6 +767,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
 			ShardPlan:                cfg.shardPlan,
+			ShardGenerationDigest:    shardGenerationDigest,
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest, routerRuntime.Config); err != nil {
 			return m3PartitionIndexRow{}, err
@@ -760,11 +775,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
-		generationBytes, err := m3WriteShardGenerationDescriptorV1(dir, cfg.shardPlan, ratio, overlap)
-		if err != nil {
-			return m3PartitionIndexRow{}, err
-		}
-		row.ShardGenerationBytes = int64(generationBytes)
+		row.ShardGenerationBytes = int64(len(shardGenerationRaw))
 	}
 	return row, nil
 }

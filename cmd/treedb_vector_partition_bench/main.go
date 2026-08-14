@@ -113,6 +113,7 @@ type config struct {
 	partitionTruthOracle  bool
 	shardPlanMode         string
 	shardPlanTargetBytes  uint64
+	shardPlanRatio        float64
 	shardPlan             vectorpartition.ShardPlanV1
 	kahipPython           string
 	kahipPythonSHA256     string
@@ -900,9 +901,9 @@ func parseConfig(args []string) (config, error) {
 		format: "json", topK: 10, recallTarget: .9, seed: 1, stage: "simulation",
 		warmup:              1,
 		partitionAssignment: partitionAssignmentGraphV1,
-		shardPlanMode:       shardPlanModeOffV1,
-		kahipTimeout:        kahipDefaultTimeout,
-		partition:           vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
+		shardPlanMode:       shardPlanModeOffV1, shardPlanRatio: -1,
+		kahipTimeout: kahipDefaultTimeout,
+		partition:    vectorpartition.DefaultConfig(), routerConfig: vectorpartition.DefaultRouterConfigV1(),
 		routerCandidates: 1024, sourceHNSWDegree: partitionHNSWDegree,
 		m8MaxRSSBytes: uint64(maxFixtureBytes), m8MaxAssetBytes: uint64(maxFixtureBytes), m8MaxExactTruthVisits: maxBenchmarkWorkUnits,
 		m8CoordinatorLimits: nativewire.DefaultVectorPartitionCoordinatorLimitsV1(),
@@ -947,6 +948,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.partitionAssignment, "partition-assignment", cfg.partitionAssignment, "partition assignment for partition/M3 stages: graph or stable_id_hash")
 	fs.StringVar(&cfg.shardPlanMode, "shard-plan", cfg.shardPlanMode, "off keeps -partitions authoritative; byte_bounded derives the M3 partition count and per-pack capacity from an explicit hot-byte budget before construction")
 	fs.Uint64Var(&cfg.shardPlanTargetBytes, "shard-plan-target-hot-bytes", 0, "explicit per-pack hot-byte budget for -shard-plan byte_bounded; zero inherits the selected portable default")
+	fs.Float64Var(&cfg.shardPlanRatio, "shard-plan-overlap-ratio", -1, "overlap ratio the byte-bounded plan provisions for; negative derives it from the largest -overlap value. Comparison variants that materialize different ratios share one geometry by planning for the same envelope")
 	fs.BoolVar(&cfg.partitionTruthOracle, "partition-truth-oracle", false, "emit exact truth primary-partition coverage diagnostic for -stage partition")
 	fs.StringVar(&cfg.kahipPython, "partition-kahip-python", "", "trusted local offline Python for KaHIP 3.25 partition/M3 build stages; never used online; adapter is scripts/treedb_kahip_partition.py")
 	fs.StringVar(&cfg.kahipScript, "partition-kahip-script", "", "explicit offline KaHIP adapter script path required with -partition-kahip-python")
@@ -1062,6 +1064,14 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.shardPlanTargetBytes != 0 && cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
 		return config{}, errors.New("-shard-plan-target-hot-bytes requires -shard-plan byte_bounded")
+	}
+	if cfg.shardPlanRatio >= 0 {
+		if cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
+			return config{}, errors.New("-shard-plan-overlap-ratio requires -shard-plan byte_bounded")
+		}
+		if math.IsNaN(cfg.shardPlanRatio) || math.IsInf(cfg.shardPlanRatio, 0) || cfg.shardPlanRatio > 1 {
+			return config{}, errors.New("-shard-plan-overlap-ratio must be finite in [0,1]")
+		}
 	}
 	plannedPartitions := cfg.shardPlanMode == shardPlanModeByteBoundedV1 && cfg.partitions == 0
 	if cfg.dataset == "" || cfg.out == "" || !plannedPartitions && cfg.partitions < 1 || cfg.partitions > maxPartitions || cfg.topK < 1 || cfg.maxVectors < 1 || cfg.maxVectors > maxVectors || cfg.maxBytes < 8 || cfg.maxBytes > maxFixtureBytes || cfg.format != "json" && cfg.format != "text" || cfg.stage != "simulation" && cfg.stage != "partition" && cfg.stage != "overlap,partition_index" && cfg.stage != "router" && cfg.stage != m6CoordinatorStageV1 && cfg.stage != m8ProductionMultiGroupModeV1 || cfg.routerCandidates < 1 {
@@ -1275,11 +1285,18 @@ func applyByteBoundedShardPlanV1(cfg config, fixture fixtureManifest) (config, e
 	if cfg.shardPlanMode != shardPlanModeByteBoundedV1 {
 		return cfg, nil
 	}
-	planningRatio := 0.0
+	planningRatio := cfg.shardPlanRatio
+	requested := 0.0
 	for _, ratio := range cfg.overlaps {
-		if ratio > planningRatio {
-			planningRatio = ratio
+		if ratio > requested {
+			requested = ratio
 		}
+	}
+	if planningRatio < 0 {
+		planningRatio = requested
+	}
+	if planningRatio < requested {
+		return config{}, fmt.Errorf("-shard-plan-overlap-ratio %.4f is below the largest requested overlap %.4f", planningRatio, requested)
 	}
 	in := vectorpartition.DefaultShardPlanInputV1(fixture.Vectors, fixture.Dimensions)
 	in.OverlapRatio = planningRatio

@@ -9,10 +9,11 @@ import (
 
 func byteBoundedShardPlanConfigV1() config {
 	return config{
-		shardPlanMode: shardPlanModeByteBoundedV1,
-		overlaps:      []float64{vectorpartition.SelectedOverlapRatioV1},
-		probes:        []int{1},
-		partition:     vectorpartition.DefaultConfig(),
+		shardPlanMode:  shardPlanModeByteBoundedV1,
+		shardPlanRatio: -1,
+		overlaps:       []float64{vectorpartition.SelectedOverlapRatioV1},
+		probes:         []int{1},
+		partition:      vectorpartition.DefaultConfig(),
 	}
 }
 
@@ -143,8 +144,8 @@ func TestM3ShardPackBudgetRejectsOversizedPacksV1(t *testing.T) {
 
 // TestM3ShardGenerationDescriptorPersistsAndReopensV1 covers the retained
 // artifact itself: a byte-bounded build must leave a shard-generation record
-// that reopens through the same validation, and must refuse to overwrite it or
-// to persist a row whose ratio the plan never provisioned.
+// that reopens under its bound digest, must refuse to overwrite it, and must
+// refuse a row ratio outside the planned envelope.
 func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
@@ -163,12 +164,15 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 		},
 		Loads: []int{3, 2}, Capacity: plan.OverlapCapacity,
 	}
-	dir := t.TempDir()
-	written, err := m3WriteShardGenerationDescriptorV1(dir, plan, plan.OverlapRatio, overlap)
-	if err != nil || written == 0 {
-		t.Fatalf("write shard generation descriptor bytes=%d err=%v", written, err)
+	raw, digest, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio, overlap)
+	if err != nil || len(raw) == 0 || !m8SHA256V1(digest) {
+		t.Fatalf("record bytes=%d digest=%q err=%v", len(raw), digest, err)
 	}
-	got, err := m3ReadShardGenerationDescriptorV1(dir)
+	dir := t.TempDir()
+	if err := m3WriteShardGenerationRecordV1(dir, raw, digest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m3ReadShardGenerationDescriptorV1(dir, digest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,14 +187,39 @@ func TestM3ShardGenerationDescriptorPersistsAndReopensV1(t *testing.T) {
 	if home != plan.Vectors || extra != 1 {
 		t.Fatalf("derived home=%d overlap=%d", home, extra)
 	}
-	if _, err := m3WriteShardGenerationDescriptorV1(dir, plan, plan.OverlapRatio, overlap); err == nil {
-		t.Fatal("overwrote immutable shard generation descriptor")
+	// A retained database must present the record under its bound digest.
+	if _, err := m3ReadShardGenerationDescriptorV1(dir, strings.Repeat("a", 64)); err == nil {
+		t.Fatal("accepted a record under an unbound digest")
 	}
-	if _, err := m3WriteShardGenerationDescriptorV1(t.TempDir(), plan, plan.OverlapRatio+.1, overlap); err == nil {
-		t.Fatal("persisted a row ratio the plan never provisioned")
+	if _, err := m3ReadShardGenerationDescriptorV1(t.TempDir(), digest); err == nil {
+		t.Fatal("accepted a byte-bounded database with no retained record")
+	}
+	if err := m3WriteShardGenerationRecordV1(dir, raw, digest); err == nil {
+		t.Fatal("overwrote immutable shard generation record")
+	}
+	if _, _, err := m3ShardGenerationRecordV1(plan, plan.OverlapRatio+.1, overlap); err == nil {
+		t.Fatal("encoded a row ratio outside the planned envelope")
+	}
+	// A variant may materialize less than the planned envelope so comparison
+	// variants can share one geometry.
+	disjoint := vectorpartition.OverlapResult{
+		Memberships: []vectorpartition.Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true},
+			{VectorOrdinal: 1, Partition: 0, Home: true},
+			{VectorOrdinal: 2, Partition: 1, Home: true},
+			{VectorOrdinal: 3, Partition: 1, Home: true},
+		},
+		Loads: []int{2, 2}, Capacity: plan.OverlapCapacity,
+	}
+	if _, _, err := m3ShardGenerationRecordV1(plan, 0, disjoint); err != nil {
+		t.Fatalf("disjoint variant rejected on a shared envelope: %v", err)
+	}
+	// A record holding replicas may not relabel itself as disjoint.
+	if _, _, err := m3ShardGenerationRecordV1(plan, 0, overlap); err == nil {
+		t.Fatal("accepted replicas under a ratio that requests none")
 	}
 	// -shard-plan off retains no record rather than an unbound one.
-	if written, err := m3WriteShardGenerationDescriptorV1(t.TempDir(), vectorpartition.ShardPlanV1{}, 0, overlap); err != nil || written != 0 {
-		t.Fatalf("unplanned build wrote a record bytes=%d err=%v", written, err)
+	if raw, digest, err := m3ShardGenerationRecordV1(vectorpartition.ShardPlanV1{}, 0, overlap); err != nil || raw != nil || digest != "" {
+		t.Fatalf("unplanned build produced a record bytes=%d digest=%q err=%v", len(raw), digest, err)
 	}
 }

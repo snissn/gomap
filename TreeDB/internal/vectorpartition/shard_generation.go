@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"unicode/utf8"
 )
 
@@ -110,11 +111,15 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 	if recomputed != d.Plan {
 		return errors.New("vectorpartition: shard generation plan does not match selected inputs")
 	}
-	// The plan derives RequestedOverlap and PlannedMemberships from its own
-	// ratio, so a descriptor that declares a different overlap config would let
-	// a consumer rebuild a budget the plan never authorized.
-	if d.OverlapConfig.Capacity != d.Plan.OverlapCapacity || d.OverlapConfig.Ratio != d.Plan.OverlapRatio {
-		return errors.New("vectorpartition: shard generation overlap config does not match the plan")
+	// The plan provisions an envelope; the config records the ratio this
+	// generation actually requested. A variant may materialize less than the
+	// planned envelope (comparison variants share one geometry that way), but
+	// never more, and never a capacity the plan did not size.
+	if d.OverlapConfig.Capacity != d.Plan.OverlapCapacity {
+		return errors.New("vectorpartition: shard generation overlap capacity does not match the plan")
+	}
+	if math.IsNaN(d.OverlapConfig.Ratio) || math.IsInf(d.OverlapConfig.Ratio, 0) || d.OverlapConfig.Ratio < 0 || d.OverlapConfig.Ratio > d.Plan.OverlapRatio {
+		return fmt.Errorf("vectorpartition: shard generation ratio %v is outside the planned envelope %v", d.OverlapConfig.Ratio, d.Plan.OverlapRatio)
 	}
 	// Pack summaries are re-derived from the memberships, never revalidated
 	// against themselves, so an omitted pack or an unrelated declared load
@@ -133,8 +138,15 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 		}
 		realizedOverlap += want.OverlapRows
 	}
-	if realizedOverlap > d.Plan.RequestedOverlap {
-		return fmt.Errorf("vectorpartition: shard generation realized %d non-home memberships above the requested %d", realizedOverlap, d.Plan.RequestedOverlap)
+	// Bound the realized non-home memberships by the ratio this generation
+	// declared, not merely by the planned envelope, so a descriptor holding
+	// replicas cannot relabel itself as a lower-ratio (or disjoint) build.
+	requested := int(math.Floor(d.OverlapConfig.Ratio * float64(d.Plan.Vectors)))
+	if requested > d.Plan.RequestedOverlap {
+		requested = d.Plan.RequestedOverlap
+	}
+	if realizedOverlap > requested {
+		return fmt.Errorf("vectorpartition: shard generation realized %d non-home memberships above the %d its ratio requests", realizedOverlap, requested)
 	}
 	digest, err := MembershipDigestV1(d.Memberships)
 	if err != nil {

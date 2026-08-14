@@ -49,8 +49,18 @@ The plan is derived before the artifact is built, so the packs the benchmark
 materializes are the packs the persisted plan describes. `-partitions` may be
 omitted, in which case the planned count is used; supplying a count that
 contradicts the plan fails closed rather than silently building a different
-geometry. One artifact serves every requested overlap ratio in a run, so the
-plan is derived at the largest requested ratio. Before materialization the
+geometry.
+
+The plan provisions an overlap *envelope*, which is derived from the largest
+requested `-overlap` value unless `-shard-plan-overlap-ratio` names one
+explicitly. A variant may materialize less than the envelope but never more, so
+comparison variants that materialize different ratios can share one geometry:
+a disjoint variant built with `-overlap 0 -shard-plan-overlap-ratio .2` gets the
+same partition count and per-pack capacity as the 0.20 variant, which is what
+the strict M8 matrix requires. Persistent M3 builds retain a single ratio, so
+without that flag a disjoint build would plan a different geometry (100k rows
+plan to 14 partitions at ratio 0 versus 16 at ratio 0.20; 250k to 35 versus
+40). Before materialization the
 runner re-derives per-pack home/overlap/total loads from the realized
 membership list and rejects any pack outside the planned home capacity,
 membership capacity, or hot-byte budget.
@@ -78,10 +88,16 @@ A byte-bounded build with `-m3-persist-db` also writes
 is the only artifact carrying the realized membership list, its digest, and the
 membership-derived per-pack home/overlap/total row and byte summaries, so it is
 what the decode-time integrity checks actually protect. The record is written
-immutably and immediately reopened through the same validation, so a database
-is never retained with a record that could not be reopened. A retained row
-whose overlap ratio differs from the planned ratio fails closed rather than
-persisting a record the plan never provisioned.
+immutably, before the final directory measurement so the reported footprint
+includes it, and is immediately reopened through the same validation, so a
+database is never retained with a record that could not be reopened.
+
+Its SHA-256 is recorded in the variant descriptor as `shard_generation_digest`
+and is part of the build-identity digest. Every retained-database consumer
+reopens through `m3ReadVariantDescriptorV1`, which requires a descriptor
+carrying a nonzero shard plan to present the matching record: deleting or
+editing it after construction makes the database fail closed instead of being
+accepted with unprotected evidence.
 
 ## Native pack construction and reopen
 

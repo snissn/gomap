@@ -238,6 +238,7 @@ func testM3ByteBoundedDescriptorV1(t *testing.T, dir string) m3VariantDescriptor
 	d.PartitionConfig.Partitions = plan.Partitions
 	d.Capacity = plan.OverlapCapacity
 	d.PartitionLoads = []int{3, 3, 3}
+	d.ShardGenerationDigest = strings.Repeat("d", 64)
 	d.OverlapUnusedCapacity = plan.OverlapCapacity*plan.Partitions - int(d.SourceRows) - d.OverlapRealized
 	refreshTestM3DescriptorIdentityV1(t, &d)
 	if err := validateM3VariantDescriptorV1(d); err != nil {
@@ -305,6 +306,13 @@ func TestM3VariantDescriptorValidatesPersistedShardPlanV1(t *testing.T) {
 		"partial plan": func(candidate *m3VariantDescriptorV1) {
 			candidate.ShardPlan = vectorpartition.ShardPlanV1{Partitions: candidate.ShardPlan.Partitions}
 		},
+		"missing generation digest": func(candidate *m3VariantDescriptorV1) { candidate.ShardGenerationDigest = "" },
+		"malformed generation digest": func(candidate *m3VariantDescriptorV1) {
+			candidate.ShardGenerationDigest = "not-a-sha"
+		},
+		"generation digest without a plan": func(candidate *m3VariantDescriptorV1) {
+			candidate.ShardPlan = vectorpartition.ShardPlanV1{}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := d
@@ -319,6 +327,7 @@ func TestM3VariantDescriptorValidatesPersistedShardPlanV1(t *testing.T) {
 	// absent plan stays absent rather than being partially believed.
 	unplanned := d
 	unplanned.ShardPlan = vectorpartition.ShardPlanV1{}
+	unplanned.ShardGenerationDigest = ""
 	refreshTestM3DescriptorIdentityV1(t, &unplanned)
 	if err := validateM3VariantDescriptorV1(unplanned); err != nil {
 		t.Fatalf("unplanned descriptor rejected: %v", err)
