@@ -375,8 +375,21 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter,
 		ShardPlan: cfg.shardPlan,
 	}
-	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap)
-	if err != nil {
+	// Only a retained run keeps the record, and encoding it copies every
+	// membership and marshals an O(rows + overlap) payload — tens of megabytes
+	// at the supported shapes. A temporary run would pay that allocation and
+	// then discard the result, inflating the process high-water mark that
+	// m3PeakRSS publishes as evidence.
+	var shardGenerationRaw []byte
+	var shardGenerationDigest string
+	if !cleanup {
+		shardGenerationRaw, shardGenerationDigest, err = m3ShardGenerationRecordV1(cfg.shardPlan, ratio, overlap)
+		if err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+	} else if err := m3ValidateShardGenerationInputsV1(cfg.shardPlan, ratio, overlap); err != nil {
+		// A temporary run still fails closed on a record it could not have
+		// retained, so -m3-persist-db is not the first thing to discover it.
 		return m3PartitionIndexRow{}, err
 	}
 	identityDescriptor.ShardGenerationDigest = shardGenerationDigest

@@ -54,6 +54,31 @@ func m3ShardGenerationRecordV1(plan vectorpartition.ShardPlanV1, ratio float64, 
 	return raw, hex.EncodeToString(sum[:]), nil
 }
 
+// m3ValidateShardGenerationInputsV1 runs the record's construction checks
+// without encoding it, so a temporary run fails closed on inputs that could not
+// have produced a retainable record while paying none of the encoding cost.
+func m3ValidateShardGenerationInputsV1(plan vectorpartition.ShardPlanV1, ratio float64, overlap vectorpartition.OverlapResult) error {
+	if plan.Partitions == 0 {
+		return nil
+	}
+	if ratio > plan.OverlapRatio {
+		return fmt.Errorf("retained row ratio %.4f exceeds the planned envelope %.4f", ratio, plan.OverlapRatio)
+	}
+	summaries, err := vectorpartition.AccountShardPacksV1(plan, overlap.Memberships)
+	if err != nil {
+		return err
+	}
+	if len(overlap.Loads) != len(summaries) {
+		return errors.New("overlap loads do not cover every planned pack")
+	}
+	for partition, load := range overlap.Loads {
+		if load != summaries[partition].Rows {
+			return fmt.Errorf("pack %d load=%d does not match membership-derived rows=%d", partition, load, summaries[partition].Rows)
+		}
+	}
+	return nil
+}
+
 func m3WriteShardGenerationRecordV1(dir string, raw []byte, digest string) error {
 	if len(raw) == 0 {
 		return nil

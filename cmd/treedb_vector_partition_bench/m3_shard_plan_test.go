@@ -310,3 +310,43 @@ func TestM3ShardGenerationMembershipsBindMaterializationV1(t *testing.T) {
 		t.Fatal("accepted a membership naming a vector outside the assignment")
 	}
 }
+
+// TestM3ShardGenerationInputsValidateWithoutEncodingV1 pins the temporary-run
+// path: a run that will not retain the record must still fail closed on inputs
+// that could not have produced one, without paying the encoding cost that would
+// inflate the process peak-RSS evidence.
+func TestM3ShardGenerationInputsValidateWithoutEncodingV1(t *testing.T) {
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: 4, Dimensions: 2, OverlapRatio: .5, Imbalance: 0,
+		TargetHotBytes: uint64(3 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlap := vectorpartition.OverlapResult{
+		Memberships: []vectorpartition.Membership{
+			{VectorOrdinal: 0, Partition: 0, Home: true},
+			{VectorOrdinal: 1, Partition: 0, Home: true},
+			{VectorOrdinal: 2, Partition: 0},
+			{VectorOrdinal: 2, Partition: 1, Home: true},
+			{VectorOrdinal: 3, Partition: 1, Home: true},
+		},
+		Loads: []int{3, 2}, Capacity: plan.OverlapCapacity,
+	}
+	if err := m3ValidateShardGenerationInputsV1(plan, plan.OverlapRatio, overlap); err != nil {
+		t.Fatalf("valid inputs rejected: %v", err)
+	}
+	// Same rejections the encoding path applies.
+	if err := m3ValidateShardGenerationInputsV1(plan, plan.OverlapRatio+.1, overlap); err == nil {
+		t.Fatal("accepted a row ratio outside the planned envelope")
+	}
+	mismatched := overlap
+	mismatched.Loads = []int{2, 3}
+	if err := m3ValidateShardGenerationInputsV1(plan, plan.OverlapRatio, mismatched); err == nil {
+		t.Fatal("accepted loads unrelated to the membership list")
+	}
+	// -shard-plan off has no record to validate.
+	if err := m3ValidateShardGenerationInputsV1(vectorpartition.ShardPlanV1{}, 0, overlap); err != nil {
+		t.Fatalf("unplanned run rejected: %v", err)
+	}
+}
