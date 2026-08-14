@@ -462,6 +462,9 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "m0-locality-simulate" {
 		return runM0LocalitySimulateV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "m0-layout-plan" {
+		return runM0LayoutPlanV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "m0-membership-account" {
 		return runM0MembershipAccountV1(args[1:], stdout)
 	}

@@ -152,6 +152,53 @@ func TestM0ObjectiveOrdersAreDeterministicAndDistinct(t *testing.T) {
 	}
 }
 
+func TestM0LayoutPlanBindsCaptureArtifactAndCanonicalOrder(t *testing.T) {
+	input := []vectorpartition.Vector{{ID: "doc-0", Values: []float64{1, 0}}, {ID: "doc-1", Values: []float64{0, 1}}, {ID: "doc-2", Values: []float64{1, 1}}, {ID: "doc-3", Values: []float64{-1, 0}}, {ID: "doc-4", Values: []float64{0, -1}}}
+	config := vectorpartition.DefaultConfig()
+	config.Partitions = 1
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "m0-plan-test"}, vectorpartition.ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := vectorpartition.CanonicalJSON(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{Rows: 5, EntryOrdinal: 0, RowOrdinals: []uint32{0, 1, 2, 3, 4}, VectorStride: 1, VectorOffset: 1, LevelsOffset: 2, LayerOffsets: [][]uint64{{0, 2, 3, 4, 5, 6}}, LayerNeighbors: [][]uint32{{1, 2, 0, 0, 4, 3}}, LayerOffsetsSectionOffsets: []uint64{3}, LayerNeighborOffsets: []uint64{4}}
+	capture := m0LocalityCaptureV1{Schema: "treedb_vector_partition_m0_exact_pack_trace_v3", Artifact: m0SHA256V1(raw), Source: artifact.Source, Manifest: strings.Repeat("a", 64), Snapshots: map[uint32]collections.VectorPartitionPackLayoutSnapshotV1{0: snapshot}, Traces: []m0LocalityTraceRowV1{{Partitions: []m0LocalityTracePartitionV1{{Partition: 0, ScoreOrdinals: []uint32{1, 3}}}}}}
+	first, err := m0BuildLayoutPlanV1(capture, strings.Repeat("b", 64), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m0BuildLayoutPlanV1(capture, strings.Repeat("b", 64), raw)
+	if err != nil || !reflect.DeepEqual(first, second) || first.ArtifactSHA256 == "" || len(first.Partitions) != 1 || len(first.Partitions[0].Order) != 5 {
+		t.Fatalf("plan=%+v second=%+v err=%v", first, second, err)
+	}
+	if first.Partitions[0].Order[2].DocumentID != "doc-3" || first.Partitions[0].Order[2].SourceOrdinal != 3 {
+		t.Fatalf("co-visitation order=%+v", first.Partitions[0].Order)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "plan.json")
+	if err := writeVectorPartitionSystemJSONExclusiveV1(path, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m0ReadLayoutPlanV1(path); err != nil {
+		t.Fatal(err)
+	}
+	first.ArtifactSHA256 = strings.Repeat("c", 64)
+	badPath := filepath.Join(root, "bad-plan.json")
+	if err := writeVectorPartitionSystemJSONExclusiveV1(badPath, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m0ReadLayoutPlanV1(badPath); err == nil {
+		t.Fatal("accepted changed plan digest")
+	}
+	capture.Artifact = strings.Repeat("d", 64)
+	if _, err := m0BuildLayoutPlanV1(capture, strings.Repeat("b", 64), raw); err == nil {
+		t.Fatal("accepted mismatched graph artifact")
+	}
+}
+
 func TestM0SnapshotRejectsOverflowingVectorStride(t *testing.T) {
 	snapshot := collections.VectorPartitionPackLayoutSnapshotV1{
 		Rows: 1, RowOrdinals: []uint32{0}, VectorStride: int(^uint(0)>>1)/4 + 1, VectorOffset: 1, LevelsOffset: 2,
