@@ -124,6 +124,12 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 		node, part, gain int
 		id               string
 	}
+	// Per-round scratch reused across nodes: gains is indexed by partition and
+	// reset through touched, so scoring stays proportional to a node's distinct
+	// neighbor partitions rather than the partition count.
+	gains := make([]int, a.Config.Partitions)
+	touched := make([]int, 0, a.Config.Partitions)
+	neighborScratch := make([]int, 0, 2*a.Config.Degree)
 	for used < budget {
 		// This proposal set is the bulk-synchronous round snapshot.
 		ps := make([]proposal, 0, n)
@@ -131,35 +137,46 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 			if len(members[i])-1 >= MaxOverlapMembershipsPerVector {
 				continue
 			}
-			counts := make([]int, a.Config.Partitions)
-			for _, j := range ns {
-				for p := range members[j] {
-					counts[p]++
-				}
-			}
-			for _, j := range incoming[i] {
-				for p := range members[j] {
-					counts[p]++
-				}
-			}
 			// Rank destinations by the directed cut edges each one newly
-			// satisfies, not by raw neighbor-membership count. A plurality
+			// satisfies, not by raw neighbor-membership count: a plurality
 			// destination can have zero marginal reduction once earlier
 			// replicas already colocated those neighbors, and picking it first
 			// would discard a lower-count destination that still reduces the
-			// cut. Only partitions holding at least one neighbor can reduce
-			// anything, so counts still bounds the candidate set.
-			best, gain := -1, 0
-			for p, count := range counts {
-				if _, exists := members[i][p]; exists || count == 0 || loads[p] >= capacity {
+			// cut.
+			//
+			// A neighbor contributes to a destination exactly when it does not
+			// already share a partition with this node, which is the same test
+			// overlapCutReduction applies for both edge directions. Scoring
+			// every destination in one neighbor pass therefore costs what the
+			// old plurality count cost, instead of one reduction scan per
+			// candidate partition.
+			for _, p := range touched {
+				gains[p] = 0
+			}
+			touched = touched[:0]
+			neighborScratch = append(neighborScratch[:0], ns...)
+			neighborScratch = append(neighborScratch, incoming[i]...)
+			for _, j := range neighborScratch {
+				if overlapMembersShare(members[i], members[j]) {
 					continue
 				}
-				reduction := overlapCutReduction(members, i, p, ns, incoming[i])
-				if reduction > gain || reduction == gain && reduction > 0 && (best < 0 || p < best) {
-					best, gain = p, reduction
+				for p := range members[j] {
+					if gains[p] == 0 {
+						touched = append(touched, p)
+					}
+					gains[p]++
 				}
 			}
-			if best >= 0 {
+			best, gain := -1, 0
+			for _, p := range touched {
+				if _, exists := members[i][p]; exists || loads[p] >= capacity {
+					continue
+				}
+				if gains[p] > gain || gains[p] == gain && best >= 0 && p < best {
+					best, gain = p, gains[p]
+				}
+			}
+			if best >= 0 && gain > 0 {
 				ps = append(ps, proposal{i, best, gain, a.IDs[i]})
 			}
 		}
@@ -313,6 +330,21 @@ func fillExactOverlapSlotsWithReplicas(a Artifact, members []map[int]struct{}, i
 		}
 	}
 	return used, useful, filler
+}
+
+// overlapMembersShare reports whether two membership sets already intersect,
+// which is the condition under which an edge between them is not cut and no
+// additional membership can reduce it.
+func overlapMembersShare(a, b map[int]struct{}) bool {
+	if len(b) < len(a) {
+		a, b = b, a
+	}
+	for p := range a {
+		if _, ok := b[p]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // overlapCutReduction scores every directed cut edge that membership in
