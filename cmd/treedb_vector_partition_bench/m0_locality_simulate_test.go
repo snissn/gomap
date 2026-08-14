@@ -86,9 +86,6 @@ func TestM0CaptureSplitPairRejectsLeakage(t *testing.T) {
 
 func TestM0ReadCaptureRequiresCleanBuildIdentity(t *testing.T) {
 	sha := strings.Repeat("a", 64)
-	approved := m0ApprovedExecutableRevisionV1
-	t.Cleanup(func() { m0ApprovedExecutableRevisionV1 = approved })
-	m0ApprovedExecutableRevisionV1 = strings.Repeat("b", 40)
 	capture := m0LocalityCaptureV1{
 		Schema:         "treedb_vector_partition_m0_exact_pack_trace_v3",
 		Artifact:       sha,

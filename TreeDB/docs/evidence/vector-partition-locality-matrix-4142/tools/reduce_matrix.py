@@ -150,7 +150,15 @@ def reduce_rows(paths: list[Path], preflight_path: Path, topology_contract_path:
         require(topology_identities.setdefault(topology, identity) == identity, "mixed topology identity")
     require([row["row_id"] for row in rows] == sorted(seen), "rows are reordered")
     require(coordinates == AUTHORIZED_COORDINATES, "incomplete matrix")
-    return {"schema_version": 1, "result_kind": "vector_partition_locality_matrix_summary_v1", "identity": expected, "rows": len(rows)}
+    return {
+        "schema_version": 1,
+        "result_kind": "vector_partition_locality_matrix_summary_v1",
+        "identity": expected,
+        "rows": len(rows),
+        "rows_sha256": hashlib.sha256(
+            json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def main() -> None:

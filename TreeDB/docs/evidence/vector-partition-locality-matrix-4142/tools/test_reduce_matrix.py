@@ -202,6 +202,33 @@ class ReducerTest(unittest.TestCase):
         changed["metrics"]["unique_pages_per_query"] = 10 ** 1000
         reducer.validate_row(changed, expected_identity())
 
+    def test_summary_digest_changes_when_a_metric_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write(name: str, value: dict) -> Path:
+                path = root / name
+                path.write_text(json.dumps(value), encoding="utf-8")
+                return path
+
+            preflight_path = write("preflight.json", preflight())
+            contract_path = write("topology-contract.json", topology_contract())
+            value = preflight()
+            value["topology_contract_sha256"] = reducer.sha256(contract_path)
+            preflight_path.write_text(json.dumps(value), encoding="utf-8")
+            first_rows = complete_rows()
+            first_paths = [write(f"{row['row_id']}.json", row) for row in first_rows]
+            changed_rows = complete_rows()
+            changed_rows[0]["metrics"]["unique_pages_per_query"] = 2.0
+            changed_paths = [write(f"changed-{row['row_id']}.json", row) for row in changed_rows]
+            with mock.patch.object(preflight_contract, "APPROVED_TOPOLOGY_CONTRACT_SHA256", value["topology_contract_sha256"]):
+                first = reducer.reduce_rows(first_paths, preflight_path, contract_path)
+                second = reducer.reduce_rows(changed_paths, preflight_path, contract_path)
+            self.assertEqual(first["rows"], second["rows"])
+            self.assertEqual(first["identity"], second["identity"])
+            self.assertRegex(first["rows_sha256"], r"^[0-9a-f]{64}$")
+            self.assertNotEqual(first["rows_sha256"], second["rows_sha256"])
+
     def test_rejects_wrong_split_identity_and_empty_measurement(self) -> None:
         expected = expected_identity()
         wrong_split = row("wrong-split")

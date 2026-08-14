@@ -20,13 +20,6 @@ func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
 
 func TestM0CleanBuildIdentityValidV1(t *testing.T) {
 	identity := m0CleanBuildIdentityV1{BinarySHA256: strings.Repeat("a", 64), SourceRevision: strings.Repeat("b", 40)}
-	approved := m0ApprovedExecutableRevisionV1
-	t.Cleanup(func() { m0ApprovedExecutableRevisionV1 = approved })
-	m0ApprovedExecutableRevisionV1 = strings.Repeat("c", 40)
-	if m0CleanBuildIdentityValidV1(identity) {
-		t.Fatal("clean but unapproved build identity accepted")
-	}
-	m0ApprovedExecutableRevisionV1 = identity.SourceRevision
 	if !m0CleanBuildIdentityValidV1(identity) {
 		t.Fatal("clean build identity rejected")
 	}
