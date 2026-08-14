@@ -47,9 +47,13 @@ func TestPlanByteBoundedShardsV1FailsClosedBeforeAllocation(t *testing.T) {
 	if _, err := PlanByteBoundedShardsV1(base); err != nil {
 		t.Fatalf("valid envelope rejected: %v", err)
 	}
-	overflow := base
-	overflow.Vectors = math.MaxInt
-	overflow.OverlapRatio = 1
+	// Vectors is rejected by the maxVectors bound before any overlap arithmetic
+	// runs, which is also why the planner's checked add/multiply guards are
+	// unreachable for any accepted input: they exist so a future bound change
+	// cannot silently wrap.
+	outOfBounds := base
+	outOfBounds.Vectors = math.MaxInt
+	outOfBounds.OverlapRatio = 1
 	undersized := base
 	undersized.TargetHotBytes = uint64(128*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1 - 1)
 	impossible := base
@@ -58,12 +62,15 @@ func TestPlanByteBoundedShardsV1FailsClosedBeforeAllocation(t *testing.T) {
 	nan.OverlapRatio = math.NaN()
 	zero := base
 	zero.Vectors = 0
+	tooManyPartitions := base
+	tooManyPartitions.MaxPartitions = maxPartitions + 1
 	for name, in := range map[string]ShardPlanRequestV1{
-		"overflow requested extras": overflow,
-		"undersized target":         undersized,
-		"impossible balance":        impossible,
-		"nan ratio":                 nan,
-		"zero vectors":              zero,
+		"vectors above bound":    outOfBounds,
+		"undersized target":      undersized,
+		"impossible balance":     impossible,
+		"nan ratio":              nan,
+		"zero vectors":           zero,
+		"partitions above bound": tooManyPartitions,
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := PlanByteBoundedShardsV1(in)

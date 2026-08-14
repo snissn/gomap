@@ -68,7 +68,7 @@ type ShardPlanV1 struct {
 	Dimensions            int     `json:"dimensions"`
 }
 
-// HomeCap and OverlapRequested are compatibility aliases used by some tests.
+// HomeCap is a compatibility alias used by some tests.
 func (p ShardPlanV1) HomeCap() int { return p.HomeCapacity }
 
 // DefaultShardPlanInputV1 returns the portable #4142 defaults for one corpus.

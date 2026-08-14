@@ -110,8 +110,11 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 	if recomputed != d.Plan {
 		return errors.New("vectorpartition: shard generation plan does not match selected inputs")
 	}
-	if d.OverlapConfig.Capacity != d.Plan.OverlapCapacity {
-		return errors.New("vectorpartition: shard generation overlap capacity does not match the plan")
+	// The plan derives RequestedOverlap and PlannedMemberships from its own
+	// ratio, so a descriptor that declares a different overlap config would let
+	// a consumer rebuild a budget the plan never authorized.
+	if d.OverlapConfig.Capacity != d.Plan.OverlapCapacity || d.OverlapConfig.Ratio != d.Plan.OverlapRatio {
+		return errors.New("vectorpartition: shard generation overlap config does not match the plan")
 	}
 	// Pack summaries are re-derived from the memberships, never revalidated
 	// against themselves, so an omitted pack or an unrelated declared load
@@ -123,10 +126,15 @@ func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
 	if len(d.PackSummaries) != len(summaries) {
 		return fmt.Errorf("vectorpartition: shard generation declares %d pack summaries, plan requires %d", len(d.PackSummaries), len(summaries))
 	}
+	realizedOverlap := 0
 	for partition, want := range summaries {
 		if d.PackSummaries[partition] != want {
 			return fmt.Errorf("vectorpartition: shard generation pack %d summary=%+v does not match membership-derived %+v", partition, d.PackSummaries[partition], want)
 		}
+		realizedOverlap += want.OverlapRows
+	}
+	if realizedOverlap > d.Plan.RequestedOverlap {
+		return fmt.Errorf("vectorpartition: shard generation realized %d non-home memberships above the requested %d", realizedOverlap, d.Plan.RequestedOverlap)
 	}
 	digest, err := MembershipDigestV1(d.Memberships)
 	if err != nil {

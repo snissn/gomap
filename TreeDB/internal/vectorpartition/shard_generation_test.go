@@ -91,10 +91,30 @@ func TestShardGenerationDescriptorRejectsStaleVersionAndConfigV1(t *testing.T) {
 	if _, err := DecodeShardGenerationDescriptorV1(stale, len(stale)); err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("stale version err=%v", err)
 	}
+	unknown := bytes.Replace(append([]byte(nil), raw...), []byte(`{"schema_version"`), []byte(`{"unknown_field":1,"schema_version"`), 1)
+	if _, err := DecodeShardGenerationDescriptorV1(unknown, len(unknown)); err == nil {
+		t.Fatal("accepted unknown field")
+	}
+	trailing := append(append([]byte(nil), raw...), []byte(`{}`)...)
+	if _, err := DecodeShardGenerationDescriptorV1(trailing, len(trailing)); err == nil {
+		t.Fatal("accepted trailing JSON")
+	}
 	mismatched := desc
 	mismatched.Plan.TargetHotBytes++
 	if err := ValidateShardGenerationDescriptorV1(mismatched); err == nil {
 		t.Fatal("accepted recomputed-plan mismatch")
+	}
+	// The plan derives its requested budget from the ratio, so a descriptor may
+	// not declare an overlap config the plan never authorized.
+	relabeledRatio := desc
+	relabeledRatio.OverlapConfig.Ratio = 0
+	if err := ValidateShardGenerationDescriptorV1(relabeledRatio); err == nil {
+		t.Fatal("accepted overlap ratio that contradicts the plan")
+	}
+	relabeledCapacity := desc
+	relabeledCapacity.OverlapConfig.Capacity++
+	if err := ValidateShardGenerationDescriptorV1(relabeledCapacity); err == nil {
+		t.Fatal("accepted overlap capacity that contradicts the plan")
 	}
 	wrongDigest := desc
 	wrongDigest.MembershipDigest = strings.Repeat("0", 64)

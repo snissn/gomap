@@ -1133,6 +1133,10 @@ func TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV
 				descriptor.OverlapRealized = descriptor.OverlapMemberships + 1
 				descriptor.OverlapRejected = descriptor.OverlapRequested - descriptor.OverlapRealized
 				descriptor.OverlapUseful = descriptor.OverlapRealized
+				// Keep the unused-capacity accounting consistent with the
+				// over-declared count so the membership/realized mismatch is the
+				// only rule the descriptor still breaks.
+				descriptor.OverlapUnusedCapacity = descriptor.Capacity*int(descriptor.Partitions) - int(descriptor.SourceRows) - descriptor.OverlapRealized
 				descriptor.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(descriptor)
 				descriptor.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{
 					Capacity: uint64(descriptor.Capacity), Budget: uint64(descriptor.OverlapRequested),
