@@ -108,7 +108,7 @@ func m0CleanBuildIdentityValidV1(identity m0CleanBuildIdentityV1) bool {
 func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-calibration-frontier", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var db, dataset, calibration, truthCache, membershipReport, assignmentArtifact, out, probesRaw, efRaw, mode string
+	var db, dataset, calibration, truthCache, membershipReport, assignmentArtifact, graphArtifact, out, probesRaw, efRaw, mode string
 	candidates, topK := 0, 0
 	fs.StringVar(&db, "db", "", "materialized clone")
 	fs.StringVar(&dataset, "dataset", "", "frozen dataset directory")
@@ -116,13 +116,14 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&truthCache, "truth-cache", "", "frozen truth cache directory")
 	fs.StringVar(&membershipReport, "membership-report", "", "strict M0 membership report")
 	fs.StringVar(&assignmentArtifact, "assignment-artifact", "", "strict canonical assignment artifact")
+	fs.StringVar(&graphArtifact, "graph-artifact", "", "frozen source graph artifact")
 	fs.StringVar(&out, "out", "", "fresh report")
 	fs.StringVar(&mode, "mode", "zero", "materialized membership mode")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
 	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
 		return errors.New("M0 calibration frontier arguments")
 	}
 	if _, e := os.Stat(out); e == nil || !errors.Is(e, os.ErrNotExist) {
@@ -174,7 +175,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, account, selected, fixture, h); e != nil {
+	if e = m0FrontierMembershipTopologyV1(assignmentArtifact, graphArtifact, account, selected, fixture, h); e != nil {
 		return e
 	}
 	searchers := make([]*collections.VectorPartitionLocalSearcherV1, len(h.manifest.Assets))
@@ -593,7 +594,7 @@ func m0FrontierCalibrationOrdinalsV1(ordinals []int, queryCount int) error {
 	return nil
 }
 
-func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, selected m0MembershipModeV1, fixture fixtureManifest, h *m8ProductionMultiGroupAssetsV1) error {
+func m0FrontierMembershipTopologyV1(path, graphPath string, account m0MembershipAccountV1, selected m0MembershipModeV1, fixture fixtureManifest, h *m8ProductionMultiGroupAssetsV1) error {
 	raw, err := os.ReadFile(path)
 	if err != nil || m0SHA256V1(raw) != account.AssignmentArtifactSHA256 {
 		return errors.New("M0 frontier assignment artifact binding")
@@ -601,6 +602,17 @@ func m0FrontierMembershipTopologyV1(path string, account m0MembershipAccountV1, 
 	artifact, err := vectorpartition.DecodeArtifact(raw, len(raw))
 	if err != nil || artifact.Config.Partitions != account.Partitions || uint32(account.Partitions) != h.manifest.PartitionCount {
 		return errors.New("M0 frontier assignment artifact")
+	}
+	graphRaw, err := os.ReadFile(graphPath)
+	if err != nil {
+		return err
+	}
+	graph, err := vectorpartition.DecodeArtifact(graphRaw, len(graphRaw))
+	if err != nil {
+		return err
+	}
+	if err = m0AssignmentBindsFrozenGraphV1(graph, artifact, graphRaw, account); err != nil {
+		return err
 	}
 	descriptor, err := m3ReadVariantDescriptorV1(h.dir)
 	if err != nil {

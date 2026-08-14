@@ -64,6 +64,41 @@ func TestM0MembershipModesZeroCutElidesUsefulAndRejectsExactFiller(t *testing.T)
 	}
 }
 
+func TestM0AssignmentBindsFrozenGraphRejectsSubstitutedTopology(t *testing.T) {
+	config := vectorpartition.DefaultConfig()
+	config.Partitions = 2
+	config.Degree = 1
+	graph, err := vectorpartition.BuildWithPartitioner([]vectorpartition.Vector{{ID: "a", Values: []float64{1}}, {ID: "b", Values: []float64{-1}}}, config, vectorpartition.Source{SourceID: "m0-graph-bind"}, m0StaticPartitionerV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	graphRaw, err := vectorpartition.CanonicalJSON(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{GraphArtifactSHA256: m0SHA256V1(graphRaw)}
+	if err := m0AssignmentBindsFrozenGraphV1(graph, graph, graphRaw, account); err != nil {
+		t.Fatal(err)
+	}
+	if len(graph.Graph.Neighbors) < 2 {
+		t.Fatal("fixture graph is too small")
+	}
+	substituted := graph
+	neighbors := make([][]int, len(graph.Graph.Neighbors))
+	for i, ns := range graph.Graph.Neighbors {
+		neighbors[i] = append([]int(nil), ns...)
+	}
+	neighbors[0], neighbors[1] = neighbors[1], neighbors[0]
+	substituted.Graph.Neighbors = neighbors
+	if err := m0AssignmentBindsFrozenGraphV1(graph, substituted, graphRaw, account); err == nil {
+		t.Fatal("accepted assignment with substituted graph topology")
+	}
+	account.GraphArtifactSHA256 = strings.Repeat("a", 64)
+	if err := m0AssignmentBindsFrozenGraphV1(graph, graph, graphRaw, account); err == nil {
+		t.Fatal("accepted membership report that does not bind the graph file")
+	}
+}
+
 func TestM0AssignmentArtifactRequiresPinnedKaHIPIdentity(t *testing.T) {
 	config := vectorpartition.DefaultConfig()
 	config.Partitions = 2

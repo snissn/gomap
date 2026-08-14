@@ -37,15 +37,16 @@ type m0MaterializeReportV1 struct {
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var sourceDB, artifactPath, membershipPath, root, out, mode string
+	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode string
 	fs.StringVar(&sourceDB, "source-db", "", "retained source DB (read only)")
 	fs.StringVar(&artifactPath, "artifact", "", "strict canonical assignment artifact")
+	fs.StringVar(&graphArtifactPath, "graph-artifact", "", "frozen source graph artifact")
 	fs.StringVar(&membershipPath, "membership-report", "", "M0 membership report")
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
-		return errors.New("m0-materialize-membership requires source-db, artifact, membership-report, root, out")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || graphArtifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
+		return errors.New("m0-materialize-membership requires source-db, artifact, graph-artifact, membership-report, root, out")
 	}
 	if _, statErr := os.Stat(out); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
 		return errors.New("M0 materialization output already exists")
@@ -70,11 +71,22 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return fmt.Errorf("M0 assignment/report binding: %w", err)
 	}
+	graphRaw, err := os.ReadFile(graphArtifactPath)
+	if err != nil {
+		return err
+	}
+	graph, err := vectorpartition.DecodeArtifact(graphRaw, len(graphRaw))
+	if err != nil {
+		return err
+	}
+	if err = m0AssignmentBindsFrozenGraphV1(graph, artifact, graphRaw, account); err != nil {
+		return err
+	}
 	d, err := m3ReadVariantDescriptorV1(sourceDB)
 	if err != nil {
 		return err
 	}
-	if d.Source != artifact.Source || d.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+	if d.Source != artifact.Source {
 		return errors.New("retained source does not match assignment artifact lineage")
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {

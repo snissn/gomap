@@ -132,7 +132,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 	if account.AssignmentArtifactSHA256 != m0SHA256V1(raw) || artifact.Config.Partitions != int(h.manifest.PartitionCount) {
 		return errors.New("M0 diagnostic artifact binding")
 	}
-	if err := m0FrontierMembershipTopologyV1(artifactPath, account, selected, fixture, h); err != nil {
+	if err := m0FrontierMembershipTopologyV1(artifactPath, graphArtifactPath, account, selected, fixture, h); err != nil {
 		return fmt.Errorf("M0 diagnostic topology: %w", err)
 	}
 	graphRaw, err := os.ReadFile(graphArtifactPath)
@@ -140,7 +140,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	graph, err := vectorpartition.DecodeArtifact(graphRaw, len(graphRaw))
-	if err != nil || m0SHA256V1(graphRaw) != account.GraphArtifactSHA256 || len(graph.IDs) != len(artifact.IDs) {
+	if err != nil || m0AssignmentBindsFrozenGraphV1(graph, artifact, graphRaw, account) != nil {
 		return errors.New("M0 diagnostic graph artifact binding")
 	}
 	originalByID := make(map[string]int, len(graph.IDs))

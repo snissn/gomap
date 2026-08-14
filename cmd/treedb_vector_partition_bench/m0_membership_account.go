@@ -161,6 +161,16 @@ func runM0MembershipAccountV1(args []string, stdout io.Writer) error {
 	_, err = fmt.Fprintf(stdout, "m0_membership_account=%s partitions=%d\n", out, report.Partitions)
 	return err
 }
+func m0AssignmentBindsFrozenGraphV1(graph, assignment vectorpartition.Artifact, graphRaw []byte, account m0MembershipAccountV1) error {
+	if m0SHA256V1(graphRaw) != account.GraphArtifactSHA256 {
+		return errors.New("membership report does not bind frozen graph artifact")
+	}
+	if assignment.Source != graph.Source || !reflect.DeepEqual(assignment.IDs, graph.IDs) || !reflect.DeepEqual(assignment.Graph, graph.Graph) {
+		return errors.New("assignment artifact does not bind frozen source, IDs, and graph")
+	}
+	return nil
+}
+
 func m0ValidateAssignmentArtifactV1(graph, request, candidate vectorpartition.Artifact) error {
 	if candidate.Source != graph.Source || !reflect.DeepEqual(candidate.IDs, graph.IDs) || !reflect.DeepEqual(candidate.Graph, graph.Graph) || !reflect.DeepEqual(candidate.Config, request.Config) {
 		return errors.New("assignment artifact does not bind frozen source, IDs, graph, and requested config")

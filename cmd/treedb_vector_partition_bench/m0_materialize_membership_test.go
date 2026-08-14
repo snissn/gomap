@@ -20,7 +20,7 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
-	descriptor := testM8QualificationRetainedDescriptorV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+	testM8QualificationRetainedDescriptorV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
@@ -41,6 +41,10 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if err = os.WriteFile(artifactPath, raw, 0644); err != nil {
 		t.Fatal(err)
 	}
+	graphPath := filepath.Join(root, "graph.json")
+	if err = os.WriteFile(graphPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
 	digest, err := vectorpartition.Digest(artifact)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +57,7 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: descriptor.GraphArtifactSHA256, AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: 16, EdgeCut: 0, Modes: []m0MembershipModeV1{{Name: "zero", Materialize: true, MembershipSHA256: zeroSHA}, {Name: "useful_only_20", EquivalentTo: "zero"}, {Name: "exact_20", Rejected: "exact-20 contains filler"}}}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(raw), AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: 16, EdgeCut: 0, Modes: []m0MembershipModeV1{{Name: "zero", Materialize: true, MembershipSHA256: zeroSHA}, {Name: "useful_only_20", EquivalentTo: "zero"}, {Name: "exact_20", Rejected: "exact-20 contains filler"}}}
 	accountRaw, err := json.Marshal(account)
 	if err != nil {
 		t.Fatal(err)
@@ -72,11 +76,11 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if err = os.WriteFile(badPath, badRaw, 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-membership-report", badPath, "-root", filepath.Join(root, "bad-clones"), "-out", filepath.Join(root, "bad.json")}, bytes.NewBuffer(nil)); err == nil {
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", badPath, "-root", filepath.Join(root, "bad-clones"), "-out", filepath.Join(root, "bad.json")}, bytes.NewBuffer(nil)); err == nil {
 		t.Fatal("materialized assignment from unrelated graph lineage")
 	}
 	out := filepath.Join(root, "out.json")
-	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-membership-report", accountPath, "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
 		t.Fatal(err)
 	}
 	var report m0MaterializeReportV1
@@ -99,7 +103,7 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-useful-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
-	descriptor := testM8QualificationRetainedDescriptorV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
+	testM8QualificationRetainedDescriptorV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-disjoint-v1", partitionAssignmentGraphV1, 0)
 	vectors := fixtureVectors(fixture)
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i := range vectors {
@@ -118,6 +122,10 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	}
 	artifactPath := filepath.Join(root, "assignment.json")
 	if err = os.WriteFile(artifactPath, raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	if err = os.WriteFile(graphPath, raw, 0644); err != nil {
 		t.Fatal(err)
 	}
 	digest, err := vectorpartition.Digest(artifact)
@@ -144,7 +152,7 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: descriptor.GraphArtifactSHA256, AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: config.Partitions, Modes: modes}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(raw), AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: config.Partitions, Modes: modes}
 	if _, selected, err := m0SelectedMembershipV1(artifact, raw, account, "useful_only_20"); err != nil || selected.Used != useful.Used {
 		t.Fatalf("select useful membership selected=%+v err=%v", selected, err)
 	}
@@ -175,7 +183,7 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(root, "out.json")
-	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-membership-report", accountPath, "-mode", "useful_only_20", "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-mode", "useful_only_20", "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
 		t.Fatal(err)
 	}
 	var report m0MaterializeReportV1
