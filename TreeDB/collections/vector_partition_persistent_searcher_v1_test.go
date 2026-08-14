@@ -586,7 +586,7 @@ func TestVectorPartitionLayoutPlanSearchParityV1(t *testing.T) {
 	}
 	manifest.Canonicalize()
 	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
-	baselineAssets, baselineResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, manifest, 994, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	baselineAssets, baselineResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, manifest, 994, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +598,7 @@ func TestVectorPartitionLayoutPlanSearchParityV1(t *testing.T) {
 	for i := range order {
 		order[i] = rows[len(rows)-1-i].id
 	}
-	layoutAssets, layoutResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(def.Name, layoutManifest, 995, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLayoutPlanV1{Digest: layoutManifest.LayoutPlanDigest, Partitions: []VectorPartitionLayoutPartitionV1{{PartitionID: 0, DocumentIDs: order}}})
+	layoutAssets, layoutResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(def.Name, layoutManifest, 995, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLayoutPlanV1{Digest: layoutManifest.LayoutPlanDigest, Partitions: []VectorPartitionLayoutPartitionV1{{PartitionID: 0, DocumentIDs: order}}})
 	if err != nil {
 		t.Fatal(err)
 	}

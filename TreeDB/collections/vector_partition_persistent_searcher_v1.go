@@ -999,7 +999,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantWithLayou
 	if layout.Digest == "" && len(layout.Partitions) == 0 {
 		return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil)
 	}
-	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 && variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 		return nil, nil, fmt.Errorf("%w: layout plan graph variant", ErrVectorPartitionSearchUnavailable)
 	}
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &layout)

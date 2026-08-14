@@ -167,7 +167,11 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(partitionHNSWIndex, manifest, fileID, inputs, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, productionLayout)
+	localVariant, err := m3PartitionLocalGraphVariantV1(d.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(d))
+	if err != nil {
+		return err
+	}
+	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(partitionHNSWIndex, manifest, fileID, inputs, localVariant, productionLayout)
 	if err != nil {
 		return err
 	}
