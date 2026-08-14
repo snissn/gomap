@@ -11,10 +11,13 @@ import (
 // membership ratio: floor(Ratio * source rows) memberships are requested.
 // Capacity is the declared per-partition total-membership cap; zero retains
 // the disjoint artifact cap. RequireExact makes any shortfall fail closed.
+// UsefulOnly stops when cut-reducing proposals are exhausted and forbids
+// filler replicas. UsefulOnly and RequireExact are mutually exclusive.
 type OverlapConfig struct {
 	Ratio        float64
 	Capacity     int
 	RequireExact bool
+	UsefulOnly   bool
 }
 
 // Membership is a stable vector ordinal paired with one logical partition.
@@ -87,6 +90,9 @@ const MaxOverlapMembershipsPerVector = 16
 // winning proposals in that order.  Consequently scheduler timing cannot
 // affect the result.
 func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
+	if cfg.UsefulOnly && cfg.RequireExact {
+		return OverlapResult{}, errors.New("useful-only overlap cannot require exact fill")
+	}
 	if err := ValidateArtifact(a); err != nil {
 		return OverlapResult{}, err
 	}
@@ -255,6 +261,9 @@ func BuildOverlap(a Artifact, cfg OverlapConfig) (OverlapResult, error) {
 	if cfg.RequireExact && out.Unspent != 0 {
 		return OverlapResult{}, &OverlapShortfallError{Requested: out.Budget, Realized: out.Used, Rejected: out.Unspent, Capacity: out.Capacity}
 	}
+	if cfg.UsefulOnly && out.Filler != 0 {
+		return OverlapResult{}, errors.New("useful-only overlap realized filler replicas")
+	}
 	if err := ValidateOverlap(a, cfg, out); err != nil {
 		return OverlapResult{}, err
 	}
@@ -358,8 +367,14 @@ func ValidateOverlap(a Artifact, cfg OverlapConfig, r OverlapResult) error {
 	if r.Budget != wantBudget || r.Budget < 0 || r.Used < 0 || r.Used > r.Budget || r.Useful < 0 || r.Filler < 0 || r.Useful+r.Filler != r.Used || r.Unspent != r.Budget-r.Used || r.Capacity != capacity || len(r.Loads) != a.Config.Partitions || len(r.Memberships) != len(a.IDs)+r.Used || len(r.Replicas) != r.Used || len(r.DestinationDiversity) != a.Config.Partitions || r.EdgeCutBefore != a.Metrics.EdgeCut {
 		return errors.New("invalid overlap accounting")
 	}
+	if cfg.UsefulOnly && cfg.RequireExact {
+		return errors.New("useful-only overlap cannot require exact fill")
+	}
 	if cfg.RequireExact && r.Unspent != 0 {
 		return &OverlapShortfallError{Requested: r.Budget, Realized: r.Used, Rejected: r.Unspent, Capacity: r.Capacity}
+	}
+	if cfg.UsefulOnly && (r.Filler != 0 || r.Useful != r.Used) {
+		return errors.New("useful-only overlap realized filler replicas")
 	}
 	seen := make(map[[2]int]struct{}, len(r.Memberships))
 	replicas := make(map[[2]int]Replica, len(r.Replicas))

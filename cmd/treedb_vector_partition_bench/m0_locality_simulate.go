@@ -213,7 +213,11 @@ func m0BuildPermutationsV1(capture m0LocalityCaptureV1, objective string) (map[u
 			}
 			sequence := partitionTrace.ScoreOrdinals
 			rows := capture.Snapshots[partitionTrace.Partition].Rows
-			window := max(1, int(m0PageBytesV1)/(capture.Snapshots[partitionTrace.Partition].VectorStride*4))
+			stride := capture.Snapshots[partitionTrace.Partition].VectorStride
+			if stride < 1 || stride > int(^uint(0)>>1)/4 {
+				return nil, errors.New("vector stride overflow")
+			}
+			window := max(1, int(m0PageBytesV1)/(stride*4))
 			for i, left := range sequence {
 				if int(left) >= rows {
 					return nil, errors.New("trace ordinal")
@@ -343,6 +347,9 @@ func m0ObjectiveOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1
 }
 
 func m0GreedyOrderV1(snapshot collections.VectorPartitionPackLayoutSnapshotV1, neighbors [][]int, pairs map[[2]int]uint32, objective string) []int {
+	if snapshot.VectorStride < 1 || snapshot.VectorStride > int(^uint(0)>>1)/4 {
+		return nil
+	}
 	window := max(1, int(m0PageBytesV1)/(snapshot.VectorStride*4))
 	placed := make([]bool, snapshot.Rows)
 	pairNeighbors := make([]map[int]uint32, snapshot.Rows)

@@ -126,15 +126,30 @@ func TestM3VariantDescriptorRejectsMalformedOverlapPolicyAccountingV1(t *testing
 	}
 }
 
-func TestM3VariantDescriptorRequiresDerivedExactTargetV1(t *testing.T) {
+func TestM3VariantDescriptorAllowsUsefulOnlyShortfallV1(t *testing.T) {
 	d := testM3VariantDescriptorV1(t.TempDir())
-	d.OverlapRequested = 0
 	d.OverlapRealized = 0
+	d.OverlapRejected = d.OverlapRequested
+	d.OverlapUseful = 0
+	d.OverlapFiller = 0
 	d.OverlapMemberships = 0
+	d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows)
+	d.PartitionLoads = []int{2, 2, 2, 2}
 	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
-	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: 0, Realized: 0, BuildIdentityDigest: d.BuildIdentityDigest})
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: 0, Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		t.Fatalf("useful-only shortfall rejected: %v", err)
+	}
+}
+
+func TestM3VariantDescriptorRejectsFillerReplicasV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	d.OverlapUseful = 0
+	d.OverlapFiller = d.OverlapRealized
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), BuildIdentityDigest: d.BuildIdentityDigest})
 	if err := validateM3VariantDescriptorV1(d); err == nil {
-		t.Fatal("accepted descriptor whose self-consistent accounting misses the ratio-derived target")
+		t.Fatal("accepted filler replicas in useful-only descriptor")
 	}
 }
 

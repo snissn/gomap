@@ -158,7 +158,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 		if err != nil {
 			return fmt.Errorf("derive exact overlap capacity ratio %.4f: %w", ratio, err)
 		}
-		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, RequireExact: true})
+		overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, UsefulOnly: true})
 		if err != nil {
 			return fmt.Errorf("build bounded overlap ratio %.4f: %w", ratio, err)
 		}
@@ -196,6 +196,23 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 // extra-membership target: ceil((source rows + requested extras)/partitions).
 // Exact construction still fails closed when affinity/per-vector constraints
 // cannot realize that target.
+func m3ShardPlanForArtifactV1(artifact vectorpartition.Artifact, ratio float64, overlap vectorpartition.OverlapResult) vectorpartition.ShardPlanV1 {
+	in := vectorpartition.DefaultShardPlanInputV1(len(artifact.IDs), artifact.Source.Dimensions)
+	in.OverlapRatio = ratio
+	in.Imbalance = artifact.Config.Imbalance
+	if overlap.Capacity > 0 && artifact.Source.Dimensions > 0 {
+		rowBytes := artifact.Source.Dimensions*vectorpartition.FP32BytesPerDimensionV1 + vectorpartition.GraphIdentityOverheadPerRowV1
+		if rowBytes > 0 {
+			in.TargetHotBytes = uint64(overlap.Capacity) * uint64(rowBytes)
+		}
+	}
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(in)
+	if err != nil {
+		return vectorpartition.ShardPlanV1{}
+	}
+	return plan
+}
+
 func m3OverlapCapacityV1(artifact vectorpartition.Artifact, ratio float64) (int, error) {
 	if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio < 0 || ratio > 1 || artifact.Config.Partitions < 1 {
 		return 0, errors.New("invalid M3 overlap capacity inputs")
@@ -689,6 +706,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			M3MaxBenchmarkVisits:     cfg.m3MaxBenchmarkVisits,
 			RouterRepresentatives:    routerRuntime.Representatives,
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
+			ShardPlan:                m3ShardPlanForArtifactV1(artifact, ratio, overlap),
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest, routerRuntime.Config); err != nil {
 			return m3PartitionIndexRow{}, err
@@ -1024,7 +1042,7 @@ func validateM3PartitionIndexReport(report m3PartitionIndexReport) error {
 		if row.OverlapUseful > 0 {
 			wantCutReductionPerUseful = float64(row.EdgeCutBefore-row.EdgeCutAfter) / float64(row.OverlapUseful)
 		}
-		if row.Budget != wantBudget || row.Used != wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != wantBudget || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapRejected != 0 || row.OverlapUseful < 0 || row.OverlapFiller < 0 || row.OverlapUseful+row.OverlapFiller != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
+		if row.Budget != wantBudget || row.Used > wantBudget || row.OverlapRequested != wantBudget || row.OverlapRealized != row.Used || row.Budget < 0 || row.Used < 0 || row.Unspent != row.Budget-row.Used || row.Capacity < 1 || row.OverlapRejected != row.Unspent || row.OverlapUseful < 0 || row.OverlapFiller != 0 || row.OverlapUseful != row.OverlapRealized || row.OverlapUnusedCapacity != wantUnusedCapacity || row.CutReductionPerUsefulReplica != wantCutReductionPerUseful || row.ReplicationFactor < 1 || row.EdgeCutAfter > row.EdgeCutBefore || row.BuildWallNanos <= 0 || row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes <= 0 || row.PackBytes == 0 || row.PartitionHNSWM < 2 || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PhysicalBytesPerSourceVector <= 0 || row.SearcherOpenWallNanos <= 0 || row.PackOpenNanos == 0 || row.LocalSearches <= 0 || row.WarmNSPerOp <= 0 || row.WarmQPS <= 0 || row.CandidatesPerOp <= 0 || row.ExactLocalRecallAtK < 0 || row.ExactLocalRecallAtK > 1 || row.ManifestDigest == "" || row.SourceRows != uint64(report.Dataset.Vectors) || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 {
 			return fmt.Errorf("invalid M3 evidence row: %+v", row)
 		}
 		if len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != len(row.PartitionLoads) {

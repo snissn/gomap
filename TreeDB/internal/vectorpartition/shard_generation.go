@@ -1,0 +1,140 @@
+package vectorpartition
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"unicode/utf8"
+)
+
+const (
+	ShardGenerationDescriptorSchemaV1 = 1
+	ShardGenerationDescriptorKindV1   = "treedb_vector_partition_shard_generation_v1"
+)
+
+// ShardGenerationDescriptorV1 persists selected planner inputs and the
+// realized useful-only membership digest. Pre-alpha: unknown versions fail
+// closed; there is no migration path.
+type ShardGenerationDescriptorV1 struct {
+	SchemaVersion    int                  `json:"schema_version"`
+	ResultKind       string               `json:"result_kind"`
+	Plan             ShardPlanV1          `json:"plan"`
+	OverlapConfig    OverlapConfig        `json:"overlap_config"`
+	Memberships      []Membership         `json:"memberships"`
+	MembershipDigest string               `json:"membership_digest"`
+	PackSummaries    []ShardPackSummaryV1 `json:"pack_summaries"`
+}
+
+func NewShardGenerationDescriptorV1(plan ShardPlanV1, cfg OverlapConfig, overlap OverlapResult) (ShardGenerationDescriptorV1, error) {
+	digest, err := MembershipDigestV1(overlap.Memberships)
+	if err != nil {
+		return ShardGenerationDescriptorV1{}, err
+	}
+	summaries, err := AccountShardPacksV1(plan, overlap.Loads)
+	if err != nil {
+		return ShardGenerationDescriptorV1{}, err
+	}
+	out := ShardGenerationDescriptorV1{
+		SchemaVersion:    ShardGenerationDescriptorSchemaV1,
+		ResultKind:       ShardGenerationDescriptorKindV1,
+		Plan:             plan,
+		OverlapConfig:    cfg,
+		Memberships:      append([]Membership(nil), overlap.Memberships...),
+		MembershipDigest: digest,
+		PackSummaries:    summaries,
+	}
+	if err := ValidateShardGenerationDescriptorV1(out); err != nil {
+		return ShardGenerationDescriptorV1{}, err
+	}
+	return out, nil
+}
+
+func CanonicalShardGenerationJSONV1(d ShardGenerationDescriptorV1) ([]byte, error) {
+	if err := ValidateShardGenerationDescriptorV1(d); err != nil {
+		return nil, err
+	}
+	return json.Marshal(d)
+}
+
+func DecodeShardGenerationDescriptorV1(raw []byte, maxBytes int) (ShardGenerationDescriptorV1, error) {
+	if maxBytes < 1 || len(raw) > maxBytes {
+		return ShardGenerationDescriptorV1{}, errors.New("vectorpartition: shard generation descriptor exceeds byte cap")
+	}
+	if !utf8.Valid(raw) {
+		return ShardGenerationDescriptorV1{}, errors.New("vectorpartition: shard generation descriptor contains invalid UTF-8")
+	}
+	var d ShardGenerationDescriptorV1
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&d); err != nil {
+		return ShardGenerationDescriptorV1{}, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return ShardGenerationDescriptorV1{}, errors.New("vectorpartition: shard generation descriptor has trailing JSON")
+	}
+	if err := ValidateShardGenerationDescriptorV1(d); err != nil {
+		return ShardGenerationDescriptorV1{}, err
+	}
+	return d, nil
+}
+
+func ValidateShardGenerationDescriptorV1(d ShardGenerationDescriptorV1) error {
+	if d.SchemaVersion != ShardGenerationDescriptorSchemaV1 {
+		return fmt.Errorf("vectorpartition: unsupported shard generation schema %d", d.SchemaVersion)
+	}
+	if d.ResultKind != ShardGenerationDescriptorKindV1 {
+		return errors.New("vectorpartition: shard generation result kind mismatch")
+	}
+	if !d.OverlapConfig.UsefulOnly || d.OverlapConfig.RequireExact {
+		return errors.New("vectorpartition: shard generation requires useful-only overlap")
+	}
+	recomputed, err := PlanByteBoundedShardsV1(d.Plan.request())
+	if err != nil {
+		return err
+	}
+	if recomputed != d.Plan {
+		return errors.New("vectorpartition: shard generation plan does not match selected inputs")
+	}
+	summaries, err := AccountShardPacksV1(d.Plan, loadsFromSummariesV1(d.PackSummaries))
+	if err != nil {
+		return err
+	}
+	rawWant, err := json.Marshal(summaries)
+	if err != nil {
+		return err
+	}
+	rawGot, err := json.Marshal(d.PackSummaries)
+	if err != nil || !bytes.Equal(rawWant, rawGot) {
+		return errors.New("vectorpartition: shard generation pack summaries mismatch")
+	}
+	digest, err := MembershipDigestV1(d.Memberships)
+	if err != nil {
+		return err
+	}
+	if d.MembershipDigest != digest {
+		return errors.New("vectorpartition: shard generation membership digest mismatch")
+	}
+	return nil
+}
+
+func MembershipDigestV1(memberships []Membership) (string, error) {
+	raw, err := json.Marshal(memberships)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func loadsFromSummariesV1(summaries []ShardPackSummaryV1) []int {
+	loads := make([]int, len(summaries))
+	for i, summary := range summaries {
+		loads[i] = summary.Rows
+	}
+	return loads
+}

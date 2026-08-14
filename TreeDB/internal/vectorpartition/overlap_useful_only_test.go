@@ -32,7 +32,9 @@ func TestOverlapUsefulOnlyZeroProposalsHaveZeroFiller(t *testing.T) {
 	if exact.Filler == 0 || exact.Used != exact.Filler {
 		t.Fatalf("exact fixture no longer produces filler: %+v", exact)
 	}
-	got, err := BuildOverlap(a, SelectedOverlapConfigV1(3))
+	cfg := SelectedOverlapConfigV1(3)
+	cfg.Ratio = .5
+	got, err := BuildOverlap(a, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

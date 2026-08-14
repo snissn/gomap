@@ -21,20 +21,20 @@ applying it. The result enforces:
 - edge cut after overlap no greater than the disjoint edge cut.
 
 The production M3 runner derives the narrow target-aware capacity
-`max(m2_cap, ceil((source_count + requested)/partitions))` and requires exact
-realization. If affinity or the per-vector cap still prevents the target, the
-build fails closed with requested, realized, rejected, and capacity evidence;
-it never publishes a silently under-filled overlap variant. Exact M3 builds
-first prioritize cut-reducing memberships, then deterministically fill any
-remaining legal non-home slots in canonical ID/partition order. Those fills
-cannot increase edge cut and make the declared global target materially mean
-the requested membership count rather than only the graph's affinity gain.
-Ratio zero emits
-only home memberships and therefore preserves exact M2 partition loads and
-edge cut. The integrity-bound M1 `BalancePolicy`, retained M3 descriptor, and
-machine report carry requested, realized, rejected, and declared-capacity
-accounting; the target and capacity are also part of the variant build
-identity.
+`max(m2_cap, ceil((source_count + requested)/partitions))` and admits only
+useful overlap (`UsefulOnly`). Partition count and that capacity are planned
+from an explicit target-hot-byte budget, current FP32 traversal-row bytes,
+and fixed graph/identity overhead; the planner never reads host LLC. Useful
+proposals stop when declared cut-reduction utility is exhausted. Leftover
+budget stays unspent; filler replicas are rejected. `RequireExact` remains
+available for diagnostic exact-fill experiments and is mutually exclusive
+with useful-only. Ratio zero emits only home memberships and therefore
+preserves exact M2 partition loads and edge cut. The integrity-bound M1
+`BalancePolicy`, retained M3 descriptor (`shard_plan`), and versioned
+`treedb_vector_partition_shard_generation_v1` record carry requested,
+realized, rejected, useful/filler, per-pack row/byte, and declared-capacity
+accounting. Unknown generation-descriptor versions fail closed; TreeDB is
+pre-alpha and does not migrate old generation descriptors.
 
 ## Native pack construction and reopen
 

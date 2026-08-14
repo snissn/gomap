@@ -7,14 +7,22 @@ import (
 	"testing"
 )
 
+func testShardRequestV1(a Artifact, ratio float64) ShardPlanRequestV1 {
+	req := SelectedShardPlanRequestV1(len(a.IDs), a.Source.Dimensions)
+	req.OverlapRatio = ratio
+	req.Imbalance = a.Config.Imbalance
+	req.TargetHotBytes = uint64(3 * (a.Source.Dimensions*FP32BytesPerDimensionV1 + GraphIdentityOverheadBytesV1))
+	return req
+}
+
 func TestShardGenerationDescriptorDeterministicAndReopenV1(t *testing.T) {
 	a := usefulOnlyArtifact(t, [][]int{{1, 2}, {0, 2}, {0, 1, 3}, {2}}, []int{0, 0, 1, 1})
-	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{Vectors: len(a.IDs), Dimensions: a.Source.Dimensions, OverlapRatio: .5, Imbalance: a.Config.Imbalance, TargetHotBytes: 64 << 10})
+	req := testShardRequestV1(a, .5)
+	plan, err := PlanByteBoundedShardsV1(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := SelectedOverlapConfigV1(plan.OverlapCapacity)
-	cfg.Ratio = .5
+	cfg := OverlapConfig{Ratio: .5, Capacity: plan.OverlapCapacity, UsefulOnly: true}
 	overlap, err := BuildOverlap(a, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +53,7 @@ func TestShardGenerationDescriptorDeterministicAndReopenV1(t *testing.T) {
 	if !reflect.DeepEqual(reopened, first) {
 		t.Fatalf("reopen=%+v want %+v", reopened, first)
 	}
-	if reopened.SchemaVersion != ShardGenerationDescriptorSchemaV1 || len(reopened.PackSummaries) != plan.Partitions {
+	if reopened.SchemaVersion != ShardGenerationDescriptorSchemaV1 || len(reopened.PackSummaries) != len(overlap.Loads) {
 		t.Fatalf("reopened descriptor=%+v", reopened)
 	}
 	for _, summary := range reopened.PackSummaries {
@@ -57,12 +65,12 @@ func TestShardGenerationDescriptorDeterministicAndReopenV1(t *testing.T) {
 
 func TestShardGenerationDescriptorRejectsStaleVersionAndConfigV1(t *testing.T) {
 	a := usefulOnlyArtifact(t, [][]int{{1, 2}, {0, 2}, {0, 1, 3}, {2}}, []int{0, 0, 1, 1})
-	plan, err := PlanByteBoundedShardsV1(ShardPlanInputV1{Vectors: len(a.IDs), Dimensions: a.Source.Dimensions, OverlapRatio: .5, Imbalance: a.Config.Imbalance, TargetHotBytes: 64 << 10})
+	req := testShardRequestV1(a, .5)
+	plan, err := PlanByteBoundedShardsV1(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := SelectedOverlapConfigV1(plan.OverlapCapacity)
-	cfg.Ratio = .5
+	cfg := OverlapConfig{Ratio: .5, Capacity: plan.OverlapCapacity, UsefulOnly: true}
 	overlap, err := BuildOverlap(a, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +110,7 @@ func TestRouterPartitionsContainExactlyRealizedMembershipV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	vectors := [][]float32{{1, 0}, {.9, .1}, {.8, .2}, {.7, .3}}
-	got, err := RouterPartitionsFromMembershipV1(a, overlap, vectors)
+	got, err := RouterPartitionsFromMembershipsV1(overlap.Memberships, vectors, a.Config.Partitions)
 	if err != nil {
 		t.Fatal(err)
 	}
