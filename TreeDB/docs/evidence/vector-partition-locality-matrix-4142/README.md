@@ -86,6 +86,21 @@ revision, and `vcs.modified=false`; exact approved-executable pinning is
 deferred to #4146. All raw artifacts remain under the task-specific
 `/mnt/fast4tb` root.
 
+## M2 implementation boundary
+
+The current production seam is
+`MaterializeVectorPartitionLocalSearchAssetsVariantV1`: it constructs a fresh
+local graph, then the native rebuild applies entry-first BFS before the existing
+search-pack writer encodes vectors, layered adjacency, IDs, and entry ordinal.
+The selected M0 co-visitation weights are not an input to that seam and no
+digest of a frozen training-query weight artifact is bound by the local-pack
+membership identity. #4144 must therefore not consume an ambient calibration
+file or silently substitute structural weights. The minimum next contract is a
+canonical, hash-bound, train/holdout-disjoint weight artifact passed to that
+materializer and domain-bound in the existing pack membership identity. Until
+then, the M0 result remains a simulation selection, not a production-layout or
+performance claim.
+
 ## Clean checkpoint: p32 membership and routing
 
 Checkpoint branch/head before this documentation-only handoff:
