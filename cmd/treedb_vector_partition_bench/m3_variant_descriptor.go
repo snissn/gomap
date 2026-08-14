@@ -82,6 +82,7 @@ type m3VariantDescriptorV1 struct {
 	PersistentAssetBytes     uint64                         `json:"persistent_asset_bytes"`
 	ShardPlan                vectorpartition.ShardPlanV1    `json:"shard_plan,omitempty"`
 	ShardGenerationDigest    string                         `json:"shard_generation_digest,omitempty"`
+	ShardGenerationBytes     uint64                         `json:"shard_generation_bytes,omitempty"`
 }
 
 func m3GraphBuildSHA256V1(artifact vectorpartition.Artifact) (string, error) {
@@ -131,6 +132,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		EdgeCutAfter             int
 		ShardPlan                vectorpartition.ShardPlanV1
 		ShardGenerationDigest    string
+		ShardGenerationBytes     uint64
 	}{
 		FixtureChecksum: d.FixtureChecksum, BaseSHA: d.BaseSHA, HeadSHA: d.HeadSHA, BuildDirty: d.BuildDirty, ExecutableSHA256: d.ExecutableSHA256, VariantID: d.VariantID, AssignmentBasis: d.AssignmentBasis, OverlapRatio: d.OverlapRatio,
 		ArtifactSHA256: d.ArtifactSHA256, GraphArtifactSHA256: d.GraphArtifactSHA256, GraphBuildSHA256: d.GraphBuildSHA256, ArtifactBackend: d.ArtifactBackend, KaHIPPythonSHA256: d.KaHIPPythonSHA256, KaHIPAdapterSHA256: d.KaHIPAdapterSHA256,
@@ -140,7 +142,7 @@ func m3VariantBuildIdentityDigestV1(d m3VariantDescriptorV1) (string, error) {
 		Capacity:             d.Capacity, OverlapRequested: d.OverlapRequested,
 		OverlapUseful: d.OverlapUseful, OverlapFiller: d.OverlapFiller,
 		EdgeCutBefore: d.EdgeCutBefore, EdgeCutAfter: d.EdgeCutAfter,
-		ShardPlan: d.ShardPlan, ShardGenerationDigest: d.ShardGenerationDigest,
+		ShardPlan: d.ShardPlan, ShardGenerationDigest: d.ShardGenerationDigest, ShardGenerationBytes: d.ShardGenerationBytes,
 	}
 	raw, err := json.Marshal(identity)
 	if err != nil {
@@ -314,13 +316,13 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 		// -shard-plan off never derives a plan, and a partially populated one is
 		// never produced: an absent plan must be absent in every field, and it
 		// retains no generation record to bind.
-		if d.ShardGenerationDigest != "" {
+		if d.ShardGenerationDigest != "" || d.ShardGenerationBytes != 0 {
 			return errors.New("M3 variant descriptor binds a shard generation record without a plan")
 		}
 		return nil
 	}
-	if !m8SHA256V1(d.ShardGenerationDigest) {
-		return errors.New("M3 variant descriptor lacks a shard generation record digest")
+	if !m8SHA256V1(d.ShardGenerationDigest) || d.ShardGenerationBytes == 0 {
+		return errors.New("M3 variant descriptor lacks a shard generation record digest or size")
 	}
 	recomputed, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
 		Vectors: plan.Vectors, Dimensions: plan.Dimensions, OverlapRatio: plan.OverlapRatio,

@@ -393,6 +393,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	identityDescriptor.ShardGenerationDigest = shardGenerationDigest
+	identityDescriptor.ShardGenerationBytes = uint64(len(shardGenerationRaw))
 	buildIdentityDigest, err := m3VariantBuildIdentityDigestV1(identityDescriptor)
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -781,6 +782,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 			PersistentAssetBytes:     packPayloadBytes + manifest.RouterAsset.Bytes,
 			ShardPlan:                cfg.shardPlan,
 			ShardGenerationDigest:    shardGenerationDigest,
+			ShardGenerationBytes:     uint64(len(shardGenerationRaw)),
 		}
 		if err := m3DescriptorMatchesManifestV1(descriptor, fixture, manifest, routerRuntime.ModelDigest, routerRuntime.Config); err != nil {
 			return m3PartitionIndexRow{}, err

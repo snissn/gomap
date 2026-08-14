@@ -346,6 +346,7 @@ type m8ProductionHostEvidenceV1 struct {
 
 type m8ProductionResourceEvidenceV1 struct {
 	PersistentAssetBytes uint64                                  `json:"persistent_asset_bytes"`
+	ShardGenerationBytes uint64                                  `json:"shard_generation_bytes,omitempty"`
 	PersistentAssetCap   uint64                                  `json:"persistent_asset_cap_bytes"`
 	PartitionLoads       []uint64                                `json:"partition_loads"`
 	PeakRSSBytes         int64                                   `json:"peak_rss_bytes,omitempty"`
@@ -2864,6 +2865,13 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 		out.PersistentAssetBytes += asset.Bytes
 	}
 	out.PersistentAssetBytes += assets.manifest.RouterAsset.Bytes
+	// PersistentAssetBytes stays the manifest asset sum, which the retained
+	// descriptor binds. The generation record is durable bytes the database
+	// needs to reopen but is not a manifest asset, so it is tracked separately
+	// and folded into the capped durable total.
+	if assets.descriptor != nil {
+		out.ShardGenerationBytes = assets.descriptor.ShardGenerationBytes
+	}
 	out.OverlapMemberships = len(assets.manifest.OverlapMemberships)
 	loads, loadErr := m8PartitionLoadsV1(assets.manifest)
 	if loadErr != nil {
@@ -2918,7 +2926,7 @@ func m8ProductionResourcesV1(cfg config, fixture fixtureManifest, assets *m8Prod
 	add := func(name string, configured, observed uint64, unit string, enforced bool) {
 		out.LimitComparisons = append(out.LimitComparisons, m8ProductionResourceLimitComparisonV1{Name: name, Configured: configured, Observed: observed, Unit: unit, Enforced: enforced, Passed: configured > 0 && observed <= configured})
 	}
-	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, out.PersistentAssetBytes, "bytes", true)
+	add("persistent_asset_bytes", cfg.m8MaxAssetBytes, out.PersistentAssetBytes+out.ShardGenerationBytes, "bytes", true)
 	peak := uint64(0)
 	if out.PeakRSSMeasured && out.PeakRSSBytes > 0 {
 		peak = uint64(out.PeakRSSBytes)

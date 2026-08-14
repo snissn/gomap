@@ -492,6 +492,15 @@ func m8ValidateVariantBuildCompatibilityV1(variants []m3VariantDescriptorV1) err
 			variant.RouterRepresentatives != base.RouterRepresentatives || variant.RouterMaxScalarWork != base.RouterMaxScalarWork || variant.RouterConfig != base.RouterConfig || variant.GraphBuildSHA256 != base.GraphBuildSHA256 {
 			return fmt.Errorf("M8 matrix variant %q does not match the common source, partition count, partition configuration, index definition, local HNSW, router representative count, and router scalar-work configuration", required)
 		}
+		// Equal partition counts are not equal geometry. Two byte-bounded plans
+		// can round to the same partition count from different envelopes and
+		// still differ in home/overlap capacity, which changes what
+		// capacity-constrained overlap construction can realize and confounds a
+		// supposedly like-for-like comparison. Comparison variants must share
+		// one plan, which -shard-plan-overlap-ratio exists to make possible.
+		if variant.ShardPlan != base.ShardPlan {
+			return fmt.Errorf("M8 matrix variant %q shard plan %+v does not match the common plan %+v", required, variant.ShardPlan, base.ShardPlan)
+		}
 	}
 	graphOverlap := byID["graph-overlap-020-v1"]
 	if graphOverlap.ArtifactSHA256 != base.ArtifactSHA256 || graphOverlap.GraphArtifactSHA256 != base.GraphArtifactSHA256 || graphOverlap.KaHIPPythonSHA256 != base.KaHIPPythonSHA256 || graphOverlap.KaHIPAdapterSHA256 != base.KaHIPAdapterSHA256 {
@@ -570,8 +579,12 @@ func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureM
 			return m8ProductionMatrixV1{}, fmt.Errorf("M8 matrix missing report %q", required)
 		}
 	}
-	disjointBytes := byID["graph-disjoint-v1"].Resources.PersistentAssetBytes
-	overlapBytes := byID["graph-overlap-020-v1"].Resources.PersistentAssetBytes
+	// The generation record is required to reopen a retained byte-bounded
+	// database, so it is durable storage the comparison must account for. It
+	// also scales with realized memberships, which is exactly the quantity this
+	// ratio is measuring.
+	disjointBytes := byID["graph-disjoint-v1"].Resources.PersistentAssetBytes + byID["graph-disjoint-v1"].Resources.ShardGenerationBytes
+	overlapBytes := byID["graph-overlap-020-v1"].Resources.PersistentAssetBytes + byID["graph-overlap-020-v1"].Resources.ShardGenerationBytes
 	if disjointBytes == 0 {
 		return m8ProductionMatrixV1{}, errors.New("M8 matrix disjoint persistent bytes are zero")
 	}

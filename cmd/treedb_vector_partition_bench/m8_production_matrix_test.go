@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
 func refreshTestM3VariantIdentityV1(t testing.TB, descriptor *m3VariantDescriptorV1) {
@@ -1302,5 +1303,60 @@ func TestM8VariantBuildCompatibilityRejectsMixedRetainedBuildsV1(t *testing.T) {
 				t.Fatal("accepted mixed retained variant builds")
 			}
 		})
+	}
+}
+
+// TestM8MatrixRequiresOneShardPlanAcrossVariantsV1 pins the geometry contract
+// for comparison variants. Equal partition counts are not equal geometry: two
+// valid byte-bounded plans can round to the same partition count and the same
+// capacity from different hot-byte envelopes, which changes what
+// capacity-constrained overlap construction can realize and confounds a
+// supposedly like-for-like comparison.
+func TestM8MatrixRequiresOneShardPlanAcrossVariantsV1(t *testing.T) {
+	variants := make([]m3VariantDescriptorV1, 0, len(m8RequiredVariantIDsV1))
+	for _, id := range m8RequiredVariantIDsV1 {
+		d := testM3ByteBoundedDescriptorV1(t, t.TempDir())
+		d.VariantID = id
+		switch id {
+		case "stable-id-hash-disjoint-v1":
+			d.AssignmentBasis, d.OverlapRatio = partitionAssignmentStableIDHashV1, 0
+			d.ArtifactSHA256 = strings.Repeat("e", 64)
+		case "graph-disjoint-v1":
+			d.OverlapRatio = 0
+		}
+		d.OverlapRequested = int(math.Floor(d.OverlapRatio * float64(d.SourceRows)))
+		d.OverlapRealized, d.OverlapUseful, d.OverlapMemberships = d.OverlapRequested, d.OverlapRequested, d.OverlapRequested
+		d.OverlapRejected = 0
+		d.OverlapUnusedCapacity = d.Capacity*int(d.Partitions) - int(d.SourceRows) - d.OverlapRealized
+		// Loads must total the realized memberships and stay inside capacity.
+		loads := make([]int, d.Partitions)
+		for i := 0; i < int(d.SourceRows)+d.OverlapRealized; i++ {
+			loads[i%len(loads)]++
+		}
+		d.PartitionLoads = loads
+		refreshTestM3DescriptorIdentityV1(t, &d)
+		variants = append(variants, d)
+	}
+	if err := m8ValidateVariantBuildCompatibilityV1(variants); err != nil {
+		t.Fatalf("variants sharing one plan rejected: %v", err)
+	}
+	// A different but equally valid envelope: same partition count and same
+	// capacity, larger per-pack membership budget.
+	wider, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: 8, Dimensions: 2, OverlapRatio: .2, Imbalance: vectorpartition.DefaultConfig().Imbalance,
+		TargetHotBytes: uint64(4 * (alignedRowBytesForTest(2) + vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := variants[0].ShardPlan
+	if wider == base || wider.Partitions != base.Partitions || wider.OverlapCapacity != base.OverlapCapacity {
+		t.Fatalf("fixture needs a distinct plan at the same count/capacity: base=%+v wider=%+v", base, wider)
+	}
+	divergent := append([]m3VariantDescriptorV1(nil), variants...)
+	divergent[1].ShardPlan = wider
+	refreshTestM3DescriptorIdentityV1(t, &divergent[1])
+	if err := m8ValidateVariantBuildCompatibilityV1(divergent); err == nil {
+		t.Fatal("accepted comparison variants built on different shard plans")
 	}
 }
