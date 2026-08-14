@@ -149,6 +149,7 @@ type VectorPartitionMembershipV1 struct {
 type VectorPartitionManifestV1 struct {
 	Format, State                                                      string
 	Collection, IndexName, IndexDefinitionDigest, IntegrityDigest      string
+	LayoutPlanDigest                                                   string `json:",omitempty"`
 	SourceGeneration, SourceChecksum, SourceSchemaHash, SourceRowCount uint64
 	Generation, RouterGeneration                                       uint64
 	PartitionCount                                                     uint32
@@ -169,6 +170,7 @@ var vectorPartitionManifestIntegrityFieldNamesV1 = [...]string{
 	"IndexName",
 	"IndexDefinitionDigest",
 	"IntegrityDigest",
+	"LayoutPlanDigest",
 	"SourceGeneration",
 	"SourceChecksum",
 	"SourceSchemaHash",
@@ -195,8 +197,12 @@ func validateVectorPartitionManifestIntegrityShapeV1() error {
 	}
 	for i, want := range vectorPartitionManifestIntegrityFieldNamesV1 {
 		field := typ.Field(i)
-		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != "" {
-			return fmt.Errorf("%w: integrity field %d is %q exported=%t json=%q want %q without tag", ErrVectorPartitionManifestInvalid, i, field.Name, field.PkgPath == "", field.Tag.Get("json"), want)
+		wantTag := ""
+		if want == "LayoutPlanDigest" {
+			wantTag = ",omitempty"
+		}
+		if field.Name != want || field.PkgPath != "" || field.Tag.Get("json") != wantTag {
+			return fmt.Errorf("%w: integrity field %d is %q exported=%t json=%q want %q json=%q", ErrVectorPartitionManifestInvalid, i, field.Name, field.PkgPath == "", field.Tag.Get("json"), want, wantTag)
 		}
 	}
 	return nil
@@ -258,7 +264,7 @@ func (m VectorPartitionManifestV1) validateWithContextV1(ctx context.Context, l 
 	if l.MaxBytes <= 0 {
 		l = DefaultVectorPartitionManifestLimits()
 	}
-	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
+	if m.Format != VectorPartitionManifestFormatV1 || (m.State != "building" && m.State != "ready") || m.Collection == "" || m.IndexName == "" || !isSHA256VPM(m.IndexDefinitionDigest) || !isSHA256VPM(m.IntegrityDigest) || m.LayoutPlanDigest != "" && !isSHA256VPM(m.LayoutPlanDigest) || m.Generation == 0 || m.SourceGeneration == 0 || m.SourceRowCount == 0 || m.PartitionCount == 0 || int(m.PartitionCount) > l.MaxPartitions {
 		return fmt.Errorf("%w: identity or partition bounds", ErrVectorPartitionManifestInvalid)
 	}
 	if m.SourceRowCount > uint64(l.sourceRowLimit()) || len(m.Collection) > l.MaxStringBytes || len(m.IndexName) > l.MaxStringBytes || len(m.State) > l.MaxStringBytes || len(m.BalancePolicy) > l.MaxStringBytes || len(m.IndexDefinitionDigest) > l.MaxStringBytes || len(m.IntegrityDigest) > l.MaxStringBytes {
@@ -470,6 +476,11 @@ func encodedSizeWithContextVPM(ctx context.Context, m VectorPartitionManifestV1,
 			return 0, err
 		}
 	}
+	if m.LayoutPlanDigest != "" {
+		if err := str(m.LayoutPlanDigest); err != nil {
+			return 0, err
+		}
+	}
 	if err := add(8*6 + 4 + 4); err != nil {
 		return 0, err
 	} // fixed fields and router asset count
@@ -603,6 +614,9 @@ func (m VectorPartitionManifestV1) readyDigestWithContextV1(ctx context.Context)
 		writeStringVPM(h, a.MembershipDigest)
 		writeU64VPM(h, a.Bytes)
 		writeColumnAssetRefVPM(h, a.Ref)
+	}
+	if m.LayoutPlanDigest != "" {
+		writeStringVPM(h, m.LayoutPlanDigest)
 	}
 	a := m.RouterAsset
 	// The router has no logical partition, but its required canonical zero is
@@ -768,6 +782,7 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 		{"IndexName", m.IndexName},
 		{"IndexDefinitionDigest", m.IndexDefinitionDigest},
 		{"IntegrityDigest", m.IntegrityDigest},
+		{"LayoutPlanDigest", m.LayoutPlanDigest},
 		{"SourceGeneration", m.SourceGeneration},
 		{"SourceChecksum", m.SourceChecksum},
 		{"SourceSchemaHash", m.SourceSchemaHash},
@@ -778,6 +793,9 @@ func (m VectorPartitionManifestV1) integrityDigestWithContextV1(ctx context.Cont
 		{"BalancePolicy", m.BalancePolicy},
 	}
 	for i, field := range scalars {
+		if field.name == "LayoutPlanDigest" && field.value == "" {
+			continue
+		}
 		if err := writeField(field.name, field.value, i == 0); err != nil {
 			return "", err
 		}
@@ -980,9 +998,16 @@ func encodeVectorPartitionManifestWithContextV1(ctx context.Context, m VectorPar
 	var x [4]byte
 	binary.BigEndian.PutUint32(x[:], vectorPartitionManifestMagicV1)
 	b.Write(x[:])
-	putU32VPM(b, 3)
+	version := uint32(3)
+	if m.LayoutPlanDigest != "" {
+		version = 4
+	}
+	putU32VPM(b, version)
 	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
 		putStringVPM(b, s)
+	}
+	if version == 4 {
+		putStringVPM(b, m.LayoutPlanDigest)
 	}
 	for _, n := range []uint64{m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, m.SourceRowCount, m.Generation, m.RouterGeneration} {
 		putU64VPM(b, n)
@@ -1023,7 +1048,7 @@ func preflightVectorPartitionManifestWithContextV1(ctx context.Context, m Vector
 	if len(m.Placements) > l.MaxPartitions || len(m.Assets) > l.MaxAssets || len(m.Memberships) > l.MaxMemberships || len(m.OverlapMemberships) > l.MaxMemberships || len(m.Representatives) > l.MaxMemberships || totalMembershipsVPM(m.Memberships, m.OverlapMemberships, m.Representatives) > l.totalMembershipLimit() {
 		return fmt.Errorf("%w: list cap", ErrVectorPartitionManifestInvalid)
 	}
-	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest} {
+	for _, s := range []string{m.Format, m.State, m.Collection, m.IndexName, m.IndexDefinitionDigest, m.IntegrityDigest, m.BalancePolicy, m.ReadySetDigest, m.LayoutPlanDigest} {
 		if len(s) > l.MaxStringBytes {
 			return fmt.Errorf("%w: string cap", ErrVectorPartitionManifestInvalid)
 		}
@@ -1074,13 +1099,23 @@ func DecodeVectorPartitionManifestWithContextV1(ctx context.Context, raw []byte,
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: encoded bytes cap", ErrVectorPartitionManifestInvalid)
 	}
 	r := vpmReader{b: raw, l: l, ctx: ctx}
-	if r.u32() != vectorPartitionManifestMagicV1 || r.u32() != 3 {
+	if r.u32() != vectorPartitionManifestMagicV1 {
+		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
+	}
+	version := r.u32()
+	if version != 3 && version != 4 {
 		return VectorPartitionManifestV1{}, fmt.Errorf("%w: magic/version", ErrVectorPartitionManifestInvalid)
 	}
 	m := VectorPartitionManifestV1{}
 	ss := []*string{&m.Format, &m.State, &m.Collection, &m.IndexName, &m.IndexDefinitionDigest, &m.IntegrityDigest, &m.BalancePolicy, &m.ReadySetDigest}
 	for _, p := range ss {
 		*p = r.str()
+	}
+	if version == 4 {
+		m.LayoutPlanDigest = r.str()
+		if m.LayoutPlanDigest == "" {
+			return VectorPartitionManifestV1{}, fmt.Errorf("%w: empty layout plan digest", ErrVectorPartitionManifestInvalid)
+		}
 	}
 	m.SourceGeneration = r.u64()
 	m.SourceChecksum = r.u64()

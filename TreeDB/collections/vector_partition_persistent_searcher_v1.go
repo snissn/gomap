@@ -301,14 +301,27 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 	return out
 }
 
+func vectorPartitionLayoutMembershipDigestV1(membership [sha256.Size]byte, layoutPlanDigest string) [sha256.Size]byte {
+	if layoutPlanDigest == "" {
+		return membership
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_layout_plan_v1/"))
+	h.Write([]byte(layoutPlanDigest))
+	h.Write(membership[:])
+	var out [sha256.Size]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
 // vectorPartitionLocalProductionGraphVariantV1 permits the selected M18
 // production pack while keeping every other domain-bound construction variant
 // offline-only. The canonical source definition remains the manifest identity.
-func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
-	if membership == expected {
+func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte, layoutPlanDigest string) (VectorPartitionLocalGraphVariantV1, bool) {
+	if vectorPartitionLayoutMembershipDigestV1(membership, layoutPlanDigest) == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, true
 	}
-	if vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expected {
+	if vectorPartitionLayoutMembershipDigestV1(vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), layoutPlanDigest) == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, true
 	}
 	return "", false
@@ -657,6 +670,7 @@ type VectorPartitionGenerationSearchOpenPlanV1 struct {
 	collection            string
 	indexName             string
 	indexDefinitionDigest string
+	layoutPlanDigest      string
 	sourceGeneration      uint64
 	sourceChecksum        uint64
 	sourceSchemaHash      uint64
@@ -694,6 +708,7 @@ func NewVectorPartitionGenerationSearchOpenPlanWithContextV1(ctx context.Context
 		collection:            manifest.Collection,
 		indexName:             manifest.IndexName,
 		indexDefinitionDigest: manifest.IndexDefinitionDigest,
+		layoutPlanDigest:      manifest.LayoutPlanDigest,
 		sourceGeneration:      manifest.SourceGeneration,
 		sourceChecksum:        manifest.SourceChecksum,
 		sourceSchemaHash:      manifest.SourceSchemaHash,
@@ -927,7 +942,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 		if err != nil {
 			return err
 		}
-		variant, ok := vectorPartitionLocalProductionGraphVariantV1(want, got)
+		variant, ok := vectorPartitionLocalProductionGraphVariantV1(want, got, manifest.LayoutPlanDigest)
 		if !ok {
 			return fmt.Errorf("%w: descriptor membership digest mismatch partition=%d", ErrVectorPartitionSearchUnavailable, asset.PartitionID)
 		}
@@ -958,27 +973,68 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 // authority. Callers install the returned descriptors in the generation M1
 // manifest; publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
 // graph variants. Native and experimental variants remain offline-only; the
 // selected M18/eFC256 auxiliary V3 variant is production-openable.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil)
+}
+
+// VectorPartitionLayoutPlanV1 is an explicit offline rebuild input. Digest is
+// retained by the manifest; each partition order is matched to stable IDs.
+type VectorPartitionLayoutPlanV1 struct {
+	Digest     string
+	Partitions []VectorPartitionLayoutPartitionV1
+}
+
+type VectorPartitionLayoutPartitionV1 struct {
+	PartitionID uint32
+	DocumentIDs []string
+}
+
+func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1, layout VectorPartitionLayoutPlanV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+	if layout.Digest == "" && len(layout.Partitions) == 0 {
+		return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil)
+	}
+	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		return nil, nil, fmt.Errorf("%w: layout plan graph variant", ErrVectorPartitionSearchUnavailable)
+	}
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &layout)
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil)
 }
 
-func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, layout *VectorPartitionLayoutPlanV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
 	}
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
+	}
+	layoutOrders := make(map[uint32][]string)
+	if layout == nil {
+		if manifest.LayoutPlanDigest != "" {
+			return nil, nil, fmt.Errorf("%w: missing layout plan", ErrVectorPartitionSearchUnavailable)
+		}
+	} else {
+		if !isSHA256VPM(layout.Digest) || manifest.LayoutPlanDigest != layout.Digest || len(layout.Partitions) != len(inputs) {
+			return nil, nil, fmt.Errorf("%w: layout plan identity", ErrVectorPartitionSearchUnavailable)
+		}
+		for _, partition := range layout.Partitions {
+			if len(partition.DocumentIDs) == 0 {
+				return nil, nil, fmt.Errorf("%w: empty layout partition", ErrVectorPartitionSearchUnavailable)
+			}
+			if _, duplicate := layoutOrders[partition.PartitionID]; duplicate {
+				return nil, nil, fmt.Errorf("%w: duplicate layout partition", ErrVectorPartitionSearchUnavailable)
+			}
+			layoutOrders[partition.PartitionID] = partition.DocumentIDs
+		}
 	}
 	limits := DefaultVectorPartitionManifestLimits()
 	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
@@ -1109,6 +1165,17 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
+		entryOrdinal := 0
+		if layout != nil {
+			order, ok := layoutOrders[in.PartitionID]
+			if !ok {
+				return nil, nil, fmt.Errorf("%w: missing layout partition", ErrVectorPartitionSearchUnavailable)
+			}
+			rows, auxiliary, entryOrdinal, err = applyVectorPartitionLayoutV1(rows, auxiliary, order)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%w: partition layout: %v", ErrVectorPartitionSearchUnavailable, err)
+			}
+		}
 		maxLayer := 0
 		rowMaxLayers := make([]int, len(rows))
 		for j := range rows {
@@ -1147,10 +1214,11 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		if err != nil {
 			return nil, nil, err
 		}
+		pack.EntryOrdinal = entryOrdinal
 		// Native A/B packs domain-bind their variant into the existing membership
 		// identity. Production publication and serving recompute the canonical
 		// membership digest and therefore fail closed on a native offline pack.
-		pack.MembershipDigest = vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant)
+		pack.MembershipDigest = vectorPartitionLayoutMembershipDigestV1(vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, variant), manifest.LayoutPlanDigest)
 		if hasAuxiliaryNavigation {
 			pack.HasAuxiliaryNavigation = true
 			pack.AuxiliaryNavigation = columnHNSWSearchPackLayerInput{Offsets: auxiliary.Offsets, Neighbors: auxiliary.Neighbors}
@@ -1185,6 +1253,87 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		}
 	}
 	return out, resources, nil
+}
+
+func applyVectorPartitionLayoutV1(rows []columnVectorGraphAssetRow, auxiliary vectorPartitionLocalAuxiliaryNavigationV1, order []string) ([]columnVectorGraphAssetRow, vectorPartitionLocalAuxiliaryNavigationV1, int, error) {
+	if len(rows) == 0 || len(order) != len(rows) || len(auxiliary.Offsets) != len(rows)+1 || auxiliary.Offsets[0] != 0 || auxiliary.Offsets[len(rows)] != uint64(len(auxiliary.Neighbors)) {
+		return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, errors.New("layout coverage")
+	}
+	oldByID := make(map[string]int, len(rows))
+	for old := range rows {
+		id := string(rows[old].ID)
+		if id == "" {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, errors.New("layout stable ID")
+		}
+		if _, duplicate := oldByID[id]; duplicate {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, errors.New("layout duplicate stable ID")
+		}
+		oldByID[id] = old
+	}
+	oldToNew := make([]int, len(rows))
+	seen := make([]bool, len(rows))
+	for next, id := range order {
+		old, ok := oldByID[id]
+		if !ok || seen[old] {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, errors.New("layout order coverage")
+		}
+		seen[old], oldToNew[old] = true, next
+	}
+	remap := func(neighbors []uint32) ([]uint32, error) {
+		out := make([]uint32, len(neighbors))
+		for i, neighbor := range neighbors {
+			if int(neighbor) >= len(oldToNew) {
+				return nil, errors.New("layout neighbor")
+			}
+			out[i] = uint32(oldToNew[neighbor])
+		}
+		return out, nil
+	}
+	remapAdjacency := func(adjacency []uint32) ([]uint32, error) {
+		if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+			return remap(adjacency)
+		}
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
+		if err != nil {
+			return nil, err
+		}
+		out := []uint32{columnVectorGraphLayeredAdjacencyMagic, uint32(maxLayer)}
+		for layer := 0; layer <= maxLayer; layer++ {
+			neighbors, err := columnVectorGraphAdjacencyLayer(adjacency, layer)
+			if err != nil {
+				return nil, err
+			}
+			mapped, err := remap(neighbors)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, uint32(len(mapped)))
+			out = append(out, mapped...)
+		}
+		return out, nil
+	}
+	ordered := make([]columnVectorGraphAssetRow, len(rows))
+	aux := vectorPartitionLocalAuxiliaryNavigationV1{Offsets: make([]uint64, len(rows)+1), Neighbors: make([]uint32, 0, len(auxiliary.Neighbors))}
+	for next, id := range order {
+		old := oldByID[id]
+		ordered[next] = rows[old]
+		var err error
+		ordered[next].Adjacency, err = remapAdjacency(rows[old].Adjacency)
+		if err != nil {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, err
+		}
+		start, end := auxiliary.Offsets[old], auxiliary.Offsets[old+1]
+		if end < start || end > uint64(len(auxiliary.Neighbors)) {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, errors.New("layout auxiliary offsets")
+		}
+		mapped, err := remap(auxiliary.Neighbors[start:end])
+		if err != nil {
+			return nil, vectorPartitionLocalAuxiliaryNavigationV1{}, 0, err
+		}
+		aux.Neighbors = append(aux.Neighbors, mapped...)
+		aux.Offsets[next+1] = uint64(len(aux.Neighbors))
+	}
+	return ordered, aux, oldToNew[0], nil
 }
 
 func encodeVectorPartitionSearchAssetV1(a VectorPartitionSearchAssetV1) ([]byte, error) {
@@ -1392,7 +1541,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true)
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.LayoutPlanDigest, &asset, members, home, overlap, true)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
@@ -1460,6 +1609,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
+		m.LayoutPlanDigest,
 		asset, members, home, overlap, false,
 	)
 	if err != nil {
@@ -1509,6 +1659,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
+		plan.layoutPlanDigest,
 		asset, members, home, overlap, false,
 	)
 	if err != nil {
@@ -1528,6 +1679,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	sourceGeneration uint64,
 	sourceChecksum uint64,
 	sourceSchemaHash uint64,
+	layoutPlanDigest string,
 	asset *VectorPartitionAssetV1,
 	members []vectorPartitionMembershipSourceV1,
 	home int,
@@ -1561,7 +1713,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	expectAuxiliaryNavigation := false
 	offlineV3 := false
 	if recomputedMembershipDigest != expectedMembershipDigest {
-		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); production {
+		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest, layoutPlanDigest); production {
 			var definitionErr error
 			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
 			if definitionErr != nil {

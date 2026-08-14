@@ -143,7 +143,7 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 		t.Fatal(err)
 	}
 	members := vectorPartitionMembershipsForPartitionV1(manifest, assets[0].PartitionID)
-	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, "", &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("production open accepted native v2 pack: %v", err)
 	}
 	nativeManifest := manifest
@@ -547,7 +547,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false)
+		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, "", &assets[0], members, len(members), 0, false)
 		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 			if productionErr != nil {
 				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
@@ -558,6 +558,76 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		} else if !errors.Is(productionErr, ErrVectorPartitionSearchUnavailable) {
 			t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
 		}
+	}
+}
+
+func TestVectorPartitionLayoutPlanSearchParityV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	rows := make([]columnGraphRebuildInputRowV2A, 16)
+	for i := range rows {
+		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: []float32{float32(i + 1), float32(i%5 + 1), float32(i%3 + 1)}}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.Collection, manifest.IndexName = "building", col.name, def.Name
+	manifest.IndexDefinitionDigest, manifest.Generation, manifest.PartitionCount = VectorIndexDefinitionDigestV1(def), 95, 1
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = make([]VectorPartitionMembershipV1, len(rows))
+	for i := range rows {
+		manifest.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	baselineAssets, baselineResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, manifest, 994, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baselineResources.Release()
+	layoutManifest := manifest
+	layoutManifest.LayoutPlanDigest = strings.Repeat("d", 64)
+	layoutManifest.Canonicalize()
+	order := make([]string, len(rows))
+	for i := range order {
+		order[i] = rows[len(rows)-1-i].id
+	}
+	layoutAssets, layoutResources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(def.Name, layoutManifest, 995, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLayoutPlanV1{Digest: layoutManifest.LayoutPlanDigest, Partitions: []VectorPartitionLayoutPartitionV1{{PartitionID: 0, DocumentIDs: order}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer layoutResources.Release()
+	baseline, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, manifest, baselineAssets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer baseline.Close()
+	layout, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, layoutManifest, layoutAssets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer layout.Close()
+	opts := VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: 96}
+	for _, row := range rows {
+		want, wantMetrics, err := baseline.SearchWithOptionsV1(t.Context(), row.vector, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, gotMetrics, err := layout.SearchWithOptionsV1(t.Context(), row.vector, opts)
+		if err != nil || !reflect.DeepEqual(got, want) || gotMetrics != wantMetrics {
+			t.Fatalf("query=%s results=%+v want=%+v metrics=%+v want=%+v err=%v", row.id, got, want, gotMetrics, wantMetrics, err)
+		}
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := layout.SearchWithOptionsV1(canceled, rows[0].vector, opts); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled layout search err=%v", err)
 	}
 }
 

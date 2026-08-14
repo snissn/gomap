@@ -23,6 +23,7 @@ type m0MaterializeReportV1 struct {
 	AssignmentSHA256          string `json:"assignment_artifact_sha256"`
 	Mode                      string `json:"mode"`
 	MembershipSHA256          string `json:"membership_sha256"`
+	LayoutPlanSHA256          string `json:"layout_plan_sha256,omitempty"`
 	SourceOrdinalDigestBefore string `json:"source_ordinal_digest_before"`
 	SourceOrdinalDigestAfter  string `json:"source_ordinal_digest_after"`
 	Generation                uint64 `json:"generation"`
@@ -37,11 +38,12 @@ type m0MaterializeReportV1 struct {
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode string
+	var sourceDB, artifactPath, graphArtifactPath, membershipPath, layoutPath, root, out, mode string
 	fs.StringVar(&sourceDB, "source-db", "", "retained source DB (read only)")
 	fs.StringVar(&artifactPath, "artifact", "", "strict canonical assignment artifact")
 	fs.StringVar(&graphArtifactPath, "graph-artifact", "", "frozen source graph artifact")
 	fs.StringVar(&membershipPath, "membership-report", "", "M0 membership report")
+	fs.StringVar(&layoutPath, "layout-plan", "", "optional canonical M2 layout plan")
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
@@ -89,6 +91,16 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if d.Source != artifact.Source {
 		return errors.New("retained source does not match assignment artifact lineage")
 	}
+	var layoutPlan m0LayoutPlanV1
+	if layoutPath != "" {
+		layoutPlan, err = m0ReadLayoutPlanV1(layoutPath)
+		if err != nil {
+			return err
+		}
+		if layoutPlan.GraphArtifactSHA256 != m0SHA256V1(graphRaw) {
+			return errors.New("layout plan graph artifact identity")
+		}
+	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
@@ -130,6 +142,15 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
+	var productionLayout collections.VectorPartitionLayoutPlanV1
+	if layoutPath != "" {
+		productionLayout, err = m0ProductionLayoutPlanV1(layoutPlan, artifact, h.manifest.IntegrityDigest)
+		if err != nil {
+			return err
+		}
+		manifest.LayoutPlanDigest = layoutPlan.ArtifactSHA256
+		manifest.Canonicalize()
+	}
 	vectorSource, vectorRows, err := h.collection.ReadVectorPartitionRouterSourceRowsV1(partitionHNSWIndex)
 	if err != nil || vectorSource != source || len(vectorRows) != len(rows) {
 		return errors.New("retained router source identity")
@@ -146,7 +167,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, fileID, inputs, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1(partitionHNSWIndex, manifest, fileID, inputs, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, productionLayout)
 	if err != nil {
 		return err
 	}
@@ -177,7 +198,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	h.status = h.router.Status()
-	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation || h.status.Manifest.PartitionCount != uint32(artifact.Config.Partitions) || h.status.Manifest.IntegrityDigest == "" || h.status.Manifest.ReadySetDigest == "" {
+	if h.status.Manifest.State != "ready" || h.status.Manifest.Generation != generation || h.status.Manifest.PartitionCount != uint32(artifact.Config.Partitions) || h.status.Manifest.IntegrityDigest == "" || h.status.Manifest.ReadySetDigest == "" || h.status.Manifest.LayoutPlanDigest != layoutPlan.ArtifactSHA256 {
 		return errors.New("materialized membership manifest is not ready after reopen")
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, generation)
@@ -200,7 +221,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
+	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, LayoutPlanSHA256: layoutPlan.ArtifactSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,17 +11,26 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
-const m0LayoutPlanSchemaV1 = "treedb_vector_partition_m2_layout_plan_v1"
+const (
+	m0LayoutPlanSchemaV1   = "treedb_vector_partition_m2_layout_plan_v1"
+	m0LayoutPlanMaxBytesV1 = 64 << 20
+)
 
 // m0LayoutPlanV1 is an offline, explicit rebuild input. Its order is keyed by
 // the frozen graph artifact, never by an ambient query or serving input.
 type m0LayoutPlanV1 struct {
-	Schema, Objective, CalibrationSHA256, GraphArtifactSHA256, TopologyDigest, ArtifactSHA256 string
-	PageBytes                                                                                 int
-	Partitions                                                                                []m0LayoutPlanPartitionV1
+	Schema              string                    `json:"schema"`
+	Objective           string                    `json:"objective"`
+	CalibrationSHA256   string                    `json:"calibration_sha256"`
+	GraphArtifactSHA256 string                    `json:"graph_artifact_sha256"`
+	TopologyDigest      string                    `json:"topology_digest"`
+	ArtifactSHA256      string                    `json:"artifact_sha256"`
+	PageBytes           int                       `json:"page_bytes"`
+	Partitions          []m0LayoutPlanPartitionV1 `json:"partitions"`
 }
 
 type m0LayoutPlanPartitionV1 struct {
@@ -126,13 +136,19 @@ func m0LayoutPlanDigestV1(plan m0LayoutPlanV1) (string, error) {
 }
 
 func m0ReadLayoutPlanV1(path string) (m0LayoutPlanV1, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readBoundedRegularFileV1(path, m0LayoutPlanMaxBytesV1)
 	if err != nil {
 		return m0LayoutPlanV1{}, err
 	}
 	var plan m0LayoutPlanV1
-	if err := json.Unmarshal(raw, &plan); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&plan); err != nil {
 		return m0LayoutPlanV1{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return m0LayoutPlanV1{}, errors.New("layout plan trailing JSON")
 	}
 	if plan.Schema != m0LayoutPlanSchemaV1 || plan.Objective != "co_visitation" || plan.PageBytes != int(m0PageBytesV1) || !m8SHA256V1(plan.CalibrationSHA256) || !m8SHA256V1(plan.GraphArtifactSHA256) || !m8SHA256V1(plan.TopologyDigest) || !m8SHA256V1(plan.ArtifactSHA256) || len(plan.Partitions) == 0 {
 		return m0LayoutPlanV1{}, errors.New("layout plan schema")
@@ -158,4 +174,25 @@ func m0ReadLayoutPlanV1(path string) (m0LayoutPlanV1, error) {
 		}
 	}
 	return plan, nil
+}
+
+func m0ProductionLayoutPlanV1(plan m0LayoutPlanV1, artifact vectorpartition.Artifact, topologyDigest string) (collections.VectorPartitionLayoutPlanV1, error) {
+	if plan.TopologyDigest != topologyDigest || len(plan.Partitions) != artifact.Config.Partitions {
+		return collections.VectorPartitionLayoutPlanV1{}, errors.New("layout plan topology")
+	}
+	out := collections.VectorPartitionLayoutPlanV1{Digest: plan.ArtifactSHA256, Partitions: make([]collections.VectorPartitionLayoutPartitionV1, len(plan.Partitions))}
+	for i, partition := range plan.Partitions {
+		if partition.Partition != uint32(i) {
+			return collections.VectorPartitionLayoutPlanV1{}, errors.New("layout plan partition coverage")
+		}
+		ids := make([]string, len(partition.Order))
+		for j, row := range partition.Order {
+			if int(row.SourceOrdinal) >= len(artifact.IDs) || artifact.IDs[row.SourceOrdinal] != row.DocumentID {
+				return collections.VectorPartitionLayoutPlanV1{}, errors.New("layout plan stable ID lineage")
+			}
+			ids[j] = row.DocumentID
+		}
+		out.Partitions[i] = collections.VectorPartitionLayoutPartitionV1{PartitionID: partition.Partition, DocumentIDs: ids}
+	}
+	return out, nil
 }

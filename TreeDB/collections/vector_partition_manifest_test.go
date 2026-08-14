@@ -2673,11 +2673,35 @@ func TestVectorPartitionManifestV1CanonicalRoundTrip(t *testing.T) {
 	if got.ReadySetDigest == "" || got.Placements[0].PartitionID != 0 {
 		t.Fatalf("bad round trip: %+v", got)
 	}
+	if binary.BigEndian.Uint32(raw[4:8]) != 3 {
+		t.Fatal("default manifest no longer uses legacy-compatible encoding")
+	}
+
+	m.LayoutPlanDigest = strings.Repeat("d", 64)
+	m.Canonicalize()
+	raw, err = EncodeVectorPartitionManifestV1(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.BigEndian.Uint32(raw[4:8]) != 4 {
+		t.Fatal("layout-bound manifest version")
+	}
+	got, err = DecodeVectorPartitionManifestV1(raw, DefaultVectorPartitionManifestLimits())
+	if err != nil || got.LayoutPlanDigest != m.LayoutPlanDigest {
+		t.Fatalf("layout round trip digest=%q err=%v", got.LayoutPlanDigest, err)
+	}
+	corrupt := append([]byte(nil), raw...)
+	corrupt[8+4] ^= 1
+	if _, err := DecodeVectorPartitionManifestV1(corrupt, DefaultVectorPartitionManifestLimits()); err == nil {
+		t.Fatal("corrupt layout-bound manifest accepted")
+	}
 }
 
 func TestVectorPartitionStoreV1CanonicalReopen(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	m := testVectorPartitionManifestV1()
+	m.LayoutPlanDigest = strings.Repeat("d", 64)
+	m.Canonicalize()
 	s, err := OpenVectorPartitionStoreV1(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -2685,8 +2709,12 @@ func TestVectorPartitionStoreV1CanonicalReopen(t *testing.T) {
 	if err := s.publishLocked(m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Open("docs", "embedding", 7); err != nil {
+	got, err := s.Open("docs", "embedding", 7)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got.LayoutPlanDigest != m.LayoutPlanDigest {
+		t.Fatalf("layout digest=%q want %q", got.LayoutPlanDigest, m.LayoutPlanDigest)
 	}
 }
 

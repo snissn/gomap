@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -37,6 +38,31 @@ func TestColumnVectorGraphPageObjectiveFixture4144(t *testing.T) {
 	}
 	if got, want := pageObjectiveScore4144(selected, canonicalPageObjectivePairs4144(weightsB), 2), uint64(20); got != want {
 		t.Fatalf("selected co-visitation score=%d want %d", got, want)
+	}
+}
+
+func TestApplyVectorPartitionLayoutV1PreservesGraphAndEntry(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("a"), Adjacency: []uint32{1, 2}},
+		{ID: []byte("b"), Adjacency: []uint32{0}},
+		{ID: []byte("c"), Adjacency: []uint32{0}},
+	}
+	aux := vectorPartitionLocalAuxiliaryNavigationV1{Offsets: []uint64{0, 2, 3, 4}, Neighbors: []uint32{1, 2, 0, 0}}
+	gotRows, gotAux, entry, err := applyVectorPartitionLayoutV1(rows, aux, []string{"c", "a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != 1 || string(gotRows[0].ID) != "c" || string(gotRows[1].ID) != "a" || string(gotRows[2].ID) != "b" {
+		t.Fatalf("entry=%d rows=%q,%q,%q", entry, gotRows[0].ID, gotRows[1].ID, gotRows[2].ID)
+	}
+	if !reflect.DeepEqual(gotRows[0].Adjacency, []uint32{1}) || !reflect.DeepEqual(gotRows[1].Adjacency, []uint32{2, 0}) || !reflect.DeepEqual(gotRows[2].Adjacency, []uint32{1}) {
+		t.Fatalf("adjacency=%v,%v,%v", gotRows[0].Adjacency, gotRows[1].Adjacency, gotRows[2].Adjacency)
+	}
+	if !reflect.DeepEqual(gotAux.Offsets, []uint64{0, 1, 3, 4}) || !reflect.DeepEqual(gotAux.Neighbors, []uint32{1, 2, 0, 1}) {
+		t.Fatalf("auxiliary=%+v", gotAux)
+	}
+	if _, _, _, err := applyVectorPartitionLayoutV1(rows, aux, []string{"a", "a", "c"}); err == nil {
+		t.Fatal("duplicate layout order accepted")
 	}
 }
 

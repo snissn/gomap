@@ -94,6 +94,50 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if report.PartitionCount != 16 || report.OverlapCount != 0 || report.PackBytes == 0 || report.CloneLogicalBytes == 0 || report.SourceOrdinalDigestBefore == "" || report.SourceOrdinalDigestBefore != report.SourceOrdinalDigestAfter {
 		t.Fatalf("report=%+v", report)
 	}
+
+	source, err := openM8ProductionExistingAssetSetModeV1(sourceDB, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	topology := source.manifest.IntegrityDigest
+	if err = source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plan := m0LayoutPlanV1{Schema: m0LayoutPlanSchemaV1, Objective: "co_visitation", CalibrationSHA256: strings.Repeat("d", 64), GraphArtifactSHA256: m0SHA256V1(raw), TopologyDigest: topology, PageBytes: int(m0PageBytesV1)}
+	orders := make([][]m0LayoutPlanOrdinalV1, config.Partitions)
+	for ordinal, partition := range artifact.Assignment {
+		orders[partition] = append(orders[partition], m0LayoutPlanOrdinalV1{SourceOrdinal: uint32(ordinal), DocumentID: artifact.IDs[ordinal]})
+	}
+	for partition := range orders {
+		plan.Partitions = append(plan.Partitions, m0LayoutPlanPartitionV1{Partition: uint32(partition), Order: orders[partition]})
+	}
+	plan.ArtifactSHA256, err = m0LayoutPlanDigestV1(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layoutPath := filepath.Join(root, "layout.json")
+	if err = writeVectorPartitionSystemJSONExclusiveV1(layoutPath, plan); err != nil {
+		t.Fatal(err)
+	}
+	layoutOut := filepath.Join(root, "layout-out.json")
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-layout-plan", layoutPath, "-root", filepath.Join(root, "layout-clones"), "-out", layoutOut}, bytes.NewBuffer(nil)); err != nil {
+		t.Fatal(err)
+	}
+	var layoutReport m0MaterializeReportV1
+	layoutRaw, err := os.ReadFile(layoutOut)
+	if err != nil || json.Unmarshal(layoutRaw, &layoutReport) != nil || layoutReport.LayoutPlanSHA256 != plan.ArtifactSHA256 {
+		t.Fatalf("layout report=%+v err=%v", layoutReport, err)
+	}
+	reopened, err := openM8ProductionExistingAssetSetModeV1(layoutReport.CloneDB, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.manifest.LayoutPlanDigest != plan.ArtifactSHA256 {
+		t.Fatalf("reopened layout digest=%q", reopened.manifest.LayoutPlanDigest)
+	}
+	if err = reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {

@@ -88,18 +88,27 @@ deferred to #4146. All raw artifacts remain under the task-specific
 
 ## M2 implementation boundary
 
-The current production seam is
-`MaterializeVectorPartitionLocalSearchAssetsVariantV1`: it constructs a fresh
-local graph, then the native rebuild applies entry-first BFS before the existing
-search-pack writer encodes vectors, layered adjacency, IDs, and entry ordinal.
-The selected M0 co-visitation weights are not an input to that seam and no
-digest of a frozen training-query weight artifact is bound by the local-pack
-membership identity. #4144 must therefore not consume an ambient calibration
-file or silently substitute structural weights. The minimum next contract is a
-canonical, hash-bound, train/holdout-disjoint weight artifact passed to that
-materializer and domain-bound in the existing pack membership identity. Until
-then, the M0 result remains a simulation selection, not a production-layout or
-performance claim.
+M2 uses a two-stage, explicit rebuild. `m0-layout-plan` consumes one frozen raw
+calibration capture plus its exact frozen graph artifact and reuses the selected
+M0 `co_visitation` ordering. Its canonical plan binds both input SHA-256s, the
+BFS manifest topology, the 4 KiB page objective, and every per-partition source
+ordinal/stable ID. It does not copy vectors or training queries into the plan.
+
+`MaterializeVectorPartitionLocalSearchAssetsVariantWithLayoutV1` accepts only
+the selected M18/eFC256 production variant. It requires exact stable-ID coverage,
+reorders the already-built graph, remaps every layered and auxiliary ordinal,
+and preserves the original entry node. The plan digest is domain-bound into the
+pack membership digest and retained manifest integrity/ready-set chain. A
+layout-bound manifest uses strict binary version 4; the ordinary no-plan path
+keeps the existing version-3 encoding and BFS behavior byte-for-byte. Full
+close/reopen, corruption, graph/entry remap, exact result/score/work-counter,
+and cancellation fixtures cover the production boundary.
+
+No retained M2 build or performance claim is included in this checkpoint. The
+next authorized run is the same-membership p40 sequence: fresh BFS calibration
+capture, canonical plan derivation, layout-bound rebuild, then matched BFS/layout
+held-out page and integrated c1/c32 measurement. The final #4146 holdout remains
+sealed.
 
 ## Clean checkpoint: p32 membership and routing
 
