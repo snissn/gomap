@@ -55,6 +55,11 @@ type m8OverlapDiagnosticsV1 struct {
 	EdgeCutBefore                int     `json:"directed_edge_cut_before"`
 	EdgeCutAfter                 int     `json:"directed_edge_cut_after"`
 	CutReductionPerUsefulReplica float64 `json:"directed_cut_reduction_per_useful_replica"`
+	// Accounted records that the realized overlap is an internally consistent
+	// useful-only outcome: at most the requested replicas, zero filler, and
+	// every realized replica useful. It is deliberately not "hit the exact
+	// ratio", which useful-only never promises.
+	Accounted bool `json:"useful_only_accounted"`
 }
 
 type m8DecisionRowV1 struct {
@@ -585,16 +590,29 @@ func m8BuildProductionMatrixWithExecutionIntervalV1(cfg config, fixture fixtureM
 	if overlapDescriptor.SourceRows > 0 {
 		matrix.OverlapMaterializationRatio = float64(gotOverlapMemberships) / float64(overlapDescriptor.SourceRows)
 	}
-	overlapMaterialized := wantOverlapMemberships > 0 && gotOverlapMemberships == wantOverlapMemberships
+	// Useful-only overlap realizes at most the ratio-derived request and stops
+	// once cut-reducing proposals are exhausted, so an internally consistent
+	// shortfall is a legal variant rather than a materialization failure. On a
+	// corpus whose partition already has zero edge cut the correct realization
+	// is zero replicas. Requiring exact fill here would make every such variant
+	// unable to pass the matrix. What must hold is that the variant requested a
+	// real overlap, realized no more than it requested, realized no filler, and
+	// realized exactly as many useful replicas as memberships.
+	overlapAccounted := wantOverlapMemberships > 0 &&
+		gotOverlapMemberships <= wantOverlapMemberships &&
+		overlapDescriptor.OverlapFiller == 0 &&
+		overlapDescriptor.OverlapUseful == overlapDescriptor.OverlapRealized &&
+		gotOverlapMemberships == uint64(overlapDescriptor.OverlapRealized)
+	matrix.OverlapDiagnostics.Accounted = overlapAccounted
 	overlapGate := "fail"
-	if overlapMaterialized && matrix.OverlapStorageRatio < 1.35 {
+	if overlapAccounted && matrix.OverlapStorageRatio < 1.35 {
 		overlapGate = "pass"
 	}
 	for i := range matrix.Variants {
 		matrix.Variants[i].GateLedger.OverlapStorage = overlapGate
 	}
 	requiredVariantsGate := "fail"
-	if overlapMaterialized {
+	if overlapAccounted {
 		requiredVariantsGate = "pass"
 	}
 	matrix.Gates = m8ProductionMatrixGatesV1{

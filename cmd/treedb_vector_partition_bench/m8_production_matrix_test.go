@@ -1150,13 +1150,33 @@ func TestM8ProductionMatrixSeparatesUsefulOnlyShortfallFromUnderMaterializationV
 				ExecutableSHA256: strings.Repeat("a", 64),
 				BaseSHA:          hash, HeadSHA: hash, Dataset: fixture, Config: config, Variant: &descriptor, GateLedger: pass,
 				Resources: m8ProductionResourceEvidenceV1{PersistentAssetBytes: 100},
-				Rows:      []m8ProductionRowV1{{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1}},
+				Rows: []m8ProductionRowV1{
+					// Candidate operating point and the exhaustive all-partition
+					// baseline the coupled-graph gate compares it against, so the
+					// matrix can actually reach local_gate_pass here.
+					{Status: "pass", VariantID: variant.id, Probes: 4, EfSearch: 128, Concurrency: 1, Samples: 1, RecallAtK: .95, QPS: 200, P95Nanos: 1000},
+					{Status: "pass", VariantID: variant.id, Probes: 16, EfSearch: 128, Concurrency: 1, Samples: 1, RecallAtK: .95, QPS: 100, P95Nanos: 2000,
+						Attribution: m8ProductionAttributionV1{ExhaustivePartitionIDParity: true, ExhaustivePartitionScoreParity: true, ExhaustivePartitionRecallAtK: 1}},
+				},
 			})
 		}
 		return reports
 	}
-	if _, err := m8BuildProductionMatrixV1(cfg, fixture, buildReports(false)); err != nil {
+	shortfall, err := m8BuildProductionMatrixV1(cfg, fixture, buildReports(false))
+	if err != nil {
 		t.Fatalf("useful-only overlap shortfall rejected: %v", err)
+	}
+	// A shortfall is a legal useful-only outcome, so the matrix must account it
+	// rather than treating it as an unmaterialized overlap. Requiring exact fill
+	// here would make every zero-cut corpus unable to pass the matrix.
+	if !shortfall.OverlapDiagnostics.Accounted {
+		t.Fatalf("useful-only shortfall not accounted: %+v", shortfall.OverlapDiagnostics)
+	}
+	if shortfall.Gates.RequiredVariants != "pass" || shortfall.Gates.OverlapStorage != "pass" {
+		t.Fatalf("useful-only shortfall gates required=%q overlap_storage=%q", shortfall.Gates.RequiredVariants, shortfall.Gates.OverlapStorage)
+	}
+	if shortfall.Status != "local_gate_pass" {
+		t.Fatalf("useful-only shortfall matrix status=%q", shortfall.Status)
 	}
 	matrix, err := m8BuildProductionMatrixV1(cfg, fixture, buildReports(true))
 	if err == nil || !strings.Contains(err.Error(), "malformed M3 variant descriptor") {
