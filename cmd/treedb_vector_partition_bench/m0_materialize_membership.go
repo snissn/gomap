@@ -97,8 +97,8 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		if err != nil {
 			return err
 		}
-		if layoutPlan.GraphArtifactSHA256 != m0SHA256V1(graphRaw) {
-			return errors.New("layout plan graph artifact identity")
+		if layoutPlan.GraphArtifactSHA256 != m0SHA256V1(artifactRaw) {
+			return errors.New("layout plan assignment artifact identity")
 		}
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {

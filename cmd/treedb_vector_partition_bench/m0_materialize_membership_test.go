@@ -119,6 +119,19 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if err = writeVectorPartitionSystemJSONExclusiveV1(layoutPath, plan); err != nil {
 		t.Fatal(err)
 	}
+	badPlan := plan
+	badPlan.GraphArtifactSHA256 = strings.Repeat("e", 64)
+	badPlan.ArtifactSHA256, err = m0LayoutPlanDigestV1(badPlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badLayoutPath := filepath.Join(root, "bad-layout.json")
+	if err = writeVectorPartitionSystemJSONExclusiveV1(badLayoutPath, badPlan); err != nil {
+		t.Fatal(err)
+	}
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-layout-plan", badLayoutPath, "-root", filepath.Join(root, "bad-layout-clones"), "-out", filepath.Join(root, "bad-layout-out.json")}, bytes.NewBuffer(nil)); err == nil {
+		t.Fatal("materialized layout from unrelated assignment")
+	}
 	layoutOut := filepath.Join(root, "layout-out.json")
 	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-layout-plan", layoutPath, "-root", filepath.Join(root, "layout-clones"), "-out", layoutOut}, bytes.NewBuffer(nil)); err != nil {
 		t.Fatal(err)
