@@ -73,6 +73,16 @@ the retained M3 variant descriptor is now
 TreeDB is pre-alpha and does not migrate retained M3 databases, so an older
 retained database must be rebuilt rather than reinterpreted.
 
+A byte-bounded build with `-m3-persist-db` also writes
+`vector_partition_shard_generation_v1.json` beside the variant descriptor. It
+is the only artifact carrying the realized membership list, its digest, and the
+membership-derived per-pack home/overlap/total row and byte summaries, so it is
+what the decode-time integrity checks actually protect. The record is written
+immutably and immediately reopened through the same validation, so a database
+is never retained with a record that could not be reopened. A retained row
+whose overlap ratio differs from the planned ratio fails closed rather than
+persisting a record the plan never provisioned.
+
 ## Native pack construction and reopen
 
 The M2 artifact is keyed by stable ID, while a rebuilt native vector index may

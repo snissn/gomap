@@ -117,6 +117,7 @@ type m3PartitionIndexRow struct {
 	CorruptAssets                uint64             `json:"corrupt_assets"`
 	StaleAssets                  uint64             `json:"stale_assets"`
 	PersistentDBDir              string             `json:"persistent_db_dir,omitempty"`
+	ShardGenerationBytes         int64              `json:"shard_generation_bytes,omitempty"`
 }
 
 type m3OverlapReplica struct {
@@ -759,6 +760,11 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
 			return m3PartitionIndexRow{}, err
 		}
+		generationBytes, err := m3WriteShardGenerationDescriptorV1(dir, cfg.shardPlan, ratio, overlap)
+		if err != nil {
+			return m3PartitionIndexRow{}, err
+		}
+		row.ShardGenerationBytes = int64(generationBytes)
 	}
 	return row, nil
 }
