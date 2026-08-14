@@ -198,6 +198,59 @@ func BuildWithPartitioner(vectors []Vector, cfg Config, source Source, backend P
 	a, _, err := BuildWithPartitionerPhased(vectors, cfg, source, backend)
 	return a, err
 }
+
+// RepartitionArtifact reuses a validated canonical graph and stable-ID order
+// while replacing only its partition assignment.  It is an offline evidence
+// seam: unlike BuildWithPartitioner it never reads vectors or rebuilds graph
+// topology.  The replacement assignment and all derived metrics are validated
+// before the resulting artifact is returned.
+func RepartitionArtifact(in Artifact, partitions int, backend Partitioner) (Artifact, error) {
+	if err := ValidateArtifact(in); err != nil {
+		return Artifact{}, fmt.Errorf("input artifact: %w", err)
+	}
+	if backend == nil {
+		return Artifact{}, errors.New("partition backend identity is required")
+	}
+	cfg := in.Config
+	cfg.Partitions = partitions
+	if err := validateArtifactConfig(in.IDs, cfg); err != nil {
+		return Artifact{}, err
+	}
+	if reference, ok := backend.(ReferencePartitioner); ok {
+		reference.maxPartitionWork = cfg.MaxPartitionWork
+		backend = reference
+	}
+	if reference, ok := backend.(*ReferencePartitioner); ok {
+		copy := *reference
+		copy.maxPartitionWork = cfg.MaxPartitionWork
+		backend = copy
+	}
+	name, license := backend.Name(), backend.License()
+	if name == "" || !utf8.ValidString(name) || len(name) > 256 || license == "" || !utf8.ValidString(license) || len(license) > 1024 {
+		return Artifact{}, errors.New("partition backend identity is required")
+	}
+	backendGraph, err := cloneGraphBounded(in.Graph, cfg.MaxEdges)
+	if err != nil {
+		return Artifact{}, err
+	}
+	assignment, err := backend.Partition(backendGraph, partitions, partitionCap(len(in.IDs), partitions, cfg.Imbalance))
+	if err != nil {
+		return Artifact{}, err
+	}
+	if _, err := validateAssignment(assignment, len(in.IDs), cfg); err != nil {
+		return Artifact{}, fmt.Errorf("partition backend assignment: %w", err)
+	}
+	outGraph, err := cloneGraphBounded(in.Graph, cfg.MaxEdges)
+	if err != nil {
+		return Artifact{}, err
+	}
+	out := Artifact{SchemaVersion: SchemaVersion, Backend: name, BackendLicense: license, Source: in.Source, Config: cfg, IDs: append([]string(nil), in.IDs...), Graph: outGraph, Assignment: assignment}
+	out.Metrics = metrics(out)
+	if err := ValidateArtifact(out); err != nil {
+		return Artifact{}, err
+	}
+	return out, nil
+}
 func BuildWithPartitionerPhased(vectors []Vector, cfg Config, source Source, backend Partitioner) (Artifact, PhaseMetrics, error) {
 	var phases PhaseMetrics
 	if backend == nil {

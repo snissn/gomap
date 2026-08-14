@@ -707,11 +707,15 @@ func writeVectorPartitionSystemJSONExclusiveV1(path string, value any) error {
 	if err != nil {
 		return err
 	}
+	return writeVectorPartitionSystemBytesExclusiveV1(path, append(raw, '\n'))
+}
+
+func writeVectorPartitionSystemBytesExclusiveV1(path string, raw []byte) error {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return err
 	}
-	_, writeErr := file.Write(append(raw, '\n'))
+	_, writeErr := file.Write(raw)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {

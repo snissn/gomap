@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -169,9 +170,82 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	}
 	searcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: view, opened: 1, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
 	ordinary, ordinaryMetrics, err := searcher.SearchWithOptionsV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
-	attributed, attributedMetrics, _, attributedErr := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
+	attributed, attributedMetrics, attribution, attributedErr := searcher.SearchWithAttributionV1(t.Context(), []float32{0, 1, 0}, VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 2})
 	if err != nil || attributedErr != nil || !reflect.DeepEqual(ordinary, attributed) || ordinaryMetrics != attributedMetrics || ordinaryMetrics.Route != VectorPartitionSearchRouteHNSWSearchPackV1 {
 		t.Fatalf("ordinary=%+v/%+v err=%v attributed=%+v/%+v err=%v", ordinary, ordinaryMetrics, err, attributed, attributedMetrics, attributedErr)
+	}
+	var upper, layer0, auxiliary bool
+	for _, read := range attribution.AdjacencyReads {
+		upper = upper || read.Layer > 0
+		layer0 = layer0 || read.Layer == 0 && !read.Auxiliary
+		auxiliary = auxiliary || read.Auxiliary
+	}
+	if len(attribution.LevelOrdinals) != 1 || len(attribution.ScoreOrdinals) == 0 || !upper || !layer0 || !auxiliary {
+		t.Fatalf("incomplete read trace levels=%v scores=%v reads=%+v", attribution.LevelOrdinals, attribution.ScoreOrdinals, attribution.AdjacencyReads)
+	}
+	pages, pageErr := searcher.PageAttributionForTraceV1(attribution, 64)
+	if pageErr != nil || pages.UniquePages != 4 || pages.VectorPages != 2 || pages.AdjacencyPages != 3 {
+		t.Fatalf("page mapping=%+v err=%v", pages, pageErr)
+	}
+	if _, err := searcher.PageAttributionForTraceV1(VectorPartitionSearchAttributionV1{}, 64); err == nil {
+		t.Fatal("accepted empty trace")
+	}
+	ordinals := make(map[string]uint32, view.Header.Rows)
+	for ordinal := 0; ordinal < view.Header.Rows; ordinal++ {
+		ordinals[string(view.DocumentIDBytes[view.DocumentIDOffsets[ordinal]:view.DocumentIDOffsets[ordinal+1]])] = uint32(ordinal)
+	}
+	if _, err := searcher.PackLayoutSnapshotV1(nil); err == nil {
+		t.Fatal("accepted empty ordinal map")
+	}
+	missing := make(map[string]uint32, 1)
+	for id, ordinal := range ordinals {
+		missing[id] = ordinal
+		break
+	}
+	if _, err := searcher.PackLayoutSnapshotV1(missing); err == nil {
+		t.Fatal("accepted missing ordinal map")
+	}
+	duplicates := make(map[string]uint32, len(ordinals))
+	for id := range ordinals {
+		duplicates[id] = 0
+	}
+	if _, err := searcher.PackLayoutSnapshotV1(duplicates); err == nil {
+		t.Fatal("accepted duplicate ordinal map")
+	}
+	snapshot, err := searcher.PackLayoutSnapshotV1(ordinals)
+	if err != nil || snapshot.Rows != input.Rows || snapshot.EntryOrdinal != input.EntryOrdinal || len(snapshot.RowOrdinals) != input.Rows || snapshot.VectorStride != input.VectorStride || snapshot.LevelsOffset == 0 || len(snapshot.LayerOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighbors) != len(input.AdjacencyLayers) || len(snapshot.LayerOffsetsSectionOffsets) != len(input.AdjacencyLayers) || len(snapshot.LayerNeighborOffsets) != len(input.AdjacencyLayers) || len(snapshot.AuxiliaryNeighbors) == 0 || snapshot.AuxiliaryOffsetsSectionOffset == 0 || snapshot.AuxiliaryNeighborOffset == 0 {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	finePages, err := searcher.PageAttributionForTraceV1(attribution, 1)
+	levelPage := snapshot.BaseOffset + snapshot.LevelsOffset + uint64(snapshot.EntryOrdinal)*2
+	if err != nil || finePages.UniquePages != finePages.VectorPages+finePages.AdjacencyPages+2 || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage}) || !slices.Contains(finePages.Tokens, VectorPartitionSearchPageTokenV1{Namespace: snapshot.Namespace, FileID: snapshot.FileID, Page: levelPage + 1}) {
+		t.Fatalf("isolated level pages [%d,%d] absent from %+v: %v", levelPage, levelPage+1, finePages, err)
+	}
+	manager := mappedresource.NewManager()
+	key := testColumnHNSWSearchPackMappedResourceKey2314(17, int64(len(raw)), page.Checksum(raw))
+	handle, err := manager.AcquireBytes(key, testColumnHNSWSearchPackScope2314(), mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: "nonaligned trace test", ValidationMode: mappedresource.ValidationVerify})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shifted *columnHNSWSearchPackPreparedView
+	t.Cleanup(func() {
+		if shifted != nil {
+			_ = shifted.Close()
+		} else {
+			_ = handle.Release()
+		}
+		if manager.Stats().ActiveHandles != 0 {
+			t.Errorf("shifted trace manager stats=%+v", manager.Stats())
+		}
+	})
+	shifted, err = newColumnHNSWSearchPackPreparedViewFromHandle(manager, handle, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: input.BaseIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shiftedSearcher := &VectorPartitionLocalSearcherV1{asset: VectorPartitionSearchAssetV1{Dimensions: 3}, prepared: shifted, opened: 1, searchRoute: VectorPartitionSearchRouteHNSWSearchPackV1}
+	shiftedPages, err := shiftedSearcher.PageAttributionForTraceV1(attribution, 64)
+	if err != nil || len(shiftedPages.Tokens) == 0 || shiftedPages.AdjacencyPageAccesses == pages.AdjacencyPageAccesses {
+		t.Fatalf("nonaligned pages=%+v base=%+v err=%v", shiftedPages, pages, err)
 	}
 	seed, err := view.greedyNearestAtLayer([]float32{0, 1, 0, 0}, 0, 1, columnVectorGraphScoreBatchModeScalar, &columnVectorGraphNativeSearchScratch{}, &columnVectorGraphNativeSearchStats{}, false, nil)
 	if err != nil || seed != 1 {

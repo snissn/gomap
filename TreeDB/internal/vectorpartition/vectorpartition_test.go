@@ -1166,6 +1166,46 @@ func TestBuildWithPartitionerFailsClosedAfterMutatingBackendFailure(t *testing.T
 	}
 }
 
+func TestRepartitionArtifactReusesCanonicalGraph(t *testing.T) {
+	in, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := RepartitionArtifact(in, 2, ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in.Graph, out.Graph) || !reflect.DeepEqual(in.IDs, out.IDs) || in.Source != out.Source || out.Config.Partitions != 2 {
+		t.Fatalf("repartition changed frozen graph identity: in=%+v out=%+v", in, out)
+	}
+	if err := ValidateArtifact(out); err != nil {
+		t.Fatal(err)
+	}
+	out.Graph.Neighbors[0][0] = 99
+	if in.Graph.Neighbors[0][0] == 99 {
+		t.Fatal("repartitioned graph aliases input graph")
+	}
+}
+
+func TestRepartitionArtifactFailsClosedAfterMutatingBackend(t *testing.T) {
+	in, err := Build(fixture(), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := CanonicalJSON(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RepartitionArtifact(in, 2, mutatingPartitioner{err: fmt.Errorf("backend failure")})
+	if err == nil {
+		t.Fatal("accepted mutating backend failure")
+	}
+	after, err := CanonicalJSON(in)
+	if err != nil || !bytes.Equal(after, before) {
+		t.Fatal("mutating backend changed frozen input artifact")
+	}
+}
+
 func TestCloneGraphBoundedUsesIndependentExactBacking(t *testing.T) {
 	original := Graph{Neighbors: [][]int{{1, 2}, {}, {0}}}
 	clone, err := cloneGraphBounded(original, 3)

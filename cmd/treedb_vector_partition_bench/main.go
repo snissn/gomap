@@ -446,6 +446,24 @@ func benchmarkRuntimeLimits() (int, int64) {
 }
 
 func run(args []string, stdout io.Writer) error {
+	if len(args) > 0 && args[0] == "m0-locality-capture" {
+		return runM0LocalityCaptureV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "m0-locality-simulate" {
+		return runM0LocalitySimulateV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "m0-membership-account" {
+		return runM0MembershipAccountV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "m0-materialize-membership" {
+		return runM0MaterializeMembershipV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "m0-calibration-frontier" {
+		return runM0CalibrationFrontierV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "m0-frontier-diagnose" {
+		return runM0FrontierDiagnoseV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "local-hnsw-attribution" {
 		return runLocalHNSWAttributionV1(args[1:], stdout)
 	}
