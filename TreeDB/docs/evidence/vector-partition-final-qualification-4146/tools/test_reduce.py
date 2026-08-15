@@ -32,6 +32,13 @@ class ReduceTest(unittest.TestCase):
             self.assertTrue(reduce_matrix(root)["gates"]["recall_at_10_gte_0_9500"])
             target = root / "250k/repeat-3/search-ef128.json"
             valid = target.read_text()
+            for metric in ("recall_at_10", "qps", "p50_nanos", "p95_nanos", "p99_nanos"):
+                for invalid in (float("inf"), float("-inf")):
+                    bad = json.loads(valid)
+                    bad["cells"][0]["metrics"][metric] = invalid
+                    target.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        reduce_matrix(root)
             duplicate = json.loads(valid)
             duplicate["cells"].append(duplicate["cells"][0])
             target.write_text(json.dumps(duplicate))

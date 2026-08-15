@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import statistics
 
@@ -39,11 +40,15 @@ def reduce_matrix(root):
                 for cell in value["cells"]:
                     concurrency = cell.get("concurrency")
                     metrics, counters = cell.get("metrics", {}), cell.get("counters", {})
+                    numeric = [metrics.get(key) for key in
+                               ("recall_at_10", "qps", "p50_nanos", "p95_nanos", "p99_nanos")]
                     if (concurrency not in CONCURRENCY or concurrency in seen or
                             cell.get("status") != "valid" or metrics.get("queries") != 1000 or
                             metrics.get("completed_queries") != 1000 or metrics.get("errors") != 0 or
                             metrics.get("timeouts") != 0 or counters.get("retries") != 0 or
-                            counters.get("redirects") != 0 or cell.get("budget", {}).get("probes") != 2):
+                            counters.get("redirects") != 0 or cell.get("budget", {}).get("probes") != 2 or
+                            any(isinstance(item, bool) or not isinstance(item, (int, float)) or
+                                not math.isfinite(item) for item in numeric)):
                         raise ValueError(f"invalid cell: {path}")
                     seen.add(concurrency)
                     cells[concurrency].append(cell)
