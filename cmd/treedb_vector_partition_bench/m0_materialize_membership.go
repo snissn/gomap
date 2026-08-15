@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ type m0MaterializeReportV1 struct {
 	Mode                      string `json:"mode"`
 	MembershipSHA256          string `json:"membership_sha256"`
 	LayoutPlanSHA256          string `json:"layout_plan_sha256,omitempty"`
+	DescriptorSHA256          string `json:"descriptor_sha256"`
 	SourceOrdinalDigestBefore string `json:"source_ordinal_digest_before"`
 	SourceOrdinalDigestAfter  string `json:"source_ordinal_digest_after"`
 	Generation                uint64 `json:"generation"`
@@ -93,6 +95,9 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	var layoutPlan m0LayoutPlanV1
 	if layoutPath != "" {
+		if d.ArtifactSHA256 != account.AssignmentArtifactSHA256 || d.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+			return errors.New("layout source descriptor does not match assignment topology")
+		}
 		layoutPlan, err = m0ReadLayoutPlanV1(layoutPath)
 		if err != nil {
 			return err
@@ -138,7 +143,11 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	generation := max(h.manifest.Generation, h.manifest.RouterGeneration) + 1
-	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, account.AssignmentArtifactSHA256)
+	buildIdentity := account.AssignmentArtifactSHA256
+	if layoutPath != "" {
+		buildIdentity = d.BuildIdentityDigest
+	}
+	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, buildIdentity)
 	if err != nil {
 		return err
 	}
@@ -221,11 +230,43 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	for _, asset := range h.status.Manifest.Assets {
 		packBytes += asset.Bytes
 	}
+	if layoutPath != "" && packBytes > math.MaxUint64-h.status.Manifest.RouterAsset.Bytes {
+		return errors.New("materialized membership asset bytes overflow")
+	}
+	descriptorSHA := ""
+	if layoutPath != "" {
+		d.DatabaseDirectory = clone
+		d.ManifestIntegrity = h.status.Manifest.IntegrityDigest
+		d.ReadySetDigest = h.status.Manifest.ReadySetDigest
+		d.RouterAssetChecksum = h.status.Manifest.RouterAsset.Checksum
+		d.RouterModelDigest = h.status.ModelDigest
+		d.PartitionGeneration = generation
+		d.RouterGeneration = h.status.Manifest.RouterGeneration
+		d.Partitions = h.status.Manifest.PartitionCount
+		d.RouterRepresentatives = uint64(len(h.status.Manifest.Representatives))
+		d.OverlapPolicy = h.status.Manifest.BalancePolicy
+		d.OverlapMemberships = len(h.status.Manifest.OverlapMemberships)
+		d.PersistentAssetBytes = packBytes + h.status.Manifest.RouterAsset.Bytes
+		if err = m3DescriptorMatchesManifestV1(d, fixtureManifest{Checksum: d.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+			return err
+		}
+		descriptorPath := filepath.Join(clone, m3VariantDescriptorFileV1)
+		if err = os.Remove(descriptorPath); err != nil {
+			return err
+		}
+		if err = m3WriteVariantDescriptorV1(clone, d); err != nil {
+			return err
+		}
+		descriptorSHA, err = localHNSWAttributionRegularFileSHA256V1(descriptorPath, m3VariantDescriptorMaxBytesV1)
+		if err != nil {
+			return err
+		}
+	}
 	cloneBytes, err := m3DirectoryBytes(clone)
 	if err != nil {
 		return err
 	}
-	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, LayoutPlanSHA256: layoutPlan.ArtifactSHA256, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
+	result := m0MaterializeReportV1{Schema: "treedb_vector_partition_m0_materialize_membership_v1", SourceDB: sourceDB, CloneDB: clone, AssignmentSHA256: account.AssignmentArtifactSHA256, Mode: mode, MembershipSHA256: selected.MembershipSHA256, LayoutPlanSHA256: layoutPlan.ArtifactSHA256, DescriptorSHA256: descriptorSHA, SourceOrdinalDigestBefore: before, SourceOrdinalDigestAfter: after, Generation: generation, ManifestIntegrity: h.status.Manifest.IntegrityDigest, ReadySetDigest: h.status.Manifest.ReadySetDigest, PartitionCount: h.status.Manifest.PartitionCount, OverlapCount: len(h.status.Manifest.OverlapMemberships), PackBytes: packBytes, CloneLogicalBytes: cloneBytes}
 	if err = os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return err
 	}

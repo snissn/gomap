@@ -148,6 +148,10 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if reopened.manifest.LayoutPlanDigest != plan.ArtifactSHA256 {
 		t.Fatalf("reopened layout digest=%q", reopened.manifest.LayoutPlanDigest)
 	}
+	descriptor, err := m3ReadVariantDescriptorV1(layoutReport.CloneDB)
+	if err != nil || descriptor.ManifestIntegrity != reopened.manifest.IntegrityDigest || descriptor.ReadySetDigest != reopened.manifest.ReadySetDigest || layoutReport.DescriptorSHA256 == "" {
+		t.Fatalf("reopened layout descriptor=%+v report=%+v err=%v", descriptor, layoutReport, err)
+	}
 	if err = reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
