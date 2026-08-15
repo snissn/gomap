@@ -11,6 +11,12 @@ import statistics
 CORPORA = ("100k", "250k")
 EFS = (64, 80, 96, 128)
 CONCURRENCY = (1, 32)
+CORPUS_IDENTITIES = {
+    "100k": ("ecc2224f386932e580e4956f2cfa852140d3134625971c3511bc0d5feddf9b95",
+             "0e9bce9465c9e1fa70c7833364e88c332bc831cfc52c628c90085e1c3068763c"),
+    "250k": ("d0c7c82ba868853aae9a4280161003d72714ad1701d41ed3169c2fa94d470d69",
+             "5a518c1cb8182edc685ab692dc17a6974655572f426a4b97c10482fd1643f04e"),
+}
 
 
 def sha256(path):
@@ -27,6 +33,7 @@ def reduce_matrix(root):
         curve, corpus_identity = {}, None
         for ef in EFS:
             cells = {c: [] for c in CONCURRENCY}
+            report_shas = set()
             for repetition in (1, 2, 3):
                 run = root / corpus / f"repeat-{repetition}"
                 ready_path, topology_path = run / "state/ready.json", run / "topology.json"
@@ -44,16 +51,19 @@ def reduce_matrix(root):
                 inputs[str(topology_path.relative_to(root))] = sha256(topology_path)
                 path = root / corpus / f"repeat-{repetition}" / f"search-ef{ef}.json"
                 value = json.loads(path.read_text(encoding="utf-8"))
-                inputs[str(path.relative_to(root))] = sha256(path)
+                report_sha = sha256(path)
+                inputs[str(path.relative_to(root))] = report_sha
                 identity = (value.get("dataset_checksum"), value.get("truth_artifact_sha256"))
                 if (value.get("schema_version") != 1 or
                         value.get("result_kind") != "vector_partition_system_bench_v1" or
                         value.get("top_k") != 10 or value.get("ef_search") != ef or
                         value.get("warmup_queries") != 1000 or value.get("search_mode") != "strict" or
                         not all(isinstance(item, str) and item for item in identity) or
+                        identity != CORPUS_IDENTITIES[corpus] or report_sha in report_shas or
                         value.get("topology_identity_sha256") != topology["topology_identity_sha256"] or
                         corpus_identity not in (None, identity) or len(value.get("cells", [])) != 2):
                     raise ValueError(f"invalid report identity: {path}")
+                report_shas.add(report_sha)
                 corpus_identity = identity
                 seen = set()
                 for cell in value["cells"]:

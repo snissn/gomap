@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from reduce import CONCURRENCY, CORPORA, EFS, reduce_matrix
+from reduce import CONCURRENCY, CORPORA, CORPUS_IDENTITIES, EFS, reduce_matrix
 
 
 class ReduceTest(unittest.TestCase):
@@ -35,8 +35,9 @@ class ReduceTest(unittest.TestCase):
                                 "counters": {"retries": 0, "redirects": 0, "candidates": 4, "edges": 5,
                                     "requests": 6, "selected_partitions": 7, "selected_groups": 8}})
                         path.write_text(json.dumps({"schema_version": 1,
-                            "result_kind": "vector_partition_system_bench_v1", "dataset_checksum": corpus,
-                            "truth_artifact_sha256": corpus + "-truth", "top_k": 10, "ef_search": ef,
+                            "result_kind": "vector_partition_system_bench_v1", "repetition": repetition,
+                            "dataset_checksum": CORPUS_IDENTITIES[corpus][0],
+                            "truth_artifact_sha256": CORPUS_IDENTITIES[corpus][1], "top_k": 10, "ef_search": ef,
                             "warmup_queries": 1000, "search_mode": "strict",
                             "topology_identity_sha256": "c" * 64, "cells": cells}))
             self.assertTrue(reduce_matrix(root)["gates"]["recall_at_10_gte_0_9500"])
@@ -50,6 +51,11 @@ class ReduceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reduce_matrix(root)
             ready_path.write_text(ready)
+            bad = json.loads(valid)
+            bad["dataset_checksum"] = CORPUS_IDENTITIES["100k"][0]
+            target.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError):
+                reduce_matrix(root)
             bad = json.loads(valid)
             bad["topology_identity_sha256"] = "d" * 64
             target.write_text(json.dumps(bad))
@@ -77,6 +83,10 @@ class ReduceTest(unittest.TestCase):
             duplicate = json.loads(valid)
             duplicate["cells"].append(duplicate["cells"][0])
             target.write_text(json.dumps(duplicate))
+            with self.assertRaises(ValueError):
+                reduce_matrix(root)
+            target.write_text(valid)
+            target.write_bytes((root / "250k/repeat-2/search-ef128.json").read_bytes())
             with self.assertRaises(ValueError):
                 reduce_matrix(root)
             target.write_text(valid)
