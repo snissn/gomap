@@ -125,7 +125,7 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer h.Close()
-	account, selected, _, err := m0FrontierAccountV1(membershipReport, h.manifest, "zero")
+	account, selected, _, err := m0FrontierAccountV1(membershipReport, h.manifest, "zero", "")
 	if err != nil {
 		return err
 	}
