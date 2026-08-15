@@ -14,10 +14,10 @@ Medians across three repetitions:
 
 | Corpus | EF | Recall@10 | c1 QPS | c1 p95 ms | c32 QPS | c32 p95 ms |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100k | 64 | .9384 | 2,182.6 | .555 | 10,546.1 | 4.998 |
-| 100k | 80 | .9599 | 2,092.5 | .570 | 9,907.2 | 5.130 |
-| 100k | 96 | .9738 | 1,922.7 | .628 | 8,878.4 | 6.146 |
-| 100k | 128 | .9883 | 1,787.8 | .701 | 8,184.4 | 6.261 |
+| 100k | 64 | .9384 | 2,236.4 | .527 | 10,557.4 | 4.962 |
+| 100k | 80 | .9599 | 2,114.4 | .568 | 9,741.7 | 5.265 |
+| 100k | 96 | .9738 | 1,998.7 | .608 | 9,214.9 | 5.802 |
+| 100k | 128 | .9883 | 1,819.7 | .689 | 8,248.1 | 6.284 |
 | 250k | 64 | .8778 | 1,950.1 | .605 | 7,001.9 | 7.998 |
 | 250k | 80 | .9095 | 1,798.4 | .963 | 5,900.3 | 9.201 |
 | 250k | 96 | **.9304** | **1,881.1** | **.649** | **8,275.0** | **6.508** |
@@ -49,7 +49,7 @@ No external system was rerun. Against the retained #4140 TreeDB result
 (`e9e6076f...ea6`):
 
 - 100k matched recall: current EF80 recall `.9599` versus old EF64 `.9525`;
-  c1/c32 QPS changed `-4.8%/-8.7%`. This is bounded, not a win.
+  c1/c32 QPS changed `-3.8%/-10.2%`. This is borderline at c32, not a win.
 - 250k nearest matched point: current EF128 recall `.9540` versus old EF128
   `.9580`; c1/c32 QPS changed `+1.1%/+10.9%`. This is an improvement, but not
   the required EF<=96 result and not the 20% hoped-for gain.
@@ -67,14 +67,14 @@ quality/throughput points, but did not finish the final performance objective.
 - executable SHA-256: `07e6dea0470bff680ebfcb747e43d9282eb30c9d4d0819344a1da9723191f527`
 - runner SHA-256: `a1d58567ca9f927817857cc4a13aadfb63178505740ea3d3b819587ebacbcae1`
 - compact raw result: `/mnt/fast4tb/gomap-4146-final-evidence/result.json`,
-  SHA-256 `0ef79e90a8494a6927d38d87c258f1ee5263a8059789aa5c88f7ed1020525b75`
+  SHA-256 `4b8d37e61a09f18640543b9aa587653a11e013b973a79a5277c635e6cbab61f0`
 - raw runs: `/mnt/fast4tb/gomap-4146-final-evidence/verified-runs/treedb_single`
 - 100k/250k asset descriptor SHA-256: `30e42712...bacf` /
   `7b1c2497...f940`
 - 100k layout: 16 partitions, zero replicas/filler, 73,211,456 pack bytes
 - 250k layout: 40 partitions, 50,000 useful replicas, zero filler, 220,027,376
   pack bytes; every final partition has 7,500 memberships
-- node peak RSS: 408,420 KiB at 100k; 1,211,024 KiB at 250k
+- node peak RSS: 407,084 KiB at 100k; 1,211,024 KiB at 250k
 - host: Linux 6.8.0-136-generic, i5-11400F, 12 logical CPUs
 
 The merged planner exposed one benchmark integration defect: `system-node`
@@ -82,7 +82,9 @@ still assumed four partitions per group. Commit `939c71b63` makes the
 existing-asset path derive the already-validated manifest partition count;
 the focused reopen/relabel test covers that behavior. The failed p16 launch is
 retained under `/mnt/fast4tb/gomap-4146-final-evidence/failed-attempts` and was
-not included in reduction.
+not included in reduction. The first clean 100k set used the pre-fix `8ad`
+executable; it was preserved under `superseded/` and rerun on `939c` so every
+reduced row has one source revision and executable digest.
 
 ## Reproduction
 

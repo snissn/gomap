@@ -17,13 +17,31 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def is_hex(value, length):
+    return isinstance(value, str) and len(value) == length and all(character in "0123456789abcdef" for character in value)
+
+
 def reduce_matrix(root):
-    inputs, corpora = {}, {}
+    inputs, corpora, build_identity, generation_identity = {}, {}, None, None
     for corpus in CORPORA:
         curve, corpus_identity = {}, None
         for ef in EFS:
             cells = {c: [] for c in CONCURRENCY}
             for repetition in (1, 2, 3):
+                run = root / corpus / f"repeat-{repetition}"
+                ready_path, topology_path = run / "state/ready.json", run / "topology.json"
+                ready = json.loads(ready_path.read_text(encoding="utf-8"))
+                topology = json.loads(topology_path.read_text(encoding="utf-8"))
+                candidate_build = (ready.get("source_revision"), ready.get("executable_sha256"))
+                if (ready.get("result_kind") != "vector_partition_system_node_ready_v1" or
+                        ready.get("vcs_modified") is not False or not is_hex(candidate_build[0], 40) or
+                        not is_hex(candidate_build[1], 64) or build_identity not in (None, candidate_build) or
+                        topology.get("result_kind") != "vector_partition_system_topology_v1" or
+                        not is_hex(topology.get("topology_identity_sha256"), 64)):
+                    raise ValueError(f"invalid run provenance: {run}")
+                build_identity = candidate_build
+                inputs[str(ready_path.relative_to(root))] = sha256(ready_path)
+                inputs[str(topology_path.relative_to(root))] = sha256(topology_path)
                 path = root / corpus / f"repeat-{repetition}" / f"search-ef{ef}.json"
                 value = json.loads(path.read_text(encoding="utf-8"))
                 inputs[str(path.relative_to(root))] = sha256(path)
@@ -33,6 +51,7 @@ def reduce_matrix(root):
                         value.get("top_k") != 10 or value.get("ef_search") != ef or
                         value.get("warmup_queries") != 1000 or value.get("search_mode") != "strict" or
                         not all(isinstance(item, str) and item for item in identity) or
+                        value.get("topology_identity_sha256") != topology["topology_identity_sha256"] or
                         corpus_identity not in (None, identity) or len(value.get("cells", [])) != 2):
                     raise ValueError(f"invalid report identity: {path}")
                 corpus_identity = identity
@@ -42,14 +61,20 @@ def reduce_matrix(root):
                     metrics, counters = cell.get("metrics", {}), cell.get("counters", {})
                     numeric = [metrics.get(key) for key in
                                ("recall_at_10", "qps", "p50_nanos", "p95_nanos", "p99_nanos")]
+                    generation_value = cell.get("generation")
+                    generation = json.dumps(generation_value, sort_keys=True, separators=(",", ":"))
                     if (concurrency not in CONCURRENCY or concurrency in seen or
                             cell.get("status") != "valid" or metrics.get("queries") != 1000 or
                             metrics.get("completed_queries") != 1000 or metrics.get("errors") != 0 or
                             metrics.get("timeouts") != 0 or counters.get("retries") != 0 or
                             counters.get("redirects") != 0 or cell.get("budget", {}).get("probes") != 2 or
                             any(isinstance(item, bool) or not isinstance(item, (int, float)) or
-                                not math.isfinite(item) for item in numeric)):
+                                not math.isfinite(item) for item in numeric) or
+                            not 0 <= numeric[0] <= 1 or any(item < 0 for item in numeric[1:]) or
+                            generation_value != {"Index": "embedding_graph", "Generation": 1} or
+                            generation_identity not in (None, generation)):
                         raise ValueError(f"invalid cell: {path}")
+                    generation_identity = generation
                     seen.add(concurrency)
                     cells[concurrency].append(cell)
                 if seen != set(CONCURRENCY):
@@ -80,7 +105,9 @@ def reduce_matrix(root):
     return {
         "schema_version": 1,
         "result_kind": "treedb_vector_partition_final_qualification_4146_v1",
-        "source_revision": "939c71b6357c41d569af681fd7b95aea705978a4",
+        "source_revision": build_identity[0],
+        "executable_sha256": build_identity[1],
+        "generation": json.loads(generation_identity),
         "selected_ef": 96,
         "selected_probes": 2,
         "gates": {
