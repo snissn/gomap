@@ -634,6 +634,7 @@ type VectorPartitionSearchOptionsV1 struct {
 	TopK             int
 	EfSearch         int
 	MaxStableIDBytes int
+	wavefrontWidth   int
 }
 
 const (
@@ -1551,6 +1552,13 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithAttributionV1(ctx context.Con
 	return results, metrics, attribution, err
 }
 
+// SearchWavefrontForOfflineV1 exposes the existing relaxed scheduler only to
+// offline qualification. Production Search methods keep exact best-first order.
+func (s *VectorPartitionLocalSearcherV1) SearchWavefrontForOfflineV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, width int) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
+	opts.wavefrontWidth = width
+	return s.searchWithOptionsV1(ctx, query, opts, nil)
+}
+
 func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context, query []float32, opts VectorPartitionSearchOptionsV1, attribution *VectorPartitionSearchAttributionV1) ([]VectorPartitionSearchResultV1, VectorPartitionSearchMetricsV1, error) {
 	if attribution != nil {
 		*attribution = VectorPartitionSearchAttributionV1{Schema: "treedb_vector_partition_search_attribution_v1"}
@@ -1596,6 +1604,10 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			EfSearch:                             opts.EfSearch,
 			OmitResultMaterialization:            true,
 			SuppressOmittedResultMaterialization: true,
+		}
+		if opts.wavefrontWidth != 0 {
+			nativeOpts.TraversalMode = columnVectorGraphNativeSearchTraversalModeWavefront
+			nativeOpts.WavefrontWidth = opts.wavefrontWidth
 		}
 		var trace columnHNSWSearchPackAttributionTrace
 		if attribution != nil {

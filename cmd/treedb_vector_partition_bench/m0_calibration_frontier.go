@@ -68,6 +68,7 @@ type m0FrontierReportV1 struct {
 	CalibrationSHA256        string             `json:"calibration_sha256"`
 	TruthSHA256              string             `json:"truth_sha256"`
 	RouterCandidates         int                `json:"router_candidates"`
+	WavefrontWidth           int                `json:"wavefront_width,omitempty"`
 	TopK                     int                `json:"top_k"`
 	Measurements             []m0FrontierCellV1 `json:"measurements"`
 	Cells                    []m0FrontierCellV1 `json:"cells"`
@@ -109,7 +110,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-calibration-frontier", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var db, dataset, calibration, truthCache, membershipReport, assignmentArtifact, graphArtifact, out, probesRaw, efRaw, mode string
-	candidates, topK := 0, 0
+	candidates, topK, wavefrontWidth := 0, 0, 0
 	fs.StringVar(&db, "db", "", "materialized clone")
 	fs.StringVar(&dataset, "dataset", "", "frozen dataset directory")
 	fs.StringVar(&calibration, "calibration", "", "frozen calibration split")
@@ -123,7 +124,8 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
+	fs.IntVar(&wavefrontWidth, "wavefront-width", 0, "offline relaxed traversal width")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 || wavefrontWidth < 0 {
 		return errors.New("M0 calibration frontier arguments")
 	}
 	if _, e := os.Stat(out); e == nil || !errors.Is(e, os.ErrNotExist) {
@@ -198,7 +200,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, WavefrontWidth: wavefrontWidth, TopK: topK}
 	for _, a := range h.manifest.Assets {
 		report.PackBytes += a.Bytes
 	}
@@ -211,13 +213,13 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	}
 	canonical := m0FrontierPlanV1(probes, efs)
 	for _, point := range canonical {
-		if _, e = m0FrontierCellBuildV1(h, searchers, queries, truth, routes[point.Probes], point.Probes, point.EFSearch, candidates, -1); e != nil {
+		if _, e = m0FrontierCellBuildV1(h, searchers, queries, truth, routes[point.Probes], point.Probes, point.EFSearch, candidates, wavefrontWidth, -1); e != nil {
 			return e
 		}
 	}
 	for repetition := 0; repetition < 3; repetition++ {
 		for _, point := range m0FrontierExecutionOrderV1(canonical, repetition) {
-			cell, e := m0FrontierCellBuildV1(h, searchers, queries, truth, routes[point.Probes], point.Probes, point.EFSearch, candidates, repetition)
+			cell, e := m0FrontierCellBuildV1(h, searchers, queries, truth, routes[point.Probes], point.Probes, point.EFSearch, candidates, wavefrontWidth, repetition)
 			if e != nil {
 				return e
 			}
@@ -388,7 +390,7 @@ func m0FrontierIntsV1(raw string) ([]int, error) {
 	}
 	return out, nil
 }
-func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*collections.VectorPartitionLocalSearcherV1, queries [][]float64, truth [][]m8CanonicalResultV1, routes []m0FrontierQueryRouteV1, probes, ef, candidates, repetition int) (m0FrontierCellV1, error) {
+func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*collections.VectorPartitionLocalSearcherV1, queries [][]float64, truth [][]m8CanonicalResultV1, routes []m0FrontierQueryRouteV1, probes, ef, candidates, wavefrontWidth, repetition int) (m0FrontierCellV1, error) {
 	var c m0FrontierCellV1
 	if probes > len(searchers) || ef < 10 {
 		return c, errors.New("M0 frontier cell")
@@ -416,7 +418,15 @@ func m0FrontierCellBuildV1(h *m8ProductionMultiGroupAssetsV1, searchers []*colle
 		var found []m8CanonicalResultV1
 		for _, partition := range routeInput.Route {
 			s := searchers[partition]
-			got, m, e := s.SearchWithOptionsV1(context.Background(), q, collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef})
+			searchOpts := collections.VectorPartitionSearchOptionsV1{TopK: 10, EfSearch: ef}
+			var got []collections.VectorPartitionSearchResultV1
+			var m collections.VectorPartitionSearchMetricsV1
+			var e error
+			if wavefrontWidth > 0 {
+				got, m, e = s.SearchWavefrontForOfflineV1(context.Background(), q, searchOpts, wavefrontWidth)
+			} else {
+				got, m, e = s.SearchWithOptionsV1(context.Background(), q, searchOpts)
+			}
 			if e != nil {
 				return c, e
 			}
