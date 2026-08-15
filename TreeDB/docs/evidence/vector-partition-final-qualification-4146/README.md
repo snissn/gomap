@@ -67,7 +67,7 @@ quality/throughput points, but did not finish the final performance objective.
 - executable SHA-256: `07e6dea0470bff680ebfcb747e43d9282eb30c9d4d0819344a1da9723191f527`
 - runner SHA-256: `a1d58567ca9f927817857cc4a13aadfb63178505740ea3d3b819587ebacbcae1`
 - compact raw result: `/mnt/fast4tb/gomap-4146-final-evidence/result.json`,
-  SHA-256 `4b8d37e61a09f18640543b9aa587653a11e013b973a79a5277c635e6cbab61f0`
+  SHA-256 `07f425ae08e05215ad24d5bbaf786bba9084f6921c72d968f2c015a660c7d28c`
 - raw runs: `/mnt/fast4tb/gomap-4146-final-evidence/verified-runs/treedb_single`
 - 100k/250k asset descriptor SHA-256: `30e42712...bacf` /
   `7b1c2497...f940`

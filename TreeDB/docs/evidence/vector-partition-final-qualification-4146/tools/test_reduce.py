@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from reduce import CONCURRENCY, CORPORA, CORPUS_IDENTITIES, EFS, reduce_matrix
+from reduce import ASSET_IDENTITIES, CONCURRENCY, CORPORA, CORPUS_IDENTITIES, EFS, reduce_matrix, topology_digest
 
 
 class ReduceTest(unittest.TestCase):
@@ -16,12 +16,19 @@ class ReduceTest(unittest.TestCase):
                 for repetition in (1, 2, 3):
                     run = root / corpus / f"repeat-{repetition}"
                     (run / "state").mkdir(parents=True, exist_ok=True)
+                    (run / "database").mkdir(exist_ok=True)
+                    (run / "database/vector_partition_variant_v1.json").write_text(json.dumps({
+                        "schema_version": 6, "result_kind": "m3_persistent_variant_descriptor_v6",
+                        "fixture_checksum": CORPUS_IDENTITIES[corpus][0], **ASSET_IDENTITIES[corpus]}))
                     (run / "state/ready.json").write_text(json.dumps({
                         "result_kind": "vector_partition_system_node_ready_v1", "vcs_modified": False,
                         "source_revision": "a" * 40, "executable_sha256": "b" * 64}))
-                    (run / "topology.json").write_text(json.dumps({
+                    topology = {
                         "result_kind": "vector_partition_system_topology_v1",
-                        "topology_identity_sha256": "c" * 64}))
+                        "topology": "single_daemon_four_group",
+                        "topology_identity_sha256": ""}
+                    topology["topology_identity_sha256"] = topology_digest(topology)
+                    (run / "topology.json").write_text(json.dumps(topology))
                     for ef in EFS:
                         path = root / corpus / f"repeat-{repetition}" / f"search-ef{ef}.json"
                         path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,7 +46,7 @@ class ReduceTest(unittest.TestCase):
                             "dataset_checksum": CORPUS_IDENTITIES[corpus][0],
                             "truth_artifact_sha256": CORPUS_IDENTITIES[corpus][1], "top_k": 10, "ef_search": ef,
                             "warmup_queries": 1000, "search_mode": "strict",
-                            "topology_identity_sha256": "c" * 64, "cells": cells}))
+                            "topology_identity_sha256": topology["topology_identity_sha256"], "cells": cells}))
             self.assertTrue(reduce_matrix(root)["gates"]["recall_at_10_gte_0_9500"])
             target = root / "250k/repeat-3/search-ef128.json"
             valid = target.read_text()
@@ -51,6 +58,22 @@ class ReduceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 reduce_matrix(root)
             ready_path.write_text(ready)
+            descriptor_path = root / "250k/repeat-3/database/vector_partition_variant_v1.json"
+            descriptor = descriptor_path.read_text()
+            bad = json.loads(descriptor)
+            bad["manifest_integrity_digest"] = "d" * 64
+            descriptor_path.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError):
+                reduce_matrix(root)
+            descriptor_path.write_text(descriptor)
+            topology_path = root / "250k/repeat-3/topology.json"
+            topology = topology_path.read_text()
+            bad = json.loads(topology)
+            bad["topology"] = "other"
+            topology_path.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError):
+                reduce_matrix(root)
+            topology_path.write_text(topology)
             bad = json.loads(valid)
             bad["dataset_checksum"] = CORPUS_IDENTITIES["100k"][0]
             target.write_text(json.dumps(bad))
@@ -80,6 +103,11 @@ class ReduceTest(unittest.TestCase):
                 target.write_text(json.dumps(bad))
                 with self.assertRaises(ValueError):
                     reduce_matrix(root)
+            bad = json.loads(valid)
+            bad["cells"][0]["metrics"].update({"p50_nanos": 3, "p95_nanos": 1, "p99_nanos": 2})
+            target.write_text(json.dumps(bad))
+            with self.assertRaises(ValueError):
+                reduce_matrix(root)
             duplicate = json.loads(valid)
             duplicate["cells"].append(duplicate["cells"][0])
             target.write_text(json.dumps(duplicate))
