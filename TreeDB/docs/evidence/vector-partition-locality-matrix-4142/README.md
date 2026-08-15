@@ -261,3 +261,40 @@ permits #4143 to progress after this PR merges. The final search holdout remains
 sealed, and #4144, #4145, and #4146 retain their dependency and final-gate
 requirements: `#4142 -> #4143 -> #4144 -> #4146 -> #4141`, conditional
 `#4144 -> #4145 -> #4146`.
+
+## M2 page-objective disposition
+
+The production M2 implementation consumes a canonical, hash-bound
+co-visitation layout plan and remaps the existing partition-local HNSW pack
+without changing its graph, vectors, identities, entry, or search policy. The
+ordinary no-plan path remains the existing entry-first BFS layout. Layout-plan
+identity is included in the manifest, ready-set, membership-domain, pack, and
+reopen validation chain.
+
+The retained 250k plan has canonical digest
+`5adab9aedb1f0ba195ae336f9b21ad9dd765c32604f14b12d1709a635f79469d`.
+Its generation-2 disposable clone reopened with descriptor digest
+`661daa59b5319dc4cb0d3769d5079cb54edf514f3195bc015ce2b699a8d78ebc`,
+manifest integrity digest
+`06e99d18aeafc4a79bd3596a400f05fd780319239d358971b4342b2513bc6570`,
+ready-set digest
+`ea9cc7014af4147f2df612c38da9d4824331d37dffd8a33e4ade41bf2d9061ee`,
+and the unchanged source-ordinal digest
+`79653ed96e52602ec25696de96ef2af4be933f1bbf7cbe18f62a46a18f60418a`.
+The materialization report SHA-256 is
+`fab9bc99d43c8077ba66890a0949e68dbe19d677fcbc96cf997fedbc19c1c1fc`.
+
+The first matched held-out page gate used the same 194-query split (SHA-256
+`b25cc80df7d03294949f3ce3ef70f14e10692d1127d14e45b9081e07e8196e28`),
+binary, p40 useful-only membership, c256 router, two probes, and EF128:
+
+| layout | median unique 4 KiB pages/query | p95 | report SHA-256 |
+| --- | ---: | ---: | --- |
+| entry-first BFS | 1327 | 1528 | `2403cbf785695561e885e3de804cebb997eb2c209219b92334829ba6d4b3931e` |
+| co-visitation | 1279 | 1488 | `643e5b4af9cfbb221627a455b109ce1af8277c7ff5a5936f7ea990a2e9980377` |
+
+The held-out median reduction is 3.62% and p95 reduction is 2.62%. This is a
+real improvement, but it fails the declared 15% median-page exit gate. The M2
+run therefore stopped before integrated QPS, 100k, hardware-counter, or M3
+work. #4145 is not activated: the evidence does not justify another traversal
+policy layer when the selected layout itself missed its first materiality gate.
