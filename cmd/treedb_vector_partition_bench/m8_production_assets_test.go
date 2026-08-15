@@ -1127,7 +1127,7 @@ func TestM8ExistingAssetsRelabelsTopologyWithoutMutatingLocalPacksV1(t *testing.
 	}
 	defer os.RemoveAll(dir)
 	groups := []string{"topology-a", "topology-b", "topology-c", "topology-d"}
-	assets, err := openM8ProductionMultiGroupExistingAssetsV1(dir, groups, 4, fixture, vectors)
+	assets, err := openM8ProductionMultiGroupExistingAssetsV1(dir, groups, 0, fixture, vectors)
 	if err != nil {
 		t.Fatal(err)
 	}

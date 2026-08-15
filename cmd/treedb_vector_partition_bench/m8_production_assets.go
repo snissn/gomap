@@ -193,7 +193,7 @@ func openM8ProductionMultiGroupExistingAssetsV1(dir string, groups []string, par
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, statErr
 	}
-	if h.status.Manifest.PartitionCount != uint32(partitions) {
+	if partitions != 0 && h.status.Manifest.PartitionCount != uint32(partitions) {
 		return nil, fmt.Errorf("retained M8 manifest partitions=%d want configured %d", h.status.Manifest.PartitionCount, partitions)
 	}
 	h.manifest, err = m8RelabelTopologyManifestV1(h.status.Manifest, groups)

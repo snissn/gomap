@@ -684,7 +684,7 @@ func openVectorPartitionSystemNodeV1(ctx context.Context, config vectorPartition
 	if err != nil {
 		return nil, err
 	}
-	assets, err := openM8ProductionMultiGroupExistingAssetsV1(config.DatabaseDirectory, groups, len(groups)*4, fixture, vectors)
+	assets, err := openM8ProductionMultiGroupExistingAssetsV1(config.DatabaseDirectory, groups, 0, fixture, vectors)
 	if err != nil {
 		return nil, err
 	}
