@@ -58,7 +58,11 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence); err != nil {
+	partitionRows, err := localHNSWAttributionQueryPartitionRowsV1(source, native, overlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence, partitionRows); err != nil {
 		t.Fatalf("valid query evidence rejected: %v", err)
 	}
 	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || len(evidence.QueryFP32SHA256) != 64 || len(evidence.GlobalTruth) != 10 || len(evidence.LowRoute) != 2 || len(evidence.HighRoute) != 4 || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, 4) || len(evidence.Partitions) != 4 || evidence.RoutingRecall != evidence.Native.RoutingRecall || evidence.RoutingRecall != evidence.Overlay.RoutingRecall || evidence.Native.LowSelectedWork.Candidates == 0 || evidence.Native.LowSelectedWork.Edges == 0 || evidence.Overlay.LowSelectedWork.Candidates == 0 || evidence.Overlay.LowSelectedWork.Edges == 0 || !localHNSWAttributionQueryUtilityConservedV1(evidence.Native.LowSelectedWork.Utility, evidence.Native.LowSelectedWork.Edges) || !localHNSWAttributionQueryUtilityConservedV1(evidence.Overlay.HighSelectedWork.Utility, evidence.Overlay.HighSelectedWork.Edges) {
@@ -74,12 +78,12 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	}
 	bad := evidence
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
-	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionRows); err == nil {
 		t.Fatal("tampered partition result accepted")
 	}
 	bad = evidence
 	bad.HighRoute[0], bad.HighRoute[1] = bad.HighRoute[1], bad.HighRoute[0]
-	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionRows); err == nil {
 		t.Fatal("noncanonical route accepted")
 	}
 	raw, err := json.Marshal(evidence)
@@ -90,8 +94,22 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad.Partitions[0].Native.TerminationReason = "candidate_limit"
-	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionRows); err == nil {
 		t.Fatal("decoded uncapped candidate-limit termination accepted")
+	}
+	bad = evidence
+	bad.PartitionRows = append([]uint32(nil), evidence.PartitionRows...)
+	bad.PartitionRows[0]++
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionRows); err == nil {
+		t.Fatal("self-declared partition row count accepted")
+	}
+	bad = evidence
+	bad.Partitions = append([]localHNSWAttributionQueryPartitionV1(nil), evidence.Partitions...)
+	bad.Partitions[0].Native.VisitedOrdinals = append([]uint32(nil), evidence.Partitions[0].Native.VisitedOrdinals...)
+	bad.Partitions[0].Native.VisitedOrdinals[len(bad.Partitions[0].Native.VisitedOrdinals)-1] = math.MaxUint32
+	bad.Partitions[0].Native.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(bad.Partitions[0].Native.VisitedOrdinals)
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionRows); err == nil {
+		t.Fatal("out-of-range visited ordinal accepted")
 	}
 }
 
@@ -103,7 +121,7 @@ func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
 	}
-	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{0, 1}, map[string]struct{}{"first": {}, "second": {}})
+	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{1, 1}, []uint32{0, 1}, map[string]struct{}{"first": {}, "second": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +138,7 @@ func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records, map[string]struct{}{"overlap": {}})
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records, []uint32{1, 1}, map[string]struct{}{"overlap": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,40 +163,40 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}})
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}})
 	if err != nil || utility.TruthRecovered != 1 || utility.Diversity.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
 		t.Fatalf("decoded overlap truth was not deduplicated: utility=%+v err=%v", utility, err)
 	}
 	decoded[1].TruthRecoveries[0].Origin = "not_an_origin"
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("malformed serialized truth recovery accepted")
 	}
 	decoded[1].TruthRecoveries[0].Origin = "reciprocal_add"
 	decoded[0].TruthRecoveries[0].ID = "not_query_truth"
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("non-truth serialized recovery accepted")
 	}
 	decoded[0].TruthRecoveries[0].ID = "overlap"
 	decoded[0].VisitedOrdinals[0]++
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("tampered visited ordinal digest accepted")
 	}
 	decoded[0].VisitedOrdinals[0]--
 	decoded[0].Candidates++
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("mismatched persisted candidate count accepted")
 	}
 	decoded[0].Candidates--
 	decoded[0].Utility.Scored++
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("non-conserved persisted utility accepted")
 	}
 	valid := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1}}})
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err != nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, []uint32{1}, map[string]struct{}{"overlap": {}}); err != nil {
 		t.Fatalf("valid native utility rejected: %v", err)
 	}
 	valid.Utility.ExaminedNative, valid.Utility.ExaminedAuxiliary = 0, 1
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, []uint32{1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("swapped native/auxiliary examined aggregate accepted")
 	}
 	valid.Edges = 2
@@ -186,16 +204,16 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	valid.Utility.Backfill.Examined = 1
 	valid.Utility.Diversity.Scored = 2
 	valid.Utility.Scored = 2
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, []uint32{1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("scored work beyond examined edge accepted")
 	}
 	truthRecord := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}})
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, map[string]struct{}{"overlap": {}}); err != nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, []uint32{1}, map[string]struct{}{"overlap": {}}); err != nil {
 		t.Fatalf("valid edge truth recovery rejected: %v", err)
 	}
 	truthRecord.Utility.Scored = 0
 	truthRecord.Utility.Diversity.Scored = 0
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, map[string]struct{}{"overlap": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, []uint32{1}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("edge-origin truth recovery without scored edge accepted")
 	}
 }
@@ -219,7 +237,7 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 			},
 		},
 	})
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err != nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err != nil {
 		t.Fatalf("valid seeded record rejected: %v", err)
 	}
 	raw, err := json.Marshal(record)
@@ -235,37 +253,37 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 	zeroWork.VisitedOrdinals = nil
 	zeroWork.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(nil)
 	zeroWork.Utility = localHNSWAttributionQueryUtilityV1{}
-	if _, err := localHNSWAttributionQueryRecordValidateV1(zeroWork, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(zeroWork, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("decoded zero-work record accepted")
 	}
 	record.SeedAdmissions++
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("tampered seed admissions accepted")
 	}
 	record.SeedAdmissions--
 	record.SeedAdmissions = record.SeedCandidates + 1
 	record.FrontierAdmissions = record.Utility.FrontierAdmissions + record.SeedAdmissions
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("seed admissions beyond seed candidates accepted")
 	}
 	record.SeedAdmissions = 0
 	record.FrontierAdmissions = record.Utility.FrontierAdmissions
 	record.SeedCandidates++
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("tampered seed candidates accepted")
 	}
 	record.SeedCandidates--
 	record.FrontierAdmissions++
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("tampered frontier admissions accepted")
 	}
 	record.FrontierAdmissions--
 	record.TerminationReason = "candidate_limit"
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("uncapped candidate-limit termination accepted")
 	}
 	record.TerminationReason = "invalid"
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("invalid termination accepted")
 	}
 }
@@ -277,7 +295,7 @@ func TestLocalHNSWAttributionQueryUtilityConservationRejectsOriginOverflowV1(t *
 			Backfill:  localHNSWAttributionQueryOriginUtilityV1{Examined: 1},
 		},
 	})
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("overflowing origin conservation accepted")
 	}
 }
