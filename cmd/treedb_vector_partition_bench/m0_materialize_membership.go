@@ -45,6 +45,8 @@ func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVa
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128, nil
 	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, nil
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, nil
 	default:
 		return "", 0, 0, fmt.Errorf("M0 materialization unsupported production graph variant %q", raw)
 	}

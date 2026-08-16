@@ -450,7 +450,7 @@ const (
 	// variant.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256"
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
-	// is an offline-only auxiliary-navigation construction candidate.
+	// is the explicit production high-recall auxiliary-navigation profile.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m20_ef_construction_256"
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
@@ -459,9 +459,9 @@ const (
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m32_ef_construction_256"
 	// vectorPartitionLocalDefaultGraphVariantV1 is the auxiliary-navigation
-	// production variant used by the implicit partition-local materialization
-	// APIs. It preserves the authoritative index definition's M and eFC values.
-	vectorPartitionLocalDefaultGraphVariantV1 = VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+	// M18/eFC256 balanced production variant used by the implicit
+	// partition-local materialization APIs.
+	vectorPartitionLocalDefaultGraphVariantV1 = VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
 )
 
 func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
@@ -486,16 +486,18 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 	return out
 }
 
-// vectorPartitionLocalProductionGraphVariantV1 permits the default
-// authoritative-definition pack and explicit M18 pack while keeping every
-// other domain-bound construction variant offline-only. The canonical source
-// definition remains the manifest identity.
+// vectorPartitionLocalProductionGraphVariantV1 permits the explicit M16
+// rollback pack, the M18 balanced default, and the M20 high-recall profile.
+// The canonical source definition remains the manifest identity.
 func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
 	if membership == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, true
 	}
 	if vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, true
+	}
+	if vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1) == expected {
+		return VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, true
 	}
 	return "", false
 }
