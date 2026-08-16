@@ -70,6 +70,16 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if err != nil || m18Construction.FinalSurvivors == 0 {
 		t.Fatalf("compact M18 construction reduction=%+v err=%v", m18Construction, err)
 	}
+	screen, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 9996, []uint32{0, 1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer screen.Close()
+	for _, partition := range screen.constructionEvidence.Partitions {
+		if partition.TraceMode != "compact" || len(partition.Events) != 0 || len(partition.FinalOrigins) == 0 {
+			t.Fatalf("#4172 screen arm retained detailed history: %+v", partition)
+		}
+	}
 	for _, partition := range m18.constructionEvidence.Partitions {
 		for _, event := range partition.Events {
 			if event.Action == "reciprocal_prune_keep" {

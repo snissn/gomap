@@ -20,15 +20,17 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		report.Arms[i].Arm = arm
-		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), Partitions: 40, PackBytes: 1}
+		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), Partitions: 5, PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]collections.VectorPartitionPackDiagnosticsV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
 			report.Arms[i].SelectedDiagnostics[j].Rows = 1
 		}
-		report.Arms[i].Cells = make([]localHNSWM18EdgeDiagnosisCellV1, len(report.EFSearch))
-		report.Arms[i].TruthHitSlots = make([]uint64, len(report.EFSearch))
+		report.Arms[i].Cells = make([]localHNSWFixedBudgetScreenCellV1, len(report.EFSearch))
 		for j, ef := range report.EFSearch {
-			report.Arms[i].Cells[j] = localHNSWM18EdgeDiagnosisCellV1{EFSearch: ef, Queries: 806, Work: localHNSWAttributionQueryWorkV1{Candidates: 1}}
+			report.Arms[i].Cells[j] = localHNSWFixedBudgetScreenCellV1{EFSearch: ef, QueryPackOpportunities: 1, Work: localHNSWAttributionQueryWorkV1{Candidates: 1}, PerPack: make([]localHNSWFixedBudgetPackWorkV1, len(report.VariantPacks))}
+		}
+		if i == len(report.Arms)-1 {
+			report.Arms[i].Control = make([]localHNSWFixedBudgetControlPackV1, len(report.VariantPacks))
 		}
 	}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
