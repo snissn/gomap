@@ -81,6 +81,172 @@ func buildVectorPartitionLocalAuxiliaryNavigationV1(rows []columnVectorGraphAsse
 	return buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(len(rows), entryOrdinal, levels, nativeOffsets, nativeNeighbors)
 }
 
+// repairVectorPartitionLocalLayer0ReciprocityV1 restores the cheapest missing
+// reverse boundary edge for each entry-unreachable region. HNSW insertion adds
+// links in both directions, but later degree pruning can discard the older
+// node's reciprocal link and strand the newer region. The repair swaps one
+// existing edge at the reachable endpoint, so every row keeps exactly the same
+// layer-0 degree and the persisted graph does not grow.
+func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAssetRow, entryOrdinal int) (int, error) {
+	if len(rows) == 0 {
+		if entryOrdinal != -1 {
+			return 0, errors.New("partition-local reciprocal repair entry")
+		}
+		return 0, nil
+	}
+	if entryOrdinal < 0 || entryOrdinal >= len(rows) {
+		return 0, errors.New("partition-local reciprocal repair entry")
+	}
+	adjacency := make([][]uint32, len(rows))
+	suffixes := make([][]uint32, len(rows))
+	for ordinal := range rows {
+		var err error
+		adjacency[ordinal], suffixes[ordinal], err = vectorPartitionLayer0AdjacencySplitV1(rows[ordinal].Adjacency)
+		if err != nil {
+			return 0, err
+		}
+	}
+	reachable := func() ([]bool, int, error) {
+		seen := make([]bool, len(rows))
+		queue := []int{entryOrdinal}
+		seen[entryOrdinal] = true
+		for head := 0; head < len(queue); head++ {
+			ordinal := queue[head]
+			for _, neighbor := range adjacency[ordinal] {
+				if int(neighbor) >= len(rows) || neighbor == uint32(ordinal) {
+					return nil, 0, errors.New("partition-local reciprocal repair neighbor")
+				}
+				if !seen[neighbor] {
+					seen[neighbor] = true
+					queue = append(queue, int(neighbor))
+				}
+			}
+		}
+		return seen, len(queue), nil
+	}
+	similarity := func(left, right int) (float32, error) {
+		if len(rows[left].Vector) == 0 || len(rows[left].Vector) != len(rows[right].Vector) {
+			return 0, errors.New("partition-local reciprocal repair vector dimensions")
+		}
+		leftInvNorm, rightInvNorm := rows[left].InvNorm, rows[right].InvNorm
+		var err error
+		if leftInvNorm == 0 {
+			leftInvNorm, err = columnVectorGraphInvNorm(rows[left].Vector)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if rightInvNorm == 0 {
+			rightInvNorm, err = columnVectorGraphInvNorm(rows[right].Vector)
+			if err != nil {
+				return 0, err
+			}
+		}
+		var dot float64
+		for dimension := range rows[left].Vector {
+			dot = canonicalVectorPartitionAccumulateV1(dot, rows[left].Vector[dimension]*leftInvNorm, rows[right].Vector[dimension]*rightInvNorm)
+		}
+		return float32(dot), nil
+	}
+	type scoredOrdinal struct {
+		ordinal int
+		score   float32
+	}
+	seen, seenCount, err := reachable()
+	if err != nil {
+		return 0, err
+	}
+	repairs := 0
+	for seenCount < len(rows) {
+		root := -1
+		for ordinal := range seen {
+			if !seen[ordinal] {
+				root = ordinal
+				break
+			}
+		}
+		if root < 0 {
+			return 0, errors.New("partition-local reciprocal repair reachability")
+		}
+		sources := make([]scoredOrdinal, 0, len(adjacency[root]))
+		for _, neighbor := range adjacency[root] {
+			if seen[neighbor] {
+				score, scoreErr := similarity(int(neighbor), root)
+				if scoreErr != nil {
+					return 0, scoreErr
+				}
+				sources = append(sources, scoredOrdinal{ordinal: int(neighbor), score: score})
+			}
+		}
+		if len(sources) == 0 {
+			for ordinal := range seen {
+				if !seen[ordinal] || len(adjacency[ordinal]) == 0 {
+					continue
+				}
+				score, scoreErr := similarity(ordinal, root)
+				if scoreErr != nil {
+					return 0, scoreErr
+				}
+				sources = append(sources, scoredOrdinal{ordinal: ordinal, score: score})
+			}
+		}
+		sort.Slice(sources, func(i, j int) bool {
+			if sources[i].score != sources[j].score {
+				return sources[i].score > sources[j].score
+			}
+			return sources[i].ordinal < sources[j].ordinal
+		})
+		repaired := false
+		for _, source := range sources {
+			drops := make([]scoredOrdinal, 0, len(adjacency[source.ordinal]))
+			for position, neighbor := range adjacency[source.ordinal] {
+				score, scoreErr := similarity(source.ordinal, int(neighbor))
+				if scoreErr != nil {
+					return 0, scoreErr
+				}
+				drops = append(drops, scoredOrdinal{ordinal: position, score: score})
+			}
+			sort.Slice(drops, func(i, j int) bool {
+				if drops[i].score != drops[j].score {
+					return drops[i].score < drops[j].score
+				}
+				return adjacency[source.ordinal][drops[i].ordinal] > adjacency[source.ordinal][drops[j].ordinal]
+			})
+			for _, drop := range drops {
+				prior := adjacency[source.ordinal][drop.ordinal]
+				adjacency[source.ordinal][drop.ordinal] = uint32(root)
+				nextSeen, nextCount, reachErr := reachable()
+				preserved := reachErr == nil && nextCount > seenCount
+				if preserved {
+					for ordinal := range seen {
+						if seen[ordinal] && !nextSeen[ordinal] {
+							preserved = false
+							break
+						}
+					}
+				}
+				if preserved {
+					seen, seenCount = nextSeen, nextCount
+					repairs++
+					repaired = true
+					break
+				}
+				adjacency[source.ordinal][drop.ordinal] = prior
+			}
+			if repaired {
+				break
+			}
+		}
+		if !repaired {
+			return 0, errors.New("partition-local reciprocal repair cannot preserve reachable rows")
+		}
+	}
+	for ordinal := range rows {
+		rows[ordinal].Adjacency = vectorPartitionLayer0AdjacencyJoinV1(adjacency[ordinal], suffixes[ordinal])
+	}
+	return repairs, nil
+}
+
 func buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0V1(rows, entryOrdinal int, levels []uint16, nativeOffsets []uint64, nativeNeighbors []uint32) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
 	return buildVectorPartitionLocalAuxiliaryNavigationFromNativeLayer0WithContextV1(context.Background(), rows, entryOrdinal, levels, nativeOffsets, nativeNeighbors)
 }
@@ -470,6 +636,9 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows []column
 	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+		if _, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
 		return buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
 	default:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, fmt.Errorf("partition-local graph variant=%q", variant)

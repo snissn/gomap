@@ -658,6 +658,40 @@ func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing
 	}
 }
 
+func TestVectorPartitionLocalLayer0ReciprocityRepairPreservesEdgeBudgetV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{Vector: []float32{1, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{Vector: []float32{0.9, 0.1}, InvNorm: 1, Adjacency: []uint32{0}},
+		{Vector: []float32{0.8, 0.2}, InvNorm: 1, Adjacency: []uint32{1}},
+		{Vector: []float32{0.7, 0.3}, InvNorm: 1, Adjacency: []uint32{2}},
+	}
+	before := 0
+	for _, row := range rows {
+		before += len(row.Adjacency)
+	}
+	repairs, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repairs != 2 {
+		t.Fatalf("repairs=%d want 2", repairs)
+	}
+	after := 0
+	for _, row := range rows {
+		after += len(row.Adjacency)
+	}
+	if after != before {
+		t.Fatalf("layer-0 edges=%d want fixed budget %d", after, before)
+	}
+	auxiliary, err := buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auxiliary.Neighbors) != 0 {
+		t.Fatalf("connected native graph still needed component bridges: %v", auxiliary.Neighbors)
+	}
+}
+
 func TestVectorPartitionPersistentLocalSearcherReopenCorruptionAndPinsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
