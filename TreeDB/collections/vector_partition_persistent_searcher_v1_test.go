@@ -1107,6 +1107,25 @@ func TestVectorPartitionConstructionEvidenceReconcilesReciprocityRepairV1(t *tes
 		t.Fatal(err)
 	}
 	defer resources.Release()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	members, err := vectorPartitionMembershipsForPartitionWithContextV1(t.Context(), manifest, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := vectorPartitionConstructionReplayEvidenceV1(reader, members, def, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Partitions[0].PruneKeeps == 0 || evidence.Partitions[0].CompactLifecycle == (VectorPartitionConstructionCompactLifecycleV1{}) {
+		t.Fatalf("fixture lacks nonzero lifecycle summary: %+v", evidence.Partitions[0])
+	}
+	if evidence.Partitions[0].PruneKeeps != replayed.PruneKeeps || evidence.Partitions[0].CompactLifecycle != replayed.CompactLifecycle {
+		t.Fatalf("replay lifecycle summary lost: evidence keeps=%d lifecycle=%+v replay keeps=%d lifecycle=%+v", evidence.Partitions[0].PruneKeeps, evidence.Partitions[0].CompactLifecycle, replayed.PruneKeeps, replayed.CompactLifecycle)
+	}
 	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, manifest, assets, evidence); err != nil {
 		t.Fatalf("repaired construction evidence: %v", err)
 	}

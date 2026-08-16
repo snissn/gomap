@@ -1575,7 +1575,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		}
 		if part.PruneKeeps != replayed.PruneKeeps || part.CompactLifecycle != replayed.CompactLifecycle {
 			searcher.Close()
-			return fmt.Errorf("%w: construction lifecycle summary mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+			return fmt.Errorf("%w: construction lifecycle summary mismatch partition=%d prune_keeps evidence=%d replay=%d lifecycle evidence=%+v replay=%+v", ErrVectorPartitionSearchUnavailable, part.PartitionID, part.PruneKeeps, replayed.PruneKeeps, part.CompactLifecycle, replayed.CompactLifecycle)
 		}
 		if !slices.Equal(part.Events, replayed.Events) {
 			searcher.Close()
@@ -1848,7 +1848,13 @@ func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysic
 	if _, err := buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, def, variant, trace); err != nil {
 		return VectorPartitionConstructionPartitionEvidenceV1{}, err
 	}
-	out := VectorPartitionConstructionPartitionEvidenceV1{NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...)}
+	// Detailed evidence omits individual prune-keep events, so the replay must
+	// preserve the count-only lifecycle summary for exact validation.
+	out := VectorPartitionConstructionPartitionEvidenceV1{
+		NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...),
+		PruneKeeps:              trace.pruneKeeps,
+		CompactLifecycle:        trace.compactLifecycle,
+	}
 	for _, selection := range trace.selections {
 		item := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
 		if selection.Sampled {
