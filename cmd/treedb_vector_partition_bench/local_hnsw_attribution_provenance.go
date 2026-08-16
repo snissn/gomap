@@ -468,6 +468,7 @@ func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1)
 			}
 		}
 		samples := make(map[int]collections.VectorPartitionConstructionSelectionV1)
+		sampleNodes := make([]int, 0)
 		idOrdinal := make(map[string]int, len(ids))
 		for ordinal, id := range ids {
 			idOrdinal[id] = ordinal
@@ -479,7 +480,11 @@ func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1)
 			if selection.Node < 0 || selection.Node >= len(ids) {
 				return out, errors.New("local HNSW oracle sample ordinal")
 			}
+			if _, duplicate := samples[selection.Node]; duplicate {
+				return out, errors.New("duplicate local HNSW oracle sample")
+			}
 			samples[selection.Node] = selection
+			sampleNodes = append(sampleNodes, selection.Node)
 			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[selection.Node], func(id string) bool {
 				ordinal, ok := idOrdinal[id]
 				return ok && part.NativeInsertionOrdinals[ordinal] < part.NativeInsertionOrdinals[selection.Node]
@@ -502,7 +507,8 @@ func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1)
 				}
 			}
 		}
-		for from := range samples {
+		sort.Ints(sampleNodes)
+		for _, from := range sampleNodes {
 			edges := final[from]
 			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[from], func(string) bool { return true }, out.ExactK)
 			if err != nil {

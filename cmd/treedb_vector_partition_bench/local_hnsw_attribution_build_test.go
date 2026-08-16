@@ -78,6 +78,15 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 		t.Fatal("invalid sampled candidate ordinal accepted")
 	}
 	harness.constructionEvidence.Partitions[0].Selections[0] = bad
+	if len(harness.constructionEvidence.Partitions[0].Selections) > 1 {
+		duplicate := harness.constructionEvidence.Partitions[0].Selections[1]
+		harness.constructionEvidence.Partitions[0].Selections[1].CandidateSampled = true
+		harness.constructionEvidence.Partitions[0].Selections[1].Node = harness.constructionEvidence.Partitions[0].Selections[0].Node
+		if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness); err == nil {
+			t.Fatal("duplicate sampled node accepted")
+		}
+		harness.constructionEvidence.Partitions[0].Selections[1] = duplicate
+	}
 	repaired, repairEvidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 9990)
 	if err != nil {
 		t.Fatal(err)
