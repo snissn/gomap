@@ -43,11 +43,15 @@ var localHNSWFixedBudgetScreenArmsV1 = []localHNSWFixedBudgetScreenArmV1{
 }
 
 type localHNSWFixedBudgetScreenArmResultV1 struct {
-	Arm                 localHNSWFixedBudgetScreenArmV1                `json:"arm"`
-	Build               localHNSWAttributionBuildEvidenceV1            `json:"build"`
-	SelectedDiagnostics []collections.VectorPartitionPackDiagnosticsV1 `json:"selected_pack_diagnostics"`
-	Cells               []localHNSWFixedBudgetScreenCellV1             `json:"cells"`
-	Control             []localHNSWFixedBudgetControlPackV1            `json:"canonical_m18_control,omitempty"`
+	Arm                 localHNSWFixedBudgetScreenArmV1     `json:"arm"`
+	Build               localHNSWAttributionBuildEvidenceV1 `json:"build"`
+	SelectedDiagnostics []localHNSWFixedBudgetDiagnosticV1  `json:"selected_pack_diagnostics"`
+	Cells               []localHNSWFixedBudgetScreenCellV1  `json:"cells"`
+	Control             []localHNSWFixedBudgetControlPackV1 `json:"canonical_m18_control,omitempty"`
+}
+type localHNSWFixedBudgetDiagnosticV1 struct {
+	Partition   uint32                                       `json:"partition"`
+	Diagnostics collections.VectorPartitionPackDiagnosticsV1 `json:"diagnostics"`
 }
 
 // Every cell is restricted to a route entry that is one of SelectedPacks.
@@ -102,20 +106,38 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		return errors.New("invalid fixed-budget screen contract")
 	}
 	for i, arm := range report.Arms {
-		if arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity == "" || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
+		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Arm.Variant)
+		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
 			return errors.New("invalid fixed-budget screen arm")
 		}
-		for j, cell := range arm.Cells {
-			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities == 0 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
-				return errors.New("invalid fixed-budget screen cell")
+		for j, d := range arm.SelectedDiagnostics {
+			if d.Partition != report.VariantPacks[j] || d.Diagnostics.Rows == 0 {
+				return errors.New("invalid fixed-budget selected diagnostic binding")
 			}
 		}
-		if i == len(report.Arms)-1 && len(arm.Control) != len(report.VariantPacks) {
+		for j, cell := range arm.Cells {
+			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities == 0 || cell.QueryPackOpportunities > ^uint64(0)/10 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
+				return errors.New("invalid fixed-budget screen cell")
+			}
+			var opportunities, hits uint64
+			var work localHNSWAttributionQueryWorkV1
+			for k, p := range cell.PerPack {
+				if p.Partition != report.VariantPacks[k] || p.Opportunities == 0 || p.Work.Candidates == 0 || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
+					return errors.New("invalid fixed-budget per-pack decomposition")
+				}
+				opportunities += p.Opportunities
+				hits += p.TruthHitSlots
+			}
+			if opportunities != cell.QueryPackOpportunities || hits != cell.LocalTruthHitSlots || work != cell.Work {
+				return errors.New("fixed-budget aggregate decomposition")
+			}
+		}
+		if i < len(report.Arms)-1 && len(arm.Control) != 0 || i == len(report.Arms)-1 && len(arm.Control) != len(report.VariantPacks) {
 			return errors.New("invalid fixed-budget screen control")
 		}
 		if i == len(report.Arms)-1 {
-			for _, control := range arm.Control {
-				if control.CandidateChecksum != control.CanonicalChecksum || control.CandidateBytes != control.CanonicalBytes {
+			for j, control := range arm.Control {
+				if control.Partition != report.VariantPacks[j] || control.CandidateChecksum == "" || control.CandidateBytes == 0 || control.CandidateChecksum != control.CanonicalChecksum || control.CandidateBytes != control.CanonicalBytes {
 					return errors.New("fixed-budget 2M/on control mismatch")
 				}
 			}
@@ -124,15 +146,16 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 	return nil
 }
 
-func localHNSWFixedBudgetScreenSelectedDiagnosticsV1(all []collections.VectorPartitionPackDiagnosticsV1) ([]collections.VectorPartitionPackDiagnosticsV1, error) {
+func localHNSWFixedBudgetScreenSelectedDiagnosticsV1(all []collections.VectorPartitionPackDiagnosticsV1) ([]localHNSWFixedBudgetDiagnosticV1, error) {
 	if len(all) != len(localHNSWM18EdgeDiagnosisPacksV1) {
 		return nil, errors.New("invalid fixed-budget diagnostics")
 	}
-	out := append([]collections.VectorPartitionPackDiagnosticsV1(nil), all...)
-	for _, diagnostic := range out {
+	out := make([]localHNSWFixedBudgetDiagnosticV1, len(all))
+	for i, diagnostic := range all {
 		if diagnostic.Rows == 0 {
 			return nil, errors.New("invalid fixed-budget selected diagnostic")
 		}
+		out[i] = localHNSWFixedBudgetDiagnosticV1{Partition: localHNSWM18EdgeDiagnosisPacksV1[i], Diagnostics: diagnostic}
 	}
 	return out, nil
 }
@@ -316,8 +339,8 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	if err != nil || !localHNSWAttributionFixtureV1(fixture) {
 		return errors.New("fixed-budget screen fixture identity")
 	}
-	calibration, _, err := loadLocalHNSWQuerySplitV1(calibrationPath)
-	if err != nil || len(calibration.Ordinals) != 806 {
+	calibration, calibrationSHA, err := loadLocalHNSWQuerySplitV1(calibrationPath)
+	if err != nil || calibrationSHA != localHNSWAttributionCalibrationSHA256V1 || len(calibration.Ordinals) != 806 {
 		return errors.New("fixed-budget screen calibration identity")
 	}
 	truthSHA, err := localHNSWAttributionRegularFileSHA256V1(truthPath, m8ProfileArtifactMaxBytesV1)
@@ -352,7 +375,7 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	if err != nil {
 		return err
 	}
-	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-fixed-budget-screen", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: localHNSWAttributionCalibrationSHA256V1}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Limitations: []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "no postfill, candidate extension, insertion-order, Vamana, router, probe, top-k, or EF policy changes"}}
+	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-fixed-budget-screen", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Limitations: []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "no postfill, candidate extension, insertion-order, Vamana, router, probe, top-k, or EF policy changes"}}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		return err
 	}
