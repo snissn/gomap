@@ -66,7 +66,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence, partitionDocumentIDs); err != nil {
 		t.Fatalf("valid query evidence rejected: %v", err)
 	}
-	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence); err != nil {
+	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence, partitionDocumentIDs); err != nil {
 		t.Fatalf("valid query scores rejected: %v", err)
 	}
 	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || len(evidence.QueryFP32SHA256) != 64 || len(evidence.GlobalTruth) != 10 || len(evidence.LowRoute) != 2 || len(evidence.HighRoute) != 4 || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, 4) || len(evidence.Partitions) != 4 || evidence.RoutingRecall != evidence.Native.RoutingRecall || evidence.RoutingRecall != evidence.Overlay.RoutingRecall || evidence.Native.LowSelectedWork.Candidates == 0 || evidence.Native.LowSelectedWork.Edges == 0 || evidence.Overlay.LowSelectedWork.Candidates == 0 || evidence.Overlay.LowSelectedWork.Edges == 0 || !localHNSWAttributionQueryUtilityConservedV1(evidence.Native.LowSelectedWork.Utility, evidence.Native.LowSelectedWork.Edges) || !localHNSWAttributionQueryUtilityConservedV1(evidence.Overlay.HighSelectedWork.Utility, evidence.Overlay.HighSelectedWork.Edges) {
@@ -104,7 +104,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	var decodedSummary localHNSWAttributionCalibrationSummaryV1
-	if err := localHNSWAttributionCalibrationSummaryAddV1(&decodedSummary, bad, partitionDocumentIDs, source, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &decodedSummary, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
 		t.Fatal("decoded canonical result score accepted by calibration summary")
 	}
 	bad = decodeEvidence()
@@ -130,8 +130,57 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	}
 	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
-	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, bad); err == nil {
+	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, bad, partitionDocumentIDs); err == nil {
 		t.Fatal("tampered canonical result score accepted")
+	}
+	bad = decodeEvidence()
+	if len(bad.Partitions[0].Native.VisitedOrdinals) <= len(bad.Partitions[0].Native.Results) {
+		t.Fatal("fixture lacks a scored visited row outside returned top K")
+	}
+	bad.Partitions[0].Native.Results = bad.Partitions[0].Native.Results[:len(bad.Partitions[0].Native.Results)-1]
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+		t.Fatal("decoded non-top-K visited result subset accepted")
+	}
+	bad = decodeEvidence()
+	tamperedRecord := &bad.Partitions[0].Native
+	if reflect.DeepEqual(tamperedRecord.Utility.Diversity, tamperedRecord.Utility.Backfill) {
+		t.Fatal("fixture lacks distinct native origin buckets")
+	}
+	tamperedRecord.Utility.Diversity, tamperedRecord.Utility.Backfill = tamperedRecord.Utility.Backfill, tamperedRecord.Utility.Diversity
+	for i := range tamperedRecord.TruthRecoveries {
+		switch tamperedRecord.TruthRecoveries[i].Origin {
+		case "diversity_selected":
+			tamperedRecord.TruthRecoveries[i].Origin = "nearest_backfill"
+		case "nearest_backfill":
+			tamperedRecord.TruthRecoveries[i].Origin = "diversity_selected"
+		}
+	}
+	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactLocal, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.NativeExactLocalTruth, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(bad.Partitions))
+	nativeResults := make([][]m8CanonicalResultV1, len(bad.Partitions))
+	for i, partition := range bad.Partitions {
+		nativeRecords[i] = partition.Native
+		nativeResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Native.Results, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad.Native, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, nativeRecords, nativeResults, partitionDocumentIDs, bad.LowRoute, bad.HighRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("aggregate-only validation rejected cross-origin swap: %v", err)
+	}
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+		t.Fatal("decoded cross-origin utility swap accepted by attributed replay")
 	}
 }
 

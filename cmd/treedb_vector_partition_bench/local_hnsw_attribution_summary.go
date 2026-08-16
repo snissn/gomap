@@ -79,7 +79,7 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 			if err != nil || evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal != ordinal || evidence.QueryFP32SHA256 != localHNSWAttributionQueryFP32SHA256V1(queries[i]) {
 				return 0, errors.New("invalid local HNSW calibration evidence")
 			}
-			if err := localHNSWAttributionCalibrationSummaryAddV1(&summary, evidence, partitionDocumentIDs, source, queries[i]); err != nil {
+			if err := localHNSWAttributionCalibrationSummaryAddV1(ctx, &summary, evidence, partitionDocumentIDs, source, native, overlay, queries[i]); err != nil {
 				return 0, err
 			}
 			cases = append(cases, localHNSWAttributionTimingCaseV1{Ordinal: ordinal, Query: append([]float32(nil), queries[i]...), QueryFP32SHA256: evidence.QueryFP32SHA256, LowRoute: append([]uint32(nil), evidence.LowRoute...), HighRoute: append([]uint32(nil), evidence.HighRoute...)})
@@ -101,11 +101,14 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 	return artifact, cases, summary, nil
 }
 
-func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1, partitionDocumentIDs [][]string, source *m8ProductionMultiGroupAssetsV1, query []float32) error {
-	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence); err != nil {
+func localHNSWAttributionCalibrationSummaryAddV1(ctx context.Context, summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1, partitionDocumentIDs [][]string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, query []float32) error {
+	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence, partitionDocumentIDs); err != nil {
 		return err
 	}
 	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence, partitionDocumentIDs); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryEvidenceReplayValidateV1(ctx, native, overlay, query, evidence); err != nil {
 		return err
 	}
 	if len(evidence.Partitions) == 0 || !localHNSWAttributionFiniteRecallV1(evidence.RoutingRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.LocalRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.LocalRecall) {

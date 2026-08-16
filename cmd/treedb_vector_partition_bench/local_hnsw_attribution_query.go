@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 
@@ -157,7 +158,7 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 	if err := localHNSWAttributionQueryEvidenceValidateV1(out, partitionDocumentIDs); err != nil {
 		return out, err
 	}
-	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, out); err != nil {
+	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, out, partitionDocumentIDs); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -168,8 +169,8 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 // The calibration summarizer passes the same retained source and calibration
 // query when it consumes decoded records. A standalone JSONL stream has only
 // the query digest and cannot independently recompute score bits.
-func localHNSWAttributionQueryEvidenceScoresValidateV1(source *m8ProductionMultiGroupAssetsV1, query []float32, evidence localHNSWAttributionQueryEvidenceV1) error {
-	if source == nil || source.collection == nil || len(query) == 0 {
+func localHNSWAttributionQueryEvidenceScoresValidateV1(source *m8ProductionMultiGroupAssetsV1, query []float32, evidence localHNSWAttributionQueryEvidenceV1, partitionDocumentIDs [][]string) error {
+	if source == nil || source.collection == nil || len(query) == 0 || len(partitionDocumentIDs) != len(evidence.Partitions) {
 		return errors.New("invalid local HNSW query score authority")
 	}
 	_, rows, err := source.collection.ReadVectorPartitionRouterSourceRowsV1(source.manifest.IndexName)
@@ -204,6 +205,28 @@ func localHNSWAttributionQueryEvidenceScoresValidateV1(source *m8ProductionMulti
 		}
 		return nil
 	}
+	validateVisitedTopK := func(record localHNSWAttributionQuerySearchV1, ids []string) error {
+		visited := make([]m8CanonicalResultV1, 0, len(record.VisitedOrdinals))
+		for _, ordinal := range record.VisitedOrdinals {
+			if int(ordinal) >= len(ids) {
+				return errors.New("persisted local HNSW visited ordinal is outside score authority")
+			}
+			vector, ok := vectors[ids[ordinal]]
+			if !ok {
+				return errors.New("persisted local HNSW visited ID is not in score source")
+			}
+			score, err := scorer.ScoreV1(vector)
+			if err != nil {
+				return err
+			}
+			visited = append(visited, m8CanonicalResultV1{ID: ids[ordinal], Score: score})
+		}
+		expected, err := localHNSWAttributionCanonicalResultsV1(visited, false)
+		if err != nil || !slices.Equal(record.Results, localHNSWAttributionQueryResultBitsV1(expected)) {
+			return errors.New("persisted local HNSW results are not canonical visited top K")
+		}
+		return nil
+	}
 	if err := validate(evidence.GlobalTruth); err != nil {
 		return err
 	}
@@ -222,12 +245,44 @@ func localHNSWAttributionQueryEvidenceScoresValidateV1(source *m8ProductionMulti
 	if err := validate(evidence.Overlay.HighResults); err != nil {
 		return err
 	}
-	for _, partition := range evidence.Partitions {
+	for i, partition := range evidence.Partitions {
 		if err := validate(partition.Native.Results); err != nil {
 			return err
 		}
 		if err := validate(partition.Overlay.Results); err != nil {
 			return err
+		}
+		if err := validateVisitedTopK(partition.Native, partitionDocumentIDs[i]); err != nil {
+			return err
+		}
+		if err := validateVisitedTopK(partition.Overlay, partitionDocumentIDs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// localHNSWAttributionQueryEvidenceReplayValidateV1 replays the bounded,
+// deterministic attributed search against retained packs and construction final
+// origins. This binds per-origin utility to actual traversed edges rather than
+// accepting aggregate-only bucket conservation from the JSONL sidecar.
+func localHNSWAttributionQueryEvidenceReplayValidateV1(ctx context.Context, native, overlay *localHNSWVariantHarnessV1, query []float32, evidence localHNSWAttributionQueryEvidenceV1) error {
+	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(evidence.GlobalTruth, true)
+	if err != nil {
+		return err
+	}
+	truthIDs := localHNSWAttributionResultIDSetV1(truth)
+	expectedNative, _, err := localHNSWAttributionQueryVariantV1Build(ctx, native, query, truthIDs)
+	if err != nil {
+		return err
+	}
+	expectedOverlay, _, err := localHNSWAttributionQueryVariantV1Build(ctx, overlay, query, truthIDs)
+	if err != nil || len(expectedNative) != len(evidence.Partitions) || len(expectedOverlay) != len(evidence.Partitions) {
+		return errors.New("invalid local HNSW query replay partitions")
+	}
+	for i, partition := range evidence.Partitions {
+		if !reflect.DeepEqual(partition.Native, expectedNative[i]) || !reflect.DeepEqual(partition.Overlay, expectedOverlay[i]) {
+			return errors.New("persisted local HNSW query replay mismatch")
 		}
 	}
 	return nil
