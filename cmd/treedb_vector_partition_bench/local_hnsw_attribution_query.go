@@ -262,6 +262,30 @@ func localHNSWAttributionQueryEvidenceScoresValidateV1(source *m8ProductionMulti
 	return nil
 }
 
+// localHNSWAttributionQueryEvidenceRouteValidateV1 binds a decoded record's
+// router decisions and query identity to the retained calibration authority.
+// Route shape alone is insufficient: a different valid permutation changes
+// selected-work and recall aggregates.
+func localHNSWAttributionQueryEvidenceRouteValidateV1(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, query []float32, evidence localHNSWAttributionQueryEvidenceV1) error {
+	if source == nil || source.router == nil || source.manifest.PartitionCount == 0 || len(query) == 0 || evidence.QueryFP32SHA256 != localHNSWAttributionQueryFP32SHA256V1(query) {
+		return errors.New("invalid local HNSW query route authority")
+	}
+	partitions := int(source.manifest.PartitionCount)
+	candidates := min(256, int(source.status.Representatives))
+	if candidates < 1 || len(evidence.Partitions) != partitions {
+		return errors.New("invalid retained local HNSW router")
+	}
+	low, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, min(2, partitions))
+	if err != nil {
+		return err
+	}
+	high, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, partitions)
+	if err != nil || !slices.Equal(evidence.LowRoute, low) || !slices.Equal(evidence.HighRoute, high) {
+		return errors.New("persisted local HNSW route does not match retained router")
+	}
+	return nil
+}
+
 // localHNSWAttributionQueryEvidenceReplayValidateV1 replays the bounded,
 // deterministic attributed search against retained packs and construction final
 // origins. This binds per-origin utility to actual traversed edges rather than

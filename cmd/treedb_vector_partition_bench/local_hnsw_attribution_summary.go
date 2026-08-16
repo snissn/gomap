@@ -102,6 +102,9 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 }
 
 func localHNSWAttributionCalibrationSummaryAddV1(ctx context.Context, summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1, partitionDocumentIDs [][]string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, query []float32) error {
+	if err := localHNSWAttributionQueryEvidenceRouteValidateV1(ctx, source, query, evidence); err != nil {
+		return err
+	}
 	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence, partitionDocumentIDs); err != nil {
 		return err
 	}

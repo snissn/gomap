@@ -102,6 +102,54 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 		t.Fatal("noncanonical route accepted")
 	}
 	bad = decodeEvidence()
+	bad.HighRoute[2], bad.HighRoute[3] = bad.HighRoute[3], bad.HighRoute[2]
+	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exactLocal, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.NativeExactLocalTruth, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(bad.Partitions))
+	overlayRecords := make([]localHNSWAttributionQuerySearchV1, len(bad.Partitions))
+	nativeResults := make([][]m8CanonicalResultV1, len(bad.Partitions))
+	overlayResults := make([][]m8CanonicalResultV1, len(bad.Partitions))
+	for i, partition := range bad.Partitions {
+		nativeRecords[i], overlayRecords[i] = partition.Native, partition.Overlay
+		nativeResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Native.Results, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		overlayResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Overlay.Results, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	bad.Native, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, nativeRecords, nativeResults, partitionDocumentIDs, bad.LowRoute, bad.HighRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.Overlay, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, overlayRecords, overlayResults, partitionDocumentIDs, bad.LowRoute, bad.HighRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.RoutingRecall = bad.Native.RoutingRecall
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("self-consistent alternate route rejected: %v", err)
+	}
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+		t.Fatal("decoded alternate router route accepted by calibration summary")
+	}
+	bad = decodeEvidence()
+	bad.QueryFP32SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("well-formed alternate query digest rejected before retained validation: %v", err)
+	}
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+		t.Fatal("decoded alternate query digest accepted by calibration summary")
+	}
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	var decodedSummary localHNSWAttributionCalibrationSummaryV1
 	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &decodedSummary, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
@@ -155,16 +203,16 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 			tamperedRecord.TruthRecoveries[i].Origin = "diversity_selected"
 		}
 	}
-	truth, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	truth, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	exactLocal, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.NativeExactLocalTruth, false)
+	exactLocal, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.NativeExactLocalTruth, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(bad.Partitions))
-	nativeResults := make([][]m8CanonicalResultV1, len(bad.Partitions))
+	nativeRecords = make([]localHNSWAttributionQuerySearchV1, len(bad.Partitions))
+	nativeResults = make([][]m8CanonicalResultV1, len(bad.Partitions))
 	for i, partition := range bad.Partitions {
 		nativeRecords[i] = partition.Native
 		nativeResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Native.Results, false)
