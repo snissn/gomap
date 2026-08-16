@@ -371,7 +371,7 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 	var assets []collections.VectorPartitionAssetV1
 	var resources interface{ Release() }
 	var constructionEvidence collections.VectorPartitionConstructionEvidenceV1
-	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || localHNSWFixedBudgetConstructionVariantV1(variant) {
 		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
 	} else {
 		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
