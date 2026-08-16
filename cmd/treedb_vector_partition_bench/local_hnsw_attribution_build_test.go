@@ -63,6 +63,60 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if m18Evidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || m18Evidence.VariantIdentity == "" || len(m18.constructionEvidence.Partitions) != 4 {
 		t.Fatalf("M18 construction evidence=%+v trace=%+v", m18Evidence, m18.constructionEvidence)
 	}
+	if m18.constructionEvidence.Partitions[0].TraceMode != "detailed" || m18.constructionEvidence.Partitions[2].TraceMode != "compact" || len(m18.constructionEvidence.Partitions[2].Events) != 0 || len(m18.constructionEvidence.Partitions[2].FinalOrigins) == 0 || m18.constructionEvidence.Partitions[2].PruneKeeps != m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[0]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[1]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[2]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[3]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[4] {
+		t.Fatalf("unexpected bounded M18 evidence: detailed=%+v compact=%+v", m18.constructionEvidence.Partitions[0], m18.constructionEvidence.Partitions[2])
+	}
+	m18Construction, err := localHNSWAttributionConstructionReduceV1(m18.constructionEvidence)
+	if err != nil || m18Construction.FinalSurvivors == 0 {
+		t.Fatalf("compact M18 construction reduction=%+v err=%v", m18Construction, err)
+	}
+	for _, partition := range m18.constructionEvidence.Partitions {
+		for _, event := range partition.Events {
+			if event.Action == "reciprocal_prune_keep" {
+				t.Fatalf("per-edge prune keep retained in %s evidence: %+v", partition.TraceMode, event)
+			}
+		}
+	}
+	// The bounded mode is strictly observational: untraced, full-detail, and
+	// selected-detail/compact construction publish identical packs. Compare the
+	// compact per-partition lifecycle counters with its full-detail oracle.
+	inputs := make([]collections.VectorPartitionSearchAssetV1, source.manifest.PartitionCount)
+	sourceID := collections.VectorPartitionSourceIdentityV1{Generation: source.manifest.SourceGeneration, Checksum: source.manifest.SourceChecksum, SchemaHash: source.manifest.SourceSchemaHash, RowCount: source.manifest.SourceRowCount}
+	for p := range inputs {
+		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: 3}
+	}
+	variant := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
+	plainAssets, plainResources, err := source.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(source.manifest.IndexName, source.manifest, 9993, inputs, variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plainResources.Release()
+	fullAssets, fullResources, fullEvidence, err := source.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, 9994, inputs, variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fullResources.Release()
+	boundedAssets, boundedResources, boundedEvidence, err := source.collection.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(source.manifest.IndexName, source.manifest, 9995, inputs, variant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer boundedResources.Release()
+	if err := source.collection.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), source.manifest.IndexName, source.manifest, boundedAssets, boundedEvidence); err != nil {
+		t.Fatal(err)
+	}
+	for p := range plainAssets {
+		if plainAssets[p].Checksum != fullAssets[p].Checksum || plainAssets[p].Checksum != boundedAssets[p].Checksum || plainAssets[p].Bytes != fullAssets[p].Bytes || plainAssets[p].Bytes != boundedAssets[p].Bytes || plainAssets[p].MembershipDigest != fullAssets[p].MembershipDigest || plainAssets[p].MembershipDigest != boundedAssets[p].MembershipDigest {
+			t.Fatalf("trace changed M18 pack partition=%d plain=%+v full=%+v bounded=%+v", p, plainAssets[p], fullAssets[p], boundedAssets[p])
+		}
+		fullPart, boundedPart := fullEvidence, boundedEvidence
+		fullPart.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{fullEvidence.Partitions[p]}
+		boundedPart.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{boundedEvidence.Partitions[p]}
+		fullTotals, fullErr := localHNSWAttributionConstructionReduceV1(fullPart)
+		boundedTotals, boundedErr := localHNSWAttributionConstructionReduceV1(boundedPart)
+		if fullErr != nil || boundedErr != nil || fullTotals.InitialAdded != boundedTotals.InitialAdded || fullTotals.ReciprocalAdded != boundedTotals.ReciprocalAdded || fullTotals.VariantRewriteAdded != boundedTotals.VariantRewriteAdded || fullTotals.VariantRewriteDropped != boundedTotals.VariantRewriteDropped || fullTotals.PruneKept != boundedTotals.PruneKept || fullTotals.PruneDropped != boundedTotals.PruneDropped || fullTotals.FinalSurvivors != boundedTotals.FinalSurvivors || fullTotals.InitialAddByOrigin != boundedTotals.InitialAddByOrigin || fullTotals.ReciprocalAddByOrigin != boundedTotals.ReciprocalAddByOrigin || fullTotals.VariantRewriteAddByOrigin != boundedTotals.VariantRewriteAddByOrigin || fullTotals.VariantRewriteDropByOrigin != boundedTotals.VariantRewriteDropByOrigin || fullTotals.PruneKeepByOrigin != boundedTotals.PruneKeepByOrigin || fullTotals.PruneDropByOrigin != boundedTotals.PruneDropByOrigin || fullTotals.FinalAgeByOrigin != boundedTotals.FinalAgeByOrigin || fullTotals.FinalDeltaByOrigin != boundedTotals.FinalDeltaByOrigin {
+			t.Fatalf("bounded lifecycle differs from full detail partition=%d full=%+v bounded=%+v fullErr=%v boundedErr=%v", p, fullTotals, boundedTotals, fullErr, boundedErr)
+		}
+	}
 	diagnostics, err := localHNSWAttributionPackDiagnosticsV1(harness.searchers)
 	if err != nil {
 		t.Fatal(err)

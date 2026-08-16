@@ -18,7 +18,12 @@ const localHNSWAttributionInstrumentationSchemaV1 = "treedb_local_hnsw_attributi
 var localHNSWAttributionConstructionOriginOrderV1 = [5]string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite"}
 
 type localHNSWAttributionConstructionTotalsV1 struct {
-	OriginOrder                     [5]string    `json:"origin_order"`
+	OriginOrder [5]string `json:"origin_order"`
+	// Lifecycle age/delta buckets below cover only detailed partitions. Compact
+	// partitions retain count-only lifecycle summaries. Final age/delta uses
+	// final origins and therefore covers every partition.
+	LifecycleAgeDeltaPartitions     uint64       `json:"lifecycle_age_delta_detailed_partitions"`
+	FinalAgeDeltaPartitions         uint64       `json:"final_age_delta_all_partitions"`
 	DiversitySelected               uint64       `json:"diversity_selected"`
 	BackfillSelected                uint64       `json:"backfill_selected"`
 	InitialAdded                    uint64       `json:"initial_added"`
@@ -141,6 +146,7 @@ type localHNSWAttributionInstrumentationSummaryV1 struct {
 
 func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartitionConstructionEvidenceV1) (localHNSWAttributionConstructionTotalsV1, error) {
 	out := localHNSWAttributionConstructionTotalsV1{OriginOrder: localHNSWAttributionConstructionOriginOrderV1}
+	var detailedInitial, detailedReciprocal, detailedVariantAdd, detailedVariantDrop, detailedPruneDrop uint64
 	if evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.Variant == "" || !localHNSWAttributionSHA256V1(evidence.ManifestChecksum) || !localHNSWAttributionSHA256V1(evidence.IndexDefinitionDigest) || len(evidence.Partitions) == 0 {
 		return out, errors.New("invalid local HNSW construction provenance")
 	}
@@ -166,6 +172,66 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 			out.DiversitySelected += uint64(selection.DiversitySelected)
 			out.BackfillSelected += uint64(selection.BackfillSelected)
 		}
+		// Prune-keep is deliberately count-only even for detailed traces: it is
+		// maintenance bookkeeping, not a causal edge transition. Compact traces
+		// carry the same per-origin summary.
+		for origin := range partition.CompactLifecycle.PruneKeep {
+			out.PruneKept += partition.CompactLifecycle.PruneKeep[origin]
+			out.PruneKeepByOrigin[origin] += partition.CompactLifecycle.PruneKeep[origin]
+		}
+		if partition.TraceMode == "compact" {
+			out.FinalAgeDeltaPartitions++
+			if len(partition.Events) != 0 || len(partition.FinalOrigins) == 0 {
+				return out, errors.New("invalid compact local HNSW construction history")
+			}
+			for origin := range partition.CompactLifecycle.InitialAdd {
+				out.InitialAdded += partition.CompactLifecycle.InitialAdd[origin]
+				out.InitialAddByOrigin[origin] += partition.CompactLifecycle.InitialAdd[origin]
+				out.ReciprocalAdded += partition.CompactLifecycle.ReciprocalAdd[origin]
+				out.ReciprocalAddByOrigin[origin] += partition.CompactLifecycle.ReciprocalAdd[origin]
+				out.VariantRewriteAdded += partition.CompactLifecycle.VariantAdd[origin]
+				out.VariantRewriteAddByOrigin[origin] += partition.CompactLifecycle.VariantAdd[origin]
+				out.VariantRewriteDropped += partition.CompactLifecycle.VariantDrop[origin]
+				out.VariantRewriteDropByOrigin[origin] += partition.CompactLifecycle.VariantDrop[origin]
+				out.PruneDropped += partition.CompactLifecycle.PruneDrop[origin]
+				out.PruneDropByOrigin[origin] += partition.CompactLifecycle.PruneDrop[origin]
+			}
+			for _, final := range partition.FinalOrigins {
+				if final.From < 0 || final.To < 0 || final.From == final.To || final.Layer < 0 || final.From >= len(partition.NativeInsertionOrdinals) || final.To >= len(partition.NativeInsertionOrdinals) {
+					return out, errors.New("invalid compact local HNSW final edge")
+				}
+				origin, ok := localHNSWAttributionNeighborhoodOriginV1(final.Origin)
+				if !ok {
+					return out, errors.New("invalid compact local HNSW final origin")
+				}
+				age := max(partition.NativeInsertionOrdinals[final.From], partition.NativeInsertionOrdinals[final.To])
+				delta := partition.NativeInsertionOrdinals[final.From] - partition.NativeInsertionOrdinals[final.To]
+				if delta < 0 {
+					delta = -delta
+				}
+				out.FinalSurvivors++
+				switch origin {
+				case 0:
+					out.FinalDiversity++
+				case 1:
+					out.FinalBackfill++
+				case 2:
+					out.FinalReciprocal++
+				case 3:
+					out.FinalRepair++
+				case 4:
+					out.FinalOverlay++
+				}
+				out.FinalAgeByOrigin[origin][localHNSWAttributionBucketV1(age)]++
+				out.FinalDeltaByOrigin[origin][localHNSWAttributionBucketV1(delta)]++
+			}
+			continue
+		}
+		if partition.TraceMode != "detailed" || len(partition.FinalOrigins) != 0 {
+			return out, errors.New("invalid local HNSW construction trace mode")
+		}
+		out.LifecycleAgeDeltaPartitions++
+		out.FinalAgeDeltaPartitions++
 		for _, event := range partition.Events {
 			if event.InsertionOrdinal < 0 || event.From < 0 || event.To < 0 || event.From == event.To || event.From >= len(partition.NativeInsertionOrdinals) || event.To >= len(partition.NativeInsertionOrdinals) || event.InsertionOrdinal != max(partition.NativeInsertionOrdinals[event.From], partition.NativeInsertionOrdinals[event.To]) {
 				return out, errors.New("invalid local HNSW construction insertion age")
@@ -197,6 +263,7 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 					return out, errors.New("invalid local HNSW initial origin")
 				}
 				out.InitialAdded++
+				detailedInitial++
 				out.InitialAddByOrigin[originIndex]++
 				out.InitialAddAgeByOrigin[originIndex][bucket]++
 				out.InitialAddDeltaByOrigin[originIndex][deltaBucket]++
@@ -205,6 +272,7 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 					return out, errors.New("invalid local HNSW reciprocal origin")
 				}
 				out.ReciprocalAdded++
+				detailedReciprocal++
 				out.ReciprocalAddByOrigin[originIndex]++
 				out.ReciprocalAddAgeByOrigin[originIndex][bucket]++
 				out.ReciprocalAddDeltaByOrigin[originIndex][deltaBucket]++
@@ -216,6 +284,7 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 					return out, errors.New("invalid local HNSW variant rewrite add origin")
 				}
 				out.VariantRewriteAdded++
+				detailedVariantAdd++
 				out.VariantRewriteAddByOrigin[originIndex]++
 				out.VariantRewriteAddAgeByOrigin[originIndex][bucket]++
 				out.VariantRewriteAddDeltaByOrigin[originIndex][deltaBucket]++
@@ -224,14 +293,15 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 					return out, errors.New("invalid local HNSW variant rewrite action")
 				}
 				out.VariantRewriteDropped++
+				detailedVariantDrop++
 				out.VariantRewriteDropByOrigin[originIndex]++
 				out.VariantRewriteDropAgeByOrigin[originIndex][bucket]++
 				out.VariantRewriteDropDeltaByOrigin[originIndex][deltaBucket]++
 			case "reciprocal_prune_keep":
-				out.PruneKept++
-				out.PruneKeepByOrigin[originIndex]++
+				return out, errors.New("unexpected per-edge local HNSW prune keep")
 			case "reciprocal_prune_drop":
 				out.PruneDropped++
+				detailedPruneDrop++
 				out.PruneDropByOrigin[originIndex]++
 				out.PruneDropAgeByOrigin[originIndex][bucket]++
 				out.PruneDropDeltaByOrigin[originIndex][deltaBucket]++
@@ -262,7 +332,7 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 	if out.InitialAdded != localHNSWAttributionOriginSumV1(out.InitialAddByOrigin) || out.ReciprocalAdded != localHNSWAttributionOriginSumV1(out.ReciprocalAddByOrigin) || out.VariantRewriteAdded != localHNSWAttributionOriginSumV1(out.VariantRewriteAddByOrigin) || out.VariantRewriteDropped != localHNSWAttributionOriginSumV1(out.VariantRewriteDropByOrigin) || out.PruneKept != localHNSWAttributionOriginSumV1(out.PruneKeepByOrigin) || out.PruneDropped != localHNSWAttributionOriginSumV1(out.PruneDropByOrigin) {
 		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW lifecycle origin conservation")
 	}
-	if localHNSWAttributionBucketsSumV1(out.InitialAddAgeByOrigin) != out.InitialAdded || localHNSWAttributionBucketsSumV1(out.InitialAddDeltaByOrigin) != out.InitialAdded || localHNSWAttributionBucketsSumV1(out.ReciprocalAddAgeByOrigin) != out.ReciprocalAdded || localHNSWAttributionBucketsSumV1(out.ReciprocalAddDeltaByOrigin) != out.ReciprocalAdded || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddAgeByOrigin) != out.VariantRewriteAdded || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddDeltaByOrigin) != out.VariantRewriteAdded || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropAgeByOrigin) != out.VariantRewriteDropped || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropDeltaByOrigin) != out.VariantRewriteDropped || localHNSWAttributionBucketsSumV1(out.PruneDropAgeByOrigin) != out.PruneDropped || localHNSWAttributionBucketsSumV1(out.PruneDropDeltaByOrigin) != out.PruneDropped || localHNSWAttributionBucketsSumV1(out.FinalAgeByOrigin) != out.FinalSurvivors || localHNSWAttributionBucketsSumV1(out.FinalDeltaByOrigin) != out.FinalSurvivors {
+	if localHNSWAttributionBucketsSumV1(out.InitialAddAgeByOrigin) != detailedInitial || localHNSWAttributionBucketsSumV1(out.InitialAddDeltaByOrigin) != detailedInitial || localHNSWAttributionBucketsSumV1(out.ReciprocalAddAgeByOrigin) != detailedReciprocal || localHNSWAttributionBucketsSumV1(out.ReciprocalAddDeltaByOrigin) != detailedReciprocal || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddAgeByOrigin) != detailedVariantAdd || localHNSWAttributionBucketsSumV1(out.VariantRewriteAddDeltaByOrigin) != detailedVariantAdd || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropAgeByOrigin) != detailedVariantDrop || localHNSWAttributionBucketsSumV1(out.VariantRewriteDropDeltaByOrigin) != detailedVariantDrop || localHNSWAttributionBucketsSumV1(out.PruneDropAgeByOrigin) != detailedPruneDrop || localHNSWAttributionBucketsSumV1(out.PruneDropDeltaByOrigin) != detailedPruneDrop || localHNSWAttributionBucketsSumV1(out.FinalAgeByOrigin) != out.FinalSurvivors || localHNSWAttributionBucketsSumV1(out.FinalDeltaByOrigin) != out.FinalSurvivors {
 		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW lifecycle bucket conservation")
 	}
 	return out, nil
@@ -317,15 +387,26 @@ func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionCons
 		return nil, errors.New("invalid local HNSW construction partition")
 	}
 	out := map[localHNSWAttributionFinalEdgeKeyV1]string{}
-	for _, event := range evidence.Partitions[partition].Events {
-		if event.Action != "final_survivor" {
-			continue
+	part := evidence.Partitions[partition]
+	if part.TraceMode == "compact" {
+		for _, final := range part.FinalOrigins {
+			key := localHNSWAttributionFinalEdgeKeyV1{final.From, final.To, final.Layer}
+			if _, exists := out[key]; exists || !localHNSWAttributionConstructionOriginValidV1(final.Origin) {
+				return nil, errors.New("invalid compact local HNSW final edge origin")
+			}
+			out[key] = final.Origin
 		}
-		key := localHNSWAttributionFinalEdgeKeyV1{event.From, event.To, event.Layer}
-		if _, exists := out[key]; exists || !localHNSWAttributionConstructionOriginValidV1(event.Origin) {
-			return nil, errors.New("invalid local HNSW final edge origin")
+	} else {
+		for _, event := range part.Events {
+			if event.Action != "final_survivor" {
+				continue
+			}
+			key := localHNSWAttributionFinalEdgeKeyV1{event.From, event.To, event.Layer}
+			if _, exists := out[key]; exists || !localHNSWAttributionConstructionOriginValidV1(event.Origin) {
+				return nil, errors.New("invalid local HNSW final edge origin")
+			}
+			out[key] = event.Origin
 		}
-		out[key] = event.Origin
 	}
 	if len(out) == 0 {
 		return nil, errors.New("empty local HNSW final edge origins")
