@@ -358,7 +358,7 @@ func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQuery
 	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.Auxiliary, value.Unattributed}
 	var examined, newlyVisited, scored, topAdmissions, frontierAdmissions, stateImprovements, truthRecovered uint64
 	for _, origin := range origins {
-		if origin.NewlyVisited > origin.Scored || origin.TopAdmissions != origin.FrontierAdmissions || origin.TopAdmissions > origin.Scored || origin.StateImprovements > origin.Scored {
+		if origin.Scored > origin.Examined || origin.NewlyVisited > origin.Scored || origin.TopAdmissions != origin.FrontierAdmissions || origin.TopAdmissions > origin.Scored || origin.StateImprovements > origin.Scored {
 			return false
 		}
 		examined += origin.Examined

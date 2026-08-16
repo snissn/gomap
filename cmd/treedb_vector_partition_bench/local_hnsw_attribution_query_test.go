@@ -156,6 +156,14 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("swapped native/auxiliary examined aggregate accepted")
 	}
+	valid.Edges = 2
+	valid.Utility.ExaminedNative, valid.Utility.ExaminedAuxiliary = 2, 0
+	valid.Utility.Backfill.Examined = 1
+	valid.Utility.Diversity.Scored = 2
+	valid.Utility.Scored = 2
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("scored work beyond examined edge accepted")
+	}
 }
 
 func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearchV1) localHNSWAttributionQuerySearchV1 {
