@@ -378,10 +378,87 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 	if len(trace.selections) == 0 {
 		t.Fatal("missing opt-in construction selections")
 	}
+	if len(trace.events) == 0 {
+		t.Fatal("missing opt-in construction edge events")
+	}
+	for _, event := range trace.events {
+		if event.From < 0 || event.From >= len(traced) || event.To < 0 || event.To >= len(traced) {
+			t.Fatalf("construction event has non-locality ordinal: %+v", event)
+		}
+	}
 	for i := range plain {
 		if string(plain[i].ID) != string(traced[i].ID) || !reflect.DeepEqual(plain[i].Adjacency, traced[i].Adjacency) {
 			t.Fatalf("trace changed graph row=%d", i)
 		}
+	}
+}
+
+func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 1, EfConstruction: 10}
+	rows := make([]columnVectorGraphAssetRow, 10)
+	for i := range rows {
+		angle := float64(i) * 2 * math.Pi / float64(len(rows))
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("node-%02d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	plain := append([]columnVectorGraphAssetRow(nil), rows...)
+	traced := append([]columnVectorGraphAssetRow(nil), rows...)
+	trace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(traced, def, trace); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plain, traced) {
+		t.Fatal("construction trace changed adjacency")
+	}
+	counts := make(map[string]int)
+	origins := make(map[string]int)
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for _, event := range trace.events {
+		if event.From < 0 || event.From >= len(traced) || event.To < 0 || event.To >= len(traced) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= len(traced) {
+			t.Fatalf("invalid remapped construction event: %+v", event)
+		}
+		counts[event.Action]++
+		origins[event.Origin]++
+		if event.Action == "final_survivor" {
+			final[vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}] = struct{}{}
+		}
+	}
+	for _, action := range []string{"initial_add", "reciprocal_add", "reciprocal_prune_keep", "reciprocal_prune_drop", "final_survivor"} {
+		if counts[action] == 0 {
+			t.Fatalf("toy graph did not exercise %s: counts=%v", action, counts)
+		}
+	}
+	if origins["diversity_selected"] == 0 || origins["nearest_backfill"] == 0 {
+		t.Fatalf("toy graph did not exercise selection origins: origins=%v", origins)
+	}
+	wantFinal := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from, row := range traced {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(row.Adjacency)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for layer := 0; layer <= maxLayer; layer++ {
+			neighbors, err := columnVectorGraphAdjacencyLayer(row.Adjacency, layer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, to := range neighbors {
+				wantFinal[vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}] = struct{}{}
+			}
+		}
+	}
+	if !reflect.DeepEqual(final, wantFinal) {
+		t.Fatalf("final survivor trace does not exactly reconcile adjacency: got=%v want=%v", final, wantFinal)
+	}
+	again := append([]columnVectorGraphAssetRow(nil), rows...)
+	againTrace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(again, def, againTrace); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(trace.selections, againTrace.selections) || !reflect.DeepEqual(trace.events, againTrace.events) {
+		t.Fatal("construction trace is not deterministic")
 	}
 }
 

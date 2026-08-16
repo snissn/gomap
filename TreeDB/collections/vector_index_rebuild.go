@@ -501,6 +501,9 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 		orderedRows[ordinal] = rows[inputOrdinal]
 		nodeOrdinal[nodeID] = ordinal
 	}
+	if err := trace.finalize(index, nodeOrdinal); err != nil {
+		return err
+	}
 	copy(rows, orderedRows)
 	nodeIDByOrdinal := order
 	for i := range rows {
@@ -510,6 +513,64 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 			return err
 		}
 		rows[i].Adjacency = adjacency
+	}
+	return nil
+}
+
+// finalize remaps temporary native node IDs to the exact BFS-locality ordinals
+// written into the pack. InsertionOrdinal intentionally remains in native
+// insertion order: it is causal age, not a persisted graph ordinal.
+func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdinal []int) error {
+	if t == nil {
+		return nil
+	}
+	remap := func(nodeID int) (int, error) {
+		if nodeID < 0 || nodeID >= len(nodeOrdinal) || nodeOrdinal[nodeID] < 0 {
+			return 0, fmt.Errorf("collections: construction trace node=%d has no locality ordinal", nodeID)
+		}
+		return nodeOrdinal[nodeID], nil
+	}
+	for i := range t.selections {
+		ordinal, err := remap(t.selections[i].Node)
+		if err != nil {
+			return err
+		}
+		t.selections[i].Node = ordinal
+	}
+	for i := range t.events {
+		from, err := remap(t.events[i].From)
+		if err != nil {
+			return err
+		}
+		to, err := remap(t.events[i].To)
+		if err != nil {
+			return err
+		}
+		t.events[i].From, t.events[i].To = from, to
+	}
+	for from, node := range index.nodes {
+		for layer, neighbors := range node.neighbors {
+			for _, neighbor := range neighbors {
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: neighbor.nodeID, Layer: layer}
+				origin, ok := t.origins[key]
+				if !ok {
+					return fmt.Errorf("collections: construction trace missing final edge origin from=%d to=%d layer=%d", from, neighbor.nodeID, layer)
+				}
+				mappedFrom, err := remap(from)
+				if err != nil {
+					return err
+				}
+				mappedTo, err := remap(neighbor.nodeID)
+				if err != nil {
+					return err
+				}
+				insertionOrdinal := from
+				if neighbor.nodeID > insertionOrdinal {
+					insertionOrdinal = neighbor.nodeID
+				}
+				t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: mappedFrom, To: mappedTo, Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: "final_survivor"})
+			}
+		}
 	}
 	return nil
 }
