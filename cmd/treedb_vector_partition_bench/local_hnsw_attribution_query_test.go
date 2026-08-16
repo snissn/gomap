@@ -82,6 +82,17 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
 		t.Fatal("noncanonical route accepted")
 	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &bad); err != nil {
+		t.Fatal(err)
+	}
+	bad.Partitions[0].Native.TerminationReason = "candidate_limit"
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+		t.Fatal("decoded uncapped candidate-limit termination accepted")
+	}
 }
 
 func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
@@ -196,7 +207,7 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 		FrontierAdmissions: 1,
 		SeedCandidates:     0,
 		SeedAdmissions:     0,
-		TerminationReason:  "candidate_limit",
+		TerminationReason:  "distance_bound",
 		Utility: localHNSWAttributionQueryUtilityV1{
 			ExaminedNative:     1,
 			NewlyVisited:       1,
@@ -240,6 +251,10 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 		t.Fatal("tampered frontier admissions accepted")
 	}
 	record.FrontierAdmissions--
+	record.TerminationReason = "candidate_limit"
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("uncapped candidate-limit termination accepted")
+	}
 	record.TerminationReason = "invalid"
 	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("invalid termination accepted")
@@ -264,7 +279,7 @@ func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearc
 	record.SeedAdmissions = 0
 	record.FrontierAdmissions = record.Utility.FrontierAdmissions
 	if record.TerminationReason == "" {
-		record.TerminationReason = "candidate_limit"
+		record.TerminationReason = "distance_bound"
 	}
 	record.VisitedOrdinals = make([]uint32, record.Candidates)
 	for i := range record.VisitedOrdinals {
