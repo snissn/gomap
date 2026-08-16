@@ -249,6 +249,11 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, constructionEvidence); err != nil {
 		t.Fatalf("construction evidence: %v", err)
 	}
+	emptyEvidence := constructionEvidence
+	emptyEvidence.Partitions = nil
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, nil, emptyEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("empty construction evidence err=%v", err)
+	}
 	overlay, overlayResources, overlayEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 988, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
 	if err != nil {
 		t.Fatal(err)

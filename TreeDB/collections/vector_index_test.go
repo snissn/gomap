@@ -393,6 +393,36 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 	}
 }
 
+func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{{documentID: []byte("sampled"), vector: []float32{1, 0}, level: 0}}
+	index.nodes[0].cacheVectorNorms()
+	candidates := []vectorIndexCandidate{{nodeID: 0, distance: 0}}
+
+	plain := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
+	trace := &vectorIndexConstructionTraceV1{sampleIDs: map[string]struct{}{"sampled": {}}}
+	index.constructionTrace = trace
+	traced := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
+	if !reflect.DeepEqual(plain, traced) {
+		t.Fatalf("trace changed zero-candidate selection: plain=%v traced=%v", plain, traced)
+	}
+	if len(trace.selections) != 1 {
+		t.Fatalf("selections=%d want 1", len(trace.selections))
+	}
+	selection := trace.selections[0]
+	if !selection.Sampled || selection.CandidateNodes == nil || len(selection.CandidateNodes) != 0 || selection.Candidates != 0 || selection.Selected != 0 {
+		t.Fatalf("zero-candidate sampled selection=%+v", selection)
+	}
+}
+
 func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
 	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 1, EfConstruction: 10}
 	rows := make([]columnVectorGraphAssetRow, 10)

@@ -1346,7 +1346,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstruction
 // trace binds the supplied immutable assets and its final survivors are their
 // exact native packed adjacency.
 func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, assets []VectorPartitionAssetV1, evidence VectorPartitionConstructionEvidenceV1) error {
-	if c == nil || evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) != len(evidence.Partitions) {
+	if c == nil || evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) == 0 || len(assets) != len(evidence.Partitions) {
 		return ErrVectorPartitionSearchUnavailable
 	}
 	variant := VectorPartitionLocalGraphVariantV1(evidence.Variant)

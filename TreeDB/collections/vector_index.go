@@ -2250,14 +2250,18 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	trace := idx.constructionTrace
 	candidateCount := len(candidates)
 	var sampledCandidates []int
+	sampled := false
 	if trace != nil {
 		// Evidence counts candidate ordinals, not raw heap entries. The search
 		// selection itself deliberately retains duplicate entries for historical
 		// behavior, but sampled and unsampled accounting must share set semantics.
 		distinct := make(map[int]struct{}, len(candidates))
-		sampled := layer == 0 && excludeNodeID >= 0 && excludeNodeID < len(idx.nodes)
+		sampled = layer == 0 && excludeNodeID >= 0 && excludeNodeID < len(idx.nodes)
 		if sampled {
 			_, sampled = trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]
+			if sampled {
+				sampledCandidates = make([]int, 0, len(candidates))
+			}
 		}
 		for _, candidate := range candidates {
 			if candidate.nodeID == excludeNodeID || candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) || idx.nodes[candidate.nodeID].level < layer || math.IsInf(float64(candidate.distance), 1) {
@@ -2295,7 +2299,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
-		if sampledCandidates != nil {
+		if sampled {
 			selection.Sampled = true
 			selection.CandidateNodes = sampledCandidates
 		}
