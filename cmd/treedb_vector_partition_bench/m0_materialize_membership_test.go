@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -169,6 +170,33 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
+	}
+	// The source descriptor remains self-consistent after this edit, but no
+	// longer describes the retained router. M0 must reject it before rebuilding
+	// the disposable clone.
+	badDescriptor, err := m3ReadVariantDescriptorV1(sourceDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDescriptor.RouterMaxScalarWork++
+	badDescriptor.RouterConfig.MaxScalarWork = badDescriptor.RouterMaxScalarWork
+	badDescriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(badDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDescriptor.OverlapPolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(badDescriptor.Capacity), Budget: uint64(badDescriptor.OverlapRequested), Realized: uint64(badDescriptor.OverlapRealized), Unspent: uint64(badDescriptor.OverlapRejected), BuildIdentityDigest: badDescriptor.BuildIdentityDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m3ReplaceVariantDescriptorAtomicallyV1(sourceDB, badDescriptor); err != nil {
+		t.Fatal(err)
+	}
+	badOut := filepath.Join(root, "bad-retained-descriptor.json")
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-root", filepath.Join(root, "bad-retained-clones"), "-out", badOut}, bytes.NewBuffer(nil)); err == nil {
+		t.Fatal("materialized a descriptor that does not bind retained assets")
+	}
+	if _, statErr := os.Stat(badOut); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("mismatched retained descriptor produced report: %v", statErr)
 	}
 }
 

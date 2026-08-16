@@ -155,6 +155,16 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, h.Close()) }()
+	if err = m8BindRetainedM3DescriptorV1(h, fixtureManifest{Checksum: d.FixtureChecksum}); err != nil {
+		return fmt.Errorf("M0 materialization source descriptor does not bind retained assets: %w", err)
+	}
+	if h.descriptor == nil {
+		return errors.New("M0 materialization retained descriptor is unavailable")
+	}
+	d = *h.descriptor
+	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
+		return err
+	}
 	source, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
 		return err
