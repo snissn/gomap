@@ -31,7 +31,12 @@ func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) ma
 	for i := range rows {
 		items[i] = item{id: string(rows[i].ID), hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), rows[i].ID...))}
 	}
-	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].hash[:], items[j].hash[:]) < 0 })
+	sort.Slice(items, func(i, j int) bool {
+		if cmp := bytes.Compare(items[i].hash[:], items[j].hash[:]); cmp != 0 {
+			return cmp < 0
+		}
+		return items[i].id < items[j].id
+	})
 	if len(items) > vectorPartitionConstructionCandidateCaptureLimitV1 {
 		items = items[:vectorPartitionConstructionCandidateCaptureLimitV1]
 	}
@@ -581,6 +586,13 @@ func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdina
 	for i := vectorPartitionConstructionCandidateSampleLimitV1; i < len(samples); i++ {
 		t.selections[samples[i].index].Sampled = false
 		t.selections[samples[i].index].CandidateNodes = nil
+	}
+	t.nativeInsertionOrdinals = make([]int, len(nodeOrdinal))
+	for native, bfs := range nodeOrdinal {
+		if bfs < 0 || bfs >= len(t.nativeInsertionOrdinals) {
+			return fmt.Errorf("collections: construction trace native ordinal")
+		}
+		t.nativeInsertionOrdinals[bfs] = native
 	}
 	for i := range t.selections {
 		ordinal, err := remap(t.selections[i].Node)

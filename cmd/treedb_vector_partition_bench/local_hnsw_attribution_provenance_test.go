@@ -11,14 +11,26 @@ import (
 
 func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing.T) {
 	digest := strings.Repeat("a", 64)
-	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{InsertionOrdinal: 1, Action: "initial_add"}, {InsertionOrdinal: 17, Action: "reciprocal_add"}, {InsertionOrdinal: 300, Action: "reciprocal_prune_keep"}, {InsertionOrdinal: 5000, Action: "reciprocal_prune_drop"}, {InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
+	ordinals := make([]int, 5001)
+	for i := range ordinals {
+		ordinals[i] = i
+	}
+	ordinals[2], ordinals[17] = ordinals[17], ordinals[2]
+	ordinals[3], ordinals[300] = ordinals[300], ordinals[3]
+	ordinals[4], ordinals[5000] = ordinals[5000], ordinals[4]
+	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 3, To: 2, InsertionOrdinal: 300, Origin: "reciprocal_add", Action: "reciprocal_prune_keep"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
 	totals, err := localHNSWAttributionConstructionReduceV1(evidence)
-	if err != nil || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InsertionAge != [4]uint64{2, 1, 1, 1} {
+	if err != nil || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [3]uint64{1, 0, 0} || totals.ReciprocalAddByOrigin != [3]uint64{0, 0, 1} || totals.FinalAgeByOrigin[0][0] != 1 || totals.FinalDeltaByOrigin[0][0] != 1 || totals.InsertionAge != [4]uint64{2, 1, 1, 1} {
 		t.Fatalf("totals=%+v err=%v", totals, err)
 	}
 	evidence.Partitions[0].Events[0].Action = "wrong"
 	if _, err := localHNSWAttributionConstructionReduceV1(evidence); err == nil {
 		t.Fatal("malformed construction action accepted")
+	}
+	evidence.Partitions[0].Events[0].Action = "initial_add"
+	evidence.Partitions[0].NativeInsertionOrdinals[0] = 1
+	if _, err := localHNSWAttributionConstructionReduceV1(evidence); err == nil {
+		t.Fatal("non-permutation insertion ordinals accepted")
 	}
 	var misses []localHNSWAttributionHardMissV1
 	for i := 0; i < 64; i++ {

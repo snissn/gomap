@@ -316,11 +316,12 @@ type VectorIndex struct {
 // vectorIndexConstructionTraceV1 is deliberately private: construction
 // provenance is benchmark evidence, not a runtime index contract.
 type vectorIndexConstructionTraceV1 struct {
-	selections []vectorIndexConstructionSelectionV1
-	events     []vectorIndexConstructionEdgeEventV1
-	pending    map[vectorIndexConstructionEdgeKeyV1]string
-	origins    map[vectorIndexConstructionEdgeKeyV1]string
-	sampleIDs  map[string]struct{}
+	selections              []vectorIndexConstructionSelectionV1
+	events                  []vectorIndexConstructionEdgeEventV1
+	pending                 map[vectorIndexConstructionEdgeKeyV1]string
+	origins                 map[vectorIndexConstructionEdgeKeyV1]string
+	sampleIDs               map[string]struct{}
+	nativeInsertionOrdinals []int
 }
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int

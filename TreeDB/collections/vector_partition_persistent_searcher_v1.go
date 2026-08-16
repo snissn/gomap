@@ -38,13 +38,14 @@ type VectorPartitionConstructionEvidenceV1 struct {
 	Partitions            []VectorPartitionConstructionPartitionEvidenceV1 `json:"partitions"`
 }
 type VectorPartitionConstructionPartitionEvidenceV1 struct {
-	PartitionID      uint32                                   `json:"partition_id"`
-	AssetChecksum    string                                   `json:"asset_checksum"`
-	MembershipDigest string                                   `json:"membership_digest"`
-	AssetBytes       uint64                                   `json:"asset_bytes"`
-	Selections       []VectorPartitionConstructionSelectionV1 `json:"selections"`
-	Events           []VectorPartitionConstructionEdgeEventV1 `json:"events"`
-	PostfillEdges    uint64                                   `json:"postfill_edges"`
+	PartitionID             uint32                                   `json:"partition_id"`
+	AssetChecksum           string                                   `json:"asset_checksum"`
+	MembershipDigest        string                                   `json:"membership_digest"`
+	AssetBytes              uint64                                   `json:"asset_bytes"`
+	Selections              []VectorPartitionConstructionSelectionV1 `json:"selections"`
+	Events                  []VectorPartitionConstructionEdgeEventV1 `json:"events"`
+	PostfillEdges           uint64                                   `json:"postfill_edges"`
+	NativeInsertionOrdinals []int                                    `json:"native_insertion_ordinals"`
 }
 type VectorPartitionConstructionSelectionV1 struct {
 	Node              int    `json:"node"`
@@ -1259,6 +1260,18 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			searcher.Close()
 			return ErrVectorPartitionSearchUnavailable
 		}
+		if len(part.NativeInsertionOrdinals) != pack.Header.Rows {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		seenInsertion := make([]bool, pack.Header.Rows)
+		for _, native := range part.NativeInsertionOrdinals {
+			if native < 0 || native >= pack.Header.Rows || seenInsertion[native] {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			seenInsertion[native] = true
+		}
 		live := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		selectionCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
 		for _, selection := range part.Selections {
@@ -1282,6 +1295,10 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 						return ErrVectorPartitionSearchUnavailable
 					}
 					seenCandidates[candidate] = struct{}{}
+					if part.NativeInsertionOrdinals[candidate] >= part.NativeInsertionOrdinals[selection.Node] {
+						searcher.Close()
+						return ErrVectorPartitionSearchUnavailable
+					}
 				}
 			} else if len(selection.CandidateOrdinals) != 0 || selection.CandidateDigest != "" {
 				searcher.Close()
@@ -1324,6 +1341,13 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			}
 			return bytes.Compare(eligible[i].id, eligible[j].id) < 0
 		})
+		// HNSW's entry point is the only row without a layer-zero insertion
+		// selection. This makes the eligible sample population derivable from
+		// the packed asset rather than from a self-declared trace subset.
+		if len(eligible) != pack.Header.Rows-1 {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
 		limit := min(vectorPartitionConstructionCandidateSampleLimitV1, len(eligible))
 		if len(actualSampled) != limit {
 			searcher.Close()
@@ -1339,7 +1363,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		seenFinal := false
 		for _, event := range part.Events {
-			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
+			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || event.InsertionOrdinal != max(part.NativeInsertionOrdinals[event.From], part.NativeInsertionOrdinals[event.To]) || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
@@ -1658,7 +1682,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			if trace == nil {
 				return nil, nil, fmt.Errorf("%w: construction trace", ErrVectorPartitionSearchUnavailable)
 			}
-			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: out[i].PartitionID, AssetChecksum: out[i].Checksum, MembershipDigest: out[i].MembershipDigest, AssetBytes: out[i].Bytes}
+			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: out[i].PartitionID, AssetChecksum: out[i].Checksum, MembershipDigest: out[i].MembershipDigest, AssetBytes: out[i].Bytes, NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...)}
 			for _, selection := range trace.selections {
 				selectionEvidence := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
 				if selection.Sampled {

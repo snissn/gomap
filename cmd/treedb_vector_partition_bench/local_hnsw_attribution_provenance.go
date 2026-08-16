@@ -15,17 +15,23 @@ import (
 const localHNSWAttributionInstrumentationSchemaV1 = "treedb_local_hnsw_attribution_instrumentation_v1"
 
 type localHNSWAttributionConstructionTotalsV1 struct {
-	DiversitySelected uint64    `json:"diversity_selected"`
-	BackfillSelected  uint64    `json:"backfill_selected"`
-	InitialAdded      uint64    `json:"initial_added"`
-	ReciprocalAdded   uint64    `json:"reciprocal_added"`
-	PruneKept         uint64    `json:"prune_kept"`
-	PruneDropped      uint64    `json:"prune_dropped"`
-	FinalSurvivors    uint64    `json:"final_survivors"`
-	FinalDiversity    uint64    `json:"final_diversity_selected"`
-	FinalBackfill     uint64    `json:"final_nearest_backfill"`
-	FinalReciprocal   uint64    `json:"final_reciprocal_add"`
-	InsertionAge      [4]uint64 `json:"insertion_age_buckets"`
+	DiversitySelected     uint64       `json:"diversity_selected"`
+	BackfillSelected      uint64       `json:"backfill_selected"`
+	InitialAdded          uint64       `json:"initial_added"`
+	ReciprocalAdded       uint64       `json:"reciprocal_added"`
+	PruneKept             uint64       `json:"prune_kept"`
+	PruneDropped          uint64       `json:"prune_dropped"`
+	FinalSurvivors        uint64       `json:"final_survivors"`
+	FinalDiversity        uint64       `json:"final_diversity_selected"`
+	FinalBackfill         uint64       `json:"final_nearest_backfill"`
+	FinalReciprocal       uint64       `json:"final_reciprocal_add"`
+	InitialAddByOrigin    [3]uint64    `json:"initial_add_by_origin"`
+	ReciprocalAddByOrigin [3]uint64    `json:"reciprocal_add_by_origin"`
+	PruneKeepByOrigin     [3]uint64    `json:"prune_keep_by_origin"`
+	PruneDropByOrigin     [3]uint64    `json:"prune_drop_by_origin"`
+	FinalAgeByOrigin      [3][4]uint64 `json:"final_age_by_origin"`
+	FinalDeltaByOrigin    [3][4]uint64 `json:"final_delta_by_origin"`
+	InsertionAge          [4]uint64    `json:"insertion_age_buckets"`
 }
 
 type localHNSWAttributionQueryUtilityV1 struct {
@@ -43,7 +49,23 @@ type localHNSWAttributionQueryUtilityV1 struct {
 	Unattributed       localHNSWAttributionQueryOriginUtilityV1 `json:"unattributed_native"`
 }
 
-type localHNSWAttributionQueryOriginUtilityV1 struct{ Examined, NewlyVisited, Scored, TopAdmissions, FrontierAdmissions, TruthRecovered uint64 }
+type localHNSWAttributionQueryOriginUtilityV1 struct {
+	Examined           uint64 `json:"examined"`
+	NewlyVisited       uint64 `json:"newly_visited"`
+	Scored             uint64 `json:"scored"`
+	TopAdmissions      uint64 `json:"top_admissions"`
+	FrontierAdmissions uint64 `json:"frontier_admissions"`
+	TruthRecovered     uint64 `json:"truth_recovered"`
+}
+
+// localHNSWAttributionDistanceAggregateV1 intentionally contains only
+// aggregations that remain meaningful when per-pack quantiles are combined.
+type localHNSWAttributionDistanceAggregateV1 struct {
+	Count uint64  `json:"count"`
+	Min   float64 `json:"min"`
+	Mean  float64 `json:"mean"`
+	Max   float64 `json:"max"`
+}
 
 type localHNSWAttributionHardMissV1 struct {
 	QueryOrdinal int    `json:"query_ordinal"`
@@ -54,18 +76,18 @@ type localHNSWAttributionHardMissV1 struct {
 }
 
 type localHNSWAttributionInstrumentationSummaryV1 struct {
-	Schema                 string                                                      `json:"schema"`
-	ManifestIntegrity      string                                                      `json:"manifest_integrity_digest"`
-	IndexDefinitionDigest  string                                                      `json:"index_definition_digest"`
-	NativeVariant          string                                                      `json:"native_variant"`
-	OverlayVariant         string                                                      `json:"overlay_variant"`
-	NativeConstruction     localHNSWAttributionConstructionTotalsV1                    `json:"native_construction"`
-	OverlayConstruction    localHNSWAttributionConstructionTotalsV1                    `json:"overlay_construction"`
-	NativeQuery            localHNSWAttributionQueryUtilityV1                          `json:"native_query"`
-	OverlayQuery           localHNSWAttributionQueryUtilityV1                          `json:"overlay_query"`
-	NativeLayer0Distances  collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_layer0_distances"`
-	OverlayLayer0Distances collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"overlay_layer0_distances"`
-	HardMisses             []localHNSWAttributionHardMissV1                            `json:"hard_misses"`
+	Schema                 string                                   `json:"schema"`
+	ManifestIntegrity      string                                   `json:"manifest_integrity_digest"`
+	IndexDefinitionDigest  string                                   `json:"index_definition_digest"`
+	NativeVariant          string                                   `json:"native_variant"`
+	OverlayVariant         string                                   `json:"overlay_variant"`
+	NativeConstruction     localHNSWAttributionConstructionTotalsV1 `json:"native_construction"`
+	OverlayConstruction    localHNSWAttributionConstructionTotalsV1 `json:"overlay_construction"`
+	NativeQuery            localHNSWAttributionQueryUtilityV1       `json:"native_query"`
+	OverlayQuery           localHNSWAttributionQueryUtilityV1       `json:"overlay_query"`
+	NativeLayer0Distances  localHNSWAttributionDistanceAggregateV1  `json:"native_layer0_distances"`
+	OverlayLayer0Distances localHNSWAttributionDistanceAggregateV1  `json:"overlay_layer0_distances"`
+	HardMisses             []localHNSWAttributionHardMissV1         `json:"hard_misses"`
 }
 
 func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartitionConstructionEvidenceV1) (localHNSWAttributionConstructionTotalsV1, error) {
@@ -74,6 +96,16 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 		return out, errors.New("invalid local HNSW construction provenance")
 	}
 	for _, partition := range evidence.Partitions {
+		if len(partition.NativeInsertionOrdinals) == 0 {
+			return out, errors.New("missing local HNSW insertion ordinals")
+		}
+		seenInsertion := make([]bool, len(partition.NativeInsertionOrdinals))
+		for _, native := range partition.NativeInsertionOrdinals {
+			if native < 0 || native >= len(seenInsertion) || seenInsertion[native] {
+				return out, errors.New("invalid local HNSW insertion ordinal permutation")
+			}
+			seenInsertion[native] = true
+		}
 		for _, selection := range partition.Selections {
 			if selection.Selected != selection.DiversitySelected+selection.BackfillSelected || selection.Selected < 0 {
 				return out, errors.New("invalid local HNSW construction selection")
@@ -82,37 +114,23 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 			out.BackfillSelected += uint64(selection.BackfillSelected)
 		}
 		for _, event := range partition.Events {
-			if event.InsertionOrdinal < 0 {
+			if event.InsertionOrdinal < 0 || event.From < 0 || event.To < 0 || event.From == event.To || event.From >= len(partition.NativeInsertionOrdinals) || event.To >= len(partition.NativeInsertionOrdinals) || event.InsertionOrdinal != max(partition.NativeInsertionOrdinals[event.From], partition.NativeInsertionOrdinals[event.To]) {
 				return out, errors.New("invalid local HNSW construction insertion age")
 			}
-			switch event.Action {
-			case "initial_add":
-				out.InitialAdded++
+			originIndex := -1
+			switch event.Origin {
+			case "diversity_selected":
+				originIndex = 0
+			case "nearest_backfill":
+				originIndex = 1
 			case "reciprocal_add":
-				out.ReciprocalAdded++
-			case "reciprocal_prune_keep":
-				out.PruneKept++
-			case "reciprocal_prune_drop":
-				out.PruneDropped++
-			case "final_survivor":
-				out.FinalSurvivors++
-				switch event.Origin {
-				case "diversity_selected":
-					out.FinalDiversity++
-				case "nearest_backfill":
-					out.FinalBackfill++
-				case "reciprocal_add":
-					out.FinalReciprocal++
-				default:
-					return out, errors.New("invalid local HNSW final origin")
-				}
+				originIndex = 2
 			default:
-				return out, errors.New("invalid local HNSW construction action")
+				return out, errors.New("invalid local HNSW construction origin")
 			}
 			bucket := 0
 			switch {
 			case event.InsertionOrdinal < 16:
-				bucket = 0
 			case event.InsertionOrdinal < 256:
 				bucket = 1
 			case event.InsertionOrdinal < 4096:
@@ -120,11 +138,64 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 			default:
 				bucket = 3
 			}
+			switch event.Action {
+			case "initial_add":
+				if originIndex == 2 {
+					return out, errors.New("invalid local HNSW initial origin")
+				}
+				out.InitialAdded++
+				out.InitialAddByOrigin[originIndex]++
+			case "reciprocal_add":
+				if originIndex != 2 {
+					return out, errors.New("invalid local HNSW reciprocal origin")
+				}
+				out.ReciprocalAdded++
+				out.ReciprocalAddByOrigin[originIndex]++
+			case "reciprocal_prune_keep":
+				out.PruneKept++
+				out.PruneKeepByOrigin[originIndex]++
+			case "reciprocal_prune_drop":
+				out.PruneDropped++
+				out.PruneDropByOrigin[originIndex]++
+			case "final_survivor":
+				out.FinalSurvivors++
+				switch event.Origin {
+				case "diversity_selected":
+					out.FinalDiversity++
+				case "nearest_backfill":
+					out.FinalBackfill++
+					originIndex = 1
+				case "reciprocal_add":
+					out.FinalReciprocal++
+					originIndex = 2
+				}
+				out.FinalAgeByOrigin[originIndex][bucket]++
+				delta := partition.NativeInsertionOrdinals[event.From] - partition.NativeInsertionOrdinals[event.To]
+				if delta < 0 {
+					delta = -delta
+				}
+				deltaBucket := 0
+				if delta >= 16 {
+					deltaBucket = 1
+				}
+				if delta >= 256 {
+					deltaBucket = 2
+				}
+				if delta >= 4096 {
+					deltaBucket = 3
+				}
+				out.FinalDeltaByOrigin[originIndex][deltaBucket]++
+			default:
+				return out, errors.New("invalid local HNSW construction action")
+			}
 			out.InsertionAge[bucket]++
 		}
 	}
 	if out.FinalSurvivors != out.FinalDiversity+out.FinalBackfill+out.FinalReciprocal {
 		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW final origin conservation")
+	}
+	if out.InitialAdded != out.InitialAddByOrigin[0]+out.InitialAddByOrigin[1]+out.InitialAddByOrigin[2] || out.ReciprocalAdded != out.ReciprocalAddByOrigin[0]+out.ReciprocalAddByOrigin[1]+out.ReciprocalAddByOrigin[2] || out.PruneKept != out.PruneKeepByOrigin[0]+out.PruneKeepByOrigin[1]+out.PruneKeepByOrigin[2] || out.PruneDropped != out.PruneDropByOrigin[0]+out.PruneDropByOrigin[1]+out.PruneDropByOrigin[2] {
+		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW lifecycle origin conservation")
 	}
 	return out, nil
 }
@@ -262,14 +333,14 @@ func localHNSWAttributionInstrumentationSummaryV1Build(source *m8ProductionMulti
 	return out, nil
 }
 
-func graphDistanceAggregateV1(searchers []*collections.VectorPartitionLocalSearcherV1) collections.VectorPartitionLocalGraphDistanceDistributionV1 {
+func graphDistanceAggregateV1(searchers []*collections.VectorPartitionLocalSearcherV1) localHNSWAttributionDistanceAggregateV1 {
 	// PackDiagnostics already computes the authoritative per-pack distances.
 	// Keep the report compact: weighted mean and global extrema are sufficient.
-	var out collections.VectorPartitionLocalGraphDistanceDistributionV1
+	var out localHNSWAttributionDistanceAggregateV1
 	for _, searcher := range searchers {
 		d, err := searcher.PackDiagnosticsV1()
 		if err != nil || d.Layer0Distances.Count == 0 {
-			return collections.VectorPartitionLocalGraphDistanceDistributionV1{}
+			return localHNSWAttributionDistanceAggregateV1{}
 		}
 		if out.Count == 0 || d.Layer0Distances.Min < out.Min {
 			out.Min = d.Layer0Distances.Min

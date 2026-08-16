@@ -228,6 +228,10 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		out.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
 		out.Partitions[0].Selections = append([]VectorPartitionConstructionSelectionV1(nil), constructionEvidence.Partitions[0].Selections...)
 		out.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1(nil), constructionEvidence.Partitions[0].Events...)
+		out.Partitions[0].NativeInsertionOrdinals = append([]int(nil), constructionEvidence.Partitions[0].NativeInsertionOrdinals...)
+		for i := range out.Partitions[0].Selections {
+			out.Partitions[0].Selections[i].CandidateOrdinals = append([]int(nil), constructionEvidence.Partitions[0].Selections[i].CandidateOrdinals...)
+		}
 		return out
 	}
 	finalEvent := func(e *VectorPartitionConstructionEvidenceV1) int {
@@ -246,7 +250,15 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		}
 		return -1
 	}
-	if len(constructionEvidence.Partitions[0].Selections) == 0 || finalEvent(&constructionEvidence) < 0 || initialEvent(&constructionEvidence) < 0 {
+	sampledSelection := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Selections {
+			if e.Partitions[0].Selections[i].CandidateSampled && len(e.Partitions[0].Selections[i].CandidateOrdinals) > 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	if len(constructionEvidence.Partitions[0].Selections) == 0 || finalEvent(&constructionEvidence) < 0 || initialEvent(&constructionEvidence) < 0 || sampledSelection(&constructionEvidence) < 0 {
 		t.Fatalf("fixture lacks lifecycle coverage: %+v", constructionEvidence)
 	}
 	for _, tc := range []struct {
@@ -261,6 +273,37 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		{"wrong_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PartitionID++ }},
 		{"duplicate_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions = append(e.Partitions, e.Partitions[0]) }},
 		{"bad_selection", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].Selections[0].Selected++ }},
+		{"duplicate_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].NativeInsertionOrdinals[0] = e.Partitions[0].NativeInsertionOrdinals[1]
+		}},
+		{"wrong_event_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].InsertionOrdinal = 0
+		}},
+		{"sample_missing", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			e.Partitions[0].Selections[i].CandidateSampled = false
+			e.Partitions[0].Selections[i].CandidateOrdinals = nil
+			e.Partitions[0].Selections[i].CandidateDigest = ""
+		}},
+		{"sample_candidate_self", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals[0] = s.Node
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
+		{"sample_candidate_missing", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals = s.CandidateOrdinals[:len(s.CandidateOrdinals)-1]
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
+		{"sample_candidate_extra", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals = append(s.CandidateOrdinals, s.CandidateOrdinals[len(s.CandidateOrdinals)-1])
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
 		{"postfill", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PostfillEdges = 1 }},
 		{"bad_origin", func(e *VectorPartitionConstructionEvidenceV1) {
 			i := initialEvent(e)

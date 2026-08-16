@@ -43,9 +43,9 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	sampled := false
 	for _, partition := range harness.constructionEvidence.Partitions {
 		for _, selection := range partition.Selections {
-			if len(selection.CandidateOrdinals) != 0 {
+			if selection.CandidateSampled {
 				sampled = true
-				if selection.Layer != 0 || selection.CandidateDigest == "" || len(selection.CandidateOrdinals) > selection.Candidates {
+				if selection.Layer != 0 || selection.CandidateDigest == "" || len(selection.CandidateOrdinals) != selection.Candidates {
 					t.Fatalf("sample=%+v", selection)
 				}
 			}
