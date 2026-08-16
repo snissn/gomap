@@ -88,11 +88,17 @@ type localHNSWFixedBudgetScreenReportV1 struct {
 	EFSearch     []int                                   `json:"ef_search"`
 	Queries      int                                     `json:"queries"`
 	Arms         []localHNSWFixedBudgetScreenArmResultV1 `json:"arms"`
+	Provenance   localHNSWAttributionProvenanceV1        `json:"provenance"`
+	Calibration  localHNSWAttributionFileInputV1         `json:"calibration_split"`
+	Truth        localHNSWAttributionFileInputV1         `json:"truth_artifact"`
+	Descriptor   localHNSWAttributionFileInputV1         `json:"retained_descriptor"`
+	Manifest     string                                  `json:"manifest_integrity_digest"`
+	Source       localHNSWAttributionSourceEvidenceV1    `json:"source"`
 	Limitations  []string                                `json:"limitations"`
 }
 
 func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenReportV1) error {
-	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) {
+	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) || report.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || report.Provenance.BaseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || report.Provenance.SourceDirty || !m8QualificationGitSHAV1(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.Source.ManifestIntegrity != report.Manifest || report.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || report.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || report.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
 		return errors.New("invalid fixed-budget screen contract")
 	}
 	for i, arm := range report.Arms {
@@ -106,6 +112,13 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		}
 		if i == len(report.Arms)-1 && len(arm.Control) != len(report.VariantPacks) {
 			return errors.New("invalid fixed-budget screen control")
+		}
+		if i == len(report.Arms)-1 {
+			for _, control := range arm.Control {
+				if control.CandidateChecksum != control.CanonicalChecksum || control.CandidateBytes != control.CanonicalBytes {
+					return errors.New("fixed-budget 2M/on control mismatch")
+				}
+			}
 		}
 	}
 	return nil
@@ -251,20 +264,43 @@ func localHNSWFixedBudgetScreenControlV1(source *m8ProductionMultiGroupAssetsV1,
 func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-fixed-budget-screen", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationPath, tempRoot, out string
+	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, out, baseSHA, headSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal retained M18 database")
 	fs.StringVar(&calibrationPath, "calibration-split", "", "frozen calibration manifest")
+	fs.StringVar(&truthPath, "truth-artifact", "", "frozen truth artifact")
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
 	fs.StringVar(&out, "out", "", "new screen JSON path")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || tempRoot == "" || out == "" {
+	fs.StringVar(&baseSHA, "base-sha", "", "exact main base SHA")
+	fs.StringVar(&headSHA, "head-sha", "", "exact screen implementation SHA")
+	fs.StringVar(&sourceCheckout, "source-checkout", "", "clean exact-head checkout")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || out == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
 		return errors.New("local-hnsw-fixed-budget-screen requires frozen inputs and fresh output")
 	}
 	var err error
-	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &tempRoot: tempRoot, &out: out} {
+	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &truthPath: truthPath, &tempRoot: tempRoot, &out: out, &sourceCheckout: sourceCheckout} {
 		if *ptr, err = m8CanonicalPathV1(value); err != nil {
 			return err
 		}
+	}
+	baseSHA, headSHA, err = provenanceWithExplicitV1(baseSHA, headSHA)
+	if err != nil || baseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || m8GitDirtyInV1(sourceCheckout) {
+		return errors.New("fixed-budget screen source provenance")
+	}
+	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil {
+		return errors.New("fixed-budget screen source checkout")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	executable, err = m8CanonicalPathV1(executable)
+	if err != nil {
+		return err
+	}
+	executableSHA, err := m8BenchmarkExecutableSHA256V1(executable)
+	if err != nil || !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("fixed-budget screen executable provenance")
 	}
 	if filepath.Ext(out) != ".json" {
 		return errors.New("fixed-budget screen output must be JSON")
@@ -280,6 +316,15 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	if err != nil || len(calibration.Ordinals) != 806 {
 		return errors.New("fixed-budget screen calibration identity")
 	}
+	truthSHA, err := localHNSWAttributionRegularFileSHA256V1(truthPath, m8ProfileArtifactMaxBytesV1)
+	if err != nil || truthSHA != localHNSWAttributionTruthSHA256V1 {
+		return errors.New("fixed-budget screen truth identity")
+	}
+	descriptorPath := filepath.Join(retainedDB, m3VariantDescriptorFileV1)
+	descriptorSHA, err := localHNSWAttributionRegularFileSHA256V1(descriptorPath, m3VariantDescriptorMaxBytesV1)
+	if err != nil || descriptorSHA != localHNSWM18DescriptorSHA256V1 {
+		return errors.New("fixed-budget screen descriptor identity")
+	}
 	source, err := openM8ProductionExistingAssetSetV1(retainedDB)
 	if err != nil {
 		return err
@@ -287,6 +332,9 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	defer func() { runErr = errors.Join(runErr, source.Close()) }()
 	if err := localHNSWRepairCalibrationBindDescriptorV1(source, fixture); err != nil {
 		return err
+	}
+	if source.descriptor == nil || source.manifest.PartitionCount != 40 || source.descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || source.descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || source.descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
+		return errors.New("fixed-budget screen retained source binding")
 	}
 	queries, err := localHNSWAttributionCalibrationV1Build(source, fixture, calibration.Ordinals)
 	if err != nil {
@@ -296,7 +344,11 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	if err != nil {
 		return err
 	}
-	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Limitations: []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "no postfill, candidate extension, insertion-order, Vamana, router, probe, top-k, or EF policy changes"}}
+	loads, err := m8PartitionLoadsV1(source.manifest)
+	if err != nil {
+		return err
+	}
+	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-fixed-budget-screen", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: localHNSWAttributionCalibrationSHA256V1}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Limitations: []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "no postfill, candidate extension, insertion-order, Vamana, router, probe, top-k, or EF policy changes"}}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		return err
 	}
