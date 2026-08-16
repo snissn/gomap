@@ -176,7 +176,7 @@ func (p *columnHNSWPreparedExactFP32ScorePlane) scoreAndPushFrontierVisitedRowID
 		return 0, errColumnHNSWPreparedTraversalScorePlaneUnavailable
 	}
 	var visited uint64
-	if err := p.pack.scoreAndPushFrontierVisitedTile(p.normalizedQuery, rowIDs, topK, p.scoreBatchMode, scratch, stats, &visited); err != nil {
+	if err := p.pack.scoreAndPushFrontierVisitedTile(p.normalizedQuery, rowIDs, topK, p.scoreBatchMode, scratch, stats, &visited, nil, nil); err != nil {
 		return int(visited), err
 	}
 	return int(visited), nil

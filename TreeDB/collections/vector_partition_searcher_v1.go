@@ -1334,15 +1334,28 @@ func (s *VectorPartitionLocalSearcherV1) SearchWithOptionsV1(ctx context.Context
 // VectorPartitionSearchAttributionV1 is offline evidence for one prepared
 // partition-local HNSW traversal.
 type VectorPartitionSearchAttributionV1 struct {
-	Schema                string                            `json:"schema"`
-	FrontierAdmissions    uint64                            `json:"frontier_admissions"`
-	VisitedRows           uint64                            `json:"visited_rows"`
-	VisitedOrdinalsSHA256 string                            `json:"visited_ordinals_sha256"`
-	TerminationReason     string                            `json:"termination_reason"`
-	VisitedOrdinals       []uint32                          `json:"-"`
-	LevelOrdinals         []uint32                          `json:"-"`
-	ScoreOrdinals         []uint32                          `json:"-"`
-	AdjacencyReads        []VectorPartitionSearchPageReadV1 `json:"-"`
+	Schema                string                             `json:"schema"`
+	FrontierAdmissions    uint64                             `json:"frontier_admissions"`
+	SeedCandidates        uint64                             `json:"seed_candidates"`
+	SeedAdmissions        uint64                             `json:"seed_admissions"`
+	VisitedRows           uint64                             `json:"visited_rows"`
+	VisitedOrdinalsSHA256 string                             `json:"visited_ordinals_sha256"`
+	TerminationReason     string                             `json:"termination_reason"`
+	VisitedOrdinals       []uint32                           `json:"-"`
+	LevelOrdinals         []uint32                           `json:"-"`
+	ScoreOrdinals         []uint32                           `json:"-"`
+	AdjacencyReads        []VectorPartitionSearchPageReadV1  `json:"-"`
+	EdgeEvents            []VectorPartitionSearchEdgeEventV1 `json:"-"`
+}
+
+// VectorPartitionSearchEdgeEventV1 records one examined prepared-pack edge.
+// Scored is false for already-visited edges; score/admission then remain zero.
+type VectorPartitionSearchEdgeEventV1 struct {
+	Layer, SourceOrdinal, DestinationOrdinal int
+	Auxiliary                                bool
+	NewlyVisited, Scored                     bool
+	Score                                    float64
+	RetainedTop, FrontierAdmission           bool
 }
 type VectorPartitionSearchPageReadV1 struct {
 	Layer     int
@@ -1715,7 +1728,12 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			for _, read := range trace.AdjacencyReads {
 				attribution.AdjacencyReads = append(attribution.AdjacencyReads, VectorPartitionSearchPageReadV1{Layer: read.Layer, Ordinal: read.Ordinal, Auxiliary: read.Auxiliary})
 			}
+			for _, event := range trace.EdgeEvents {
+				attribution.EdgeEvents = append(attribution.EdgeEvents, VectorPartitionSearchEdgeEventV1{Layer: event.Layer, SourceOrdinal: event.SourceOrdinal, DestinationOrdinal: event.DestinationOrdinal, Auxiliary: event.Auxiliary, NewlyVisited: event.NewlyVisited, Scored: event.Scored, Score: event.Score, RetainedTop: event.RetainedTop, FrontierAdmission: event.FrontierAdmission})
+			}
 			attribution.FrontierAdmissions = stats.FrontierPushes
+			attribution.SeedCandidates = trace.SeedCandidates
+			attribution.SeedAdmissions = trace.SeedAdmissions
 			attribution.TerminationReason = trace.Termination
 			attribution.VisitedOrdinalsSHA256 = hex.EncodeToString(h.Sum(nil))
 			if attribution.VisitedRows == 0 || attribution.TerminationReason == "" {

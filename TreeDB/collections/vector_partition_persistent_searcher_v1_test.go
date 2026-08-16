@@ -332,6 +332,35 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if attribution.Schema != "treedb_vector_partition_search_attribution_v1" || attribution.VisitedRows == 0 || attribution.VisitedRows != uint64(len(attribution.VisitedOrdinals)) || attribution.FrontierAdmissions == 0 || len(attribution.VisitedOrdinalsSHA256) != 64 {
 		t.Fatalf("attribution=%+v", attribution)
 	}
+	if len(attribution.EdgeEvents) == 0 {
+		t.Fatal("missing per-edge attribution events")
+	}
+	var nativeEdges, auxiliaryEdges, newlyVisited, admissions uint64
+	for i, event := range attribution.EdgeEvents {
+		if event.SourceOrdinal < 0 || event.SourceOrdinal >= len(rows) || event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(rows) {
+			t.Fatalf("event[%d] ordinal=%+v", i, event)
+		}
+		if event.Auxiliary {
+			auxiliaryEdges++
+		} else {
+			nativeEdges++
+		}
+		if event.NewlyVisited {
+			newlyVisited++
+			if !event.Scored {
+				t.Fatalf("new event[%d] was not scored: %+v", i, event)
+			}
+		}
+		if event.FrontierAdmission {
+			admissions++
+			if !event.RetainedTop {
+				t.Fatalf("frontier event[%d] was not retained: %+v", i, event)
+			}
+		}
+	}
+	if nativeEdges+auxiliaryEdges != attributedMetrics.Edges || auxiliaryEdges != attributedMetrics.AuxiliaryEdges || newlyVisited+attribution.SeedCandidates != attributedMetrics.Candidates || admissions+attribution.SeedAdmissions != attribution.FrontierAdmissions {
+		t.Fatalf("edge attribution does not reconcile metrics=%+v attribution=%+v native=%d aux=%d new=%d admissions=%d", attributedMetrics, attribution, nativeEdges, auxiliaryEdges, newlyVisited, admissions)
+	}
 	h := sha256.New()
 	h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
 	var raw [4]byte
@@ -464,6 +493,21 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	}
 	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
 		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
+	}
+	var sawNative, sawAuxiliary bool
+	for _, event := range overlayTrace.EdgeEvents {
+		sawNative = sawNative || !event.Auxiliary
+		sawAuxiliary = sawAuxiliary || event.Auxiliary
+	}
+	if !sawNative || !sawAuxiliary {
+		t.Fatalf("overlay edge attribution lacks native/auxiliary distinction: %+v", overlayTrace.EdgeEvents)
+	}
+	_, _, rerunTrace, err := o.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(overlayTrace.EdgeEvents, rerunTrace.EdgeEvents) {
+		t.Fatalf("edge attribution is not deterministic: first=%+v rerun=%+v", overlayTrace.EdgeEvents, rerunTrace.EdgeEvents)
 	}
 }
 
