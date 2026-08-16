@@ -1,8 +1,8 @@
 # Frozen M18 edge-quality diagnosis (#4171)
 
-Status: **pre-outcome pack selection recorded 2026-08-16; treatment not yet
-run.** This record is intentionally committed before reading any new M18 query
-outcome.
+Status: **accepted frozen baseline diagnosis recorded 2026-08-16.** Pack
+selection was committed before reading any new M18 query outcome. The accepted
+run is diagnostic only: it does not change production construction or search.
 
 ## Frozen source lock
 
@@ -53,18 +53,115 @@ the maximum source-order alternation. Packs 16 and 1 also provide the
 historically plausibly difficult bridge/mixed category without using recall,
 miss, or utility results to choose them.
 
-## Planned campaign
+## Accepted execution
 
-The new offline-only `local-hnsw-m18-edge-diagnosis` runner will compile from
-the clean exact source head, strictly reopen/materialize a traced M18/eFC256
-clone, and run exactly the 806 frozen calibration ordinals at probes=2 and EF
-`80,81,88,96`. It will retain construction provenance and the bounded exact
-candidate/final-neighbor oracle for all packs, aggregate per-origin utility
-over every cell, and retain raw detailed traces only for deterministic bounded
-hard misses. The compact report will bind source, fixture, descriptor,
-membership, manifest, router, calibration, truth, and executable identities.
+The offline-only `local-hnsw-m18-edge-diagnosis` runner strictly reopened and
+materialized a traced M18/eFC256 clone, then ran all 806 frozen calibration
+ordinals at probes=2 and EF `80,81,88,96`. It did not access holdout outcomes
+or change graph construction, routing, probes, top-k, query EF defaults, or
+quantization.
 
-It will not access holdout outcomes or change graph construction, routing,
-probes, top-k, query EF defaults, or quantization. Linux data establish
-persistence/correctness; any M3 timing is explicitly within-host only and is
-not compared absolutely with Linux timings.
+Preparation and query execution have deliberately split provenance. The
+immutable preparation checkpoint remains bound to the source head that created
+it; the query report is independently bound to the clean executable head that
+reopened it.
+
+| Artifact | Identity |
+| --- | --- |
+| frozen base | `2a7d01443d3c842990c259b08bd442a4d0109511` |
+| preparation head | `964bde7437a6f8ae8fda07939b272dc198873b4c` |
+| query/validator head | `b428d38c9b061487c9f2d7b44ae45403aa32eec2` |
+| checkpoint | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-964bde74.json` |
+| checkpoint SHA-256 | `3b934b75e8281a913f7bf15368b1403e3c384c802bdbb61a980fe786025f61e4` |
+| compact report | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-b428d38c.json` |
+| compact report SHA-256 | `020b0259055895c395abe3fa8f2e056671329037e5567b4ed31e22438527de75` |
+| bounded raw sidecar | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-b428d38c.json` |
+| sidecar SHA-256 | `7726624a7c30641c230141dd6647ed3a564e8268a224b16650c3a5b699a8d94b` |
+
+Full 40-pack preparation completed in 7:53 with 3,538,372 kB maximum RSS,
+zero swap, and 172 major faults. Checkpoint reuse plus all four query cells and
+strict sidecar/report reread completed in 2:08.50 with 3,697,936 kB maximum
+RSS, zero swap, and zero major faults. These Linux measurements qualify the
+harness and persistence path; they are not cross-host latency claims.
+
+The accepted query invocation was:
+
+```sh
+/mnt/fast4tb/gomap-4171-m18-diagnosis/clean/bin/treedb-vector-bench-b428d38c \
+  local-hnsw-m18-edge-diagnosis \
+  --dataset /mnt/fast4tb/gomap-4160-m18-default/source/testdata/vector_partition_qualification_embedding_mixture_250k \
+  --retained-db /mnt/fast4tb/gomap-4160-m18-default/materialized-m18-edc7f1430/m0-membership-3440095458 \
+  --calibration-split /mnt/fast4tb/gomap-hnsw-edge-quality-20260816/inputs/250k-query-calibration-manifest.json \
+  --truth-artifact /mnt/fast4tb/gomap-hnsw-edge-quality-20260816/inputs/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json \
+  --checkpoint /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-964bde74.json \
+  --out /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-b428d38c.json \
+  --raw-sidecar /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-b428d38c.json \
+  --base-sha 2a7d01443d3c842990c259b08bd442a4d0109511 \
+  --head-sha b428d38c9b061487c9f2d7b44ae45403aa32eec2 \
+  --preparation-head-sha 964bde7437a6f8ae8fda07939b272dc198873b4c \
+  --source-checkout /mnt/fast4tb/gomap-4171-m18-diagnosis/clean
+```
+
+## Baseline frontier
+
+Work is the exact aggregate over the 806 calibration queries. Recall rises
+monotonically, but each increment requires more comparisons; this is the
+baseline against which fixed-budget construction variants must be compared.
+
+| EF | recall@10 | candidates | edges examined | frontier admissions |
+| ---: | ---: | ---: | ---: | ---: |
+| 80 | 0.931017 | 2,747,541 | 4,809,980 | 441,831 |
+| 81 | 0.933127 | 2,769,010 | 4,867,644 | 446,412 |
+| 88 | 0.941439 | 2,912,578 | 5,268,459 | 477,535 |
+| 96 | 0.949628 | 3,068,927 | 5,729,760 | 512,751 |
+
+## Candidate coverage and final survival
+
+The bounded exact oracle uses 32 deterministically selected construction nodes
+per pack and exact predecessor-restricted top-10 neighbors. Candidate coverage
+is essentially complete in every predeclared stratum, while final adjacency
+loses a material fraction of those already-available neighbors.
+
+| pack | candidate exact-10 coverage | final exact-10 overlap | diversity truth / 100 final edges | backfill truth / 100 final edges | reciprocal truth / 100 final edges |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 100.00% | 91.88% | 31.16 | 20.56 | 21.35 |
+| 1 | 100.00% | 91.88% | 34.05 | 17.46 | 23.34 |
+| 3 | 99.69% | 87.81% | 29.27 | 17.37 | 22.13 |
+| 16 | 100.00% | 95.63% | 35.32 | 18.69 | 23.29 |
+| 36 | 100.00% | 93.75% | 37.11 | 14.24 | 25.12 |
+
+Across the five packs, construction candidate pools contain 1,599/1,600
+exact neighbors (99.94%), while final adjacency retains 1,475/1,600 (92.19%).
+Thus 124 sampled exact neighbors were available and subsequently displaced;
+only one was absent from the candidate pool. All five final layer-0 graphs are
+single strongly connected components with all 7,500 rows reachable, so this is
+not explained by gross disconnection.
+
+Backfill also shows the weakest aggregate query utility. At EF80 it accounts
+for 8.72% of native edge examinations but only 5.04% of recovered truth:
+903 recovered truth neighbors per million examined edges, versus 1,714 for
+diversity-selected and 1,561 for reciprocal edges. The same ordering persists
+through EF96 (739 versus 1,457 and 1,354). Pack 0 is a useful homogeneous
+exception where local backfill is efficient, which argues for testing policy
+variants rather than deleting backfill unconditionally.
+
+## Causal decision
+
+Observed evidence places the leading loss at **selection/survival**, not
+candidate coverage:
+
+1. Exact useful candidates almost always enter the construction pool.
+2. A material fraction disappears before final adjacency.
+3. Backfill consumes edges and traversal work less efficiently overall, while
+   retaining stratum-dependent value.
+4. Connectivity and reachability are already complete.
+
+Therefore #4172 should run the predeclared equal-capacity M18/eFC256 layer-0
+matrix: initial selection `{M,2M}` by backfill `{off,on}`, with the current
+`2M/backfill-on` graph as the exact control. The reciprocal/final degree cap
+stays 2M, so this tests allocation and survival rather than simply adding
+edges. If the best backfill-off arm underfills, apply exact-budget postfill only
+to that finalist. Candidate-pool expansion remains conditional and is not the
+next experiment. Generic insertion shuffling remains rejected by prior #4107
+evidence. Full Vamana remains deferred until a same-budget robust-prune-style
+refinement succeeds but HNSW construction constraints still visibly cap it.
