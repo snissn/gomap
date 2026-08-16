@@ -477,6 +477,13 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 }
 
 func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
+	return buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, true)
+}
+
+// buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1 lets a
+// partition variant defer final survivors until after its own adjacency rewrite.
+// Generic graph construction finalizes immediately.
+func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -545,6 +552,14 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 			return err
 		}
 		rows[i].Adjacency = adjacency
+	}
+	if err := trace.reconcileNativeAdjacency(rows); err != nil {
+		return err
+	}
+	if recordFinal {
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -663,6 +678,53 @@ func (t *vectorIndexConstructionTraceV1) recordFinalSurvivors(rows []columnVecto
 				t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: int(neighbor), Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: "final_survivor"})
 			}
 		}
+	}
+	return nil
+}
+
+// reconcileNativeAdjacency makes the traced live edge map agree with the
+// serialized native graph before a partition variant mutates layer 0. The
+// builder can prune a reciprocal edge while maintaining a node; record that
+// loss explicitly rather than allowing a stale in-memory trace to masquerade
+// as a variant rewrite. Every packed native edge must already have an origin.
+func (t *vectorIndexConstructionTraceV1) reconcileNativeAdjacency(rows []columnVectorGraphAssetRow) error {
+	if t == nil {
+		return nil
+	}
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
+			for _, to := range neighbors {
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}
+				if _, ok := t.origins[key]; !ok {
+					return fmt.Errorf("collections: construction trace missing native edge origin from=%d to=%d layer=%d", from, to, layer)
+				}
+				final[key] = struct{}{}
+			}
+		}
+	}
+	drops := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range t.origins {
+		if _, ok := final[key]; !ok {
+			drops = append(drops, key)
+		}
+	}
+	sort.Slice(drops, func(i, j int) bool {
+		if drops[i].Layer != drops[j].Layer {
+			return drops[i].Layer < drops[j].Layer
+		}
+		if drops[i].From != drops[j].From {
+			return drops[i].From < drops[j].From
+		}
+		return drops[i].To < drops[j].To
+	})
+	for _, key := range drops {
+		t.record(key.From, key.To, key.Layer, t.origins[key], "reciprocal_prune_drop")
+		delete(t.origins, key)
 	}
 	return nil
 }

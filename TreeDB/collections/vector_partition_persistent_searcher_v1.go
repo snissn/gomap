@@ -731,7 +731,7 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
-	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows, def, trace); err != nil {
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, false); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
 	switch variant {
