@@ -174,6 +174,14 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	updated := d
 	updated.AssignmentBasis = partitionAssignmentGraphRepartitionedV1
+	switch mode {
+	case "zero":
+		updated.OverlapRatio = 0
+	case "useful_only_20":
+		updated.OverlapRatio = m0OverlapRatioV1
+	default:
+		return errors.New("M0 materialization overlap mode")
+	}
 	updated.VariantID, err = m3VariantIDV1(updated.AssignmentBasis, updated.OverlapRatio)
 	if err != nil {
 		return err
