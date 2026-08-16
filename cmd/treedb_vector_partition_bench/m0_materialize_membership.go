@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -280,6 +281,16 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	h.status = h.router.Status()
+	persisted, err := m3ReadVariantDescriptorV1(clone)
+	if err != nil {
+		return fmt.Errorf("materialized descriptor is not admissible after reopen: %w", err)
+	}
+	if !reflect.DeepEqual(persisted, updated) {
+		return errors.New("materialized descriptor changed after atomic replacement")
+	}
+	if err = m3DescriptorMatchesManifestV1(persisted, fixtureManifest{Checksum: persisted.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+		return fmt.Errorf("materialized descriptor does not match reopened assets: %w", err)
+	}
 	var packBytes uint64
 	for _, asset := range h.status.Manifest.Assets {
 		packBytes += asset.Bytes

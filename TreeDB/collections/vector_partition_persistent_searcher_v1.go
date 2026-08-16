@@ -278,8 +278,9 @@ const (
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m32_ef_construction_256"
-	// vectorPartitionLocalDefaultGraphVariantV1 is the M16/eFC128 production
-	// variant used by the implicit partition-local materialization APIs.
+	// vectorPartitionLocalDefaultGraphVariantV1 is the auxiliary-navigation
+	// production variant used by the implicit partition-local materialization
+	// APIs. It preserves the authoritative index definition's M and eFC values.
 	vectorPartitionLocalDefaultGraphVariantV1 = VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
 )
 
@@ -305,10 +306,10 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 	return out
 }
 
-// vectorPartitionLocalProductionGraphVariantV1 permits the default M16 pack
-// and explicit M18 pack while keeping every other domain-bound construction
-// variant offline-only. The canonical source definition remains the manifest
-// identity.
+// vectorPartitionLocalProductionGraphVariantV1 permits the default
+// authoritative-definition pack and explicit M18 pack while keeping every
+// other domain-bound construction variant offline-only. The canonical source
+// definition remains the manifest identity.
 func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
 	if membership == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, true
@@ -959,18 +960,18 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 	return nil
 }
 
-// MaterializeVectorPartitionLocalSearchAssetsV1 uses the M16/eFC128
-// auxiliary-navigation V3 production default and the M1 column-asset
-// authority. Callers install the returned descriptors in the generation M1
-// manifest; publication then validates the exact ref, size, CRC and SHA-256.
+// MaterializeVectorPartitionLocalSearchAssetsV1 uses the auxiliary-navigation
+// V3 production default with the authoritative M1 column-asset definition.
+// Callers install the returned descriptors in the generation M1 manifest;
+// publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
 // graph variants. Native and experimental variants remain offline-only; the
-// M16/eFC128 and selected M18/eFC256 auxiliary V3 variants are
-// production-openable.
+// The authoritative-definition and selected M18/eFC256 auxiliary V3 variants
+// are production-openable.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant)
 }
