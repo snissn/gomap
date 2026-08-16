@@ -207,28 +207,35 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 }
 
 func localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal []m8CanonicalResultV1, records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, lowRoute, highRoute []uint32) (localHNSWAttributionQueryVariantV1, error) {
-	lowResults, lowWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, lowRoute)
+	truthIDs := make(map[string]struct{}, len(truth))
+	for _, result := range truth {
+		truthIDs[result.ID] = struct{}{}
+	}
+	lowResults, lowWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, lowRoute, truthIDs)
 	if err != nil {
 		return localHNSWAttributionQueryVariantV1{}, err
 	}
-	highResults, highWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, highRoute)
+	highResults, highWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, highRoute, truthIDs)
 	if err != nil {
 		return localHNSWAttributionQueryVariantV1{}, err
 	}
 	return localHNSWAttributionQueryVariantV1{LowResults: localHNSWAttributionQueryResultBitsV1(lowResults), HighResults: localHNSWAttributionQueryResultBitsV1(highResults), EndToEndRecall: m8CanonicalRecallV1(truth, lowResults), LocalRecall: m8CanonicalRecallV1(exactLocal, lowResults), RoutingRecall: m8CanonicalRecallV1(truth, exactLocal), LowSelectedWork: lowWork, HighSelectedWork: highWork}, nil
 }
 
-func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, route []uint32) ([]m8CanonicalResultV1, localHNSWAttributionQueryWorkV1, error) {
+func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, route []uint32, truth map[string]struct{}) ([]m8CanonicalResultV1, localHNSWAttributionQueryWorkV1, error) {
 	var merged []m8CanonicalResultV1
 	var work localHNSWAttributionQueryWorkV1
 	recovered := make(map[string]struct{})
 	for _, partition := range route {
+		if int(partition) >= len(records) || int(partition) >= len(resultsByPartition) {
+			return nil, localHNSWAttributionQueryWorkV1{}, errors.New("invalid local HNSW query partition")
+		}
 		merged = append(merged, resultsByPartition[partition]...)
 		work.Candidates += records[partition].Candidates
 		work.Edges += records[partition].Edges
 		work.FrontierAdmissions += records[partition].FrontierAdmissions
 		utility := records[partition].Utility
-		recoveries, err := localHNSWAttributionTruthRecoveryMapV1(records[partition])
+		recoveries, err := localHNSWAttributionQueryRecordValidateV1(records[partition], truth)
 		if err != nil {
 			return nil, localHNSWAttributionQueryWorkV1{}, err
 		}
@@ -251,12 +258,12 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 // localHNSWAttributionQueryUtilityAggregateV1 counts every searched partition's
 // work, but credits a canonical truth ID once per query across home/overlap
 // memberships. Non-truth work remains partition-local by design.
-func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQuerySearchV1) (localHNSWAttributionQueryUtilityV1, error) {
+func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQuerySearchV1, truth map[string]struct{}) (localHNSWAttributionQueryUtilityV1, error) {
 	var out localHNSWAttributionQueryUtilityV1
 	recovered := make(map[string]struct{})
 	for _, record := range records {
 		utility := record.Utility
-		recoveries, err := localHNSWAttributionTruthRecoveryMapV1(record)
+		recoveries, err := localHNSWAttributionQueryRecordValidateV1(record, truth)
 		if err != nil {
 			return localHNSWAttributionQueryUtilityV1{}, err
 		}
@@ -295,7 +302,15 @@ func localHNSWAttributionTruthRecoveryRecordsV1(recoveries map[string]string) []
 // localHNSWAttributionTruthRecoveryMapV1 validates the persisted canonical
 // records before de-duplicating overlap recoveries. JSONL is the sole source
 // of truth; no transient map is retained across serialization.
-func localHNSWAttributionTruthRecoveryMapV1(record localHNSWAttributionQuerySearchV1) (map[string]string, error) {
+func localHNSWAttributionQueryRecordValidateV1(record localHNSWAttributionQuerySearchV1, truth map[string]struct{}) (map[string]string, error) {
+	if len(truth) == 0 || record.Candidates != uint64(len(record.VisitedOrdinals)) || record.VisitedOrdinalsSHA256 != localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals) {
+		return nil, errors.New("invalid local HNSW persisted query record")
+	}
+	for i, ordinal := range record.VisitedOrdinals {
+		if i != 0 && ordinal <= record.VisitedOrdinals[i-1] {
+			return nil, errors.New("noncanonical local HNSW visited ordinals")
+		}
+	}
 	if uint64(len(record.TruthRecoveries)) != record.Utility.TruthRecovered {
 		return nil, errors.New("local HNSW truth recovery count mismatch")
 	}
@@ -308,6 +323,9 @@ func localHNSWAttributionTruthRecoveryMapV1(record localHNSWAttributionQuerySear
 	for i, recovery := range record.TruthRecoveries {
 		if recovery.ID == "" || recovery.Origin == "" || (i != 0 && recovery.ID <= previous) {
 			return nil, errors.New("invalid local HNSW truth recovery records")
+		}
+		if _, wanted := truth[recovery.ID]; !wanted {
+			return nil, errors.New("local HNSW truth recovery is not query truth")
 		}
 		if _, ok := localHNSWAttributionTruthRecoveryBucketV1(&record.Utility, recovery.Origin); !ok {
 			return nil, errors.New("invalid local HNSW truth recovery origin")
@@ -323,6 +341,17 @@ func localHNSWAttributionTruthRecoveryMapV1(record localHNSWAttributionQuerySear
 		}
 	}
 	return out, nil
+}
+
+func localHNSWAttributionVisitedOrdinalsSHA256V1(ordinals []uint32) string {
+	h := sha256.New()
+	h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
+	var raw [4]byte
+	for _, ordinal := range ordinals {
+		binary.LittleEndian.PutUint32(raw[:], ordinal)
+		h.Write(raw[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {

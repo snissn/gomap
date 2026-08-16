@@ -114,12 +114,42 @@ func TestLocalHNSWAttributionQueryUtilityReducerCreditsUpperLayerBeforeSeedV1(t 
 	}
 }
 
+func TestLocalHNSWAttributionInitialEntryTruthRecoveryPrecedesEdgeV1(t *testing.T) {
+	trace := collections.VectorPartitionSearchAttributionV1{
+		Schema:                localHNSWAttributionSearchSchemaV1,
+		FrontierAdmissions:    1,
+		SeedCandidates:        1,
+		SeedAdmissions:        1,
+		VisitedRows:           1,
+		VisitedOrdinalsSHA256: strings.Repeat("a", 64),
+		TerminationReason:     "candidate_limit",
+		VisitedOrdinals:       []uint32{1},
+		SeedEvents: []collections.VectorPartitionSearchSeedEventV1{
+			{Ordinal: 1, Score: 1, InitialEntry: true},
+			{Ordinal: 0, Score: 0, TopAdmission: true, FrontierAdmission: true},
+		},
+		EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{{Layer: 1, SourceOrdinal: 0, DestinationOrdinal: 1, Scored: true}},
+	}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{0, 1, 1}: "reciprocal_add"}
+	truth := map[string]struct{}{"truth": {}}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 1, Edges: 1}, trace, origins, []string{"entry", "truth"}, truth)
+	if err != nil || utility.TruthRecovered != 1 || utility.Unattributed.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
+		t.Fatalf("initial entry recovery order utility=%+v err=%v", utility, err)
+	}
+	if got := localHNSWAttributionTruthRecoveriesV1(trace, origins, []string{"entry", "truth"}, truth)["truth"]; got != "unattributed" {
+		t.Fatalf("initial entry recovery origin=%q", got)
+	}
+}
+
 func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "diversity_selected"}}},
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "overlay_rewrite"}}},
 	}
-	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, []uint32{0, 1})
+	for i := range records {
+		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
+	}
+	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, []uint32{0, 1}, map[string]struct{}{"same": {}})
 	if err != nil {
 		t.Fatal(err)
 	}

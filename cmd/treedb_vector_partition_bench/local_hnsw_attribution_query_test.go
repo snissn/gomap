@@ -75,7 +75,10 @@ func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
 		{Edges: 2, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 2, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 2, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "first", Origin: "diversity_selected"}}},
 		{Edges: 3, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, ExaminedAuxiliary: 2, NewlyVisited: 2, Scored: 3, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, NewlyVisited: 1, Scored: 1}, Auxiliary: localHNSWAttributionQueryOriginUtilityV1{Examined: 2, NewlyVisited: 1, Scored: 2, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "second", Origin: "auxiliary"}}},
 	}
-	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{0, 1})
+	for i := range records {
+		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
+	}
+	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{0, 1}, map[string]struct{}{"first": {}, "second": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +92,10 @@ func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records)
+	for i := range records {
+		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
+	}
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records, map[string]struct{}{"overlap": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +109,9 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
 	}
+	for i := range records {
+		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
+	}
 	raw, err := json.Marshal(records)
 	if err != nil {
 		t.Fatal(err)
@@ -111,14 +120,36 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded)
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}})
 	if err != nil || utility.TruthRecovered != 1 || utility.Diversity.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
 		t.Fatalf("decoded overlap truth was not deduplicated: utility=%+v err=%v", utility, err)
 	}
 	decoded[1].TruthRecoveries[0].Origin = "not_an_origin"
-	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded); err == nil {
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("malformed serialized truth recovery accepted")
 	}
+	decoded[1].TruthRecoveries[0].Origin = "reciprocal_add"
+	decoded[0].TruthRecoveries[0].ID = "not_query_truth"
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("non-truth serialized recovery accepted")
+	}
+	decoded[0].TruthRecoveries[0].ID = "overlap"
+	decoded[0].VisitedOrdinals[0]++
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("tampered visited ordinal digest accepted")
+	}
+	decoded[0].VisitedOrdinals[0]--
+	decoded[0].Candidates++
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("mismatched persisted candidate count accepted")
+	}
+}
+
+func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearchV1) localHNSWAttributionQuerySearchV1 {
+	record.Candidates = 1
+	record.VisitedOrdinals = []uint32{0}
+	record.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals)
+	return record
 }
 
 func TestLocalHNSWAttributionTruthRecoverySerializationAndUnderflowV1(t *testing.T) {

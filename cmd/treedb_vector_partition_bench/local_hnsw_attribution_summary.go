@@ -151,11 +151,15 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 	for i, partition := range evidence.Partitions {
 		nativeRecords[i], overlayRecords[i] = partition.Native, partition.Overlay
 	}
-	nativeUtility, err := localHNSWAttributionQueryUtilityAggregateV1(nativeRecords)
+	truth := make(map[string]struct{}, len(evidence.GlobalTruth))
+	for _, result := range evidence.GlobalTruth {
+		truth[result.ID] = struct{}{}
+	}
+	nativeUtility, err := localHNSWAttributionQueryUtilityAggregateV1(nativeRecords, truth)
 	if err != nil {
 		return err
 	}
-	overlayUtility, err := localHNSWAttributionQueryUtilityAggregateV1(overlayRecords)
+	overlayUtility, err := localHNSWAttributionQueryUtilityAggregateV1(overlayRecords, truth)
 	if err != nil {
 		return err
 	}

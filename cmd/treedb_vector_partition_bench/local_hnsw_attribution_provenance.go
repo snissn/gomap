@@ -338,6 +338,28 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 		return out, errors.New("invalid local HNSW query attribution")
 	}
 	recovered := map[string]struct{}{}
+	creditSeed := func(seed collections.VectorPartitionSearchSeedEventV1) error {
+		if seed.Ordinal < 0 || seed.Ordinal >= len(ids) {
+			return errors.New("invalid local HNSW seed ordinal")
+		}
+		if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+			if _, seen := recovered[ids[seed.Ordinal]]; !seen {
+				recovered[ids[seed.Ordinal]] = struct{}{}
+				out.TruthRecovered++
+				out.Unattributed.TruthRecovered++
+			}
+		}
+		return nil
+	}
+	// The initial entry is scored before upper-layer descent, so it owns a
+	// truth recovery before any subsequently examined edge can claim it.
+	for _, seed := range attribution.SeedEvents {
+		if seed.InitialEntry {
+			if err := creditSeed(seed); err != nil {
+				return out, err
+			}
+		}
+	}
 	var layer0NewlyVisited, layer0Scored uint64
 	for _, event := range attribution.EdgeEvents {
 		if event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
@@ -401,19 +423,11 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 			}
 		}
 	}
-	// A seed can be the entry reached by upper-layer greedy descent. Edge events
-	// are already emitted before that seed, whereas later layer-zero visits to a
-	// seeded row are unscored. Crediting scored edges first therefore preserves
-	// the actual recovery owner without a second cross-slice event sequence.
+	// Remaining L0/fallback seeds are reached after edge examination.
 	for _, seed := range attribution.SeedEvents {
-		if seed.Ordinal < 0 || seed.Ordinal >= len(ids) {
-			return out, errors.New("invalid local HNSW seed ordinal")
-		}
-		if _, wanted := truth[ids[seed.Ordinal]]; wanted {
-			if _, seen := recovered[ids[seed.Ordinal]]; !seen {
-				recovered[ids[seed.Ordinal]] = struct{}{}
-				out.TruthRecovered++
-				out.Unattributed.TruthRecovered++
+		if !seed.InitialEntry {
+			if err := creditSeed(seed); err != nil {
+				return out, err
 			}
 		}
 	}
@@ -428,6 +442,20 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 
 func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) map[string]string {
 	out := make(map[string]string)
+	creditSeed := func(seed collections.VectorPartitionSearchSeedEventV1) {
+		if seed.Ordinal >= 0 && seed.Ordinal < len(ids) {
+			if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+				if _, exists := out[ids[seed.Ordinal]]; !exists {
+					out[ids[seed.Ordinal]] = "unattributed"
+				}
+			}
+		}
+	}
+	for _, seed := range attribution.SeedEvents {
+		if seed.InitialEntry {
+			creditSeed(seed)
+		}
+	}
 	for _, event := range attribution.EdgeEvents {
 		if !event.Scored || event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
 			continue
@@ -446,12 +474,8 @@ func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartiti
 		out[id] = origin
 	}
 	for _, seed := range attribution.SeedEvents {
-		if seed.Ordinal >= 0 && seed.Ordinal < len(ids) {
-			if _, wanted := truth[ids[seed.Ordinal]]; wanted {
-				if _, exists := out[ids[seed.Ordinal]]; !exists {
-					out[ids[seed.Ordinal]] = "unattributed"
-				}
-			}
+		if !seed.InitialEntry {
+			creditSeed(seed)
 		}
 	}
 	return out
