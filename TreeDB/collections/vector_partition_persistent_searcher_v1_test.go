@@ -559,16 +559,17 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		ef      int
 		fileID  uint32
 		aux     bool
+		version uint16
 	}{
-		{VectorPartitionLocalGraphVariantOverlayCurrentV1, def.M, 128, 986, false},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, def.M, 128, 994, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, 990, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 993, true},
+		{VectorPartitionLocalGraphVariantOverlayCurrentV1, def.M, 128, 986, false, columnHNSWSearchPackVersionV2},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, def.M, 128, 994, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, 990, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 993, true, columnHNSWSearchPackVersionV3},
 	} {
 		assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, test.fileID, in, test.variant)
 		if err != nil {
@@ -591,7 +592,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: digest})
-		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || pack.Header.HasAuxiliaryNavigation != test.aux || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
+		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || pack.Header.HasAuxiliaryNavigation != test.aux || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != test.version {
 			t.Fatalf("variant=%s pack=%+v err=%v", test.variant, pack.Header, err)
 		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, assets[0])
