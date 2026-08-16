@@ -308,6 +308,18 @@ type VectorIndex struct {
 	dirtyDocs              map[string]struct{}
 	lastRebuildDuration    time.Duration
 	insertQuantScratch     []int8
+	// constructionTrace is an offline-only nullable sink installed by the
+	// partition-pack diagnostic builder. Normal collection indexes never set it.
+	constructionTrace *vectorIndexConstructionTraceV1
+}
+
+// vectorIndexConstructionTraceV1 is deliberately private: construction
+// provenance is benchmark evidence, not a runtime index contract.
+type vectorIndexConstructionTraceV1 struct {
+	selections []vectorIndexConstructionSelectionV1
+}
+type vectorIndexConstructionSelectionV1 struct {
+	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
 }
 
 type vectorIndexNode struct {
@@ -1423,7 +1435,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	scored = idx.selectDiverseCandidatesLocked(scored, limit)
+	scored, _ = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
@@ -2148,7 +2160,10 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		}
 		scored = append(scored, candidate)
 	}
-	scored = idx.selectDiverseCandidatesLocked(scored, limit)
+	scored, diversitySelected := idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
+	if idx.constructionTrace != nil {
+		idx.constructionTrace.selections = append(idx.constructionTrace.selections, vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: len(candidates), Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected})
+	}
 	out := make([]int, len(scored))
 	for i := range scored {
 		out[i] = scored[i].nodeID
@@ -2157,15 +2172,20 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
+	selected, _ := idx.selectDiverseCandidatesWithAccountingLocked(candidates, limit)
+	return selected
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
 	if limit <= 0 || len(candidates) == 0 {
-		return nil
+		return nil, 0
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	if len(candidates) <= limit {
-		return candidates
+		return candidates, len(candidates)
 	}
 	if idx.metric == VectorMetricInnerProduct {
-		return candidates[:limit]
+		return candidates[:limit], limit
 	}
 	var selectedStack [128]vectorIndexCandidate
 	selected := selectedStack[:0]
@@ -2192,7 +2212,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {
 		out = append(out, selected...)
-		return out
+		return out, len(selected)
 	}
 	selectedPos := 0
 	rejectedPos := 0
@@ -2207,7 +2227,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	out = append(out, selected[selectedPos:]...)
 	out = append(out, rejected[rejectedPos:backfill]...)
-	return out
+	return out, len(selected)
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {

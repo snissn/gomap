@@ -444,6 +444,10 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	return buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows, def, nil)
+}
+
+func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -457,6 +461,7 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 	if err != nil {
 		return err
 	}
+	index.constructionTrace = trace
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	for i := range rows {

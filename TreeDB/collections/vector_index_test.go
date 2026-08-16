@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -359,6 +360,28 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 3, 0)
 	if len(got) != 3 {
 		t.Fatalf("selected %d neighbors=%v, want backfilled degree 3", len(got), got)
+	}
+}
+
+func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 4}
+	rows := []columnVectorGraphAssetRow{{ID: []byte("a"), Vector: []float32{1, 0}}, {ID: []byte("b"), Vector: []float32{.99, .01}}, {ID: []byte("c"), Vector: []float32{0, 1}}, {ID: []byte("d"), Vector: []float32{-1, 0}}}
+	plain := append([]columnVectorGraphAssetRow(nil), rows...)
+	traced := append([]columnVectorGraphAssetRow(nil), rows...)
+	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
+		t.Fatal(err)
+	}
+	trace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(traced, def, trace); err != nil {
+		t.Fatal(err)
+	}
+	if len(trace.selections) == 0 {
+		t.Fatal("missing opt-in construction selections")
+	}
+	for i := range plain {
+		if string(plain[i].ID) != string(traced[i].ID) || !reflect.DeepEqual(plain[i].Adjacency, traced[i].Adjacency) {
+			t.Fatalf("trace changed graph row=%d", i)
+		}
 	}
 }
 
