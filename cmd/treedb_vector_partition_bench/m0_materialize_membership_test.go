@@ -187,8 +187,10 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
 	}
 	config := vectorpartition.DefaultConfig()
-	config.Partitions, config.Seed, config.MaxDistanceWork = 4, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, m0ModuloPartitionerV1{})
+	// Match the retained source descriptor exactly: M0 must reject a different
+	// assignment artifact before cloning, even when it has the same source.
+	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,16 +294,4 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
-}
-
-type m0ModuloPartitionerV1 struct{}
-
-func (m0ModuloPartitionerV1) Name() string    { return "m0_modulo_test" }
-func (m0ModuloPartitionerV1) License() string { return "test" }
-func (m0ModuloPartitionerV1) Partition(graph vectorpartition.Graph, partitions, _ int) ([]int, error) {
-	assignment := make([]int, len(graph.Neighbors))
-	for i := range assignment {
-		assignment[i] = i % partitions
-	}
-	return assignment, nil
 }
