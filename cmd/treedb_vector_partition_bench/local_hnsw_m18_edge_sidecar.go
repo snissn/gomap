@@ -25,7 +25,7 @@ type localHNSWM18EdgeTraceV1 struct {
 // both the persisted record utility and its truth-recovery records, so a
 // sidecar cannot swap an origin bucket while preserving aggregate work.
 func localHNSWM18EdgeTraceValidateV1(value localHNSWM18EdgeTraceV1, ids []string, origins map[localHNSWAttributionFinalEdgeKeyV1]string, truth map[string]struct{}) error {
-	if value.Schema != localHNSWM18EdgeTraceSchemaV1 || len(ids) == 0 || origins == nil {
+	if value.Schema != localHNSWM18EdgeTraceSchemaV1 || !localHNSWAttributionSHA256V1(value.QuerySHA) || len(ids) == 0 || origins == nil {
 		return errors.New("invalid M18 edge trace identity")
 	}
 	if _, err := localHNSWAttributionQueryRecordValidateV1(value.Record, ids, truth); err != nil {
