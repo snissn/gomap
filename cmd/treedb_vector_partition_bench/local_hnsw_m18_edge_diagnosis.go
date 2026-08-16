@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -46,6 +46,7 @@ type localHNSWM18EdgeDiagnosisReportV1 struct {
 	ResultKind   string                                   `json:"result_kind"`
 	Status       string                                   `json:"status"`
 	GeneratedAt  string                                   `json:"generated_at"`
+	Provenance   localHNSWAttributionProvenanceV1         `json:"provenance"`
 	Variant      string                                   `json:"variant"`
 	Probes       int                                      `json:"probes"`
 	EFSearch     []int                                    `json:"ef_search"`
@@ -163,21 +164,43 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-m18-edge-diagnosis", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, out string
+	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, out, baseSHA, headSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal M18 retained database")
 	fs.StringVar(&calibrationPath, "calibration-split", "", "frozen calibration manifest")
 	fs.StringVar(&truthPath, "truth-artifact", "", "frozen truth artifact")
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
 	fs.StringVar(&out, "out", "", "new report path")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || out == "" {
+	fs.StringVar(&baseSHA, "base-sha", "", "exact main base SHA")
+	fs.StringVar(&headSHA, "head-sha", "", "exact diagnosis implementation SHA")
+	fs.StringVar(&sourceCheckout, "source-checkout", "", "clean exact-head checkout")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || out == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
 		return errors.New("local-hnsw-m18-edge-diagnosis requires frozen inputs, temp root, and fresh output")
 	}
 	var err error
-	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &truthPath: truthPath, &tempRoot: tempRoot, &out: out} {
+	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &truthPath: truthPath, &tempRoot: tempRoot, &out: out, &sourceCheckout: sourceCheckout} {
 		if *ptr, err = m8CanonicalPathV1(value); err != nil {
 			return err
 		}
+	}
+	baseSHA, headSHA, err = provenanceWithExplicitV1(baseSHA, headSHA)
+	if err != nil || baseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || m8GitDirtyInV1(sourceCheckout) {
+		return errors.New("M18 edge diagnosis source provenance")
+	}
+	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil {
+		return errors.New("M18 edge diagnosis source checkout")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	executable, err = m8CanonicalPathV1(executable)
+	if err != nil {
+		return err
+	}
+	executableSHA, err := m8BenchmarkExecutableSHA256V1(executable)
+	if err != nil || !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("M18 edge diagnosis executable provenance")
 	}
 	if filepath.Ext(out) != ".json" {
 		return errors.New("M18 edge diagnosis output must be JSON")
@@ -235,12 +258,16 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	if err != nil {
 		return err
 	}
-	report := localHNSWM18EdgeDiagnosisReportV1{Schema: localHNSWM18EdgeDiagnosisSchemaV1, ResultKind: "local_hnsw_m18_edge_diagnosis_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Variant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Build: build, Construction: construction, Neighborhood: neighborhood, Cells: cells, Limitations: []string{"offline calibration-only M18 diagnosis; no holdout outcomes opened", "hard misses are bounded deterministic summaries; raw attributed events are not published"}}
+	if m8GitDirtyInV1(sourceCheckout) || strings.TrimSpace(headSHA) == "" {
+		return errors.New("M18 edge diagnosis provenance changed")
+	}
+	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA || !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
+		return errors.New("M18 edge diagnosis executable changed")
+	}
+	report := localHNSWM18EdgeDiagnosisReportV1{Schema: localHNSWM18EdgeDiagnosisSchemaV1, ResultKind: "local_hnsw_m18_edge_diagnosis_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-m18-edge-diagnosis", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Variant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Build: build, Construction: construction, Neighborhood: neighborhood, Cells: cells, Limitations: []string{"offline calibration-only M18 diagnosis; no holdout outcomes opened", "hard misses are bounded deterministic summaries; raw attributed events are not published"}}
 	if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "report=%s queries=806 probes=2 ef=%v\n", out, localHNSWM18EdgeDiagnosisEFV1)
 	return err
 }
-
-var _ = json.Valid
