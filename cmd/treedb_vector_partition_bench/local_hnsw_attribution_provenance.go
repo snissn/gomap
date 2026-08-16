@@ -793,7 +793,7 @@ func localHNSWAttributionPackDiagnosticsV1(searchers []*collections.VectorPartit
 		var err error
 		out[i], err = searcher.PackDiagnosticsV1()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("local HNSW pack diagnostics partition_index=%d partition_id=%d: %w", i, searcher.Status().PartitionID, err)
 		}
 	}
 	return out, nil

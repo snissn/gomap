@@ -27,10 +27,12 @@ func TestLocalHNSWM18EdgeDiagnosisContractV1(t *testing.T) {
 }
 
 func TestLocalHNSWM18PreparationSmokePartitionContractV1(t *testing.T) {
-	if !localHNSWM18PreparationSmokePartitionV1(16) || !localHNSWM18PreparationSmokePartitionV1(36) {
-		t.Fatal("selected smoke partition rejected")
+	for _, partition := range []uint{0, 2, 16, 36, 39} {
+		if !localHNSWM18PreparationSmokePartitionV1(partition) {
+			t.Fatalf("retained smoke partition rejected: %d", partition)
+		}
 	}
-	for _, partition := range []uint{0, 1, 3, 15, 17, 35, 37} {
+	for _, partition := range []uint{40, 41, ^uint(0)} {
 		if localHNSWM18PreparationSmokePartitionV1(partition) {
 			t.Fatalf("unselected smoke partition accepted: %d", partition)
 		}

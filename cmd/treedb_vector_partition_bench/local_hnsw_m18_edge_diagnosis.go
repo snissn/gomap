@@ -38,7 +38,7 @@ var localHNSWM18EdgeDiagnosisEFV1 = []int{80, 81, 88, 96}
 var localHNSWM18EdgeDiagnosisPacksV1 = []uint32{0, 1, 3, 16, 36}
 
 func localHNSWM18PreparationSmokePartitionV1(partition uint) bool {
-	return partition == 16 || partition == 36
+	return partition < 40
 }
 
 // runLocalHNSWM18PreparationSmokeV1 is a deliberately non-campaign Linux
@@ -53,9 +53,9 @@ func runLocalHNSWM18PreparationSmokeV1(args []string, stdout io.Writer) (runErr 
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal M18 retained database")
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
-	fs.UintVar(&partition, "partition", partition, "selected retained partition (16 or 36)")
+	fs.UintVar(&partition, "partition", partition, "retained M18 partition (0..39; defaults to selected pack 36)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || tempRoot == "" || !localHNSWM18PreparationSmokePartitionV1(partition) {
-		return errors.New("local-hnsw-m18-preparation-smoke requires frozen inputs and --partition=16 or 36")
+		return errors.New("local-hnsw-m18-preparation-smoke requires frozen inputs and --partition in [0,39]")
 	}
 	var err error
 	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &tempRoot: tempRoot} {
@@ -84,7 +84,8 @@ func runLocalHNSWM18PreparationSmokeV1(args []string, stdout io.Writer) (runErr 
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, h.Close()) }()
-	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != uint32(partition) || h.constructionEvidence.Partitions[0].PartitionID != uint32(partition) || h.constructionEvidence.Partitions[0].TraceMode != "detailed" || len(h.constructionEvidence.Partitions[0].Events) == 0 || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
+	part := h.constructionEvidence.Partitions[0]
+	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != uint32(partition) || part.PartitionID != uint32(partition) || (part.TraceMode != "detailed" && part.TraceMode != "compact") || (part.TraceMode == "detailed" && len(part.Events) == 0) || (part.TraceMode == "compact" && (len(part.Events) != 0 || len(part.FinalOrigins) == 0)) || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
 		return errors.New("M18 preparation smoke bounded evidence reconciliation")
 	}
 	status := h.searchers[0].Status()
