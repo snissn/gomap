@@ -143,6 +143,11 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("mismatched persisted candidate count accepted")
 	}
+	decoded[0].Candidates--
+	decoded[0].Utility.Scored++
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("non-conserved persisted utility accepted")
+	}
 }
 
 func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearchV1) localHNSWAttributionQuerySearchV1 {

@@ -303,7 +303,7 @@ func localHNSWAttributionTruthRecoveryRecordsV1(recoveries map[string]string) []
 // records before de-duplicating overlap recoveries. JSONL is the sole source
 // of truth; no transient map is retained across serialization.
 func localHNSWAttributionQueryRecordValidateV1(record localHNSWAttributionQuerySearchV1, truth map[string]struct{}) (map[string]string, error) {
-	if len(truth) == 0 || record.Candidates != uint64(len(record.VisitedOrdinals)) || record.VisitedOrdinalsSHA256 != localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals) {
+	if len(truth) == 0 || !localHNSWAttributionQueryUtilityConservedV1(record.Utility, record.Edges) || record.Candidates != uint64(len(record.VisitedOrdinals)) || record.VisitedOrdinalsSHA256 != localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals) {
 		return nil, errors.New("invalid local HNSW persisted query record")
 	}
 	for i, ordinal := range record.VisitedOrdinals {
