@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -414,6 +415,33 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 			}
 		})
 	}
+	t.Run("sample_candidate_replay_substitution", func(t *testing.T) {
+		e := cloneEvidence()
+		i := sampledSelection(&e)
+		s := &e.Partitions[0].Selections[i]
+		present := make(map[int]struct{}, len(s.CandidateOrdinals))
+		for _, ordinal := range s.CandidateOrdinals {
+			present[ordinal] = struct{}{}
+		}
+		replacement := -1
+		for ordinal, insertion := range e.Partitions[0].NativeInsertionOrdinals {
+			if ordinal != s.Node && insertion < e.Partitions[0].NativeInsertionOrdinals[s.Node] {
+				if _, exists := present[ordinal]; !exists {
+					replacement = ordinal
+					break
+				}
+			}
+		}
+		if replacement < 0 {
+			t.Fatal("fixture lacks a valid non-pool predecessor")
+		}
+		s.CandidateOrdinals[0] = replacement
+		sort.Ints(s.CandidateOrdinals)
+		s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("substituted sampled candidate accepted: %v", err)
+		}
+	})
 	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
 	if err != nil {
 		t.Fatal(err)

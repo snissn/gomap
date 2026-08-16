@@ -1353,6 +1353,30 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return ErrVectorPartitionSearchUnavailable
 	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	buildDef, _, err := vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
+	if err != nil {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	_, sourceGraph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(index)
+	if err != nil || sourceGraph.BaseManifestGeneration != manifest.SourceGeneration || sourceGraph.BaseManifestChecksum != manifest.SourceChecksum || sourceGraph.BaseSchemaHash != manifest.SourceSchemaHash || uint64(sourceGraph.RowCount) != manifest.SourceRowCount {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	reader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	defer reader.Close()
+	members := make(map[uint32][]vectorPartitionMembershipSourceV1)
+	for _, membership := range manifest.Memberships {
+		members[membership.PartitionID] = append(members[membership.PartitionID], vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipHomeV1})
+	}
+	for _, membership := range manifest.OverlapMemberships {
+		members[membership.PartitionID] = append(members[membership.PartitionID], vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipOverlapV1})
+	}
 	seenPartitions := make(map[uint32]struct{}, len(assets))
 	for i, asset := range assets {
 		part := evidence.Partitions[i]
@@ -1474,6 +1498,11 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return ErrVectorPartitionSearchUnavailable
 			}
 		}
+		replayed, replayErr := vectorPartitionConstructionReplaySampleSelectionsV1(reader, members[part.PartitionID], buildDef, variant)
+		if replayErr != nil || !vectorPartitionConstructionSampleSelectionsEqualV1(part.Selections, replayed) {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
 		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		seenFinal := false
@@ -1590,6 +1619,78 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1, nil)
+}
+
+// vectorPartitionConstructionReplaySampleSelectionsV1 deterministically
+// reconstructs the bounded sampled candidate pools from manifest-bound source
+// vectors. Candidate pools depend on the evolving HNSW graph, so a self-hash
+// of evidence alone is not an independent binding.
+func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGraphPhysicalRowReader, selected []vectorPartitionMembershipSourceV1, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionConstructionSelectionV1, error) {
+	if reader == nil || len(selected) == 0 {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	type selectedRow struct {
+		ordinal int
+		id      []byte
+	}
+	sourceRows := make([]selectedRow, len(selected))
+	for i, source := range selected {
+		id, ok := reader.documentIDForOrdinal(source.ordinal)
+		if !ok || len(id) == 0 {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		sourceRows[i] = selectedRow{ordinal: source.ordinal, id: id}
+	}
+	sort.Slice(sourceRows, func(i, j int) bool { return sourceRows[i].ordinal < sourceRows[j].ordinal })
+	rows := make([]columnVectorGraphAssetRow, len(sourceRows))
+	scratch := &columnPhysicalRowReaderScratch{}
+	for i, source := range sourceRows {
+		if i > 0 && source.ordinal == sourceRows[i-1].ordinal {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		row, fetchErr := reader.FetchRow(source.ordinal, scratch)
+		if fetchErr != nil {
+			row = columnVectorGraphPhysicalRow{}
+		}
+		if len(row.Vector) != def.Dimensions {
+			row.Vector, _, _, _ = reader.typedVectorForOrdinal(source.ordinal)
+		}
+		if len(row.Vector) != def.Dimensions {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		if invNorm, _, _, ok := reader.invNormForOrdinal(source.ordinal); ok {
+			row.InvNorm = invNorm
+		}
+		rows[i] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), row.Vector...), InvNorm: row.InvNorm}
+	}
+	trace := &vectorIndexConstructionTraceV1{}
+	if _, err := buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, def, variant, trace); err != nil {
+		return nil, err
+	}
+	out := make([]VectorPartitionConstructionSelectionV1, 0)
+	for _, selection := range trace.selections {
+		if !selection.Sampled {
+			continue
+		}
+		candidates := append([]int(nil), selection.CandidateNodes...)
+		sort.Ints(candidates)
+		out = append(out, VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected, CandidateSampled: true, CandidateOrdinals: candidates, CandidateDigest: vectorPartitionConstructionCandidateDigestV1(candidates)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Node < out[j].Node })
+	return out, nil
+}
+
+func vectorPartitionConstructionSampleSelectionsEqualV1(selections, replayed []VectorPartitionConstructionSelectionV1) bool {
+	actual := make([]VectorPartitionConstructionSelectionV1, 0, len(replayed))
+	for _, selection := range selections {
+		if selection.CandidateSampled {
+			actual = append(actual, selection)
+		}
+	}
+	sort.Slice(actual, func(i, j int) bool { return actual[i].Node < actual[j].Node })
+	return slices.EqualFunc(actual, replayed, func(a, b VectorPartitionConstructionSelectionV1) bool {
+		return a.Node == b.Node && a.Layer == b.Layer && a.Candidates == b.Candidates && a.Selected == b.Selected && a.DiversitySelected == b.DiversitySelected && a.BackfillSelected == b.BackfillSelected && a.CandidateSampled == b.CandidateSampled && a.CandidateDigest == b.CandidateDigest && slices.Equal(a.CandidateOrdinals, b.CandidateOrdinals)
+	})
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
