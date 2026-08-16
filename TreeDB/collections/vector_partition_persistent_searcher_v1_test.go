@@ -940,7 +940,7 @@ func TestVectorPartitionConstructionEvidenceReconcilesReciprocityRepairV1(t *tes
 			},
 		}
 	}
-	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 2, inputs)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 1, inputs)
 	defer d.Close()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
