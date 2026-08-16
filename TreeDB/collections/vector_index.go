@@ -353,6 +353,15 @@ func (t *vectorIndexConstructionTraceV1) record(from, to, layer int, origin, act
 	if to > insertionOrdinal {
 		insertionOrdinal = to
 	}
+	// Variant rewrites are recorded after BFS locality remapping. Translate
+	// those persisted ordinals back to causal insertion order; pre-remap build
+	// events intentionally retain their native node ordinals directly.
+	if len(t.nativeInsertionOrdinals) != 0 && from >= 0 && to >= 0 && from < len(t.nativeInsertionOrdinals) && to < len(t.nativeInsertionOrdinals) {
+		insertionOrdinal = t.nativeInsertionOrdinals[from]
+		if t.nativeInsertionOrdinals[to] > insertionOrdinal {
+			insertionOrdinal = t.nativeInsertionOrdinals[to]
+		}
+	}
 	t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: to, Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: action})
 }
 
