@@ -22,17 +22,18 @@ func localHNSWRepairCalibrationBindDescriptorV1(h *m8ProductionMultiGroupAssetsV
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
-	var partitionHNSWM int
 	var indexDefinitionDigest string
 	for _, index := range h.collection.MetaView().VectorIndexes {
 		if index.Name == partitionHNSWIndex {
-			partitionHNSWM = index.M
 			indexDefinitionDigest = collections.VectorIndexDefinitionDigestV1(index)
 			break
 		}
 	}
-	if partitionHNSWM != descriptor.PartitionHNSWM || indexDefinitionDigest != descriptor.IndexDefinitionDigest {
-		return errors.New("retained local HNSW repair descriptor definition mismatch")
+	// The source index definition and the materialized partition-local graph are
+	// intentionally separate identities. The promoted default may use M18 while
+	// the canonical source index remains M16.
+	if indexDefinitionDigest != descriptor.IndexDefinitionDigest {
+		return errors.New("retained local HNSW repair descriptor source definition mismatch")
 	}
 	h.descriptor = &descriptor
 	return nil

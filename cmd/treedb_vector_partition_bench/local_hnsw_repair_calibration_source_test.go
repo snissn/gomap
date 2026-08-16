@@ -31,6 +31,9 @@ func TestLocalHNSWRepairCalibrationBindDescriptorV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if descriptor.PartitionHNSWM != partitionLocalHNSWDefaultM || descriptor.PartitionHNSWEfC != partitionLocalHNSWDefaultEfC {
+		t.Fatalf("retained local HNSW M/eFC=%d/%d", descriptor.PartitionHNSWM, descriptor.PartitionHNSWEfC)
+	}
 	descriptor.SourceOrdinalDigest = ""
 	raw, err := json.Marshal(descriptor)
 	if err != nil {
