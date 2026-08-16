@@ -252,7 +252,7 @@ type VectorPartitionLocalGraphVariantV1 string
 const (
 	VectorPartitionLocalGraphVariantNativeV1         VectorPartitionLocalGraphVariantV1 = "native"
 	VectorPartitionLocalGraphVariantOverlayCurrentV1 VectorPartitionLocalGraphVariantV1 = "overlay_current"
-	// VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 is the production
+	// VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 is the explicit M16
 	// v3 repair: native HNSW is unchanged and component bridges live in the
 	// separately encoded auxiliary channel.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation"
@@ -266,7 +266,7 @@ const (
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m24_ef_construction_256"
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
-	// is an offline-only auxiliary-navigation construction candidate.
+	// is the production-default auxiliary-navigation construction variant.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256"
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
@@ -277,6 +277,10 @@ const (
 	// VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1
 	// is an offline-only auxiliary-navigation construction candidate.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m32_ef_construction_256"
+	// vectorPartitionLocalDefaultGraphVariantV1 is the production variant used
+	// by the implicit partition-local materialization APIs. Its membership
+	// identity is domain-separated from the explicit M16/eFC128 variant.
+	vectorPartitionLocalDefaultGraphVariantV1 = VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
 )
 
 func VectorPartitionLocalGraphVariantIdentityV1(variant VectorPartitionLocalGraphVariantV1) (string, error) {
@@ -301,9 +305,10 @@ func vectorPartitionLocalGraphVariantMembershipDigestV1(membership [sha256.Size]
 	return out
 }
 
-// vectorPartitionLocalProductionGraphVariantV1 permits the selected M18
-// production pack while keeping every other domain-bound construction variant
-// offline-only. The canonical source definition remains the manifest identity.
+// vectorPartitionLocalProductionGraphVariantV1 permits the default M18
+// production pack and the legacy explicit M16 pack while keeping every other
+// domain-bound construction variant offline-only. The canonical source
+// definition remains the manifest identity.
 func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
 	if membership == expected {
 		return VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, true
@@ -954,11 +959,12 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 	return nil
 }
 
-// MaterializeVectorPartitionLocalSearchAssetsV1 uses the M1 column-asset
+// MaterializeVectorPartitionLocalSearchAssetsV1 uses the M18/eFC256
+// auxiliary-navigation V3 production default and the M1 column-asset
 // authority. Callers install the returned descriptors in the generation M1
 // manifest; publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
@@ -969,7 +975,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index 
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1)
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
