@@ -69,9 +69,10 @@ pruning disconnects an entry-reachable region. It swaps an existing edge only
 after proving that prior reachability is retained and total reachability grows.
 The repaired M16 graph reaches all 300,000 rows with 40 traversal roots and zero
 zero-indegree rows while preserving exactly 9,600,000 layer-0 edges. Its recall
-and search work are bit-identical because the auxiliary graph had already
-masked the defect. The repair is retained as a correctness improvement, not
-claimed as the source of the M18 recall gain.
+is bit-identical at all four measured p2 EF points because the auxiliary graph
+had already masked the defect. Per 806-query cell, candidates differ by at most
+33 and traversed edges by at most 96 (under 0.0023%). The repair is retained as
+a correctness improvement, not claimed as the source of the M18 recall gain.
 
 The stronger variants instead show more reciprocal and slightly longer edges:
 M16 has 5,578,406 reciprocal directed edges (58.11%) and mean cosine distance
@@ -84,14 +85,15 @@ not merely closer neighbors or more copies of the same local neighborhood.
 | Artifact | SHA-256 |
 | --- | --- |
 | Clean comparison executable (`619e96fc`) | `8299a49cb40cd6b1bbe3eefa36c24f7cb66a946c4862cf6131c6a4e1deb6c20e` |
-| Repaired executable (`0c0898a5`) | `be8c06957ca2f76eb96c09947eb72feaac5013ad19319cd253dbbad5908f82a1` |
+| Final repaired executable (`4ff3fafe`) | `6df4b5d6360aacaac54f11e578dbeba7f757aca0d258ad2c3be11c5e7ff13c04` |
 | M16 outer run 1 | `5a1e3b3aa15beaa6f5faf84f952852172ea9028084fe1f1864717871223a5900` |
 | M16 outer run 2 | `c2345880582c11beae7be255ef5f289cf38c6b3c372fefbdfa0ab3ae4028cf2e` |
 | M18 outer run 1 | `c64de394e7726f9ebb978f698d7ede85b0d402e3856db679631abc9751db5434` |
 | M18 outer run 2 | `5927e8da22e194e933a50e26ea4fbec485811aee5f1abad3cee01b51cdd88046` |
 | M20 outer run 1 | `9efec1c4e2c23c76883db92db724613300e9fcc3b8c05338d52ee8b002fcca4c` |
 | M20 outer run 2 | `f039fb80eaccb43ea765104b3b1c265d9f2bb744b4e1d7b477e5deec059dd7e8` |
-| Repaired M16 run | `8c4b11a365cf257342bd00405461e38166691852881104af48fb1594b338fbe8` |
+| Final repaired M16 materialization | `5024d44ca1887eb8582c78a7af9eab574f1de882608017206a22cdd81d705f40` |
+| Final repaired M16 frontier | `107ac2f7c05d9b75a9ceb45724203bb937ffdd403241d1d6c4db0b0b45450573` |
 
 Raw re-evaluation inputs, databases, and reports are retained under
 `/private/tmp/gomap-hnsw-edge-quality-evidence-20260816` on the quiet host and
