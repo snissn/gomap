@@ -1428,6 +1428,14 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		return
 	}
 	neighbors := idx.nodes[fromNodeID].neighbors[layer]
+	// Preserve the pre-link slice for trace-only reciprocal-prune accounting.
+	// append may reuse the node slice's backing array, so reading the node's
+	// old slice after append can incorrectly treat the newly linked edge as an
+	// existing edge and produce a contradictory lifecycle.
+	var preexisting []vectorIndexNeighbor
+	if idx.constructionTrace != nil {
+		preexisting = append(preexisting, neighbors...)
+	}
 	for _, existing := range neighbors {
 		if existing.nodeID == toNodeID {
 			return
@@ -1464,7 +1472,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 			}
 			// The just-pruned list is the authoritative reciprocal maintenance
 			// outcome for every edge that was present before the prune.
-			for _, neighbor := range idx.nodes[fromNodeID].neighbors[layer] {
+			for _, neighbor := range preexisting {
 				key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: neighbor.nodeID, Layer: layer}
 				edgeOrigin := trace.origins[key]
 				if _, ok := kept[neighbor.nodeID]; ok {
