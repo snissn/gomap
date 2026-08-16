@@ -86,6 +86,28 @@ func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWAttributionQueryUtilityReducerSeparatesAuxiliaryMetricsV1(t *testing.T) {
+	metrics := collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 1, AuxiliaryEdges: 1}
+	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, VisitedRows: 2, VisitedOrdinalsSHA256: strings.Repeat("a", 64), VisitedOrdinals: []uint32{0, 1}, TerminationReason: "distance_bound", EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
+		{Layer: 0, SourceOrdinal: 0, DestinationOrdinal: 1, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true},
+		{Layer: 0, SourceOrdinal: 1, DestinationOrdinal: 0, Auxiliary: true, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true},
+	}}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{From: 0, To: 1, Layer: 0}: "diversity_selected"}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, trace, origins, []string{"a", "b"}, map[string]struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, err := localHNSWAttributionMetricEdgesV1(metrics)
+	if err != nil || total != 2 || utility.ExaminedNative != 1 || utility.ExaminedAuxiliary != 1 || utility.Diversity.Examined != 1 || utility.Auxiliary.Examined != 1 || !localHNSWAttributionQueryUtilityConservedV1(utility, total) {
+		t.Fatalf("total=%d utility=%+v err=%v", total, utility, err)
+	}
+	overflow := metrics
+	overflow.Edges = math.MaxUint64
+	if _, err := localHNSWAttributionMetricEdgesV1(overflow); err == nil {
+		t.Fatal("accepted overflowing native plus auxiliary edge metrics")
+	}
+}
+
 func TestLocalHNSWAttributionQueryUtilityReducerCreditsUpperLayerBeforeSeedV1(t *testing.T) {
 	trace := collections.VectorPartitionSearchAttributionV1{
 		Schema:                localHNSWAttributionSearchSchemaV1,

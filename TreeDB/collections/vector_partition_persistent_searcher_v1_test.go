@@ -664,7 +664,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 			}
 		}
 	}
-	if nativeEdges+auxiliaryEdges != attributedMetrics.Edges || auxiliaryEdges != attributedMetrics.AuxiliaryEdges || newlyVisited+attribution.SeedCandidates != attributedMetrics.Candidates || admissions+attribution.SeedAdmissions != attribution.FrontierAdmissions {
+	if nativeEdges != attributedMetrics.Edges || auxiliaryEdges != attributedMetrics.AuxiliaryEdges || newlyVisited+attribution.SeedCandidates != attributedMetrics.Candidates || admissions+attribution.SeedAdmissions != attribution.FrontierAdmissions {
 		t.Fatalf("edge attribution does not reconcile metrics=%+v attribution=%+v native=%d aux=%d new=%d admissions=%d", attributedMetrics, attribution, nativeEdges, auxiliaryEdges, newlyVisited, admissions)
 	}
 	h := sha256.New()

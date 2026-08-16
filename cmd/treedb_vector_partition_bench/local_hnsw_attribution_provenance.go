@@ -442,7 +442,8 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 	originFrontierAdmissions := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions })
 	originStateImprovements := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.StateImprovements })
 	originTruthRecovered := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered })
-	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || originExamined != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges {
+	totalEdges, err := localHNSWAttributionMetricEdgesV1(metrics)
+	if err != nil || out.ExaminedNative != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || originExamined != totalEdges {
 		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query edge conservation: native=%d auxiliary=%d origin=%d metrics=%d metrics_auxiliary=%d", out.ExaminedNative, out.ExaminedAuxiliary, originExamined, metrics.Edges, metrics.AuxiliaryEdges)
 	}
 	if originNewlyVisited != out.NewlyVisited || originScored != out.Scored || originTopAdmissions != out.TopAdmissions || originFrontierAdmissions != out.FrontierAdmissions || originStateImprovements != out.StateImprovements || originTruthRecovered != out.TruthRecovered {
@@ -455,6 +456,15 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query admission conservation: top=%d edge_frontier=%d seed_frontier=%d total_frontier=%d", out.TopAdmissions, out.FrontierAdmissions, attribution.SeedAdmissions, attribution.FrontierAdmissions)
 	}
 	return out, nil
+}
+
+// VectorPartitionSearchMetricsV1 reports native and auxiliary edge work in
+// separate fields. Attribution records use their checked sum as total work.
+func localHNSWAttributionMetricEdgesV1(metrics collections.VectorPartitionSearchMetricsV1) (uint64, error) {
+	if math.MaxUint64-metrics.Edges < metrics.AuxiliaryEdges {
+		return 0, errors.New("local HNSW query edge metric overflow")
+	}
+	return metrics.Edges + metrics.AuxiliaryEdges, nil
 }
 
 func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) map[string]string {

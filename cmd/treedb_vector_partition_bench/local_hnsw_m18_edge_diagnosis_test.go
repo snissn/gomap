@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -91,5 +94,46 @@ func TestLocalHNSWM18EdgeTraceReplayRejectsTamperingV1(t *testing.T) {
 	tampered.Record.TruthRecoveries = nil
 	if err := localHNSWM18EdgeTraceValidateV1(tampered, ids, origins, truth); err == nil {
 		t.Fatal("truth recovery tamper accepted")
+	}
+}
+
+func TestLocalHNSWM18EdgeCheckpointOriginsRoundTripV1(t *testing.T) {
+	origins := make([]map[localHNSWAttributionFinalEdgeKeyV1]string, 40)
+	for partition := range origins {
+		origins[partition] = map[localHNSWAttributionFinalEdgeKeyV1]string{
+			{Layer: 0, From: partition + 2, To: partition + 1}: "nearest_backfill",
+			{Layer: 1, From: partition, To: partition + 3}:     "reciprocal_add",
+		}
+	}
+	path := filepath.Join(t.TempDir(), "origins.bin")
+	if err := localHNSWM18EdgeOriginsWriteV1(path, origins); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := localHNSWAttributionRegularFileSHA256V1(path, localHNSWM18EdgeOriginsMaxBytesV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := localHNSWM18EdgeOriginsReadV1(localHNSWAttributionFileInputV1{Path: path, SHA256: digest})
+	if err != nil || !reflect.DeepEqual(got, origins) {
+		t.Fatalf("round trip err=%v got=%v", err, got)
+	}
+	bad := make([]map[localHNSWAttributionFinalEdgeKeyV1]string, len(origins))
+	copy(bad, origins)
+	bad[0] = map[localHNSWAttributionFinalEdgeKeyV1]string{{Layer: 0, From: 0, To: 1}: "unknown"}
+	if err := localHNSWM18EdgeOriginsWriteV1(filepath.Join(t.TempDir(), "bad.bin"), bad); err == nil {
+		t.Fatal("accepted invalid final origin")
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localHNSWM18EdgeOriginsReadV1(localHNSWAttributionFileInputV1{Path: path, SHA256: digest}); err == nil {
+		t.Fatal("accepted changed origin sidecar")
 	}
 }

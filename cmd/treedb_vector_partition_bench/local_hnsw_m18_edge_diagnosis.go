@@ -309,14 +309,18 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 				if err != nil {
 					return nil, fmt.Errorf("M18 edge diagnosis query ordinal=%d query_index=%d ef=%d partition=%d: %w", calibration.Ordinals[i], i, cell.EFSearch, p, err)
 				}
+				totalEdges, err := localHNSWAttributionMetricEdgesV1(metrics)
+				if err != nil {
+					return nil, fmt.Errorf("M18 edge diagnosis query ordinal=%d query_index=%d ef=%d partition=%d: %w", calibration.Ordinals[i], i, cell.EFSearch, p, err)
+				}
 				recoveries := localHNSWAttributionTruthRecoveriesV1(trace, h.finalOrigins[p], h.documentIDs[p], truthSet)
-				records[p] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: trace.FrontierAdmissions, SeedCandidates: trace.SeedCandidates, SeedAdmissions: trace.SeedAdmissions, TerminationReason: trace.TerminationReason, VisitedOrdinalsSHA256: trace.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), trace.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
+				records[p] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: totalEdges, FrontierAdmissions: trace.FrontierAdmissions, SeedCandidates: trace.SeedCandidates, SeedAdmissions: trace.SeedAdmissions, TerminationReason: trace.TerminationReason, VisitedOrdinalsSHA256: trace.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), trace.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
 				queryTraces = append(queryTraces, localHNSWM18EdgeTraceV1{Schema: localHNSWM18EdgeTraceSchemaV1, QuerySHA: localHNSWAttributionQueryFP32SHA256V1(query), Partition: p, Record: records[p], Edges: append([]collections.VectorPartitionSearchEdgeEventV1(nil), trace.EdgeEvents...), Seeds: append([]collections.VectorPartitionSearchSeedEventV1(nil), trace.SeedEvents...)})
 				results[p] = canonical
 				for j, selected := range localHNSWM18EdgeDiagnosisPacksV1 {
 					if p == selected {
 						w := &out[ci].SelectedWork[j].Work
-						if localHNSWM18EdgeDiagnosisWorkAddV1(w, metrics.Candidates, metrics.Edges, trace.FrontierAdmissions, utility) != nil {
+						if localHNSWM18EdgeDiagnosisWorkAddV1(w, metrics.Candidates, totalEdges, trace.FrontierAdmissions, utility) != nil {
 							return nil, errors.New("M18 selected utility")
 						}
 					}
@@ -361,22 +365,23 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-m18-edge-diagnosis", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, out, rawSidecar, baseSHA, headSHA, sourceCheckout string
+	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, checkpointPath, out, rawSidecar, baseSHA, headSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal M18 retained database")
 	fs.StringVar(&calibrationPath, "calibration-split", "", "frozen calibration manifest")
 	fs.StringVar(&truthPath, "truth-artifact", "", "frozen truth artifact")
 	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
+	fs.StringVar(&checkpointPath, "checkpoint", "", "prepared graph and compact reduction checkpoint")
 	fs.StringVar(&out, "out", "", "new report path")
 	fs.StringVar(&rawSidecar, "raw-sidecar", "", "fresh local bounded trace sidecar")
 	fs.StringVar(&baseSHA, "base-sha", "", "exact main base SHA")
 	fs.StringVar(&headSHA, "head-sha", "", "exact diagnosis implementation SHA")
 	fs.StringVar(&sourceCheckout, "source-checkout", "", "clean exact-head checkout")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || out == "" || rawSidecar == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || checkpointPath == "" || out == "" || rawSidecar == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
 		return errors.New("local-hnsw-m18-edge-diagnosis requires frozen inputs, temp root, and fresh output")
 	}
 	var err error
-	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &truthPath: truthPath, &tempRoot: tempRoot, &out: out, &rawSidecar: rawSidecar, &sourceCheckout: sourceCheckout} {
+	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &calibrationPath: calibrationPath, &truthPath: truthPath, &tempRoot: tempRoot, &checkpointPath: checkpointPath, &out: out, &rawSidecar: rawSidecar, &sourceCheckout: sourceCheckout} {
 		if *ptr, err = m8CanonicalPathV1(value); err != nil {
 			return err
 		}
@@ -438,37 +443,71 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	if err != nil {
 		return err
 	}
-	h, build, err := localHNSWAttributionBuildVariantV1(source, tempRoot, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 4171001)
-	if err != nil {
+	var h *localHNSWVariantHarnessV1
+	var build localHNSWAttributionBuildEvidenceV1
+	var construction localHNSWAttributionConstructionTotalsV1
+	var neighborhood localHNSWAttributionNeighborhoodOracleV1
+	var selectedDiagnostics []collections.VectorPartitionPackDiagnosticsV1
+	var selectedConstruction []localHNSWM18EdgeDiagnosisPackConstructionV1
+	var selectedNeighborhood []localHNSWM18EdgeDiagnosisPackNeighborhoodV1
+	if _, statErr := os.Lstat(checkpointPath); errors.Is(statErr, os.ErrNotExist) {
+		h, build, err = localHNSWAttributionBuildVariantV1(source, tempRoot, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 4171001)
+		if err != nil {
+			return err
+		}
+		defer func() { runErr = errors.Join(runErr, h.Close()) }()
+		construction, err = localHNSWAttributionConstructionReduceV1(h.constructionEvidence)
+		if err != nil {
+			return err
+		}
+		selectedConstruction, err = localHNSWM18EdgeDiagnosisSelectedConstructionV1(h.constructionEvidence)
+		if err != nil {
+			return err
+		}
+		diagnostics, diagnosticsErr := localHNSWAttributionPackDiagnosticsV1(h.searchers)
+		if diagnosticsErr != nil {
+			return diagnosticsErr
+		}
+		vectors, vectorsErr := localHNSWAttributionNeighborhoodVectorsV1(h)
+		if vectorsErr != nil {
+			return vectorsErr
+		}
+		neighborhood, err = localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
+		if err != nil {
+			return err
+		}
+		selectedNeighborhood, err = localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h, diagnostics, vectors)
+		if err != nil {
+			return err
+		}
+		vectors = nil
+		runtime.GC()
+		checkpoint, checkpointErr := localHNSWM18EdgeCheckpointWriteV1(checkpointPath, headSHA, descriptorSHA, tempRoot, source, h, build, construction, selectedConstruction, diagnostics, neighborhood, selectedNeighborhood)
+		if checkpointErr != nil {
+			return checkpointErr
+		}
+		selectedDiagnostics = checkpoint.SelectedDiagnostics
+		// The checkpoint now owns the clone. Closing this preparation process
+		// releases mappings and heap without deleting its immutable assets.
+		h.assets.owned = false
+		_, err = fmt.Fprintf(stdout, "checkpoint=%s prepared packs=40; rerun the exact command to execute queries\n", checkpointPath)
 		return err
+	} else if statErr != nil {
+		return statErr
+	} else {
+		checkpoint, opened, openErr := localHNSWM18EdgeCheckpointOpenV1(checkpointPath, headSHA, descriptorSHA, tempRoot, source)
+		if openErr != nil {
+			return openErr
+		}
+		h = opened
+		defer func() { runErr = errors.Join(runErr, h.Close()) }()
+		build = checkpoint.Build
+		construction = checkpoint.Construction
+		neighborhood = checkpoint.Neighborhood
+		selectedDiagnostics = checkpoint.SelectedDiagnostics
+		selectedConstruction = checkpoint.SelectedConstruction
+		selectedNeighborhood = checkpoint.SelectedNeighborhood
 	}
-	defer func() { runErr = errors.Join(runErr, h.Close()) }()
-	construction, err := localHNSWAttributionConstructionReduceV1(h.constructionEvidence)
-	if err != nil {
-		return err
-	}
-	selectedConstruction, err := localHNSWM18EdgeDiagnosisSelectedConstructionV1(h.constructionEvidence)
-	if err != nil {
-		return err
-	}
-	diagnostics, err := localHNSWAttributionPackDiagnosticsV1(h.searchers)
-	if err != nil {
-		return err
-	}
-	vectors, err := localHNSWAttributionNeighborhoodVectorsV1(h)
-	if err != nil {
-		return err
-	}
-	neighborhood, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
-	if err != nil {
-		return err
-	}
-	selectedNeighborhood, err := localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h, diagnostics, vectors)
-	if err != nil {
-		return err
-	}
-	vectors = nil
-	runtime.GC()
 	cells, err := localHNSWM18EdgeDiagnosisBuildV1(context.Background(), source, h, queries)
 	if err != nil {
 		return err
@@ -511,13 +550,6 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	loads, err := m8PartitionLoadsV1(source.manifest)
 	if err != nil || source.descriptor == nil {
 		return errors.New("M18 edge diagnosis source binding")
-	}
-	selectedDiagnostics := make([]collections.VectorPartitionPackDiagnosticsV1, len(localHNSWM18EdgeDiagnosisPacksV1))
-	for i, p := range localHNSWM18EdgeDiagnosisPacksV1 {
-		if int(p) >= len(diagnostics) {
-			return errors.New("M18 selected pack")
-		}
-		selectedDiagnostics[i] = diagnostics[p]
 	}
 	report := localHNSWM18EdgeDiagnosisReportV1{
 		Schema: localHNSWM18EdgeDiagnosisSchemaV1, ResultKind: "local_hnsw_m18_edge_diagnosis_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
