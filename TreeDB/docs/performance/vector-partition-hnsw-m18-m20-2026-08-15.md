@@ -2,12 +2,102 @@
 
 Date: 2026-08-15
 
-Status: **measured gate failures; no production-default promotion.**
+Status: **historical gate record; superseded by the Pareto re-evaluation below.**
 
 This report records the bounded successors to the M16/eFC128 failure in #4159.
 M18/eFC256 failed the frozen calibration gate in #4160. M20/eFC256 passed
 calibration but failed the protected product-throughput gate in #4161. Neither
 variant is qualified to replace the current production default.
+
+## 2026-08-16 Pareto re-evaluation
+
+The earlier conclusion treated every frozen absolute threshold as conjunctive.
+That was useful for preserving the original experiment, but it was too strict
+for choosing between internally comparable graph variants: the Linux host can
+be noisy, and missing a threshold by three recall slots does not make a variant
+that is simultaneously more accurate and cheaper to search a worse production
+choice. The original measurements remain valid evidence; their binary pass/fail
+disposition no longer determines the default on its own.
+
+We therefore reran retained M16, M18, and M20 packs on the same quiet Apple M3
+host with the same frozen 806-query calibration split, truth, routing inputs,
+probes=2, router candidate budget 256, top-k 10, and EF grid `80,81,88,96`.
+There were two full outer runs with order-balanced variants. Absolute numbers
+must not be compared with the Linux product thresholds, but the interleaved
+within-host deltas are suitable for deciding the graph/EF Pareto frontier.
+
+| Variant | Pack bytes | EF | recall@10 | median QPS | median p95 | candidates | edges |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| M16/eFC128 | 220,027,376 | 80 | 0.9116625310 | 2,623.3 | 0.459875 ms | 2,503,266 | 4,274,361 |
+| M16/eFC128 | 220,027,376 | 81 | 0.9137717122 | 2,590.6 | 0.461542 ms | 2,523,064 | 4,325,049 |
+| M16/eFC128 | 220,027,376 | 88 | 0.9212158809 | 2,466.7 | 0.482333 ms | 2,658,273 | 4,683,609 |
+| M16/eFC128 | 220,027,376 | 96 | 0.9317617866 | 2,304.6 | 0.523188 ms | 2,803,445 | 5,091,321 |
+| M18/eFC256 | 224,093,976 | 80 | 0.9310173697 | 2,467.3 | 0.482958 ms | 2,747,541 | 4,802,323 |
+| M18/eFC256 | 224,093,976 | 81 | 0.9331265509 | 2,471.4 | 0.479814 ms | 2,769,010 | 4,859,887 |
+| M18/eFC256 | 224,093,976 | 88 | 0.9414392060 | 2,333.6 | 0.516022 ms | 2,912,616 | 5,260,207 |
+| M18/eFC256 | 224,093,976 | 96 | 0.9497518610 | 2,219.5 | 0.534542 ms | 3,068,919 | 5,720,719 |
+| M20/eFC256 | 228,754,240 | 80 | 0.9410669975 | 2,388.0 | 0.501854 ms | 2,948,627 | 5,322,056 |
+| M20/eFC256 | 228,754,240 | 81 | 0.9423076923 | 2,364.6 | 0.501980 ms | 2,971,799 | 5,387,896 |
+| M20/eFC256 | 228,754,240 | 88 | 0.9513647643 | 2,251.5 | 0.532522 ms | 3,122,130 | 5,833,816 |
+| M20/eFC256 | 228,754,240 | 96 | 0.9590570720 | 2,141.6 | 0.560313 ms | 3,285,104 | 6,348,176 |
+
+The balanced comparison is M18/EF81 against the old M16/EF96 operating point.
+M18 improves recall by 0.1365 percentage points, QPS by 7.24%, p95 by 8.29%,
+candidates by 1.23%, and traversed edges by 4.55%, for 1.85% more pack bytes.
+It is therefore the new balanced default, independent of the old 0.9500 gate.
+This does not change the request EF default globally; EF81 is the qualified
+operating point for this workload.
+
+M20/EF88 is the explicit high-recall profile. Against M18/EF96 it improves
+recall by 0.1613 percentage points and QPS by 1.44%, with 0.38% lower p95,
+1.73% more candidates, 1.98% more traversed edges, and 2.08% more pack bytes.
+M20/EF96 is the maximum-recall measured point: 95.906% recall, cutting the
+remaining M16/EF96 error by about 40% for about 7.1% less QPS and 7.1% higher
+p95. M20 is production-readable and explicitly selectable, but is not the
+implicit default.
+
+### Edge-quality diagnosis
+
+All M16 rows were saturated at their layer-0 degree limit, yet the native graph
+reached only 293,778 of 300,000 rows and 20 rows had zero indegree. Fifteen of
+40 partitions were disconnected from their native entry. The existing
+auxiliary graph made all rows reachable, so this structural defect did not
+explain the M16-to-M18 recall difference by itself.
+
+A fixed-budget boundary repair restores a missing reciprocal edge whenever
+pruning disconnects an entry-reachable region. It swaps an existing edge only
+after proving that prior reachability is retained and total reachability grows.
+The repaired M16 graph reaches all 300,000 rows with 40 traversal roots and zero
+zero-indegree rows while preserving exactly 9,600,000 layer-0 edges. Its recall
+and search work are bit-identical because the auxiliary graph had already
+masked the defect. The repair is retained as a correctness improvement, not
+claimed as the source of the M18 recall gain.
+
+The stronger variants instead show more reciprocal and slightly longer edges:
+M16 has 5,578,406 reciprocal directed edges (58.11%) and mean cosine distance
+0.049591; M18 has 6,578,218 (60.91%) and 0.049842; M20 has 7,320,940 (61.01%)
+and 0.050001. That is consistent with better navigational coverage and diversity,
+not merely closer neighbors or more copies of the same local neighborhood.
+
+### Re-evaluation evidence
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Clean comparison executable (`619e96fc`) | `8299a49cb40cd6b1bbe3eefa36c24f7cb66a946c4862cf6131c6a4e1deb6c20e` |
+| Repaired executable (`0c0898a5`) | `be8c06957ca2f76eb96c09947eb72feaac5013ad19319cd253dbbad5908f82a1` |
+| M16 outer run 1 | `5a1e3b3aa15beaa6f5faf84f952852172ea9028084fe1f1864717871223a5900` |
+| M16 outer run 2 | `c2345880582c11beae7be255ef5f289cf38c6b3c372fefbdfa0ab3ae4028cf2e` |
+| M18 outer run 1 | `c64de394e7726f9ebb978f698d7ede85b0d402e3856db679631abc9751db5434` |
+| M18 outer run 2 | `5927e8da22e194e933a50e26ea4fbec485811aee5f1abad3cee01b51cdd88046` |
+| M20 outer run 1 | `9efec1c4e2c23c76883db92db724613300e9fcc3b8c05338d52ee8b002fcca4c` |
+| M20 outer run 2 | `f039fb80eaccb43ea765104b3b1c265d9f2bb744b4e1d7b477e5deec059dd7e8` |
+| Repaired M16 run | `8c4b11a365cf257342bd00405461e38166691852881104af48fb1594b338fbe8` |
+
+Raw re-evaluation inputs, databases, and reports are retained under
+`/private/tmp/gomap-hnsw-edge-quality-evidence-20260816` on the quiet host and
+`/mnt/fast4tb/gomap-hnsw-edge-quality-20260816` on the Linux host. The compact
+figures and hashes above are committed so the decision does not depend on
+those machine-local paths remaining available.
 
 The experiment changes only the partition-local graph variant. Both rows use
 the same 250,000-vector, 40-partition, 50,000 useful-overlap-membership asset;

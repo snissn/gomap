@@ -220,19 +220,25 @@ type m8AttributionStageOwnerV1 struct {
 // directed layer-0 traversal can reveal an unreachable entry-reachable subset,
 // but is not a substitute for the exact-oracle quality measurement.
 type m8PartitionPackDiagnosticsV1 struct {
-	PartitionID           uint32   `json:"partition_id"`
-	Rows                  uint64   `json:"rows"`
-	ReachableRows         uint64   `json:"reachable_rows"`
-	TraversalRoots        uint64   `json:"traversal_roots"`
-	MaxLayer              int      `json:"max_layer"`
-	RowsByLayer           []uint64 `json:"rows_by_layer"`
-	EdgesByLayer          []uint64 `json:"edges_by_layer"`
-	Layer0DegreeLimit     uint64   `json:"layer0_degree_limit"`
-	Layer0SaturatedRows   uint64   `json:"layer0_saturated_rows"`
-	AuxiliaryEdges        uint64   `json:"auxiliary_edges"`
-	AuxiliaryCSRBytes     uint64   `json:"auxiliary_csr_bytes"`
-	AuxiliaryMaxDegree    uint64   `json:"auxiliary_max_degree"`
-	CombinedReachableRows uint64   `json:"combined_reachable_rows"`
+	PartitionID            uint32                                                      `json:"partition_id"`
+	Rows                   uint64                                                      `json:"rows"`
+	ReachableRows          uint64                                                      `json:"reachable_rows"`
+	TraversalRoots         uint64                                                      `json:"traversal_roots"`
+	MaxLayer               int                                                         `json:"max_layer"`
+	RowsByLayer            []uint64                                                    `json:"rows_by_layer"`
+	EdgesByLayer           []uint64                                                    `json:"edges_by_layer"`
+	Layer0DegreeLimit      uint64                                                      `json:"layer0_degree_limit"`
+	Layer0SaturatedRows    uint64                                                      `json:"layer0_saturated_rows"`
+	Layer0ZeroIndegreeRows uint64                                                      `json:"layer0_zero_indegree_rows"`
+	Layer0DuplicateEdges   uint64                                                      `json:"layer0_duplicate_edges"`
+	Layer0ReciprocalEdges  uint64                                                      `json:"layer0_reciprocal_edges"`
+	Layer0ReciprocalRatio  float64                                                     `json:"layer0_reciprocal_ratio"`
+	Layer0Distances        collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"layer0_distances"`
+	AuxiliaryEdges         uint64                                                      `json:"auxiliary_edges"`
+	AuxiliaryCSRBytes      uint64                                                      `json:"auxiliary_csr_bytes"`
+	AuxiliaryMaxDegree     uint64                                                      `json:"auxiliary_max_degree"`
+	AuxiliaryDistances     collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"auxiliary_distances"`
+	CombinedReachableRows  uint64                                                      `json:"combined_reachable_rows"`
 }
 
 type m8ProductionRowV1 struct {
@@ -2286,8 +2292,12 @@ func (h *m8AttributionHarnessV1) packDiagnostics() ([]m8PartitionPackDiagnostics
 			TraversalRoots: pack.TraversalRoots, MaxLayer: pack.MaxLayer,
 			RowsByLayer: append([]uint64(nil), pack.RowsByLayer...), EdgesByLayer: append([]uint64(nil), pack.EdgesByLayer...),
 			Layer0DegreeLimit: pack.Layer0DegreeLimit, Layer0SaturatedRows: pack.Layer0SaturatedRows,
-			AuxiliaryEdges: pack.AuxiliaryEdges, AuxiliaryCSRBytes: pack.AuxiliaryCSRBytes,
-			AuxiliaryMaxDegree: pack.AuxiliaryMaxDegree, CombinedReachableRows: pack.CombinedReachableRows,
+			Layer0ZeroIndegreeRows: pack.Layer0ZeroIndegreeRows, Layer0DuplicateEdges: pack.Layer0DuplicateEdges,
+			Layer0ReciprocalEdges: pack.Layer0ReciprocalEdges, Layer0ReciprocalRatio: pack.Layer0ReciprocalRatio,
+			Layer0Distances: pack.Layer0Distances,
+			AuxiliaryEdges:  pack.AuxiliaryEdges, AuxiliaryCSRBytes: pack.AuxiliaryCSRBytes,
+			AuxiliaryMaxDegree: pack.AuxiliaryMaxDegree, AuxiliaryDistances: pack.AuxiliaryDistances,
+			CombinedReachableRows: pack.CombinedReachableRows,
 		}
 	}
 	return diagnostics, nil

@@ -661,18 +661,24 @@ type VectorPartitionSearchStatusV1 struct {
 // computing connectivity walks the full persisted graph and must never become
 // request-path work.
 type VectorPartitionPackDiagnosticsV1 struct {
-	Rows                  uint64   `json:"rows"`
-	ReachableRows         uint64   `json:"reachable_rows"`
-	TraversalRoots        uint64   `json:"traversal_roots"`
-	MaxLayer              int      `json:"max_layer"`
-	RowsByLayer           []uint64 `json:"rows_by_layer"`
-	EdgesByLayer          []uint64 `json:"edges_by_layer"`
-	Layer0DegreeLimit     uint64   `json:"layer0_degree_limit"`
-	Layer0SaturatedRows   uint64   `json:"layer0_saturated_rows"`
-	AuxiliaryEdges        uint64   `json:"auxiliary_edges"`
-	AuxiliaryCSRBytes     uint64   `json:"auxiliary_csr_bytes"`
-	AuxiliaryMaxDegree    uint64   `json:"auxiliary_max_degree"`
-	CombinedReachableRows uint64   `json:"combined_reachable_rows"`
+	Rows                   uint64                                          `json:"rows"`
+	ReachableRows          uint64                                          `json:"reachable_rows"`
+	TraversalRoots         uint64                                          `json:"traversal_roots"`
+	MaxLayer               int                                             `json:"max_layer"`
+	RowsByLayer            []uint64                                        `json:"rows_by_layer"`
+	EdgesByLayer           []uint64                                        `json:"edges_by_layer"`
+	Layer0DegreeLimit      uint64                                          `json:"layer0_degree_limit"`
+	Layer0SaturatedRows    uint64                                          `json:"layer0_saturated_rows"`
+	Layer0ZeroIndegreeRows uint64                                          `json:"layer0_zero_indegree_rows"`
+	Layer0DuplicateEdges   uint64                                          `json:"layer0_duplicate_edges"`
+	Layer0ReciprocalEdges  uint64                                          `json:"layer0_reciprocal_edges"`
+	Layer0ReciprocalRatio  float64                                         `json:"layer0_reciprocal_ratio"`
+	Layer0Distances        VectorPartitionLocalGraphDistanceDistributionV1 `json:"layer0_distances"`
+	AuxiliaryEdges         uint64                                          `json:"auxiliary_edges"`
+	AuxiliaryCSRBytes      uint64                                          `json:"auxiliary_csr_bytes"`
+	AuxiliaryMaxDegree     uint64                                          `json:"auxiliary_max_degree"`
+	AuxiliaryDistances     VectorPartitionLocalGraphDistanceDistributionV1 `json:"auxiliary_distances"`
+	CombinedReachableRows  uint64                                          `json:"combined_reachable_rows"`
 }
 
 // PackDiagnosticsV1 scans the immutable prepared pack and reports topology
@@ -738,6 +744,73 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		}
 	}
 	base := pack.AdjacencyLayers[0]
+	indegree := make([]uint64, rows)
+	edges := make(map[uint64]struct{}, len(base.Neighbors))
+	layer0Distances := make([]float64, 0, len(base.Neighbors))
+	auxiliaryDistances := make([]float64, 0, len(auxiliary.Neighbors))
+	distance := func(left int, right uint32) (float64, error) {
+		if int(right) >= rows {
+			return 0, ErrVectorPartitionSearchUnavailable
+		}
+		leftBase, rightBase := left*pack.Header.VectorStride, int(right)*pack.Header.VectorStride
+		score, scoreErr := canonicalVectorPartitionNormalizedScoreV1(
+			pack.NormalizedVectors[leftBase:leftBase+pack.Header.Dimensions],
+			pack.NormalizedVectors[rightBase:rightBase+pack.Header.Dimensions],
+		)
+		value := 1 - float64(score)
+		if scoreErr != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, ErrVectorPartitionSearchUnavailable
+		}
+		return value, nil
+	}
+	for ordinal := range rows {
+		start, end := base.Offsets[ordinal], base.Offsets[ordinal+1]
+		if end < start || end > uint64(len(base.Neighbors)) {
+			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		for _, neighbor := range base.Neighbors[start:end] {
+			if int(neighbor) >= rows || neighbor == uint32(ordinal) {
+				return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
+			}
+			indegree[neighbor]++
+			edge := uint64(uint32(ordinal))<<32 | uint64(neighbor)
+			if _, duplicate := edges[edge]; duplicate {
+				d.Layer0DuplicateEdges++
+			}
+			edges[edge] = struct{}{}
+			value, distanceErr := distance(ordinal, neighbor)
+			if distanceErr != nil {
+				return VectorPartitionPackDiagnosticsV1{}, distanceErr
+			}
+			layer0Distances = append(layer0Distances, value)
+		}
+		if len(auxiliary.Offsets) != 0 {
+			start, end = auxiliary.Offsets[ordinal], auxiliary.Offsets[ordinal+1]
+			for _, neighbor := range auxiliary.Neighbors[start:end] {
+				value, distanceErr := distance(ordinal, neighbor)
+				if distanceErr != nil {
+					return VectorPartitionPackDiagnosticsV1{}, distanceErr
+				}
+				auxiliaryDistances = append(auxiliaryDistances, value)
+			}
+		}
+	}
+	for _, count := range indegree {
+		if count == 0 {
+			d.Layer0ZeroIndegreeRows++
+		}
+	}
+	for edge := range edges {
+		reverse := edge<<32 | edge>>32
+		if _, ok := edges[reverse]; ok {
+			d.Layer0ReciprocalEdges++
+		}
+	}
+	if len(base.Neighbors) != 0 {
+		d.Layer0ReciprocalRatio = float64(d.Layer0ReciprocalEdges) / float64(len(base.Neighbors))
+	}
+	d.Layer0Distances = vectorPartitionLocalGraphDistanceSummaryV1(layer0Distances)
+	d.AuxiliaryDistances = vectorPartitionLocalGraphDistanceSummaryV1(auxiliaryDistances)
 	seen := make([]bool, rows)
 	visit := func(start int) (int, error) {
 		queue := []int{start}
