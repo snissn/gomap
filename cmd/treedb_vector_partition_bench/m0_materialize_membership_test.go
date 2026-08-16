@@ -14,12 +14,21 @@ import (
 )
 
 func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
-	variant, m, efConstruction, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1))
-	if err != nil || variant != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || m != 18 || efConstruction != 256 {
-		t.Fatalf("M18 variant = (%q,%d,%d,%v)", variant, m, efConstruction, err)
+	for _, want := range []struct {
+		variant collections.VectorPartitionLocalGraphVariantV1
+		m, ef   int
+	}{
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128},
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256},
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256},
+	} {
+		variant, m, efConstruction, err := m0MaterializeVariantV1(string(want.variant))
+		if err != nil || variant != want.variant || m != want.m || efConstruction != want.ef {
+			t.Fatalf("variant %q = (%q,%d,%d,%v)", want.variant, variant, m, efConstruction, err)
+		}
 	}
-	if _, _, _, err := m0MaterializeVariantV1("m20_ef_construction_256"); err == nil {
-		t.Fatal("unsupported M20 variant accepted")
+	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)); err == nil {
+		t.Fatal("unsupported M22 variant accepted")
 	}
 }
 

@@ -45,6 +45,8 @@ func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVa
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128, nil
 	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, nil
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, nil
 	default:
 		return "", 0, 0, fmt.Errorf("M0 materialization unsupported production graph variant %q", raw)
 	}
@@ -74,7 +76,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
-	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), "production partition-local HNSW variant")
+	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1), "production partition-local HNSW variant")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || graphArtifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
 		return errors.New("m0-materialize-membership requires source-db, artifact, graph-artifact, membership-report, root, out")
 	}

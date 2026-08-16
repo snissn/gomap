@@ -1346,6 +1346,8 @@ func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPa
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, nil
 	case m == 18 && efConstruction == 256:
 		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, nil
+	case m == 20 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
 	default:
 		return "", fmt.Errorf("unsupported production partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
 	}
