@@ -125,7 +125,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	d, err := m3ReadVariantDescriptorV1(sourceDB)
 	if err != nil {
-		return err
+		return fmt.Errorf("M0 materialization source descriptor is not admissible: %w", err)
 	}
 	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
 		return err
@@ -172,6 +172,11 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	updated := d
+	updated.AssignmentBasis = partitionAssignmentGraphRepartitionedV1
+	updated.VariantID, err = m3VariantIDV1(updated.AssignmentBasis, updated.OverlapRatio)
+	if err != nil {
+		return err
+	}
 	updated.BaseSHA, updated.HeadSHA, updated.BuildDirty, updated.ExecutableSHA256 = build.SourceRevision, build.SourceRevision, false, build.BinarySHA256
 	updated.ArtifactSHA256, updated.GraphArtifactSHA256, updated.GraphBuildSHA256, updated.ArtifactBackend = account.AssignmentArtifactSHA256, account.GraphArtifactSHA256, graphBuild, artifact.Backend
 	updated.Source, updated.DatabaseDirectory = artifact.Source, clone

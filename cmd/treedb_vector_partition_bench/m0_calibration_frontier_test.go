@@ -188,8 +188,8 @@ func TestM0FrontierLineageV1RejectsDifferentFixtureSource(t *testing.T) {
 	fixture := fixtureManifest{Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"}
 	source := vectorpartition.Source{SourceID: "m0_fixture:" + hash, Checksum: strings.Repeat("b", 64), Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, Metric: fixture.Metric}
 	artifact := vectorpartition.Artifact{Source: source}
-	descriptor := m3VariantDescriptorV1{FixtureChecksum: hash, GraphArtifactSHA256: hash, Source: source}
-	account := m0MembershipAccountV1{GraphArtifactSHA256: hash}
+	descriptor := m3VariantDescriptorV1{AssignmentBasis: partitionAssignmentGraphRepartitionedV1, FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, Source: source}
+	account := m0MembershipAccountV1{AssignmentArtifactSHA256: hash, GraphArtifactSHA256: hash}
 	if !m0FrontierLineageV1(descriptor, artifact, account, fixture, uint64(fixture.Vectors)) {
 		t.Fatal("valid frontier lineage rejected")
 	}

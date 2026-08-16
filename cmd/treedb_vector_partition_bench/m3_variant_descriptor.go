@@ -178,6 +178,15 @@ func m3VariantIDV1(assignment string, ratio float64) (string, error) {
 		}
 		encoded := strings.NewReplacer(".", "p", "-", "m").Replace(strconv.FormatFloat(ratio, 'g', -1, 64))
 		return "graph-overlap-" + encoded + "-v1", nil
+	case partitionAssignmentGraphRepartitionedV1:
+		if ratio == 0 {
+			return "graph-repartitioned-disjoint-v1", nil
+		}
+		if ratio == .2 {
+			return "graph-repartitioned-overlap-020-v1", nil
+		}
+		encoded := strings.NewReplacer(".", "p", "-", "m").Replace(strconv.FormatFloat(ratio, 'g', -1, 64))
+		return "graph-repartitioned-overlap-" + encoded + "-v1", nil
 	default:
 		return "", fmt.Errorf("unknown M3 assignment basis %q", assignment)
 	}
@@ -360,6 +369,9 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 			return errors.New("M3 variant descriptor binds a shard generation record without a plan")
 		}
 		return nil
+	}
+	if m8SHA256V1(d.ShardGenerationDigest) && d.ShardGenerationBytes == 0 {
+		return errors.New("M3 legacy byte-bounded descriptor omits shard generation byte size")
 	}
 	if !m8SHA256V1(d.ShardGenerationDigest) || d.ShardGenerationBytes == 0 {
 		return errors.New("M3 variant descriptor lacks a shard generation record digest or size")

@@ -85,6 +85,8 @@ const (
 	m8ProductionCandidateBudgetBytesV1 uint64 = 128 << 20
 )
 
+const partitionAssignmentGraphRepartitionedV1 = "graph_repartitioned"
+
 type config struct {
 	dataset               string
 	partitions            int

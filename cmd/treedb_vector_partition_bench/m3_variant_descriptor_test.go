@@ -55,6 +55,24 @@ func TestM3VariantDescriptorRoundTripAndImmutableCreateV1(t *testing.T) {
 	}
 }
 
+func TestM3VariantDescriptorGraphRepartitionedAllowsDistinctArtifactsV1(t *testing.T) {
+	d := testM3VariantDescriptorV1(t.TempDir())
+	d.AssignmentBasis = partitionAssignmentGraphRepartitionedV1
+	d.VariantID = "graph-repartitioned-overlap-020-v1"
+	d.GraphArtifactSHA256 = strings.Repeat("b", 64)
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err != nil {
+		t.Fatalf("graph-repartitioned descriptor rejected: %v", err)
+	}
+	d.AssignmentBasis, d.VariantID = partitionAssignmentGraphV1, "graph-overlap-020-v1"
+	d.BuildIdentityDigest, _ = m3VariantBuildIdentityDigestV1(d)
+	d.OverlapPolicy, _ = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(d.Capacity), Budget: uint64(d.OverlapRequested), Realized: uint64(d.OverlapRealized), Unspent: uint64(d.OverlapRejected), BuildIdentityDigest: d.BuildIdentityDigest})
+	if err := validateM3VariantDescriptorV1(d); err == nil {
+		t.Fatal("ordinary graph descriptor accepted distinct artifacts")
+	}
+}
+
 func TestM3VariantDescriptorRejectsMissingSourceOrdinalDigestV1(t *testing.T) {
 	descriptor := testM3VariantDescriptorV1(t.TempDir())
 	descriptor.SourceOrdinalDigest = ""
@@ -504,6 +522,7 @@ func TestM3VariantIdentityV1(t *testing.T) {
 	}{
 		{partitionAssignmentGraphV1, 0, "graph-disjoint-v1"},
 		{partitionAssignmentGraphV1, .2, "graph-overlap-020-v1"},
+		{partitionAssignmentGraphRepartitionedV1, .2, "graph-repartitioned-overlap-020-v1"},
 		{partitionAssignmentStableIDHashV1, 0, "stable-id-hash-disjoint-v1"},
 	} {
 		got, err := m3VariantIDV1(tc.assignment, tc.ratio)

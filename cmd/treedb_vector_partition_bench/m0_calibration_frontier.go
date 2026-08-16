@@ -165,14 +165,14 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 		return e
 	}
 	defer h.Close()
+	if e = m8BindRetainedM3DescriptorV1(h, fixture); e != nil {
+		return fmt.Errorf("M0 frontier retained descriptor: %w", e)
+	}
 	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
 		return errors.New("M0 frontier DB status")
 	}
 	if h.status.Representatives == 0 || uint64(candidates) > h.status.Representatives {
 		return errors.New("M0 frontier router candidate budget")
-	}
-	if h.descriptor == nil {
-		return errors.New("M0 frontier missing retained descriptor")
 	}
 	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, *h.descriptor, mode)
 	if e != nil {
@@ -668,7 +668,7 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 }
 
 func m0FrontierLineageV1(descriptor m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1, fixture fixtureManifest, sourceRows uint64) bool {
-	return descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.ArtifactSHA256 == account.AssignmentArtifactSHA256 && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
+	return descriptor.AssignmentBasis == partitionAssignmentGraphRepartitionedV1 && descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.ArtifactSHA256 == account.AssignmentArtifactSHA256 && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
 		artifact.Source.SourceID == "m0_fixture:"+fixture.Checksum && artifact.Source.Vectors == fixture.Vectors && artifact.Source.Dimensions == fixture.Dimensions && artifact.Source.Metric == fixture.Metric && sourceRows == uint64(fixture.Vectors)
 }
 
