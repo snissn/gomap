@@ -1483,7 +1483,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		for _, event := range part.Events {
 			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || event.InsertionOrdinal != max(part.NativeInsertionOrdinals[event.From], part.NativeInsertionOrdinals[event.To]) || !vectorPartitionConstructionOriginValidV1(event.Origin) || !vectorPartitionConstructionActionValidV1(event.Action) || !vectorPartitionConstructionVariantMutationAllowedV1(variant, event.Action) {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction event invalid %+v", ErrVectorPartitionSearchUnavailable, event)
 			}
 			key := vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}
 			switch event.Action {
