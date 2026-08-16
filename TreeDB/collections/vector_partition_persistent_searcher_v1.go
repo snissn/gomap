@@ -1395,18 +1395,18 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		for _, selection := range part.Selections {
 			if selection.Node < 0 || selection.Node >= pack.Header.Rows || selection.Layer < 0 || selection.Layer >= len(pack.AdjacencyLayers) || selection.Candidates < 0 || selection.Selected < 0 || selection.DiversitySelected < 0 || selection.BackfillSelected < 0 || selection.Selected != selection.DiversitySelected+selection.BackfillSelected || selection.Selected > selection.Candidates {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction selection invalid %+v", ErrVectorPartitionSearchUnavailable, selection)
 			}
 			if selection.CandidateSampled {
 				if selection.Layer != 0 || len(selection.CandidateOrdinals) != selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
 					searcher.Close()
-					return ErrVectorPartitionSearchUnavailable
+					return fmt.Errorf("%w: construction candidate sample node=%d candidates=%d ordinals=%d", ErrVectorPartitionSearchUnavailable, selection.Node, selection.Candidates, len(selection.CandidateOrdinals))
 				}
 				seenCandidates := make(map[int]struct{}, len(selection.CandidateOrdinals))
 				for candidateIndex, candidate := range selection.CandidateOrdinals {
 					if candidate < 0 || candidate >= pack.Header.Rows || candidate == selection.Node || candidateIndex > 0 && selection.CandidateOrdinals[candidateIndex-1] >= candidate {
 						searcher.Close()
-						return ErrVectorPartitionSearchUnavailable
+						return fmt.Errorf("%w: construction candidate ordinal node=%d candidate=%d index=%d", ErrVectorPartitionSearchUnavailable, selection.Node, candidate, candidateIndex)
 					}
 					if _, duplicate := seenCandidates[candidate]; duplicate {
 						searcher.Close()
@@ -1415,7 +1415,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 					seenCandidates[candidate] = struct{}{}
 					if part.NativeInsertionOrdinals[candidate] >= part.NativeInsertionOrdinals[selection.Node] {
 						searcher.Close()
-						return ErrVectorPartitionSearchUnavailable
+						return fmt.Errorf("%w: construction candidate insertion order node=%d candidate=%d", ErrVectorPartitionSearchUnavailable, selection.Node, candidate)
 					}
 				}
 			} else if len(selection.CandidateOrdinals) != 0 || selection.CandidateDigest != "" {
