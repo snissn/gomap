@@ -250,7 +250,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		h, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, tempRoot, arm.Variant, 4172000+uint32(i), localHNSWM18EdgeDiagnosisPacksV1)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("fixed-budget arm %s materialize: %w", arm.Name, err)
 		}
 		if len(h.constructionEvidence.Partitions) != len(localHNSWM18EdgeDiagnosisPacksV1) || len(h.searchers) != len(localHNSWM18EdgeDiagnosisPacksV1) {
 			_ = h.Close()
@@ -277,7 +277,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		}
 		if err != nil {
 			_ = h.Close()
-			return nil, err
+			return nil, fmt.Errorf("fixed-budget arm %s evidence: %w", arm.Name, err)
 		}
 		out[i].Arm = arm
 		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)
@@ -292,7 +292,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 			out[i].Control, err = localHNSWFixedBudgetScreenControlV1(source, h)
 			if err != nil {
 				_ = h.Close()
-				return nil, err
+				return nil, fmt.Errorf("fixed-budget arm %s control: %w", arm.Name, err)
 			}
 		}
 		if err := h.Close(); err != nil {
@@ -319,7 +319,7 @@ func localHNSWFixedBudgetScreenSelectedNeighborhoodV1(h *localHNSWVariantHarness
 		one.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{h.constructionEvidence.Partitions[i]}
 		neighborhood, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&one, []collections.VectorPartitionPackDiagnosticsV1{diagnostics[i]}, vectors)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("fixed-budget partition %d neighborhood: %w", partition, err)
 		}
 		out[i] = localHNSWFixedBudgetPackNeighborhoodV1{Partition: partition, Neighborhood: neighborhood}
 	}
