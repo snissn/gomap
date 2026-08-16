@@ -1992,10 +1992,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		}
 		membershipDigest, err := vectorPartitionMembershipDigestV1(reader, generation, in.PartitionID, selected)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d membership digest: %w", in.PartitionID, err)
 		}
 		if err := preflightVectorPartitionNativePackV1(len(selected), buildDef.Dimensions, buildDef.M); err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d pack preflight: %w", in.PartitionID, err)
 		}
 		type selectedRow struct {
 			ordinal int
@@ -2018,7 +2018,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		// shape-only preflight. Reject the known fixed-width and stable-ID lower
 		// bound before copying vectors or constructing the partition-local HNSW.
 		if err := preflightVectorPartitionNativePackKnownBytesV1(len(sourceRows), buildDef.Dimensions, documentIDBytes, maxAssetBytes); err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d byte preflight: %w", in.PartitionID, err)
 		}
 		// The partition owns a fresh local HNSW. Source ordinals provide a stable
 		// insertion order; the native builder then applies its deterministic
@@ -2096,12 +2096,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		}
 		exactPackBytes, err := exactVectorPartitionLocalGraphPackBytesV1(len(rows), buildDef.Dimensions, neighborCounts, documentIDBytes, auxiliaryNeighbors, hasAuxiliaryNavigation, maxAssetBytes)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d exact pack bytes: %w", in.PartitionID, err)
 		}
 		graph := columnVectorGraphManifestSnapshot{IndexName: buildDef.Name, Field: buildDef.Field, Metric: buildDef.Metric, Encoding: buildDef.Encoding, Dimensions: buildDef.Dimensions, M: buildDef.M, EfConstruction: buildDef.EfConstruction, EfSearch: buildDef.EfSearch, BaseManifestGeneration: manifest.SourceGeneration, BaseManifestChecksum: manifest.SourceChecksum, BaseSchemaHash: manifest.SourceSchemaHash, GraphSchemaHash: cfg.SchemaHash, RowCount: len(rows)}
 		pack, err := buildColumnHNSWSearchPackInput(buildDef, graph, rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d pack input: %w", in.PartitionID, err)
 		}
 		// Native A/B packs domain-bind their variant into the existing membership
 		// identity. Production publication and serving recompute the canonical
@@ -2113,7 +2113,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		}
 		raw, err := encodeColumnHNSWSearchPack(pack)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("retained variant partition %d encode pack: %w", in.PartitionID, err)
 		}
 		if int64(len(raw)) != exactPackBytes || int64(len(raw)) > maxAssetBytes {
 			return nil, nil, fmt.Errorf("%w: encoded native pack bytes=%d exact=%d cap=%d", ErrVectorPartitionSearchUnavailable, len(raw), exactPackBytes, maxAssetBytes)
@@ -2162,12 +2162,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	}
 	lease, err := c.db.AcquireStableResourceCaptureLease()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("retained variant capture lease: %w", err)
 	}
 	defer lease.Release()
 	refs, resources, err := AppendColumnPhysicalAssetsWithStableResources(c.db.ColumnAssetRootDir(), *cfg, fileID, items, c.db.StableResourceIdentityPinRegistry(), lease)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("retained variant append packs: %w", err)
 	}
 	out := make([]VectorPartitionAssetV1, len(inputs))
 	for i := range inputs {
