@@ -152,33 +152,44 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 		ordinal int
 		score   float32
 	}
+	type scoredBoundary struct {
+		source int
+		target int
+		score  float32
+	}
 	seen, seenCount, err := reachable()
 	if err != nil {
 		return 0, err
 	}
 	repairs := 0
 	for seenCount < len(rows) {
-		root := -1
-		for ordinal := range seen {
-			if !seen[ordinal] {
-				root = ordinal
-				break
+		boundaries := make([]scoredBoundary, 0)
+		for target := range seen {
+			if seen[target] {
+				continue
 			}
-		}
-		if root < 0 {
-			return 0, errors.New("partition-local reciprocal repair reachability")
-		}
-		sources := make([]scoredOrdinal, 0, len(adjacency[root]))
-		for _, neighbor := range adjacency[root] {
-			if seen[neighbor] {
-				score, scoreErr := similarity(int(neighbor), root)
+			for _, neighbor := range adjacency[target] {
+				if !seen[neighbor] {
+					continue
+				}
+				score, scoreErr := similarity(int(neighbor), target)
 				if scoreErr != nil {
 					return 0, scoreErr
 				}
-				sources = append(sources, scoredOrdinal{ordinal: int(neighbor), score: score})
+				boundaries = append(boundaries, scoredBoundary{source: int(neighbor), target: target, score: score})
 			}
 		}
-		if len(sources) == 0 {
+		if len(boundaries) == 0 {
+			root := -1
+			for ordinal := range seen {
+				if !seen[ordinal] {
+					root = ordinal
+					break
+				}
+			}
+			if root < 0 {
+				return 0, errors.New("partition-local reciprocal repair reachability")
+			}
 			for ordinal := range seen {
 				if !seen[ordinal] || len(adjacency[ordinal]) == 0 {
 					continue
@@ -187,20 +198,23 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 				if scoreErr != nil {
 					return 0, scoreErr
 				}
-				sources = append(sources, scoredOrdinal{ordinal: ordinal, score: score})
+				boundaries = append(boundaries, scoredBoundary{source: ordinal, target: root, score: score})
 			}
 		}
-		sort.Slice(sources, func(i, j int) bool {
-			if sources[i].score != sources[j].score {
-				return sources[i].score > sources[j].score
+		sort.Slice(boundaries, func(i, j int) bool {
+			if boundaries[i].score != boundaries[j].score {
+				return boundaries[i].score > boundaries[j].score
 			}
-			return sources[i].ordinal < sources[j].ordinal
+			if boundaries[i].source != boundaries[j].source {
+				return boundaries[i].source < boundaries[j].source
+			}
+			return boundaries[i].target < boundaries[j].target
 		})
 		repaired := false
-		for _, source := range sources {
-			drops := make([]scoredOrdinal, 0, len(adjacency[source.ordinal]))
-			for position, neighbor := range adjacency[source.ordinal] {
-				score, scoreErr := similarity(source.ordinal, int(neighbor))
+		for _, boundary := range boundaries {
+			drops := make([]scoredOrdinal, 0, len(adjacency[boundary.source]))
+			for position, neighbor := range adjacency[boundary.source] {
+				score, scoreErr := similarity(boundary.source, int(neighbor))
 				if scoreErr != nil {
 					return 0, scoreErr
 				}
@@ -210,11 +224,11 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 				if drops[i].score != drops[j].score {
 					return drops[i].score < drops[j].score
 				}
-				return adjacency[source.ordinal][drops[i].ordinal] > adjacency[source.ordinal][drops[j].ordinal]
+				return adjacency[boundary.source][drops[i].ordinal] > adjacency[boundary.source][drops[j].ordinal]
 			})
 			for _, drop := range drops {
-				prior := adjacency[source.ordinal][drop.ordinal]
-				adjacency[source.ordinal][drop.ordinal] = uint32(root)
+				prior := adjacency[boundary.source][drop.ordinal]
+				adjacency[boundary.source][drop.ordinal] = uint32(boundary.target)
 				nextSeen, nextCount, reachErr := reachable()
 				preserved := reachErr == nil && nextCount > seenCount
 				if preserved {
@@ -231,7 +245,7 @@ func repairVectorPartitionLocalLayer0ReciprocityV1(rows []columnVectorGraphAsset
 					repaired = true
 					break
 				}
-				adjacency[source.ordinal][drop.ordinal] = prior
+				adjacency[boundary.source][drop.ordinal] = prior
 			}
 			if repaired {
 				break

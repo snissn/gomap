@@ -662,8 +662,8 @@ func TestVectorPartitionLocalLayer0ReciprocityRepairPreservesEdgeBudgetV1(t *tes
 	rows := []columnVectorGraphAssetRow{
 		{Vector: []float32{1, 0}, InvNorm: 1, Adjacency: []uint32{1}},
 		{Vector: []float32{0.9, 0.1}, InvNorm: 1, Adjacency: []uint32{0}},
-		{Vector: []float32{0.8, 0.2}, InvNorm: 1, Adjacency: []uint32{1}},
-		{Vector: []float32{0.7, 0.3}, InvNorm: 1, Adjacency: []uint32{2}},
+		{Vector: []float32{0.8, 0.2}, InvNorm: 1, Adjacency: []uint32{3}},
+		{Vector: []float32{0.7, 0.3}, InvNorm: 1, Adjacency: []uint32{1}},
 	}
 	before := 0
 	for _, row := range rows {
