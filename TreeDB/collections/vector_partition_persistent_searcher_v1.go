@@ -67,6 +67,40 @@ type VectorPartitionConstructionEdgeEventV1 struct {
 	Action           string `json:"action"`
 }
 
+func vectorPartitionConstructionOriginValidV1(origin string) bool {
+	switch origin {
+	case "diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite":
+		return true
+	default:
+		return false
+	}
+}
+
+func vectorPartitionConstructionActionValidV1(action string) bool {
+	switch action {
+	case "initial_add", "reciprocal_add", "reciprocal_prune_keep", "reciprocal_prune_drop", "reciprocity_repair_add", "reciprocity_repair_drop", "overlay_rewrite_add", "overlay_rewrite_drop", "final_survivor":
+		return true
+	default:
+		return false
+	}
+}
+
+func vectorPartitionConstructionVariantMutationAllowedV1(variant VectorPartitionLocalGraphVariantV1, action string) bool {
+	if !strings.Contains(action, "_rewrite_") && !strings.Contains(action, "_repair_") {
+		return true
+	}
+	if strings.HasPrefix(action, "overlay_rewrite_") {
+		return variant == VectorPartitionLocalGraphVariantOverlayCurrentV1
+	}
+	if strings.HasPrefix(action, "reciprocity_repair_") {
+		switch variant {
+		case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+			return true
+		}
+	}
+	return false
+}
+
 func vectorPartitionConstructionCandidateDigestV1(ordinals []int) string {
 	h := sha256.New()
 	h.Write([]byte("treedb-4170-candidate-ordinals-v1/"))
@@ -702,17 +736,101 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 	}
 	switch variant {
 	case VectorPartitionLocalGraphVariantNativeV1:
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
-		return vectorPartitionLocalAuxiliaryNavigationV1{}, addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+		if err := addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.reconcileVariantMutation(rows, "overlay_rewrite"); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
 		if _, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.reconcileVariantMutation(rows, "reciprocity_repair"); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.recordFinalSurvivors(rows); err != nil {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 		}
 		return buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
 	default:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, fmt.Errorf("partition-local graph variant=%q", variant)
 	}
+}
+
+// reconcileVariantMutation accounts every layer-0 rewrite made after the
+// native HNSW builder. The origin of a removed edge remains its causal native
+// origin; a replacement is explicitly attributed to the variant rewrite.
+func (t *vectorIndexConstructionTraceV1) reconcileVariantMutation(rows []columnVectorGraphAssetRow, mutation string) error {
+	if t == nil {
+		return nil
+	}
+	if mutation != "reciprocity_repair" && mutation != "overlay_rewrite" {
+		return fmt.Errorf("collections: construction trace mutation=%q", mutation)
+	}
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
+			for _, to := range neighbors {
+				final[vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}] = struct{}{}
+			}
+		}
+	}
+	dropAction, addAction := mutation+"_drop", mutation+"_add"
+	less := func(left, right vectorIndexConstructionEdgeKeyV1) bool {
+		if left.Layer != right.Layer {
+			return left.Layer < right.Layer
+		}
+		if left.From != right.From {
+			return left.From < right.From
+		}
+		return left.To < right.To
+	}
+	drops := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range t.origins {
+		if _, survives := final[key]; survives {
+			continue
+		}
+		if key.Layer != 0 {
+			return fmt.Errorf("collections: construction trace unexpected variant removal layer=%d", key.Layer)
+		}
+		drops = append(drops, key)
+	}
+	sort.Slice(drops, func(i, j int) bool { return less(drops[i], drops[j]) })
+	for _, key := range drops {
+		origin := t.origins[key]
+		t.record(key.From, key.To, key.Layer, origin, dropAction)
+		delete(t.origins, key)
+	}
+	adds := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range final {
+		if _, existed := t.origins[key]; existed {
+			continue
+		}
+		if key.Layer != 0 {
+			return fmt.Errorf("collections: construction trace unexpected variant layer=%d", key.Layer)
+		}
+		adds = append(adds, key)
+	}
+	sort.Slice(adds, func(i, j int) bool { return less(adds[i], adds[j]) })
+	for _, key := range adds {
+		t.origins[key] = mutation
+		t.record(key.From, key.To, key.Layer, mutation, addAction)
+	}
+	return nil
 }
 
 func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow, degreeLimit int) error {
@@ -1363,7 +1481,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		seenFinal := false
 		for _, event := range part.Events {
-			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || event.InsertionOrdinal != max(part.NativeInsertionOrdinals[event.From], part.NativeInsertionOrdinals[event.To]) || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
+			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || event.InsertionOrdinal != max(part.NativeInsertionOrdinals[event.From], part.NativeInsertionOrdinals[event.To]) || !vectorPartitionConstructionOriginValidV1(event.Origin) || !vectorPartitionConstructionActionValidV1(event.Action) || !vectorPartitionConstructionVariantMutationAllowedV1(variant, event.Action) {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
@@ -1402,6 +1520,23 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 					return ErrVectorPartitionSearchUnavailable
 				}
 			case "reciprocal_prune_drop":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				delete(live, key)
+			case "reciprocity_repair_add", "overlay_rewrite_add":
+				wantOrigin := strings.TrimSuffix(event.Action, "_add")
+				if event.Origin != wantOrigin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				live[key] = event.Origin
+			case "reciprocity_repair_drop", "overlay_rewrite_drop":
 				if live[key] != event.Origin {
 					searcher.Close()
 					return ErrVectorPartitionSearchUnavailable

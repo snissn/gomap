@@ -217,6 +217,29 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, constructionEvidence); err != nil {
 		t.Fatalf("construction evidence: %v", err)
 	}
+	overlay, overlayResources, overlayEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 988, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer overlayResources.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, overlay, overlayEvidence); err != nil {
+		t.Fatalf("overlay construction evidence: %v", err)
+	}
+	overlayAdds, overlayDrops := 0, 0
+	for _, event := range overlayEvidence.Partitions[0].Events {
+		switch event.Action {
+		case "overlay_rewrite_add":
+			overlayAdds++
+			if event.Origin != "overlay_rewrite" {
+				t.Fatalf("overlay add origin=%q", event.Origin)
+			}
+		case "overlay_rewrite_drop":
+			overlayDrops++
+		}
+	}
+	if overlayAdds == 0 || overlayDrops == 0 {
+		t.Fatalf("overlay mutation evidence adds=%d drops=%d events=%+v", overlayAdds, overlayDrops, overlayEvidence.Partitions[0].Events)
+	}
 	badEvidence := constructionEvidence
 	badEvidence.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
 	badEvidence.Partitions[0].AssetChecksum = "wrong"
@@ -895,6 +918,84 @@ func TestVectorPartitionLocalLayer0ReciprocityRepairPreservesEdgeBudgetV1(t *tes
 	}
 	if len(auxiliary.Neighbors) != 0 {
 		t.Fatalf("connected native graph still needed component bridges: %v", auxiliary.Neighbors)
+	}
+}
+
+func TestVectorPartitionConstructionEvidenceReconcilesReciprocityRepairV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	const seed = 148 // Deterministically produces layer-0 reciprocity rewrites.
+	inputs := make([]columnGraphRebuildInputRowV2A, 24)
+	for i := range inputs {
+		inputs[i] = columnGraphRebuildInputRowV2A{
+			id: fmt.Sprintf("r-%03d-%03d", seed, i),
+			vector: []float32{
+				float32(math.Sin(float64(seed*31 + i*7))),
+				float32(math.Cos(float64(seed*17 + i*13))),
+				float32(math.Sin(float64(seed*11 + i*19))),
+				float32(math.Cos(float64(seed*23 + i*3))),
+			},
+		}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 2, inputs)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State = "building"
+	manifest.Collection = col.name
+	manifest.IndexName = def.Name
+	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	manifest.Generation = 148
+	manifest.PartitionCount = 1
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = make([]VectorPartitionMembershipV1, len(inputs))
+	for i := range inputs {
+		manifest.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	manifest.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	assets, resources, evidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 1481, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, manifest, assets, evidence); err != nil {
+		t.Fatalf("repaired construction evidence: %v", err)
+	}
+	adds, drops, finalRepair := 0, 0, 0
+	for _, event := range evidence.Partitions[0].Events {
+		switch event.Action {
+		case "reciprocity_repair_add":
+			adds++
+			if event.Origin != "reciprocity_repair" {
+				t.Fatalf("repair add origin=%q", event.Origin)
+			}
+		case "reciprocity_repair_drop":
+			drops++
+		case "final_survivor":
+			if event.Origin == "reciprocity_repair" {
+				finalRepair++
+			}
+		}
+	}
+	if adds == 0 || drops == 0 || finalRepair == 0 {
+		t.Fatalf("repair lifecycle adds=%d drops=%d final-repair=%d", adds, drops, finalRepair)
+	}
+	again, againResources, againEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 1482, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer againResources.Release()
+	if !reflect.DeepEqual(evidence, againEvidence) {
+		t.Fatalf("repair evidence is not deterministic\nfirst=%+v\nagain=%+v", evidence, againEvidence)
+	}
+	if assets[0].Checksum != again[0].Checksum || assets[0].Bytes != again[0].Bytes {
+		t.Fatalf("repair materialization payload differs first=%+v again=%+v", assets[0], again[0])
 	}
 }
 

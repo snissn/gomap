@@ -235,7 +235,7 @@ func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtility
 	dst.FrontierAdmissions += value.FrontierAdmissions
 	dst.StateImprovements += value.StateImprovements
 	dst.TruthRecovered += value.TruthRecovered
-	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
+	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
 		pair[0].Examined += pair[1].Examined
 		pair[0].NewlyVisited += pair[1].NewlyVisited
 		pair[0].Scored += pair[1].Scored

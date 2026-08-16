@@ -210,7 +210,7 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
-	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Auxiliary, value.Unattributed}
+	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.Auxiliary, value.Unattributed}
 	var examined, newlyVisited, scored, topAdmissions, frontierAdmissions, stateImprovements, truthRecovered uint64
 	for _, origin := range origins {
 		examined += origin.Examined

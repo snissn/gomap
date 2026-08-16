@@ -20,7 +20,7 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	ordinals[4], ordinals[5000] = ordinals[5000], ordinals[4]
 	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 3, To: 2, InsertionOrdinal: 300, Origin: "reciprocal_add", Action: "reciprocal_prune_keep"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
 	totals, err := localHNSWAttributionConstructionReduceV1(evidence)
-	if err != nil || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [3]uint64{1, 0, 0} || totals.ReciprocalAddByOrigin != [3]uint64{0, 0, 1} || totals.InitialAddAgeByOrigin != [3][4]uint64{{1, 0, 0, 0}, {}, {}} || totals.InitialAddDeltaByOrigin != [3][4]uint64{{1, 0, 0, 0}, {}, {}} || totals.ReciprocalAddAgeByOrigin != [3][4]uint64{{}, {}, {0, 1, 0, 0}} || totals.ReciprocalAddDeltaByOrigin != [3][4]uint64{{}, {}, {0, 1, 0, 0}} || totals.PruneDropAgeByOrigin != [3][4]uint64{{}, {}, {0, 0, 0, 1}} || totals.PruneDropDeltaByOrigin != [3][4]uint64{{}, {}, {0, 0, 0, 1}} || totals.FinalAgeByOrigin != [3][4]uint64{{1, 0, 0, 0}, {}, {}} || totals.FinalDeltaByOrigin != [3][4]uint64{{1, 0, 0, 0}, {}, {}} {
+	if err != nil || totals.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [5]uint64{1, 0, 0, 0, 0} || totals.ReciprocalAddByOrigin != [5]uint64{0, 0, 1, 0, 0} || totals.InitialAddAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.InitialAddDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.ReciprocalAddAgeByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.ReciprocalAddDeltaByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.PruneDropAgeByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.PruneDropDeltaByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.FinalAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.FinalDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} {
 		t.Fatalf("totals=%+v err=%v", totals, err)
 	}
 	evidence.Partitions[0].Events[0].Action = "wrong"
@@ -31,6 +31,16 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	evidence.Partitions[0].NativeInsertionOrdinals[0] = 1
 	if _, err := localHNSWAttributionConstructionReduceV1(evidence); err == nil {
 		t.Fatal("non-permutation insertion ordinals accepted")
+	}
+	evidence.Partitions[0].NativeInsertionOrdinals[0] = 0
+	evidence.Variant = string(collections.VectorPartitionLocalGraphVariantNativeV1)
+	evidence.Partitions[0].Events = append(evidence.Partitions[0].Events, collections.VectorPartitionConstructionEdgeEventV1{From: 5, To: 0, InsertionOrdinal: 5, Origin: "reciprocity_repair", Action: "reciprocity_repair_add"})
+	if _, err := localHNSWAttributionConstructionReduceV1(evidence); err == nil {
+		t.Fatal("native repair action accepted")
+	}
+	evidence.Variant = string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if _, err := localHNSWAttributionConstructionReduceV1(evidence); err != nil {
+		t.Fatalf("auxiliary repair action rejected: %v", err)
 	}
 	var misses []localHNSWAttributionHardMissV1
 	for i := 0; i < 64; i++ {

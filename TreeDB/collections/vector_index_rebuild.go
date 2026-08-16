@@ -533,7 +533,7 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 		orderedRows[ordinal] = rows[inputOrdinal]
 		nodeOrdinal[nodeID] = ordinal
 	}
-	if err := trace.finalize(index, nodeOrdinal); err != nil {
+	if err := trace.remap(index, nodeOrdinal); err != nil {
 		return err
 	}
 	copy(rows, orderedRows)
@@ -549,10 +549,12 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 	return nil
 }
 
-// finalize remaps temporary native node IDs to the exact BFS-locality ordinals
+// remap converts temporary native node IDs to the exact BFS-locality ordinals
 // written into the pack. InsertionOrdinal intentionally remains in native
-// insertion order: it is causal age, not a persisted graph ordinal.
-func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdinal []int) error {
+// insertion order: it is causal age, not a persisted graph ordinal. Final
+// survivors are deliberately recorded later, after a variant has made every
+// native-adjacency mutation (overlay or reciprocity repair).
+func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal []int) error {
 	if t == nil {
 		return nil
 	}
@@ -619,31 +621,68 @@ func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdina
 		}
 		t.events[i].From, t.events[i].To = from, to
 	}
-	for from, node := range index.nodes {
-		for layer, neighbors := range node.neighbors {
+	remapOrigins := make(map[vectorIndexConstructionEdgeKeyV1]string, len(t.origins))
+	for key, origin := range t.origins {
+		from, err := remap(key.From)
+		if err != nil {
+			return err
+		}
+		to, err := remap(key.To)
+		if err != nil {
+			return err
+		}
+		remapOrigins[vectorIndexConstructionEdgeKeyV1{From: from, To: to, Layer: key.Layer}] = origin
+	}
+	t.origins = remapOrigins
+	if len(t.pending) != 0 {
+		return fmt.Errorf("collections: construction trace has pending selected edges")
+	}
+	return nil
+}
+
+func (t *vectorIndexConstructionTraceV1) recordFinalSurvivors(rows []columnVectorGraphAssetRow) error {
+	if t == nil {
+		return nil
+	}
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
 			for _, neighbor := range neighbors {
-				key := vectorIndexConstructionEdgeKeyV1{From: from, To: neighbor.nodeID, Layer: layer}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: int(neighbor), Layer: layer}
 				origin, ok := t.origins[key]
 				if !ok {
-					return fmt.Errorf("collections: construction trace missing final edge origin from=%d to=%d layer=%d", from, neighbor.nodeID, layer)
+					return fmt.Errorf("collections: construction trace missing final edge origin from=%d to=%d layer=%d", from, neighbor, layer)
 				}
-				mappedFrom, err := remap(from)
-				if err != nil {
-					return err
+				insertionOrdinal := t.nativeInsertionOrdinals[from]
+				if t.nativeInsertionOrdinals[int(neighbor)] > insertionOrdinal {
+					insertionOrdinal = t.nativeInsertionOrdinals[int(neighbor)]
 				}
-				mappedTo, err := remap(neighbor.nodeID)
-				if err != nil {
-					return err
-				}
-				insertionOrdinal := from
-				if neighbor.nodeID > insertionOrdinal {
-					insertionOrdinal = neighbor.nodeID
-				}
-				t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: mappedFrom, To: mappedTo, Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: "final_survivor"})
+				t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: int(neighbor), Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: "final_survivor"})
 			}
 		}
 	}
 	return nil
+}
+
+func vectorPartitionConstructionAdjacencyLayersV1(adjacency []uint32) ([][]uint32, error) {
+	maxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
+	if err != nil {
+		return nil, err
+	}
+	if maxLayer < 0 {
+		return nil, nil
+	}
+	layers := make([][]uint32, maxLayer+1)
+	for layer := range layers {
+		layers[layer], err = columnVectorGraphAdjacencyLayer(adjacency, layer)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return layers, nil
 }
 
 func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
