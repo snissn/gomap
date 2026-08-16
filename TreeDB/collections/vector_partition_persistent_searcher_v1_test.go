@@ -209,7 +209,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer nr.Release()
-	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 983, in)
+	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	auxiliaryAgain, ar2, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 984, in)
+	auxiliaryAgain, ar2, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 984, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
