@@ -125,7 +125,10 @@ func runM0FrontierDiagnoseV1(args []string, stdout io.Writer) error {
 		return err
 	}
 	defer h.Close()
-	account, selected, _, err := m0FrontierAccountV1(membershipReport, h.manifest, "zero")
+	if h.descriptor == nil {
+		return errors.New("M0 diagnose missing retained descriptor")
+	}
+	account, selected, _, err := m0FrontierAccountV1(membershipReport, h.manifest, *h.descriptor, "zero")
 	if err != nil {
 		return err
 	}

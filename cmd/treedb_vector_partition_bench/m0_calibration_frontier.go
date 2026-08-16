@@ -171,7 +171,10 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if h.status.Representatives == 0 || uint64(candidates) > h.status.Representatives {
 		return errors.New("M0 frontier router candidate budget")
 	}
-	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, mode)
+	if h.descriptor == nil {
+		return errors.New("M0 frontier missing retained descriptor")
+	}
+	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, *h.descriptor, mode)
 	if e != nil {
 		return e
 	}
@@ -244,7 +247,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	return e
 }
 
-func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManifestV1, mode string) (m0MembershipAccountV1, m0MembershipModeV1, string, error) {
+func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManifestV1, descriptor m3VariantDescriptorV1, mode string) (m0MembershipAccountV1, m0MembershipModeV1, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return m0MembershipAccountV1{}, m0MembershipModeV1{}, "", err
@@ -254,7 +257,7 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 		return account, m0MembershipModeV1{}, "", err
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || policy.BuildIdentityDigest != account.AssignmentArtifactSHA256 {
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
 		return account, m0MembershipModeV1{}, "", errors.New("M0 frontier membership binding")
 	}
 	var zero, useful, exact *m0MembershipModeV1
@@ -665,7 +668,7 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 }
 
 func m0FrontierLineageV1(descriptor m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1, fixture fixtureManifest, sourceRows uint64) bool {
-	return descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
+	return descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.ArtifactSHA256 == account.AssignmentArtifactSHA256 && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
 		artifact.Source.SourceID == "m0_fixture:"+fixture.Checksum && artifact.Source.Vectors == fixture.Vectors && artifact.Source.Dimensions == fixture.Dimensions && artifact.Source.Metric == fixture.Metric && sourceRows == uint64(fixture.Vectors)
 }
 

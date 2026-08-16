@@ -34,10 +34,21 @@ type m0MaterializeReportV1 struct {
 	CloneLogicalBytes         int64  `json:"clone_logical_bytes"`
 }
 
+func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVariantV1, int, int, error) {
+	switch collections.VectorPartitionLocalGraphVariantV1(raw) {
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128, nil
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, nil
+	default:
+		return "", 0, 0, fmt.Errorf("M0 materialization unsupported production graph variant %q", raw)
+	}
+}
+
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode string
+	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode, variantRaw string
 	fs.StringVar(&sourceDB, "source-db", "", "retained source DB (read only)")
 	fs.StringVar(&artifactPath, "artifact", "", "strict canonical assignment artifact")
 	fs.StringVar(&graphArtifactPath, "graph-artifact", "", "frozen source graph artifact")
@@ -45,11 +56,20 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
+	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), "production partition-local HNSW variant")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || graphArtifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
 		return errors.New("m0-materialize-membership requires source-db, artifact, graph-artifact, membership-report, root, out")
 	}
 	if _, statErr := os.Stat(out); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
 		return errors.New("M0 materialization output already exists")
+	}
+	variant, variantM, variantEfC, err := m0MaterializeVariantV1(variantRaw)
+	if err != nil {
+		return err
+	}
+	build, err := m0CurrentCleanBuildIdentityV1()
+	if err != nil {
+		return err
 	}
 	artifactRaw, err := os.ReadFile(artifactPath)
 	if err != nil {
@@ -89,6 +109,9 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if d.Source != artifact.Source {
 		return errors.New("retained source does not match assignment artifact lineage")
 	}
+	if d.ArtifactSHA256 != account.AssignmentArtifactSHA256 || d.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
+		return errors.New("retained descriptor does not bind frozen assignment artifacts")
+	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
@@ -126,7 +149,25 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	generation := max(h.manifest.Generation, h.manifest.RouterGeneration) + 1
-	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, account.AssignmentArtifactSHA256)
+	graphBuild, err := m3GraphBuildSHA256V1(graph)
+	if err != nil {
+		return err
+	}
+	updated := d
+	updated.BaseSHA, updated.HeadSHA, updated.BuildDirty, updated.ExecutableSHA256 = build.SourceRevision, build.SourceRevision, false, build.BinarySHA256
+	updated.ArtifactSHA256, updated.GraphArtifactSHA256, updated.GraphBuildSHA256, updated.ArtifactBackend = account.AssignmentArtifactSHA256, account.GraphArtifactSHA256, graphBuild, artifact.Backend
+	updated.Source, updated.DatabaseDirectory = artifact.Source, clone
+	updated.SourceGeneration, updated.SourceChecksum, updated.SourceSchemaHash, updated.SourceRows, updated.SourceOrdinalDigest = source.Generation, source.Checksum, source.SchemaHash, source.RowCount, before
+	updated.Partitions, updated.PartitionHNSWM, updated.PartitionHNSWEfC, updated.PartitionConfig = uint32(artifact.Config.Partitions), variantM, variantEfC, artifact.Config
+	updated.Capacity, updated.OverlapRequested, updated.OverlapRealized, updated.OverlapRejected = overlap.Capacity, overlap.Budget, overlap.Used, overlap.Unspent
+	updated.OverlapUseful, updated.OverlapFiller, updated.EdgeCutBefore, updated.EdgeCutAfter = overlap.Useful, overlap.Filler, overlap.EdgeCutBefore, overlap.EdgeCutAfter
+	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), len(overlap.Memberships)
+	updated.OverlapUnusedCapacity = overlap.Capacity*len(overlap.Loads) - len(overlap.Memberships)
+	updated.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(updated)
+	if err != nil {
+		return err
+	}
+	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, updated.BuildIdentityDigest)
 	if err != nil {
 		return err
 	}
@@ -146,7 +187,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, fileID, inputs, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, fileID, inputs, variant)
 	if err != nil {
 		return err
 	}
@@ -172,7 +213,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = h.Close(); err != nil {
 		return err
 	}
-	h, err = openM8ProductionExistingAssetSetModeV1(clone, true)
+	h, err = openM8ProductionExistingAssetSetModeV1(clone, false)
 	if err != nil {
 		return err
 	}
@@ -192,6 +233,30 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil || after != before || afterRowsSource != source {
 		return errors.New("source identity changed during materialization")
 	}
+	updated.OverlapPolicy = h.status.Manifest.BalancePolicy
+	updated.ManifestIntegrity, updated.ReadySetDigest = h.status.Manifest.IntegrityDigest, h.status.Manifest.ReadySetDigest
+	updated.RouterAssetChecksum, updated.RouterModelDigest = h.status.Manifest.RouterAsset.Checksum, h.status.ModelDigest
+	updated.PartitionGeneration, updated.RouterGeneration = h.status.Manifest.Generation, h.status.Manifest.RouterGeneration
+	updated.IndexDefinitionDigest = h.status.Manifest.IndexDefinitionDigest
+	updated.RouterRepresentatives = h.status.Representatives
+	updated.PersistentAssetBytes = h.status.Manifest.RouterAsset.Bytes
+	for _, asset := range h.status.Manifest.Assets {
+		updated.PersistentAssetBytes += asset.Bytes
+	}
+	if err = m3DescriptorMatchesManifestV1(updated, fixtureManifest{Checksum: updated.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+		return err
+	}
+	if err = m3ReplaceVariantDescriptorAtomicallyV1(clone, updated); err != nil {
+		return err
+	}
+	if err = h.Close(); err != nil {
+		return err
+	}
+	h, err = openM8ProductionExistingAssetSetModeV1(clone, true)
+	if err != nil {
+		return err
+	}
+	h.status = h.router.Status()
 	var packBytes uint64
 	for _, asset := range h.status.Manifest.Assets {
 		packBytes += asset.Bytes

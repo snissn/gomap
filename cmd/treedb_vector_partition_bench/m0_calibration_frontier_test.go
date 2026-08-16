@@ -1,13 +1,42 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
+
+func TestM0FrontierAccountSeparatesAssignmentAndBuildIdentityV1(t *testing.T) {
+	assignment := strings.Repeat("a", 64)
+	buildIdentity := strings.Repeat("b", 64)
+	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 1, BuildIdentityDigest: buildIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", Partitions: 4, AssignmentArtifactSHA256: assignment, GraphArtifactSHA256: strings.Repeat("c", 64), Modes: []m0MembershipModeV1{
+		{Name: "zero", Materialize: true, MembershipSHA256: strings.Repeat("d", 64)},
+		{Name: "useful_only_20", Materialize: true, MembershipSHA256: strings.Repeat("e", 64), Used: 1, Useful: 1},
+		{Name: "exact_20", Materialize: true, MembershipSHA256: strings.Repeat("e", 64), Used: 1, Useful: 1},
+	}}
+	raw, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "membership.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := m3VariantDescriptorV1{ArtifactSHA256: assignment, BuildIdentityDigest: buildIdentity}
+	if _, _, _, err := m0FrontierAccountV1(path, collections.VectorPartitionManifestV1{PartitionCount: 4, BalancePolicy: policy}, descriptor, "zero"); err != nil {
+		t.Fatalf("frontier account rejected separately bound identities: %v", err)
+	}
+}
 
 func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
 	base := []string{"-db", "db", "-dataset", "dataset", "-calibration", "calibration", "-truth-cache", "truth", "-membership-report", "membership", "-assignment-artifact", "assignment", "-graph-artifact", "graph", "-out", t.TempDir() + "/report.json"}

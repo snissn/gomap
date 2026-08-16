@@ -203,6 +203,38 @@ func m3WriteVariantDescriptorV1(dir string, descriptor m3VariantDescriptorV1) er
 	return errors.Join(writeErr, file.Close())
 }
 
+// m3ReplaceVariantDescriptorAtomicallyV1 is reserved for a disposable clone
+// whose manifest/router have just been rebuilt. Retained source descriptors
+// remain immutable through m3WriteVariantDescriptorV1.
+func m3ReplaceVariantDescriptorAtomicallyV1(dir string, descriptor m3VariantDescriptorV1) error {
+	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
+		return err
+	}
+	raw, err := m3VariantDescriptorJSONV1(descriptor)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".vector_partition_variant_v1-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0o644); err == nil {
+		_, err = tmp.Write(raw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, m3VariantDescriptorFileV1))
+}
+
 func m3VariantDescriptorJSONV1(descriptor m3VariantDescriptorV1) ([]byte, error) {
 	raw, err := json.MarshalIndent(descriptor, "", "  ")
 	if err != nil {

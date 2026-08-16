@@ -13,6 +13,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
+	variant, m, efConstruction, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1))
+	if err != nil || variant != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || m != 18 || efConstruction != 256 {
+		t.Fatalf("M18 variant = (%q,%d,%d,%v)", variant, m, efConstruction, err)
+	}
+	if _, _, _, err := m0MaterializeVariantV1("m20_ef_construction_256"); err == nil {
+		t.Fatal("unsupported M20 variant accepted")
+	}
+}
+
 func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
