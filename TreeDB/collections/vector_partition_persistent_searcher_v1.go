@@ -31,23 +31,36 @@ type vectorPartitionMembershipSourceV1 struct {
 // VectorPartitionConstructionEvidenceV1 is offline-only, versioned HNSW
 // construction provenance. It is never serialized into the search pack.
 type VectorPartitionConstructionEvidenceV1 struct {
-	Schema, Variant, ManifestChecksum, IndexDefinitionDigest string
-	Partitions                                               []VectorPartitionConstructionPartitionEvidenceV1
+	Schema                string                                           `json:"schema"`
+	Variant               string                                           `json:"variant"`
+	ManifestChecksum      string                                           `json:"manifest_checksum"`
+	IndexDefinitionDigest string                                           `json:"index_definition_digest"`
+	Partitions            []VectorPartitionConstructionPartitionEvidenceV1 `json:"partitions"`
 }
 type VectorPartitionConstructionPartitionEvidenceV1 struct {
-	PartitionID                     uint32
-	AssetChecksum, MembershipDigest string
-	AssetBytes                      uint64
-	Selections                      []VectorPartitionConstructionSelectionV1
-	Events                          []VectorPartitionConstructionEdgeEventV1
-	PostfillEdges                   uint64
+	PartitionID      uint32                                   `json:"partition_id"`
+	AssetChecksum    string                                   `json:"asset_checksum"`
+	MembershipDigest string                                   `json:"membership_digest"`
+	AssetBytes       uint64                                   `json:"asset_bytes"`
+	Selections       []VectorPartitionConstructionSelectionV1 `json:"selections"`
+	Events           []VectorPartitionConstructionEdgeEventV1 `json:"events"`
+	PostfillEdges    uint64                                   `json:"postfill_edges"`
 }
 type VectorPartitionConstructionSelectionV1 struct {
-	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
+	Node              int `json:"node"`
+	Layer             int `json:"layer"`
+	Candidates        int `json:"candidates"`
+	Selected          int `json:"selected"`
+	DiversitySelected int `json:"diversity_selected"`
+	BackfillSelected  int `json:"backfill_selected"`
 }
 type VectorPartitionConstructionEdgeEventV1 struct {
-	From, To, Layer, InsertionOrdinal int
-	Origin, Action                    string
+	From             int    `json:"from"`
+	To               int    `json:"to"`
+	Layer            int    `json:"layer"`
+	InsertionOrdinal int    `json:"insertion_ordinal"`
+	Origin           string `json:"origin"`
+	Action           string `json:"action"`
 }
 
 func compactPartitionAdjacencyV1(in []uint32) []uint32 {
@@ -1223,22 +1236,85 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			searcher.Close()
 			return ErrVectorPartitionSearchUnavailable
 		}
-		finals := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+		if part.PostfillEdges != 0 {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		live := make(map[vectorIndexConstructionEdgeKeyV1]string)
+		selectionCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
+		for _, selection := range part.Selections {
+			if selection.Node < 0 || selection.Node >= pack.Header.Rows || selection.Layer < 0 || selection.Layer >= len(pack.AdjacencyLayers) || selection.Candidates < 0 || selection.Selected < 0 || selection.DiversitySelected < 0 || selection.BackfillSelected < 0 || selection.Selected != selection.DiversitySelected+selection.BackfillSelected || selection.Selected > selection.Candidates {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			selectionCounts[vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
+		}
+		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
+		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		seenFinal := false
 		for _, event := range part.Events {
 			if event.From < 0 || event.To < 0 || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
-			if event.Action == "final_survivor" {
-				seenFinal = true
-				key := vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}
-				if _, duplicate := finals[key]; duplicate {
+			key := vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}
+			switch event.Action {
+			case "initial_add":
+				if event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" {
 					searcher.Close()
 					return ErrVectorPartitionSearchUnavailable
 				}
-				finals[key] = struct{}{}
-			} else if seenFinal {
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				live[key] = event.Origin
+				counts := initialCounts[vectorIndexConstructionEdgeKeyV1{From: event.From, Layer: event.Layer}]
+				if event.Origin == "diversity_selected" {
+					counts[0]++
+				} else {
+					counts[1]++
+				}
+				initialCounts[vectorIndexConstructionEdgeKeyV1{From: event.From, Layer: event.Layer}] = counts
+			case "reciprocal_add":
+				if event.Origin != "reciprocal_add" {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				live[key] = event.Origin
+			case "reciprocal_prune_keep":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+			case "reciprocal_prune_drop":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				delete(live, key)
+			case "final_survivor":
+				seenFinal = true
+				if origin, ok := finals[key]; ok || live[key] != event.Origin || origin != "" {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				finals[key] = event.Origin
+			default:
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			if event.Action != "final_survivor" && seenFinal {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
+		for key, counts := range initialCounts {
+			if selectionCounts[key] != counts {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
@@ -1252,11 +1328,11 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			}
 		}
 		searcher.Close()
-		if len(finals) != len(want) {
+		if len(finals) != len(want) || len(live) != len(finals) {
 			return ErrVectorPartitionSearchUnavailable
 		}
 		for key := range want {
-			if _, ok := finals[key]; !ok {
+			if _, ok := finals[key]; !ok || live[key] != finals[key] {
 				return ErrVectorPartitionSearchUnavailable
 			}
 		}
