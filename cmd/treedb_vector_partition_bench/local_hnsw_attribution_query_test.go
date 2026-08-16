@@ -91,6 +91,31 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 		}
 		return decoded
 	}
+	rebuildVariants := func(value *localHNSWAttributionQueryEvidenceV1, truth, exactLocal []m8CanonicalResultV1) error {
+		nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(value.Partitions))
+		overlayRecords := make([]localHNSWAttributionQuerySearchV1, len(value.Partitions))
+		nativeResults := make([][]m8CanonicalResultV1, len(value.Partitions))
+		overlayResults := make([][]m8CanonicalResultV1, len(value.Partitions))
+		for i, partition := range value.Partitions {
+			var err error
+			nativeRecords[i], overlayRecords[i] = partition.Native, partition.Overlay
+			if nativeResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Native.Results, false); err != nil {
+				return err
+			}
+			if overlayResults[i], err = localHNSWAttributionCanonicalQueryResultBitsV1(partition.Overlay.Results, false); err != nil {
+				return err
+			}
+		}
+		var err error
+		if value.Native, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, nativeRecords, nativeResults, partitionDocumentIDs, value.LowRoute, value.HighRoute); err != nil {
+			return err
+		}
+		if value.Overlay, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, overlayRecords, overlayResults, partitionDocumentIDs, value.LowRoute, value.HighRoute); err != nil {
+			return err
+		}
+		value.RoutingRecall = value.Native.RoutingRecall
+		return nil
+	}
 	bad := decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
@@ -138,7 +163,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
 		t.Fatalf("self-consistent alternate route rejected: %v", err)
 	}
-	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
 		t.Fatal("decoded alternate router route accepted by calibration summary")
 	}
 	bad = decodeEvidence()
@@ -146,13 +171,84 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
 		t.Fatalf("well-formed alternate query digest rejected before retained validation: %v", err)
 	}
-	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
 		t.Fatal("decoded alternate query digest accepted by calibration summary")
+	}
+	bad = decodeEvidence()
+	truth, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternativeLocal, err := localHNSWAttributionCanonicalQueryResultBitsV1(bad.Partitions[0].Native.Results, false)
+	if err != nil || reflect.DeepEqual(alternativeLocal, truth) {
+		t.Fatal("fixture lacks alternate exact-local truth")
+	}
+	bad.NativeExactLocalTruth = localHNSWAttributionQueryResultBitsV1(alternativeLocal)
+	if err := rebuildVariants(&bad, truth, alternativeLocal); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("self-consistent alternate exact-local truth rejected: %v", err)
+	}
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
+		t.Fatal("decoded alternate exact-local truth accepted by calibration summary")
+	}
+	bad = decodeEvidence()
+	truth, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.GlobalTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truthIDs := localHNSWAttributionResultIDSetV1(truth)
+	var replacement localHNSWAttributionQueryResultV1
+	for _, partition := range bad.Partitions {
+		for _, result := range partition.Native.Results {
+			if _, exists := truthIDs[result.ID]; !exists {
+				replacement = result
+				break
+			}
+		}
+		if replacement.ID != "" {
+			break
+		}
+	}
+	if replacement.ID == "" {
+		t.Fatal("fixture lacks alternate global truth result")
+	}
+	alternativeTruth := append([]m8CanonicalResultV1(nil), truth[:len(truth)-1]...)
+	alternativeTruth = append(alternativeTruth, m8CanonicalResultV1{ID: replacement.ID, Score: math.Float32frombits(replacement.ScoreBits)})
+	alternativeTruth, err = localHNSWAttributionCanonicalResultsV1(alternativeTruth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.GlobalTruth = localHNSWAttributionQueryResultBitsV1(alternativeTruth)
+	nativeRecords, _, err = localHNSWAttributionQueryVariantV1Build(t.Context(), native, query, localHNSWAttributionResultIDSetV1(alternativeTruth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayRecords, _, err = localHNSWAttributionQueryVariantV1Build(t.Context(), overlay, query, localHNSWAttributionResultIDSetV1(alternativeTruth))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range bad.Partitions {
+		bad.Partitions[i].Native, bad.Partitions[i].Overlay = nativeRecords[i], overlayRecords[i]
+	}
+	exactLocal, err = localHNSWAttributionCanonicalQueryResultBitsV1(bad.NativeExactLocalTruth, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildVariants(&bad, alternativeTruth, exactLocal); err != nil {
+		t.Fatal(err)
+	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
+		t.Fatalf("self-consistent alternate global truth rejected: %v", err)
+	}
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
+		t.Fatal("decoded alternate global truth accepted by calibration summary")
 	}
 	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	var decodedSummary localHNSWAttributionCalibrationSummaryV1
-	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &decodedSummary, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &decodedSummary, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
 		t.Fatal("decoded canonical result score accepted by calibration summary")
 	}
 	bad = decodeEvidence()
@@ -186,7 +282,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 		t.Fatal("fixture lacks a scored visited row outside returned top K")
 	}
 	bad.Partitions[0].Native.Results = bad.Partitions[0].Native.Results[:len(bad.Partitions[0].Native.Results)-1]
-	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
 		t.Fatal("decoded non-top-K visited result subset accepted")
 	}
 	bad = decodeEvidence()
@@ -227,7 +323,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err != nil {
 		t.Fatalf("aggregate-only validation rejected cross-origin swap: %v", err)
 	}
-	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query); err == nil {
+	if err := localHNSWAttributionCalibrationSummaryAddV1(t.Context(), &localHNSWAttributionCalibrationSummaryV1{}, bad, partitionDocumentIDs, source, native, overlay, query, global); err == nil {
 		t.Fatal("decoded cross-origin utility swap accepted by attributed replay")
 	}
 }

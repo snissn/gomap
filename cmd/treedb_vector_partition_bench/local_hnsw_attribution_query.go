@@ -286,6 +286,38 @@ func localHNSWAttributionQueryEvidenceRouteValidateV1(ctx context.Context, sourc
 	return nil
 }
 
+// localHNSWAttributionQueryEvidenceTruthValidateV1 binds the two truth sets
+// that determine recall and attribution ownership. The global truth is the
+// frozen calibration authority; exact-local truth is recomputed from the
+// retained native packs over the already-authoritative low router route.
+func localHNSWAttributionQueryEvidenceTruthValidateV1(ctx context.Context, source *m8ProductionMultiGroupAssetsV1, native *localHNSWVariantHarnessV1, query []float32, authoritativeGlobal []m8CanonicalResultV1, evidence localHNSWAttributionQueryEvidenceV1) error {
+	authoritative, err := localHNSWAttributionCanonicalResultsV1(authoritativeGlobal, true)
+	if err != nil {
+		return errors.New("invalid local HNSW calibration truth authority")
+	}
+	persistedGlobal, err := localHNSWAttributionCanonicalQueryResultBitsV1(evidence.GlobalTruth, true)
+	if err != nil {
+		return err
+	}
+	globalIDs, globalScores := m8CanonicalParityV1(authoritative, persistedGlobal)
+	if !globalIDs || !globalScores {
+		return errors.New("persisted local HNSW global truth does not match calibration authority")
+	}
+	expectedLocal, err := localHNSWAttributionExactLocalV1(ctx, native, query, evidence.LowRoute)
+	if err != nil {
+		return err
+	}
+	persistedLocal, err := localHNSWAttributionCanonicalQueryResultBitsV1(evidence.NativeExactLocalTruth, false)
+	if err != nil {
+		return err
+	}
+	localIDs, localScores := m8CanonicalParityV1(expectedLocal, persistedLocal)
+	if !localIDs || !localScores {
+		return errors.New("persisted local HNSW exact-local truth does not match retained packs")
+	}
+	return nil
+}
+
 // localHNSWAttributionQueryEvidenceReplayValidateV1 replays the bounded,
 // deterministic attributed search against retained packs and construction final
 // origins. This binds per-origin utility to actual traversed edges rather than
