@@ -35,6 +35,11 @@ type localHNSWM18EdgeDiagnosisCellV1 struct {
 	Work           localHNSWAttributionQueryWorkV1       `json:"work"`
 	HardMisses     []localHNSWM18EdgeDiagnosisHardMissV1 `json:"hard_misses"`
 	Traces         []localHNSWM18EdgeTraceV1             `json:"-"`
+	SelectedWork   []localHNSWM18EdgeDiagnosisPackWorkV1 `json:"selected_pack_work"`
+}
+type localHNSWM18EdgeDiagnosisPackWorkV1 struct {
+	Partition uint32                          `json:"partition"`
+	Work      localHNSWAttributionQueryWorkV1 `json:"work"`
 }
 
 type localHNSWM18EdgeDiagnosisHardMissV1 struct {
@@ -125,6 +130,10 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 	out := make([]localHNSWM18EdgeDiagnosisCellV1, len(localHNSWM18EdgeDiagnosisEFV1))
 	for i, ef := range localHNSWM18EdgeDiagnosisEFV1 {
 		out[i].EFSearch = ef
+		out[i].SelectedWork = make([]localHNSWM18EdgeDiagnosisPackWorkV1, len(localHNSWM18EdgeDiagnosisPacksV1))
+		for j, p := range localHNSWM18EdgeDiagnosisPacksV1 {
+			out[i].SelectedWork[j].Partition = p
+		}
 	}
 	for i, query := range calibration.Queries {
 		route, err := localHNSWAttributionQueryRouteV1(ctx, source, query, candidates, 2)
@@ -158,6 +167,17 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 				records[p] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: trace.FrontierAdmissions, SeedCandidates: trace.SeedCandidates, SeedAdmissions: trace.SeedAdmissions, TerminationReason: trace.TerminationReason, VisitedOrdinalsSHA256: trace.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), trace.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
 				queryTraces = append(queryTraces, localHNSWM18EdgeTraceV1{Schema: localHNSWM18EdgeTraceSchemaV1, QuerySHA: localHNSWAttributionQueryFP32SHA256V1(query), Partition: p, Record: records[p], Edges: append([]collections.VectorPartitionSearchEdgeEventV1(nil), trace.EdgeEvents...), Seeds: append([]collections.VectorPartitionSearchSeedEventV1(nil), trace.SeedEvents...)})
 				results[p] = canonical
+				for j, selected := range localHNSWM18EdgeDiagnosisPacksV1 {
+					if p == selected {
+						w := &out[ci].SelectedWork[j].Work
+						w.Candidates += metrics.Candidates
+						w.Edges += metrics.Edges
+						w.FrontierAdmissions += trace.FrontierAdmissions
+						if localHNSWAttributionQueryUtilityAddV1(&w.Utility, utility) != nil {
+							return nil, errors.New("M18 selected utility")
+						}
+					}
+				}
 			}
 			merged, work, err := localHNSWAttributionQueryMergeV1(records, results, h.documentIDs, route, truthSet)
 			if err != nil {
