@@ -241,16 +241,12 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 					out.FinalDiversity++
 				case "nearest_backfill":
 					out.FinalBackfill++
-					originIndex = 1
 				case "reciprocal_add":
 					out.FinalReciprocal++
-					originIndex = 2
 				case "reciprocity_repair":
 					out.FinalRepair++
-					originIndex = 3
 				case "overlay_rewrite":
 					out.FinalOverlay++
-					originIndex = 4
 				}
 				out.FinalAgeByOrigin[originIndex][bucket]++
 				out.FinalDeltaByOrigin[originIndex][deltaBucket]++
@@ -480,7 +476,21 @@ func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttribu
 
 func localHNSWAttributionHardMissesV1(in []localHNSWAttributionHardMissV1) []localHNSWAttributionHardMissV1 {
 	// Stable digest ranking makes the sample independent of calibration order.
-	sort.Slice(in, func(i, j int) bool { return in[i].Rank < in[j].Rank })
+	sort.Slice(in, func(i, j int) bool {
+		if in[i].Rank != in[j].Rank {
+			return in[i].Rank < in[j].Rank
+		}
+		if in[i].Variant != in[j].Variant {
+			return in[i].Variant < in[j].Variant
+		}
+		if in[i].QueryOrdinal != in[j].QueryOrdinal {
+			return in[i].QueryOrdinal < in[j].QueryOrdinal
+		}
+		if in[i].QuerySHA256 != in[j].QuerySHA256 {
+			return in[i].QuerySHA256 < in[j].QuerySHA256
+		}
+		return in[i].OverlapBits < in[j].OverlapBits
+	})
 	if len(in) > 32 {
 		in = in[:32]
 	}

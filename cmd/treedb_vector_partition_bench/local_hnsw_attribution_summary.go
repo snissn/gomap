@@ -46,9 +46,12 @@ type localHNSWAttributionCalibrationSummaryV1 struct {
 	ChangedPackVisitedDigest uint64                                    `json:"changed_pack_visited_digest"`
 	ChangedPackTermination   uint64                                    `json:"changed_pack_termination"`
 	FirstWitness             *localHNSWAttributionCalibrationWitnessV1 `json:"first_witness,omitempty"`
-	NativeUtility            localHNSWAttributionQueryUtilityV1        `json:"native_utility"`
-	OverlayUtility           localHNSWAttributionQueryUtilityV1        `json:"overlay_utility"`
-	HardMisses               []localHNSWAttributionHardMissV1          `json:"hard_misses"`
+	// NativeUtility aggregates all partition-local native-pack work, before
+	// routed result merging; it is not a global unique-document count.
+	NativeUtility localHNSWAttributionQueryUtilityV1 `json:"native_utility"`
+	// OverlayUtility has the same partition-local scope for overlay-current.
+	OverlayUtility localHNSWAttributionQueryUtilityV1 `json:"overlay_utility"`
+	HardMisses     []localHNSWAttributionHardMissV1   `json:"hard_misses"`
 }
 
 func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarPath string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, ordinals []int, queries [][]float32, truths [][]m8CanonicalResultV1) (localHNSWAttributionArtifactV1, []localHNSWAttributionTimingCaseV1, localHNSWAttributionCalibrationSummaryV1, error) {

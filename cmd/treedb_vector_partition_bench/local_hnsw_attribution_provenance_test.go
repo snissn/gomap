@@ -56,6 +56,17 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	if len(first) != 32 || !reflect.DeepEqual(first, second) {
 		t.Fatalf("non-deterministic bounded misses: %d", len(first))
 	}
+	tied := []localHNSWAttributionHardMissV1{
+		{Rank: "same", Variant: "overlay_current", QueryOrdinal: 9, QuerySHA256: strings.Repeat("c", 64), OverlapBits: 2},
+		{Rank: "same", Variant: "native", QueryOrdinal: 7, QuerySHA256: strings.Repeat("b", 64), OverlapBits: 1},
+		{Rank: "same", Variant: "native", QueryOrdinal: 3, QuerySHA256: strings.Repeat("d", 64), OverlapBits: 3},
+	}
+	tiedFirst := localHNSWAttributionHardMissesV1(append([]localHNSWAttributionHardMissV1(nil), tied...))
+	tied[0], tied[2] = tied[2], tied[0]
+	tiedSecond := localHNSWAttributionHardMissesV1(append([]localHNSWAttributionHardMissV1(nil), tied...))
+	if !reflect.DeepEqual(tiedFirst, tiedSecond) || tiedFirst[0].Variant != "native" || tiedFirst[0].QueryOrdinal != 3 || tiedFirst[1].QueryOrdinal != 7 || tiedFirst[2].Variant != "overlay_current" {
+		t.Fatalf("rank ties do not have a total deterministic order: %+v", tiedFirst)
+	}
 }
 
 func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
