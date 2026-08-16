@@ -165,3 +165,28 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 		t.Fatal("expected invalid variant rejection")
 	}
 }
+
+func TestMaterializeRetainedLocalHNSWVariantSinglePartitionV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	vectors := make([][]float64, 16)
+	for i := range vectors {
+		vectors[i] = []float64{float64(i + 1), float64(i%3 + 1), 1}
+	}
+	source, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	variant := collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
+	h, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), variant, 9996, []uint32{3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != 3 || h.constructionEvidence.Partitions[0].PartitionID != 3 || h.constructionEvidence.Partitions[0].TraceMode != "detailed" || len(h.constructionEvidence.Partitions[0].Events) == 0 || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
+		t.Fatalf("single retained M18 materialization=%+v evidence=%+v origins=%v", h.packAssets, h.constructionEvidence, h.finalOrigins)
+	}
+	if _, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), variant, 9997, []uint32{4}); err == nil {
+		t.Fatal("accepted out-of-range retained partition")
+	}
+}

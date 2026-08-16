@@ -37,6 +37,64 @@ const (
 var localHNSWM18EdgeDiagnosisEFV1 = []int{80, 81, 88, 96}
 var localHNSWM18EdgeDiagnosisPacksV1 = []uint32{0, 1, 3, 16, 36}
 
+func localHNSWM18PreparationSmokePartitionV1(partition uint) bool {
+	return partition == 16 || partition == 36
+}
+
+// runLocalHNSWM18PreparationSmokeV1 is a deliberately non-campaign Linux
+// gate. It reflink-clones the retained source, builds exactly one selected M18
+// pack with bounded construction evidence, strictly reconciles it, and exits.
+// It writes neither a checkpoint nor a diagnosis sidecar/report.
+func runLocalHNSWM18PreparationSmokeV1(args []string, stdout io.Writer) (runErr error) {
+	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-m18-preparation-smoke", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dataset, retainedDB, tempRoot string
+	partition := uint(36)
+	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
+	fs.StringVar(&retainedDB, "retained-db", "", "literal M18 retained database")
+	fs.StringVar(&tempRoot, "temp-root", "", "existing fast temporary root")
+	fs.UintVar(&partition, "partition", partition, "selected retained partition (16 or 36)")
+	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || tempRoot == "" || !localHNSWM18PreparationSmokePartitionV1(partition) {
+		return errors.New("local-hnsw-m18-preparation-smoke requires frozen inputs and --partition=16 or 36")
+	}
+	var err error
+	for ptr, value := range map[*string]string{&dataset: dataset, &retainedDB: retainedDB, &tempRoot: tempRoot} {
+		if *ptr, err = m8CanonicalPathV1(value); err != nil {
+			return err
+		}
+	}
+	fixture, err := loadFixture(dataset)
+	if err != nil || !localHNSWAttributionFixtureV1(fixture) {
+		return errors.New("M18 preparation smoke fixture identity")
+	}
+	descriptorPath := filepath.Join(retainedDB, m3VariantDescriptorFileV1)
+	if digest, err := localHNSWAttributionRegularFileSHA256V1(descriptorPath, m3VariantDescriptorMaxBytesV1); err != nil || digest != localHNSWM18DescriptorSHA256V1 {
+		return errors.New("M18 preparation smoke descriptor identity")
+	}
+	source, err := openM8ProductionExistingAssetSetV1(retainedDB)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, source.Close()) }()
+	if err := localHNSWRepairCalibrationBindDescriptorV1(source, fixture); err != nil || source.manifest.PartitionCount != 40 || source.descriptor == nil || source.descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || source.descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || source.descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 || source.descriptor.PartitionHNSWM != 18 || source.descriptor.PartitionHNSWEfC != 256 {
+		return errors.New("M18 preparation smoke retained source binding")
+	}
+	h, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, tempRoot, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 4171036+uint32(partition), []uint32{uint32(partition)})
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, h.Close()) }()
+	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != uint32(partition) || h.constructionEvidence.Partitions[0].PartitionID != uint32(partition) || h.constructionEvidence.Partitions[0].TraceMode != "detailed" || len(h.constructionEvidence.Partitions[0].Events) == 0 || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
+		return errors.New("M18 preparation smoke bounded evidence reconciliation")
+	}
+	status := h.searchers[0].Status()
+	if status.PartitionID != uint32(partition) || status.PackBytes != h.packAssets[0].Bytes || status.PackBytes == 0 || status.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 {
+		return errors.New("M18 preparation smoke pack status")
+	}
+	_, err = fmt.Fprintf(stdout, "m18-preparation-smoke partition=%d checksum=%s bytes=%d trace=%s\n", partition, h.packAssets[0].Checksum, h.packAssets[0].Bytes, h.constructionEvidence.Partitions[0].TraceMode)
+	return err
+}
+
 type localHNSWM18EdgeDiagnosisCellV1 struct {
 	EFSearch       int                                   `json:"ef_search"`
 	Queries        int                                   `json:"queries"`
