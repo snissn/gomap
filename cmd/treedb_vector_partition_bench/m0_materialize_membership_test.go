@@ -104,6 +104,22 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if report.PartitionCount != 16 || report.OverlapCount != 0 || report.PackBytes == 0 || report.CloneLogicalBytes == 0 || report.SourceOrdinalDigestBefore == "" || report.SourceOrdinalDigestBefore != report.SourceOrdinalDigestAfter {
 		t.Fatalf("report=%+v", report)
 	}
+	descriptor, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict reopen: %v", err)
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(h.manifest.BalancePolicy)
+	if !ok || descriptor.PartitionHNSWM != 18 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+		_ = h.Close()
+		t.Fatalf("rewritten descriptor=%+v policy=%+v", descriptor, policy)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
@@ -210,6 +226,20 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	}
 	if report.Mode != "useful_only_20" || report.MembershipSHA256 != usefulSHA || report.OverlapCount != useful.Used || report.PartitionCount != uint32(config.Partitions) || report.SourceOrdinalDigestBefore == "" || report.SourceOrdinalDigestBefore != report.SourceOrdinalDigestAfter {
 		t.Fatalf("report=%+v", report)
+	}
+	descriptor, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.OverlapMemberships != useful.Used || descriptor.OverlapRealized != useful.Used || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+		t.Fatalf("rewritten overlap accounting descriptor=%+v useful=%+v", descriptor, useful)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict useful reopen: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

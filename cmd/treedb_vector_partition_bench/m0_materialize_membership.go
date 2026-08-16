@@ -161,7 +161,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	updated.Partitions, updated.PartitionHNSWM, updated.PartitionHNSWEfC, updated.PartitionConfig = uint32(artifact.Config.Partitions), variantM, variantEfC, artifact.Config
 	updated.Capacity, updated.OverlapRequested, updated.OverlapRealized, updated.OverlapRejected = overlap.Capacity, overlap.Budget, overlap.Used, overlap.Unspent
 	updated.OverlapUseful, updated.OverlapFiller, updated.EdgeCutBefore, updated.EdgeCutAfter = overlap.Useful, overlap.Filler, overlap.EdgeCutBefore, overlap.EdgeCutAfter
-	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), len(overlap.Memberships)
+	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), overlap.Used
 	updated.OverlapUnusedCapacity = overlap.Capacity*len(overlap.Loads) - len(overlap.Memberships)
 	updated.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(updated)
 	if err != nil {
