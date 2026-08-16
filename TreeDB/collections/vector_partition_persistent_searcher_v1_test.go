@@ -210,9 +210,28 @@ func TestMaterializeVectorPartitionConstructionEvidenceCanonicalizesUnsortedInpu
 
 func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
-	rows := make([]columnGraphRebuildInputRowV2A, 8)
-	for i := range rows {
-		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}}
+	// The 32 domain-separated sample IDs are deliberately late in stable-ID
+	// insertion order. With more than eFC=128 predecessors, this guarantees a
+	// sampled selection with a valid predecessor outside its candidate pool for
+	// the replay-substitution regression below.
+	rows := make([]columnGraphRebuildInputRowV2A, 0, 160)
+	for i := 0; i < 128; i++ {
+		rows = append(rows, columnGraphRebuildInputRowV2A{id: fmt.Sprintf("a%03d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}})
+	}
+	type lateID struct {
+		id   string
+		hash [32]byte
+	}
+	late := make([]lateID, 4096)
+	for i := range late {
+		late[i] = lateID{id: fmt.Sprintf("z%04d", i)}
+		late[i].hash = vectorPartitionConstructionSampleHashV1([]byte(late[i].id))
+	}
+	sort.Slice(late, func(i, j int) bool {
+		return vectorPartitionConstructionSampleLessV1(late[i].hash, []byte(late[i].id), late[j].hash, []byte(late[j].id))
+	})
+	for i := 0; i < 32; i++ {
+		rows = append(rows, columnGraphRebuildInputRowV2A{id: late[i].id, vector: []float32{float32(i + 129), float32(i%3 + 1), 1}})
 	}
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
 	defer d.Close()
@@ -427,24 +446,32 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	t.Run("sample_candidate_replay_substitution", func(t *testing.T) {
 		e := cloneEvidence()
-		i := sampledSelection(&e)
-		s := &e.Partitions[0].Selections[i]
-		present := make(map[int]struct{}, len(s.CandidateOrdinals))
-		for _, ordinal := range s.CandidateOrdinals {
-			present[ordinal] = struct{}{}
-		}
-		replacement := -1
-		for ordinal, insertion := range e.Partitions[0].NativeInsertionOrdinals {
-			if ordinal != s.Node && insertion < e.Partitions[0].NativeInsertionOrdinals[s.Node] {
-				if _, exists := present[ordinal]; !exists {
-					replacement = ordinal
-					break
+		i, replacement := -1, -1
+		for selection := range e.Partitions[0].Selections {
+			s := &e.Partitions[0].Selections[selection]
+			if !s.CandidateSampled || len(s.CandidateOrdinals) == 0 {
+				continue
+			}
+			present := make(map[int]struct{}, len(s.CandidateOrdinals))
+			for _, ordinal := range s.CandidateOrdinals {
+				present[ordinal] = struct{}{}
+			}
+			for ordinal, insertion := range e.Partitions[0].NativeInsertionOrdinals {
+				if ordinal != s.Node && insertion < e.Partitions[0].NativeInsertionOrdinals[s.Node] {
+					if _, exists := present[ordinal]; !exists {
+						i, replacement = selection, ordinal
+						break
+					}
 				}
 			}
+			if replacement >= 0 {
+				break
+			}
 		}
-		if replacement < 0 {
-			t.Fatal("fixture lacks a valid non-pool predecessor")
+		if i < 0 || replacement < 0 {
+			t.Fatal("deterministic replay fixture lacks a non-pool predecessor")
 		}
+		s := &e.Partitions[0].Selections[i]
 		s.CandidateOrdinals[0] = replacement
 		sort.Ints(s.CandidateOrdinals)
 		s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
