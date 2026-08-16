@@ -14,6 +14,7 @@ const localHNSWM18EdgeTraceSchemaV1 = "treedb_local_hnsw_m18_edge_trace_v1"
 
 type localHNSWM18EdgeTraceV1 struct {
 	Schema    string                                         `json:"schema"`
+	QuerySHA  string                                         `json:"query_fp32_sha256"`
 	Partition uint32                                         `json:"partition"`
 	Record    localHNSWAttributionQuerySearchV1              `json:"record"`
 	Edges     []collections.VectorPartitionSearchEdgeEventV1 `json:"edges"`
