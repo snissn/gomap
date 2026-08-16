@@ -17,6 +17,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		EFSearch:     append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...),
 		Queries:      806,
 		Arms:         make([]localHNSWFixedBudgetScreenArmResultV1, len(localHNSWFixedBudgetScreenArmsV1)),
+		Provenance:   localHNSWAttributionProvenanceV1{BaseSHA: "2a7d01443d3c842990c259b08bd442a4d0109511", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ExecutableSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		Calibration:  localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionCalibrationSHA256V1},
+		Truth:        localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionTruthSHA256V1},
+		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
+		Manifest:     "manifest",
+		Source:       localHNSWAttributionSourceEvidenceV1{ManifestIntegrity: "manifest", Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1}},
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		report.Arms[i].Arm = arm
@@ -31,6 +37,9 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		}
 		if i == len(report.Arms)-1 {
 			report.Arms[i].Control = make([]localHNSWFixedBudgetControlPackV1, len(report.VariantPacks))
+			for j := range report.Arms[i].Control {
+				report.Arms[i].Control[j] = localHNSWFixedBudgetControlPackV1{CandidateChecksum: "x", CanonicalChecksum: "x", CandidateBytes: 1, CanonicalBytes: 1}
+			}
 		}
 	}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
