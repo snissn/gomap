@@ -69,6 +69,10 @@ type m0FrontierReportV1 struct {
 	TruthSHA256              string             `json:"truth_sha256"`
 	RouterCandidates         int                `json:"router_candidates"`
 	TopK                     int                `json:"top_k"`
+	PartitionHNSWM           int                `json:"partition_hnsw_m"`
+	PartitionHNSWEfC         int                `json:"partition_hnsw_ef_construction"`
+	GraphVariant             string             `json:"graph_variant"`
+	OfflineGraphVariant      bool               `json:"offline_graph_variant"`
 	Measurements             []m0FrontierCellV1 `json:"measurements"`
 	Cells                    []m0FrontierCellV1 `json:"cells"`
 }
@@ -109,6 +113,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-calibration-frontier", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var db, dataset, calibration, truthCache, membershipReport, assignmentArtifact, graphArtifact, out, probesRaw, efRaw, mode string
+	var allowOfflineGraphVariant bool
 	candidates, topK := 0, 0
 	fs.StringVar(&db, "db", "", "materialized clone")
 	fs.StringVar(&dataset, "dataset", "", "frozen dataset directory")
@@ -123,6 +128,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&efRaw, "ef", "80,81,88,96", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
+	fs.BoolVar(&allowOfflineGraphVariant, "allow-offline-graph-variant", false, "admit a recognized offline-only graph variant for characterization")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
 		return errors.New("M0 calibration frontier arguments")
 	}
@@ -165,7 +171,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 		return e
 	}
 	defer h.Close()
-	if e = m8BindRetainedM3DescriptorV1(h, fixture); e != nil {
+	if e = m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, allowOfflineGraphVariant); e != nil {
 		return fmt.Errorf("M0 frontier retained descriptor: %w", e)
 	}
 	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
@@ -201,7 +207,14 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK}
+	variant, productionVariantErr := m3PartitionLocalGraphVariantV1(h.descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(*h.descriptor))
+	if productionVariantErr != nil {
+		variant, e = m3PartitionLocalOfflineGraphVariantV1(h.descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(*h.descriptor))
+		if e != nil || !allowOfflineGraphVariant {
+			return errors.New("M0 frontier graph variant policy")
+		}
+	}
+	report := m0FrontierReportV1{Schema: "treedb_vector_partition_m0_calibration_frontier_v1", DB: db, ManifestIntegrity: h.manifest.IntegrityDigest, ReadySet: h.manifest.ReadySetDigest, AssetChecksumsSHA256: m0FrontierAssetDigestV1(h.manifest), SourceGeneration: h.manifest.SourceGeneration, SourceChecksum: h.manifest.SourceChecksum, SourceSchemaHash: h.manifest.SourceSchemaHash, SourceRows: h.manifest.SourceRowCount, PartitionGeneration: h.manifest.Generation, PartitionCount: h.manifest.PartitionCount, RouterGeneration: h.manifest.RouterGeneration, RouterModelDigest: h.status.ModelDigest, BalancePolicy: h.manifest.BalancePolicy, OverlapCount: len(h.manifest.OverlapMemberships), Mode: mode, MembershipSHA256: selected.MembershipSHA256, MembershipReportSHA256: accountSHA, GraphArtifactSHA256: account.GraphArtifactSHA256, AssignmentArtifactSHA256: account.AssignmentArtifactSHA256, DatasetManifestSHA256: datasetSHA, BinarySHA256: buildIdentity.BinarySHA256, SourceRevision: buildIdentity.SourceRevision, VCSModified: buildIdentity.VCSModified, CalibrationSHA256: splitSHA, TruthSHA256: truthSHA, RouterCandidates: candidates, TopK: topK, PartitionHNSWM: h.descriptor.PartitionHNSWM, PartitionHNSWEfC: m3DescriptorPartitionHNSWEfCV1(*h.descriptor), GraphVariant: string(variant), OfflineGraphVariant: productionVariantErr != nil}
 	for _, a := range h.manifest.Assets {
 		report.PackBytes += a.Bytes
 	}
@@ -298,7 +311,18 @@ func m0FrontierModeV1(mode string, zero, useful, exact m0MembershipModeV1, overl
 }
 
 func validateM0FrontierReportV1(report m0FrontierReportV1, probes, efs []int, candidates int) bool {
-	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount < 4 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.PackBytes == 0 || report.RouterCandidates != candidates || candidates < 1 || report.TopK != 10 || !validLowerSHA(report.SourceRevision) || report.VCSModified || (report.Mode != "zero" && report.Mode != "useful_only_20") || (report.Mode == "zero" && report.OverlapCount != 0) || (report.Mode == "useful_only_20" && report.OverlapCount == 0) || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
+	if report.Schema != "treedb_vector_partition_m0_calibration_frontier_v1" || report.PartitionCount < 4 || report.PartitionGeneration != 2 || report.SourceGeneration == 0 || report.SourceChecksum == 0 || report.SourceSchemaHash == 0 || report.SourceRows != 250000 || report.PackBytes == 0 || report.RouterCandidates != candidates || candidates < 1 || report.TopK != 10 || report.PartitionHNSWM < 2 || report.PartitionHNSWEfC < report.PartitionHNSWM || report.GraphVariant == "" || !validLowerSHA(report.SourceRevision) || report.VCSModified || (report.Mode != "zero" && report.Mode != "useful_only_20") || (report.Mode == "zero" && report.OverlapCount != 0) || (report.Mode == "useful_only_20" && report.OverlapCount == 0) || !m0FrontierCellsCompleteV1(report.Cells, probes, efs, 806) || len(report.Measurements) != 36 {
+		return false
+	}
+	variant, productionErr := m3PartitionLocalGraphVariantV1(report.PartitionHNSWM, report.PartitionHNSWEfC)
+	if productionErr != nil {
+		var err error
+		variant, err = m3PartitionLocalOfflineGraphVariantV1(report.PartitionHNSWM, report.PartitionHNSWEfC)
+		if err != nil {
+			return false
+		}
+	}
+	if report.GraphVariant != string(variant) || report.OfflineGraphVariant != (productionErr != nil) {
 		return false
 	}
 	for _, id := range []string{report.ManifestIntegrity, report.ReadySet, report.AssetChecksumsSHA256, report.RouterModelDigest, report.MembershipSHA256, report.MembershipReportSHA256, report.GraphArtifactSHA256, report.AssignmentArtifactSHA256, report.DatasetManifestSHA256, report.BinarySHA256, report.CalibrationSHA256, report.TruthSHA256} {

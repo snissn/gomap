@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -311,7 +310,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	if err != nil {
 		return nil, err
 	}
-	if output, err := exec.Command("cp", "-a", "--reflink=auto", source.dir+"/.", clone).CombinedOutput(); err != nil {
+	if output, err := vectorPartitionCloneTreeCommandV1(source.dir, clone).CombinedOutput(); err != nil {
 		_ = os.RemoveAll(clone)
 		return nil, fmt.Errorf("reflink clone retained DB: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -369,6 +368,10 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 }
 
 func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest) error {
+	return m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, false)
+}
+
+func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest, allowOfflineGraphVariant bool) error {
 	if h == nil || h.collection == nil || h.router == nil {
 		return errors.New("retained M8 assets are not open")
 	}
@@ -405,16 +408,43 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 	if err != nil || digest != descriptor.SourceOrdinalDigest {
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
-	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
-		return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+	offlineGraphVariant := false
+	var retainedGraphVariant collections.VectorPartitionLocalGraphVariantV1
+	retainedGraphVariant, err = m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+	if err != nil {
+		if !allowOfflineGraphVariant {
+			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+		}
+		var offlineErr error
+		retainedGraphVariant, offlineErr = m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+		if offlineErr != nil {
+			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
+		}
+		offlineGraphVariant = true
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {
 		return fmt.Errorf("verify retained M8 partition assets: %w", err)
 	}
+	expectedStaleAssets := uint64(0)
+	if offlineGraphVariant {
+		// Offline variants deliberately domain-separate their membership digest,
+		// so the production status boundary must classify every local pack as
+		// stale. Validate those packs through the explicit offline opener below.
+		expectedStaleAssets = uint64(len(h.manifest.Assets))
+	}
 	if !assetStatus.Ready || !assetStatus.Active || assetStatus.Manifest.IntegrityDigest != h.status.Manifest.IntegrityDigest ||
-		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 {
+		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != expectedStaleAssets {
 		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
+	}
+	for _, asset := range h.manifest.Assets {
+		searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
+		if openErr != nil {
+			return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+		}
+		if closeErr := searcher.Close(); closeErr != nil {
+			return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
+		}
 	}
 	h.descriptor = &descriptor
 	return nil

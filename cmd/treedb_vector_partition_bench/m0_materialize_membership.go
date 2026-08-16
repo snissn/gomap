@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 
@@ -144,7 +143,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 			_ = os.RemoveAll(clone)
 		}
 	}()
-	if output, e := exec.Command("cp", "-a", "--reflink=auto", sourceDB+"/.", clone).CombinedOutput(); e != nil {
+	if output, e := vectorPartitionCloneTreeCommandV1(sourceDB, clone).CombinedOutput(); e != nil {
 		return fmt.Errorf("reflink clone: %w: %s", e, output)
 	}
 	if err = backenddb.RebindDurableRootSnapshotV1(clone); err != nil {

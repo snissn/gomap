@@ -218,7 +218,7 @@ func TestM8ProductionReportRejectsUnexercisedDataGroupV1(t *testing.T) {
 	diagnostics := func(loads []uint64) []m8PartitionPackDiagnosticsV1 {
 		out := make([]m8PartitionPackDiagnosticsV1, len(loads))
 		for partition, load := range loads {
-			out[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: load, ReachableRows: load, TraversalRoots: 1}
+			out[partition] = testM8NativePackDiagnosticsV1(uint32(partition), load)
 		}
 		return out
 	}
@@ -628,9 +628,12 @@ func testM8BindRouterSessionsVariantV1(evidence *m8ProductionRouterSessionEviden
 }
 
 func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
+	distance := func(count uint64) collections.VectorPartitionLocalGraphDistanceDistributionV1 {
+		return collections.VectorPartitionLocalGraphDistanceDistributionV1{Count: count, Min: 0.1, Mean: 0.25, P50: 0.2, P95: 0.4, P99: 0.45, Max: 0.5}
+	}
 	valid := []m8PartitionPackDiagnosticsV1{
-		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 3},
-		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, CombinedReachableRows: 2},
+		{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, RowsByLayer: []uint64{3}, EdgesByLayer: []uint64{6}, Layer0DegreeLimit: 2, Layer0SaturatedRows: 3, Layer0ReciprocalEdges: 4, Layer0ReciprocalRatio: 4.0 / 6.0, Layer0Distances: distance(6), CombinedReachableRows: 3},
+		{PartitionID: 1, Rows: 2, ReachableRows: 1, TraversalRoots: 2, MaxLayer: 1, RowsByLayer: []uint64{2, 1}, EdgesByLayer: []uint64{2, 0}, Layer0DegreeLimit: 1, Layer0SaturatedRows: 2, Layer0ReciprocalEdges: 2, Layer0ReciprocalRatio: 1, Layer0Distances: distance(2), AuxiliaryEdges: 2, AuxiliaryCSRBytes: 32, AuxiliaryMaxDegree: 1, AuxiliaryDistances: distance(2), CombinedReachableRows: 2},
 	}
 	if !validM8PartitionPackDiagnosticsV1(valid, 2, []uint64{3, 2}) {
 		t.Fatal("rejected complete native-plus-auxiliary diagnostics")
@@ -652,12 +655,36 @@ func TestM8PartitionPackDiagnosticsFailClosedV1(t *testing.T) {
 		"native_bad_combined":     {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 2}, valid[1]},
 		"empty":                   {{PartitionID: 0, Rows: 0, ReachableRows: 0, TraversalRoots: 1}, valid[1]},
 		"row_mismatch":            {valid[0], {PartitionID: 1, Rows: 1, ReachableRows: 1, TraversalRoots: 1}},
+		"missing_edge_quality":    {{PartitionID: 0, Rows: 3, ReachableRows: 3, TraversalRoots: 1, CombinedReachableRows: 3}, valid[1]},
+		"bad_layer0_distance_count": {func() m8PartitionPackDiagnosticsV1 {
+			d := valid[0]
+			d.Layer0Distances.Count--
+			return d
+		}(), valid[1]},
+		"bad_reciprocal_ratio": {func() m8PartitionPackDiagnosticsV1 {
+			d := valid[0]
+			d.Layer0ReciprocalRatio = 0.5
+			return d
+		}(), valid[1]},
+		"bad_aux_distance_count": {valid[0], func() m8PartitionPackDiagnosticsV1 {
+			d := valid[1]
+			d.AuxiliaryDistances.Count--
+			return d
+		}()},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if validM8PartitionPackDiagnosticsV1(diagnostics, 2, []uint64{3, 2}) {
 				t.Fatalf("accepted %s diagnostics: %+v", name, diagnostics)
 			}
 		})
+	}
+}
+
+func testM8NativePackDiagnosticsV1(partition uint32, rows uint64) m8PartitionPackDiagnosticsV1 {
+	return m8PartitionPackDiagnosticsV1{
+		PartitionID: partition, Rows: rows, ReachableRows: rows, TraversalRoots: 1,
+		RowsByLayer: []uint64{rows}, EdgesByLayer: []uint64{0}, Layer0DegreeLimit: 16,
+		CombinedReachableRows: rows,
 	}
 }
 

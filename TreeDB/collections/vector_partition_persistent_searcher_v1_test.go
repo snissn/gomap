@@ -143,7 +143,7 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 		t.Fatal(err)
 	}
 	members := vectorPartitionMembershipsForPartitionV1(manifest, assets[0].PartitionID)
-	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false, ""); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("production open accepted native v2 pack: %v", err)
 	}
 	nativeManifest := manifest
@@ -558,22 +558,25 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		m       int
 		ef      int
 		fileID  uint32
+		aux     bool
+		version uint16
 	}{
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, def.M, 128, 994},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, 990},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 993},
+		{VectorPartitionLocalGraphVariantOverlayCurrentV1, def.M, 128, 986, false, columnHNSWSearchPackVersionV2},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, def.M, 128, 994, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, 990, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 993, true, columnHNSWSearchPackVersionV3},
 	} {
 		assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, test.fileID, in, test.variant)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer resources.Release()
-		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 {
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
 			if assets[0].MembershipDigest != canonical[0].MembershipDigest {
 				t.Fatalf("variant=%s did not retain default authoritative membership digest", test.variant)
 			}
@@ -589,7 +592,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		pack, err := decodeColumnHNSWSearchPack(raw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: digest})
-		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || !pack.Header.HasAuxiliaryNavigation || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != columnHNSWSearchPackVersionV3 {
+		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || pack.Header.HasAuxiliaryNavigation != test.aux || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != test.version {
 			t.Fatalf("variant=%s pack=%+v err=%v", test.variant, pack.Header, err)
 		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, assets[0])
@@ -601,11 +604,30 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil || closeErr != nil || diagnostics.CombinedReachableRows != diagnostics.Rows {
 			t.Fatalf("variant=%s diagnostics=%+v err=%v close=%v", test.variant, diagnostics, err, closeErr)
 		}
+		exact, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], test.variant)
+		if err != nil {
+			t.Fatalf("variant=%s exact open err=%v", test.variant, err)
+		}
+		if err := exact.Close(); err != nil {
+			t.Fatal(err)
+		}
+		wrongVariant := VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1
+		if test.variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
+			wrongVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+		} else if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 {
+			wrongVariant = VectorPartitionLocalGraphVariantOverlayCurrentV1
+		}
+		if test.variant == wrongVariant {
+			wrongVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
+		}
+		if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], wrongVariant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("variant=%s exact open accepted descriptor variant=%s: %v", test.variant, wrongVariant, err)
+		}
 		members, err := vectorPartitionMembershipsForPartitionWithContextV1(t.Context(), m, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false)
+		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false, "")
 		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 			if productionErr != nil {
 				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
@@ -649,12 +671,46 @@ func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 {
+	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.Layer0ZeroIndegreeRows != 1 || diagnostics.Layer0DuplicateEdges != 0 || diagnostics.Layer0ReciprocalEdges != 2 || diagnostics.Layer0ReciprocalRatio != 1 || diagnostics.Layer0Distances.Count != 2 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 || diagnostics.AuxiliaryDistances.Count != 2 {
 		t.Fatalf("diagnostics=%+v", diagnostics)
 	}
 	status := searcher.Status()
 	if status.AuxiliaryEdges != ordinaryMetrics.AuxiliaryEdges+attributedMetrics.AuxiliaryEdges || status.AuxiliaryCandidates != ordinaryMetrics.AuxiliaryCandidates+attributedMetrics.AuxiliaryCandidates || status.AuxiliaryAdmissions != ordinaryMetrics.AuxiliaryAdmissions+attributedMetrics.AuxiliaryAdmissions {
 		t.Fatalf("status=%+v ordinary=%+v attributed=%+v", status, ordinaryMetrics, attributedMetrics)
+	}
+}
+
+func TestVectorPartitionLocalLayer0ReciprocityRepairPreservesEdgeBudgetV1(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{Vector: []float32{1, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{Vector: []float32{0.9, 0.1}, InvNorm: 1, Adjacency: []uint32{0}},
+		{Vector: []float32{0.8, 0.2}, InvNorm: 1, Adjacency: []uint32{3}},
+		{Vector: []float32{0.7, 0.3}, InvNorm: 1, Adjacency: []uint32{1}},
+	}
+	before := 0
+	for _, row := range rows {
+		before += len(row.Adjacency)
+	}
+	repairs, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repairs != 2 {
+		t.Fatalf("repairs=%d want 2", repairs)
+	}
+	after := 0
+	for _, row := range rows {
+		after += len(row.Adjacency)
+	}
+	if after != before {
+		t.Fatalf("layer-0 edges=%d want fixed budget %d", after, before)
+	}
+	auxiliary, err := buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auxiliary.Neighbors) != 0 {
+		t.Fatalf("connected native graph still needed component bridges: %v", auxiliary.Neighbors)
 	}
 }
 

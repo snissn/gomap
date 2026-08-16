@@ -3019,7 +3019,7 @@ func testM8QualificationReportV1(t *testing.T, head string, fixture fixtureManif
 	}
 	diagnostics := make([]m8PartitionPackDiagnosticsV1, len(loads))
 	for i, load := range loads {
-		diagnostics[i] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(i), Rows: load, ReachableRows: load, TraversalRoots: 1}
+		diagnostics[i] = testM8NativePackDiagnosticsV1(uint32(i), load)
 	}
 	rows := make([]m8ProductionRowV1, 0, len(rowProbes))
 	for _, probes := range rowProbes {

@@ -185,7 +185,7 @@ func localHNSWFinalQualificationTestGateEvidenceV1(report *m8ProductionReportV1)
 	report.PackDiagnostics = make([]m8PartitionPackDiagnosticsV1, 16)
 	for partition := range report.PackDiagnostics {
 		report.Resources.PartitionLoads[partition] = 1
-		report.PackDiagnostics[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+		report.PackDiagnostics[partition] = testM8NativePackDiagnosticsV1(uint32(partition), 1)
 	}
 	for i := range report.Rows {
 		report.Rows[i].RecallAtK = 1

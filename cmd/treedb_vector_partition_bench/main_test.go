@@ -3004,7 +3004,7 @@ func TestM8GateLedgerRequiresMatchedRecallQPSAndTailV1(t *testing.T) {
 		PackDiagnostics: func() []m8PartitionPackDiagnosticsV1 {
 			diagnostics := make([]m8PartitionPackDiagnosticsV1, 16)
 			for partition := range diagnostics {
-				diagnostics[partition] = m8PartitionPackDiagnosticsV1{PartitionID: uint32(partition), Rows: 1, ReachableRows: 1, TraversalRoots: 1}
+				diagnostics[partition] = testM8NativePackDiagnosticsV1(uint32(partition), 1)
 			}
 			return diagnostics
 		}(),
