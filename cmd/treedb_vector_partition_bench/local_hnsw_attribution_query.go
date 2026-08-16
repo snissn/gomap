@@ -104,11 +104,15 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 	if err != nil {
 		return out, err
 	}
-	nativeRecords, nativeResults, err := localHNSWAttributionQueryVariantV1Build(ctx, native, query)
+	truthIDsSet := make(map[string]struct{}, len(truth))
+	for _, result := range truth {
+		truthIDsSet[result.ID] = struct{}{}
+	}
+	nativeRecords, nativeResults, err := localHNSWAttributionQueryVariantV1Build(ctx, native, query, truthIDsSet)
 	if err != nil {
 		return out, err
 	}
-	overlayRecords, overlayResults, err := localHNSWAttributionQueryVariantV1Build(ctx, overlay, query)
+	overlayRecords, overlayResults, err := localHNSWAttributionQueryVariantV1Build(ctx, overlay, query, truthIDsSet)
 	if err != nil {
 		return out, err
 	}
@@ -153,7 +157,7 @@ func localHNSWAttributionExactLocalV1(ctx context.Context, native *localHNSWVari
 	return localHNSWAttributionCanonicalResultsV1(results, false)
 }
 
-func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *localHNSWVariantHarnessV1, query []float32) ([]localHNSWAttributionQuerySearchV1, [][]m8CanonicalResultV1, error) {
+func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *localHNSWVariantHarnessV1, query []float32, truth map[string]struct{}) ([]localHNSWAttributionQuerySearchV1, [][]m8CanonicalResultV1, error) {
 	records := make([]localHNSWAttributionQuerySearchV1, len(harness.searchers))
 	resultsByPartition := make([][]m8CanonicalResultV1, len(harness.searchers))
 	for partition, searcher := range harness.searchers {
@@ -172,7 +176,11 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 		if err != nil {
 			return nil, nil, err
 		}
-		utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, attribution)
+		origins, err := localHNSWAttributionFinalOriginsV1(harness.constructionEvidence, partition)
+		if err != nil {
+			return nil, nil, err
+		}
+		utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, attribution, origins, harness.documentIDs[partition], truth)
 		if err != nil {
 			return nil, nil, err
 		}

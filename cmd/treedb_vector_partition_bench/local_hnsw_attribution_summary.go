@@ -233,6 +233,14 @@ func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtility
 	dst.Scored += value.Scored
 	dst.TopAdmissions += value.TopAdmissions
 	dst.FrontierAdmissions += value.FrontierAdmissions
+	dst.TruthRecovered += value.TruthRecovered
+	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
+		pair[0].Examined += pair[1].Examined
+		pair[0].NewlyVisited += pair[1].NewlyVisited
+		pair[0].Scored += pair[1].Scored
+		pair[0].TopAdmissions += pair[1].TopAdmissions
+		pair[0].FrontierAdmissions += pair[1].FrontierAdmissions
+	}
 }
 
 func localHNSWAttributionFiniteRecallV1(value float64) bool {

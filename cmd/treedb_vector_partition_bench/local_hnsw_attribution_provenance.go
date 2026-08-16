@@ -26,13 +26,21 @@ type localHNSWAttributionConstructionTotalsV1 struct {
 }
 
 type localHNSWAttributionQueryUtilityV1 struct {
-	ExaminedNative     uint64 `json:"examined_native"`
-	ExaminedAuxiliary  uint64 `json:"examined_auxiliary"`
-	NewlyVisited       uint64 `json:"newly_visited"`
-	Scored             uint64 `json:"scored"`
-	TopAdmissions      uint64 `json:"top_admissions"`
-	FrontierAdmissions uint64 `json:"frontier_admissions"`
+	ExaminedNative     uint64                                   `json:"examined_native"`
+	ExaminedAuxiliary  uint64                                   `json:"examined_auxiliary"`
+	NewlyVisited       uint64                                   `json:"newly_visited"`
+	Scored             uint64                                   `json:"scored"`
+	TopAdmissions      uint64                                   `json:"top_admissions"`
+	FrontierAdmissions uint64                                   `json:"frontier_admissions"`
+	TruthRecovered     uint64                                   `json:"truth_recovered"`
+	Diversity          localHNSWAttributionQueryOriginUtilityV1 `json:"diversity_selected"`
+	Backfill           localHNSWAttributionQueryOriginUtilityV1 `json:"nearest_backfill"`
+	Reciprocal         localHNSWAttributionQueryOriginUtilityV1 `json:"reciprocal"`
+	Auxiliary          localHNSWAttributionQueryOriginUtilityV1 `json:"auxiliary"`
+	Unattributed       localHNSWAttributionQueryOriginUtilityV1 `json:"unattributed_native"`
 }
+
+type localHNSWAttributionQueryOriginUtilityV1 struct{ Examined, NewlyVisited, Scored, TopAdmissions, FrontierAdmissions uint64 }
 
 type localHNSWAttributionHardMissV1 struct {
 	QueryOrdinal int    `json:"query_ordinal"`
@@ -46,17 +54,12 @@ type localHNSWAttributionInstrumentationSummaryV1 struct {
 	Schema                 string                                                      `json:"schema"`
 	ManifestIntegrity      string                                                      `json:"manifest_integrity_digest"`
 	IndexDefinitionDigest  string                                                      `json:"index_definition_digest"`
-	DescriptorSHA256       string                                                      `json:"descriptor_sha256"`
-	CalibrationSHA256      string                                                      `json:"calibration_sha256"`
-	TruthSHA256            string                                                      `json:"truth_sha256"`
 	NativeVariant          string                                                      `json:"native_variant"`
 	OverlayVariant         string                                                      `json:"overlay_variant"`
 	NativeConstruction     localHNSWAttributionConstructionTotalsV1                    `json:"native_construction"`
 	OverlayConstruction    localHNSWAttributionConstructionTotalsV1                    `json:"overlay_construction"`
 	NativeQuery            localHNSWAttributionQueryUtilityV1                          `json:"native_query"`
 	OverlayQuery           localHNSWAttributionQueryUtilityV1                          `json:"overlay_query"`
-	ExactKNNPoolCoverage   localHNSWAttributionRecallAggregateV1                       `json:"exact_knn_candidate_pool_coverage"`
-	FinalExactKNNOverlap   localHNSWAttributionRecallAggregateV1                       `json:"final_exact_knn_overlap"`
 	NativeLayer0Distances  collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"native_layer0_distances"`
 	OverlayLayer0Distances collections.VectorPartitionLocalGraphDistanceDistributionV1 `json:"overlay_layer0_distances"`
 	HardMisses             []localHNSWAttributionHardMissV1                            `json:"hard_misses"`
@@ -110,28 +113,78 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 	return out, nil
 }
 
-func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitionSearchMetricsV1, attribution collections.VectorPartitionSearchAttributionV1) (localHNSWAttributionQueryUtilityV1, error) {
+type localHNSWAttributionFinalEdgeKeyV1 struct{ From, To, Layer int }
+
+func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionConstructionEvidenceV1, partition int) (map[localHNSWAttributionFinalEdgeKeyV1]string, error) {
+	if partition < 0 || partition >= len(evidence.Partitions) {
+		return nil, errors.New("invalid local HNSW construction partition")
+	}
+	out := map[localHNSWAttributionFinalEdgeKeyV1]string{}
+	for _, event := range evidence.Partitions[partition].Events {
+		if event.Action != "final_survivor" {
+			continue
+		}
+		key := localHNSWAttributionFinalEdgeKeyV1{event.From, event.To, event.Layer}
+		if _, exists := out[key]; exists || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal") {
+			return nil, errors.New("invalid local HNSW final edge origin")
+		}
+		out[key] = event.Origin
+	}
+	if len(out) == 0 {
+		return nil, errors.New("empty local HNSW final edge origins")
+	}
+	return out, nil
+}
+
+func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitionSearchMetricsV1, attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) (localHNSWAttributionQueryUtilityV1, error) {
 	var out localHNSWAttributionQueryUtilityV1
 	if !localHNSWAttributionSearchValidV1(attribution) {
 		return out, errors.New("invalid local HNSW query attribution")
 	}
+	recovered := map[string]struct{}{}
 	for _, event := range attribution.EdgeEvents {
+		if event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
+			return localHNSWAttributionQueryUtilityV1{}, errors.New("invalid local HNSW trace ordinal")
+		}
+		var origin *localHNSWAttributionQueryOriginUtilityV1
 		if event.Auxiliary {
 			out.ExaminedAuxiliary++
+			origin = &out.Auxiliary
 		} else {
 			out.ExaminedNative++
+			switch origins[localHNSWAttributionFinalEdgeKeyV1{event.SourceOrdinal, event.DestinationOrdinal, event.Layer}] {
+			case "diversity_selected":
+				origin = &out.Diversity
+			case "nearest_backfill":
+				origin = &out.Backfill
+			case "reciprocal":
+				origin = &out.Reciprocal
+			default:
+				origin = &out.Unattributed
+			}
 		}
+		origin.Examined++
 		if event.NewlyVisited {
 			out.NewlyVisited++
+			origin.NewlyVisited++
 		}
 		if event.Scored {
 			out.Scored++
+			origin.Scored++
 		}
 		if event.TopAdmission {
 			out.TopAdmissions++
+			origin.TopAdmissions++
 		}
 		if event.FrontierAdmission {
 			out.FrontierAdmissions++
+			origin.FrontierAdmissions++
+		}
+		if _, wanted := truth[ids[event.DestinationOrdinal]]; wanted {
+			if _, seen := recovered[ids[event.DestinationOrdinal]]; !seen {
+				recovered[ids[event.DestinationOrdinal]] = struct{}{}
+				out.TruthRecovered++
+			}
 		}
 	}
 	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || out.NewlyVisited+attribution.SeedCandidates != metrics.Candidates || out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.Scored != out.NewlyVisited || out.TopAdmissions != out.FrontierAdmissions {
@@ -173,7 +226,7 @@ func localHNSWAttributionInstrumentationSummaryV1Build(source *m8ProductionMulti
 	if calibration.QueryCount == 0 || calibration.NativeUtility.ExaminedNative+calibration.NativeUtility.ExaminedAuxiliary == 0 || calibration.OverlayUtility.ExaminedNative+calibration.OverlayUtility.ExaminedAuxiliary == 0 {
 		return out, errors.New("empty local HNSW instrumentation query utility")
 	}
-	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, DescriptorSHA256: localHNSWAttributionDescriptorSHA256V1, CalibrationSHA256: localHNSWAttributionCalibrationSHA256V1, TruthSHA256: localHNSWAttributionTruthSHA256V1, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, ExactKNNPoolCoverage: calibration.RoutingRecall, FinalExactKNNOverlap: calibration.Overlay.AllGlobal, NativeLayer0Distances: graphDistanceAggregateV1(native.searchers), OverlayLayer0Distances: graphDistanceAggregateV1(overlay.searchers), HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
+	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(native.searchers), OverlayLayer0Distances: graphDistanceAggregateV1(overlay.searchers), HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
 	if out.NativeVariant != "native" || out.OverlayVariant != "overlay_current" || !localHNSWAttributionSHA256V1(out.IndexDefinitionDigest) || out.NativeLayer0Distances.Count == 0 || out.OverlayLayer0Distances.Count == 0 {
 		return localHNSWAttributionInstrumentationSummaryV1{}, errors.New("invalid local HNSW instrumentation summary")
 	}

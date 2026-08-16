@@ -269,6 +269,7 @@ type localHNSWVariantHarnessV1 struct {
 	resources            interface{ Release() }
 	searchers            []*collections.VectorPartitionLocalSearcherV1
 	packAssets           []collections.VectorPartitionAssetV1
+	documentIDs          [][]string
 	constructionEvidence collections.VectorPartitionConstructionEvidenceV1
 }
 
@@ -351,7 +352,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 		resources.Release()
 		return nil, errors.Join(err, owned.Close())
 	}
-	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), constructionEvidence: constructionEvidence, searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets))}
+	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), constructionEvidence: constructionEvidence, searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets)), documentIDs: make([][]string, len(assets))}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, h.Close())
@@ -367,6 +368,10 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset)
 		if err != nil {
 			return nil, err
+		}
+		h.documentIDs[p], err = h.searchers[p].PackDocumentIDsForOfflineTraceV1()
+		if err != nil || len(h.documentIDs[p]) == 0 {
+			return nil, errors.New("retained variant document IDs")
 		}
 	}
 	return h, nil

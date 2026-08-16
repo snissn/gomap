@@ -1376,6 +1376,33 @@ type VectorPartitionSearchPageTokenV1 struct {
 	Page      uint64
 }
 
+// PackDocumentIDsForOfflineTraceV1 exposes the prepared ordinal-to-ID mapping
+// only for offline attribution joins. It is not used by serving traversal.
+func (s *VectorPartitionLocalSearcherV1) PackDocumentIDsForOfflineTraceV1() ([]string, error) {
+	if s == nil {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if err := s.Acquire(); err != nil {
+		return nil, err
+	}
+	defer s.Release()
+	s.mu.Lock()
+	pack := s.prepared
+	s.mu.Unlock()
+	if pack == nil || pack.validateLive() != nil {
+		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	out := make([]string, pack.Header.Rows)
+	for ordinal := range out {
+		start, end := pack.DocumentIDOffsets[ordinal], pack.DocumentIDOffsets[ordinal+1]
+		if end < start || end > uint64(len(pack.DocumentIDBytes)) {
+			return nil, ErrVectorPartitionSearchUnavailable
+		}
+		out[ordinal] = string(pack.DocumentIDBytes[start:end])
+	}
+	return out, nil
+}
+
 // VectorPartitionPackLayoutSnapshotV1 is an offline serialization seam for
 // layout simulations. It exposes no vectors or IDs, only immutable pack row
 // geometry needed to remap recorded traversal reads.
