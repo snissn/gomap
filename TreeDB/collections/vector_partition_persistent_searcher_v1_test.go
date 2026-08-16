@@ -409,7 +409,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer or.Release()
-	repaired, rr, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 985, in)
+	repaired, rr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 985, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,8 +573,12 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resources.Release()
-		if assets[0].MembershipDigest == canonical[0].MembershipDigest {
-			t.Fatalf("variant=%s retained canonical membership digest", test.variant)
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+			if assets[0].MembershipDigest != canonical[0].MembershipDigest {
+				t.Fatalf("variant=%s did not retain default M18/eFC256 membership digest", test.variant)
+			}
+		} else if assets[0].MembershipDigest == canonical[0].MembershipDigest {
+			t.Fatalf("variant=%s retained default M18/eFC256 membership digest", test.variant)
 		}
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), assets[0].Ref)
 		if err != nil {
