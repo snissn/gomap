@@ -88,8 +88,307 @@ type columnHNSWSearchPackEdgeAttribution struct {
 }
 
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
-	return v.searchCosineWithContextTrace(ctx, query, opts, scratch, nil)
+	return v.searchCosineWithContextFast(ctx, query, opts, scratch)
 }
+
+func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+	var stats columnVectorGraphNativeSearchStats
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
+	if v == nil {
+		return nil, stats, errColumnHNSWSearchPackSearchUnavailable
+	}
+	switch status := v.fastStatus(""); status {
+	case columnHNSWSearchPackPreparedStatusDirect, columnHNSWSearchPackPreparedStatusHeap:
+	default:
+		return nil, stats, columnHNSWSearchPackStatusError(status)
+	}
+	if scratch == nil {
+		return nil, stats, errColumnVectorGraphNativeSearchScratchRequired
+	}
+	if len(query) != v.Header.Dimensions {
+		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 query dims=%d want %d: %w", len(query), v.Header.Dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
+	}
+	queryMode, err := opts.QueryMode.normalized()
+	if err != nil {
+		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 query mode: %w", err)
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact || opts.QuantizedIndexName != "" || opts.QuantizedRerankCandidates != 0 {
+		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
+	}
+	if opts.SuppressOmittedResultMaterialization && !opts.OmitResultMaterialization {
+		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
+	}
+	if opts.HasCandidateRows {
+		return nil, stats, errColumnHNSWSearchPackSearchCandidateRows
+	}
+	statsMode := opts.StatsMode.normalized()
+	if !columnHNSWSearchPackStatsModeSupportedForSearch(statsMode) {
+		return nil, stats, errColumnHNSWSearchPackSearchUnsupportedMode
+	}
+	columnVectorGraphNativeSearchStartWorkAccounting(&stats, statsMode)
+	rowCount := v.Header.Rows
+	topK := opts.TopK
+	if topK < 0 {
+		return nil, stats, errColumnVectorGraphNativeSearchTopKNegative
+	}
+	efSearch := opts.EfSearch
+	if efSearch < 0 {
+		return nil, stats, errColumnVectorGraphNativeSearchEfSearchNegative
+	}
+	candidateLimit := opts.CandidateLimit
+	if candidateLimit < 0 {
+		return nil, stats, errors.New("collections: hnsw_search_pack_v1 candidate limit cannot be negative")
+	}
+	if topK == 0 || rowCount == 0 {
+		return nil, stats, nil
+	}
+	stats.CandidateRows = uint64(rowCount)
+	if candidateLimit == 0 || candidateLimit > rowCount {
+		candidateLimit = rowCount
+	}
+	if topK > candidateLimit {
+		topK = candidateLimit
+	}
+	if topK > rowCount {
+		topK = rowCount
+	}
+	if efSearch == 0 {
+		efSearch = v.Header.EfSearch
+	}
+	if efSearch < topK {
+		efSearch = topK
+	}
+	if efSearch > candidateLimit {
+		efSearch = candidateLimit
+	}
+	degree, err := v.layer0ExpansionDegreeV1()
+	if err != nil {
+		return nil, stats, err
+	}
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
+		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 query norm: %w: %w", errColumnVectorGraphNativeSearchQueryNormInvalid, err)
+	}
+	normalizedQuery := scratch.scoreScratch.Float32Values[:v.Header.VectorStride]
+	for i := 0; i < v.Header.Dimensions; i++ {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
+		normalizedQuery[i] = query[i] * queryInvNorm
+	}
+	if v.Header.VectorStride > v.Header.Dimensions {
+		clear(normalizedQuery[v.Header.Dimensions:])
+	}
+	countLoopEdges := !statsMode.minimal()
+	var loopEdgeVisits uint64
+	var visitedCandidates uint64
+	entryOrdinal := v.Header.EntryOrdinal
+	if entryOrdinal < 0 || entryOrdinal >= rowCount {
+		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 entry ordinal=%d outside rows=%d", entryOrdinal, rowCount)
+	}
+	traversalStart, traversalDistanceBefore := columnVectorGraphNativeSearchStartGraphTraversal(&stats)
+	if opts.CandidateLimit == 0 {
+
+		maxLayer, err := v.maxLayerForOrdinal(entryOrdinal)
+		if err != nil {
+			return nil, stats, err
+		}
+		for layer := maxLayer; layer > 0; layer-- {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+			entryOrdinal, err = v.greedyNearestAtLayerWithContextFast(ctx, normalizedQuery, entryOrdinal, layer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits)
+			if err != nil {
+				return nil, stats, err
+			}
+		}
+	}
+	visitMarks := scratch.visitMarks
+	visitEpoch := scratch.visitEpoch
+	visitMarks[entryOrdinal] = visitEpoch
+
+	if err := v.scoreAndPushFrontierVisitedFast(normalizedQuery, entryOrdinal, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+		return nil, stats, err
+	}
+	nextSeed := 0
+	rowCount64 := uint64(rowCount)
+	traversalSteps := 0
+	termination := ""
+	for {
+		if traversalSteps&63 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
+		traversalSteps++
+		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
+			termination = "candidate_limit"
+			break
+		}
+		candidate, ok := scratch.popFrontierAccounting(&stats)
+		if !ok {
+			if len(scratch.top) >= efSearch {
+				termination = "frontier_empty_retained_full"
+				break
+			}
+			seed, seedOK, err := columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
+			if err != nil {
+				return nil, stats, err
+			}
+			if !seedOK {
+				termination = "frontier_empty_no_seed"
+				break
+			}
+			nextSeed = seed + 1
+			visitMarks[seed] = visitEpoch
+
+			if err := v.scoreAndPushFrontierVisitedFast(normalizedQuery, seed, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+				return nil, stats, err
+			}
+			continue
+		}
+		if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
+			termination = "distance_bound"
+			break
+		}
+
+		adjacency, err := v.adjacencyLayerForOrdinal(candidate.ordinal, 0, &stats)
+		if err != nil {
+			return nil, stats, err
+		}
+		auxiliary := []uint32(nil)
+		if v.Header.HasAuxiliaryNavigation {
+
+			start, end := v.AuxiliaryNavigation.Offsets[candidate.ordinal], v.AuxiliaryNavigation.Offsets[candidate.ordinal+1]
+			auxiliary = v.AuxiliaryNavigation.Neighbors[start:end]
+		}
+		if len(adjacency) == 0 && len(auxiliary) == 0 {
+			continue
+		}
+		if len(auxiliary) > math.MaxInt-len(adjacency) {
+			return nil, stats, errColumnHNSWSearchPackSearchUnavailable
+		}
+		scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, len(adjacency)+len(auxiliary))
+		tile := scratch.scoreTileRowIDs[:0]
+
+		// Keep the serving path free of attribution work in this inner loop.
+		for i, neighbor := range adjacency {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
+			if countLoopEdges {
+				loopEdgeVisits++
+			}
+			if uint64(neighbor) >= rowCount64 {
+				return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			}
+			neighborOrdinal := int(neighbor)
+			if visitMarks[neighborOrdinal] == visitEpoch {
+				continue
+			}
+			visitMarks[neighborOrdinal] = visitEpoch
+			tile = append(tile, neighbor)
+			if opts.CandidateLimit > 0 && uint64(len(tile))+visitedCandidates >= uint64(candidateLimit) {
+				break
+			}
+		}
+
+		if len(tile) != 0 {
+			if err := v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+				return nil, stats, err
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
+		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
+			continue
+		}
+		tile = scratch.scoreTileRowIDs[:0]
+
+		for i, neighbor := range auxiliary {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return nil, stats, err
+				}
+			}
+			if countLoopEdges {
+				stats.AuxiliaryEdges++
+			}
+			if uint64(neighbor) >= rowCount64 {
+				return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 ordinal=%d auxiliary[%d]=%d outside row_count=%d: %w", candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			}
+			neighborOrdinal := int(neighbor)
+			if visitMarks[neighborOrdinal] == visitEpoch {
+				continue
+			}
+			visitMarks[neighborOrdinal] = visitEpoch
+			tile = append(tile, neighbor)
+			if opts.CandidateLimit > 0 && uint64(len(tile))+visitedCandidates >= uint64(candidateLimit) {
+				break
+			}
+		}
+
+		if len(tile) != 0 {
+			beforeCandidates, beforeFrontier := visitedCandidates, len(scratch.frontier)
+			if err := v.scoreAndPushFrontierVisitedTileFast(normalizedQuery, tile, efSearch, opts.ScoreBatchMode, scratch, &stats, &visitedCandidates); err != nil {
+				return nil, stats, err
+			}
+			if countLoopEdges {
+				stats.AuxiliaryCandidates += visitedCandidates - beforeCandidates
+				stats.AuxiliaryAdmissions += uint64(len(scratch.frontier) - beforeFrontier)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, stats, err
+			}
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, stats, err
+	}
+	_ = termination
+	stats.Candidates = visitedCandidates
+	if countLoopEdges {
+		stats.Edges = loopEdgeVisits
+		stats.VisitedEdges = loopEdgeVisits
+	}
+	columnVectorGraphNativeSearchFinishGraphTraversal(&stats, traversalStart, traversalDistanceBefore)
+	if len(scratch.top) == 0 {
+		return scratch.results, stats, nil
+	}
+	if opts.SuppressOmittedResultMaterialization {
+		return scratch.results, stats, nil
+	}
+	scratch.retainTopBestFirst(topK)
+	if opts.OmitResultMaterialization {
+		for _, candidate := range scratch.top {
+			scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{Ordinal: candidate.ordinal, Score: candidate.score})
+		}
+		return scratch.results, stats, nil
+	}
+	if err := v.fetchTopSearchResults(scratch, &stats); err != nil {
+		return nil, stats, err
+	}
+	return scratch.results, stats, nil
+}
+
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch, trace *columnHNSWSearchPackAttributionTrace) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	var stats columnVectorGraphNativeSearchStats
 	if trace != nil {
@@ -530,6 +829,68 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayer(normalizedQuery 
 func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContext(ctx context.Context, normalizedQuery []float32, entryOrdinal int, layer int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
 	return v.greedyNearestAtLayerWithContextTrace(ctx, normalizedQuery, entryOrdinal, layer, scoreBatchMode, scratch, stats, countLoopEdges, loopEdgeVisits, nil)
 }
+
+func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextFast(ctx context.Context, normalizedQuery []float32, entryOrdinal int, layer int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64) (int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	best := entryOrdinal
+	bestScore, err := v.scoreOrdinal(normalizedQuery, best, scoreBatchMode, scratch, stats)
+	if err != nil {
+		return 0, err
+	}
+	changed := true
+	for changed {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		changed = false
+		adjacency, err := v.adjacencyLayerForOrdinal(best, layer, stats)
+		if err != nil {
+			return 0, err
+		}
+		if len(adjacency) == 0 {
+			continue
+		}
+		for i, neighbor := range adjacency {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+			}
+			if countLoopEdges && loopEdgeVisits != nil {
+				(*loopEdgeVisits)++
+			}
+			if uint64(neighbor) >= uint64(v.Header.Rows) {
+				return 0, fmt.Errorf("collections: hnsw_search_pack_v1 ordinal=%d layer=%d adjacency[%d]=%d outside row_count=%d: %w", best, layer, i, neighbor, v.Header.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			}
+		}
+		scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(adjacency))
+		scores, err := v.scoreRowIDs(normalizedQuery, adjacency, scratch.scoreTileScores, scoreBatchMode, scratch, stats)
+		if err != nil {
+			return 0, err
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		for i, neighborRowID := range adjacency {
+			if i&255 == 0 {
+				if err := ctx.Err(); err != nil {
+					return 0, err
+				}
+			}
+			neighborOrdinal := int(neighborRowID)
+			score := scores[i]
+			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+				best, bestScore, changed = neighborOrdinal, score, true
+			}
+		}
+	}
+	return best, nil
+}
 func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextTrace(ctx context.Context, normalizedQuery []float32, entryOrdinal int, layer int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64, trace *columnHNSWSearchPackAttributionTrace) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -628,6 +989,21 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisited(normalize
 		if admitted {
 			trace.SeedAdmissions++
 		}
+	}
+	return nil
+}
+
+func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedFast(normalizedQuery []float32, ordinal, topK int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, visitedCandidates *uint64) error {
+	score, err := v.scoreOrdinal(normalizedQuery, ordinal, scoreBatchMode, scratch, stats)
+	if err != nil {
+		return err
+	}
+	if visitedCandidates != nil {
+		(*visitedCandidates)++
+	}
+	candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
+	if scratch.insertTop(topK, candidate) {
+		scratch.pushFrontierAccounting(candidate, stats)
 	}
 	return nil
 }
