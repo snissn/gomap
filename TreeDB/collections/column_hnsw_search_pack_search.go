@@ -84,7 +84,7 @@ type columnHNSWSearchPackEdgeAttribution struct {
 	Auxiliary                                bool
 	NewlyVisited, Scored                     bool
 	Score                                    float64
-	RetainedTop, FrontierAdmission           bool
+	TopAdmission, FrontierAdmission          bool
 }
 
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
@@ -598,7 +598,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 				}
 				if trace != nil && i < len(eventIndices) {
 					event := &trace.EdgeEvents[eventIndices[i]]
-					event.Scored, event.Score, event.RetainedTop, event.FrontierAdmission = true, candidate.score, admitted, admitted
+					event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission = true, candidate.score, admitted, admitted
 				}
 			}
 			return nil
@@ -620,7 +620,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 		}
 		if trace != nil && i < len(eventIndices) {
 			event := &trace.EdgeEvents[eventIndices[i]]
-			event.Scored, event.Score, event.RetainedTop, event.FrontierAdmission = true, candidate.score, admitted, admitted
+			event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission = true, candidate.score, admitted, admitted
 		}
 	}
 	return nil

@@ -223,6 +223,90 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, badEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("bad evidence err=%v", err)
 	}
+	cloneEvidence := func() VectorPartitionConstructionEvidenceV1 {
+		out := constructionEvidence
+		out.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
+		out.Partitions[0].Selections = append([]VectorPartitionConstructionSelectionV1(nil), constructionEvidence.Partitions[0].Selections...)
+		out.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1(nil), constructionEvidence.Partitions[0].Events...)
+		return out
+	}
+	finalEvent := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Events {
+			if e.Partitions[0].Events[i].Action == "final_survivor" {
+				return i
+			}
+		}
+		return -1
+	}
+	initialEvent := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Events {
+			if e.Partitions[0].Events[i].Action == "initial_add" {
+				return i
+			}
+		}
+		return -1
+	}
+	if len(constructionEvidence.Partitions[0].Selections) == 0 || finalEvent(&constructionEvidence) < 0 || initialEvent(&constructionEvidence) < 0 {
+		t.Fatalf("fixture lacks lifecycle coverage: %+v", constructionEvidence)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*VectorPartitionConstructionEvidenceV1)
+	}{
+		{"wrong_variant", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Variant = string(VectorPartitionLocalGraphVariantNativeV1)
+		}},
+		{"wrong_manifest", func(e *VectorPartitionConstructionEvidenceV1) { e.ManifestChecksum = "wrong" }},
+		{"wrong_index", func(e *VectorPartitionConstructionEvidenceV1) { e.IndexDefinitionDigest = "wrong" }},
+		{"wrong_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PartitionID++ }},
+		{"duplicate_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions = append(e.Partitions, e.Partitions[0]) }},
+		{"bad_selection", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].Selections[0].Selected++ }},
+		{"postfill", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PostfillEdges = 1 }},
+		{"bad_origin", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].Origin = "reciprocal_add"
+		}},
+		{"bad_action", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].Action = "reciprocal_prune_keep"
+		}},
+		{"keep_absent", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1{{From: 0, To: 0, Layer: 0, InsertionOrdinal: 0, Origin: "reciprocal_add", Action: "reciprocal_prune_keep"}}, e.Partitions[0].Events...)
+		}},
+		{"drop_absent", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1{{From: 0, To: 0, Layer: 0, InsertionOrdinal: 0, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}}, e.Partitions[0].Events...)
+		}},
+		{"origin_mismatch", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events[i].Origin = "reciprocal_add"
+		}},
+		{"after_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, e.Partitions[0].Events[i-1])
+		}},
+		{"missing_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events[:i], e.Partitions[0].Events[i+1:]...)
+		}},
+		{"duplicate_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, e.Partitions[0].Events[i])
+		}},
+		{"extra_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			x := e.Partitions[0].Events[i]
+			x.To = (x.To + 1) % len(rows)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, x)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := cloneEvidence()
+			tc.mutate(&e)
+			if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
 	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +326,14 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	if !slices.Equal(auxiliaryRaw, auxiliaryAgainRaw) {
 		t.Fatal("auxiliary rebuild bytes differ")
+	}
+	tracedAgain, tracedAgainResources, tracedAgainEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 987, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracedAgainResources.Release()
+	if !reflect.DeepEqual(constructionEvidence, tracedAgainEvidence) || auxiliary[0].Checksum != tracedAgain[0].Checksum || auxiliary[0].Bytes != tracedAgain[0].Bytes {
+		t.Fatalf("traced evidence/assets are not deterministic: first=%+v again=%+v", constructionEvidence, tracedAgainEvidence)
 	}
 	nativeDigest, err := decodeVectorPartitionMembershipDigestV1(native[0].MembershipDigest)
 	if err != nil {
@@ -362,7 +454,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		}
 		if event.FrontierAdmission {
 			admissions++
-			if !event.RetainedTop {
+			if !event.TopAdmission {
 				t.Fatalf("frontier event[%d] was not retained: %+v", i, event)
 			}
 		}

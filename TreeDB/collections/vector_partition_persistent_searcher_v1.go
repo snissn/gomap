@@ -1220,8 +1220,13 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return ErrVectorPartitionSearchUnavailable
 	}
+	seenPartitions := make(map[uint32]struct{}, len(assets))
 	for i, asset := range assets {
 		part := evidence.Partitions[i]
+		if _, duplicate := seenPartitions[part.PartitionID]; duplicate || (i > 0 && evidence.Partitions[i-1].PartitionID >= part.PartitionID) {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		seenPartitions[part.PartitionID] = struct{}{}
 		if asset.PartitionID != part.PartitionID || asset.Checksum != part.AssetChecksum || asset.MembershipDigest != part.MembershipDigest || asset.Bytes != part.AssetBytes {
 			return ErrVectorPartitionSearchUnavailable
 		}
@@ -1247,13 +1252,18 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
-			selectionCounts[vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
+			key := vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}
+			if _, duplicate := selectionCounts[key]; duplicate {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			selectionCounts[key] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
 		}
 		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
 		seenFinal := false
 		for _, event := range part.Events {
-			if event.From < 0 || event.To < 0 || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
+			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") || (event.Action != "initial_add" && event.Action != "reciprocal_add" && event.Action != "reciprocal_prune_keep" && event.Action != "reciprocal_prune_drop" && event.Action != "final_survivor") {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
@@ -1319,6 +1329,12 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return ErrVectorPartitionSearchUnavailable
 			}
 		}
+		for key, counts := range selectionCounts {
+			if initialCounts[key] != counts {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
 		want := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
 		for layer, adjacency := range pack.AdjacencyLayers {
 			for from := 0; from < pack.Header.Rows; from++ {
@@ -1328,7 +1344,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			}
 		}
 		searcher.Close()
-		if len(finals) != len(want) || len(live) != len(finals) {
+		if (len(want) != 0 && !seenFinal) || len(finals) != len(want) || len(live) != len(finals) {
 			return ErrVectorPartitionSearchUnavailable
 		}
 		for key := range want {
