@@ -89,8 +89,8 @@ func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
 
 func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
 	}
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
@@ -106,8 +106,8 @@ func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *
 
 func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "reciprocal_add"}}},
 	}
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
@@ -163,6 +163,15 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	valid.Utility.Scored = 2
 	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("scored work beyond examined edge accepted")
+	}
+	truthRecord := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "overlap", Origin: "diversity_selected"}}})
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, map[string]struct{}{"overlap": {}}); err != nil {
+		t.Fatalf("valid edge truth recovery rejected: %v", err)
+	}
+	truthRecord.Utility.Scored = 0
+	truthRecord.Utility.Diversity.Scored = 0
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{truthRecord}, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("edge-origin truth recovery without scored edge accepted")
 	}
 }
 

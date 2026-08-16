@@ -143,8 +143,8 @@ func TestLocalHNSWAttributionInitialEntryTruthRecoveryPrecedesEdgeV1(t *testing.
 
 func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "diversity_selected"}}},
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "overlay_rewrite"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "diversity_selected"}}},
+		{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Scored: 1, TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, Scored: 1, TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "overlay_rewrite"}}},
 	}
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
