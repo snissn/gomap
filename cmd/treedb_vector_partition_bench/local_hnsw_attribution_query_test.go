@@ -229,6 +229,15 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 	if err := json.Unmarshal(raw, &record); err != nil {
 		t.Fatal(err)
 	}
+	zeroWork := record
+	zeroWork.Candidates, zeroWork.Edges, zeroWork.FrontierAdmissions = 0, 0, 0
+	zeroWork.SeedCandidates, zeroWork.SeedAdmissions = 0, 0
+	zeroWork.VisitedOrdinals = nil
+	zeroWork.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(nil)
+	zeroWork.Utility = localHNSWAttributionQueryUtilityV1{}
+	if _, err := localHNSWAttributionQueryRecordValidateV1(zeroWork, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("decoded zero-work record accepted")
+	}
 	record.SeedAdmissions++
 	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("tampered seed admissions accepted")
@@ -278,6 +287,10 @@ func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearc
 	record.Candidates = record.Utility.NewlyVisited + record.SeedCandidates
 	record.SeedAdmissions = 0
 	record.FrontierAdmissions = record.Utility.FrontierAdmissions
+	if record.FrontierAdmissions == 0 {
+		record.SeedAdmissions = 1
+		record.FrontierAdmissions = 1
+	}
 	if record.TerminationReason == "" {
 		record.TerminationReason = "distance_bound"
 	}
