@@ -57,11 +57,24 @@ type localHNSWM18EdgeDiagnosisReportV1 struct {
 	Descriptor   localHNSWAttributionFileInputV1          `json:"retained_descriptor"`
 	RawSidecar   localHNSWAttributionFileInputV1          `json:"raw_sidecar"`
 	Manifest     string                                   `json:"manifest_integrity_digest"`
+	Source       localHNSWAttributionSourceEvidenceV1     `json:"source"`
 	Build        localHNSWAttributionBuildEvidenceV1      `json:"build"`
 	Construction localHNSWAttributionConstructionTotalsV1 `json:"construction"`
 	Neighborhood localHNSWAttributionNeighborhoodOracleV1 `json:"neighborhood"`
 	Cells        []localHNSWM18EdgeDiagnosisCellV1        `json:"cells"`
 	Limitations  []string                                 `json:"limitations"`
+}
+
+func localHNSWM18EdgeDiagnosisReportValidateV1(r localHNSWM18EdgeDiagnosisReportV1) error {
+	if r.Schema != localHNSWM18EdgeDiagnosisSchemaV1 || r.ResultKind != "local_hnsw_m18_edge_diagnosis_v1" || r.Status != "valid" || r.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || r.Probes != 2 || !localHNSWM18EdgeDiagnosisPointsV1(r.EFSearch) || r.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || r.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || !localHNSWAttributionSHA256V1(r.RawSidecar.SHA256) || r.Source.Partitions != 16 || r.Source.SourceRows != 250000 || r.Source.ManifestIntegrity != r.Manifest || r.Build.Variant != r.Variant || len(r.Cells) != len(r.EFSearch) {
+		return errors.New("invalid M18 edge diagnosis report")
+	}
+	for i, cell := range r.Cells {
+		if cell.EFSearch != r.EFSearch[i] || cell.Queries != 806 || cell.Work.Candidates == 0 || !localHNSWAttributionFiniteRecallV1(cell.EndToEndRecall.Mean) || len(cell.HardMisses) > 32 {
+			return errors.New("invalid M18 edge diagnosis cell")
+		}
+	}
+	return nil
 }
 
 type localHNSWM18EdgeSidecarV1 struct {
@@ -321,7 +334,14 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA || !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
 		return errors.New("M18 edge diagnosis executable changed")
 	}
-	report := localHNSWM18EdgeDiagnosisReportV1{Schema: localHNSWM18EdgeDiagnosisSchemaV1, ResultKind: "local_hnsw_m18_edge_diagnosis_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-m18-edge-diagnosis", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Variant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, RawSidecar: localHNSWAttributionFileInputV1{Path: rawSidecar, SHA256: sidecarSHA}, Manifest: source.manifest.IntegrityDigest, Build: build, Construction: construction, Neighborhood: neighborhood, Cells: cells, Limitations: []string{"offline calibration-only M18 diagnosis; no holdout outcomes opened", "hard misses are bounded deterministic summaries; raw attributed events are not published"}}
+	loads, err := m8PartitionLoadsV1(source.manifest)
+	if err != nil || source.descriptor == nil {
+		return errors.New("M18 edge diagnosis source binding")
+	}
+	report := localHNSWM18EdgeDiagnosisReportV1{Schema: localHNSWM18EdgeDiagnosisSchemaV1, ResultKind: "local_hnsw_m18_edge_diagnosis_v1", Status: "valid", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano), Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-m18-edge-diagnosis", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Variant: string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, RawSidecar: localHNSWAttributionFileInputV1{Path: rawSidecar, SHA256: sidecarSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Build: build, Construction: construction, Neighborhood: neighborhood, Cells: cells, Limitations: []string{"offline calibration-only M18 diagnosis; no holdout outcomes opened", "hard misses are bounded deterministic summaries; raw attributed events are not published"}}
+	if err := localHNSWM18EdgeDiagnosisReportValidateV1(report); err != nil {
+		return err
+	}
 	if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
