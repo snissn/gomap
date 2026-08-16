@@ -80,3 +80,17 @@ func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
 		t.Fatalf("merged work=%+v", work)
 	}
 }
+
+func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *testing.T) {
+	records := []localHNSWAttributionQuerySearchV1{
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"overlap": "diversity_selected"}},
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"overlap": "reciprocal_add"}},
+	}
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utility.TruthRecovered != 1 || utility.Diversity.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
+		t.Fatalf("overlap truth was counted more than once: %+v", utility)
+	}
+}

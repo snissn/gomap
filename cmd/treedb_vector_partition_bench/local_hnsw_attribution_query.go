@@ -233,6 +233,28 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 	return m8CanonicalResultsV1(merged, 10), work, nil
 }
 
+// localHNSWAttributionQueryUtilityAggregateV1 counts every searched partition's
+// work, but credits a canonical truth ID once per query across home/overlap
+// memberships. Non-truth work remains partition-local by design.
+func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQuerySearchV1) (localHNSWAttributionQueryUtilityV1, error) {
+	var out localHNSWAttributionQueryUtilityV1
+	recovered := make(map[string]struct{})
+	for _, record := range records {
+		utility := record.Utility
+		for id, origin := range record.truthRecoveries {
+			if _, seen := recovered[id]; seen {
+				localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin)
+				continue
+			}
+			recovered[id] = struct{}{}
+		}
+		if err := localHNSWAttributionQueryUtilityAddV1(&out, utility); err != nil {
+			return localHNSWAttributionQueryUtilityV1{}, err
+		}
+	}
+	return out, nil
+}
+
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
 	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.Auxiliary, value.Unattributed}
 	var examined, newlyVisited, scored, topAdmissions, frontierAdmissions, stateImprovements, truthRecovered uint64

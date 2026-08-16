@@ -86,6 +86,34 @@ func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWAttributionQueryUtilityReducerCreditsUpperLayerBeforeSeedV1(t *testing.T) {
+	trace := collections.VectorPartitionSearchAttributionV1{
+		Schema:                localHNSWAttributionSearchSchemaV1,
+		FrontierAdmissions:    1,
+		SeedCandidates:        1,
+		SeedAdmissions:        1,
+		SeedEvents:            []collections.VectorPartitionSearchSeedEventV1{{Ordinal: 1, Score: 1, TopAdmission: true, FrontierAdmission: true}},
+		VisitedRows:           1,
+		VisitedOrdinalsSHA256: strings.Repeat("a", 64),
+		TerminationReason:     "candidate_limit",
+		VisitedOrdinals:       []uint32{1},
+		EdgeEvents:            []collections.VectorPartitionSearchEdgeEventV1{{Layer: 1, SourceOrdinal: 0, DestinationOrdinal: 1, Scored: true}},
+	}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{0, 1, 1}: "reciprocal_add"}
+	truth := map[string]struct{}{"truth": {}}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 1, Edges: 1}, trace, origins, []string{"entry", "truth"}, truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utility.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 1 || utility.Unattributed.TruthRecovered != 0 {
+		t.Fatalf("upper-layer recovery was stolen by later seed: %+v", utility)
+	}
+	recoveries := localHNSWAttributionTruthRecoveriesV1(trace, origins, []string{"entry", "truth"}, truth)
+	if recoveries["truth"] != "reciprocal_add" {
+		t.Fatalf("truth recovery origin=%q want reciprocal_add", recoveries["truth"])
+	}
+}
+
 func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
 		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"same": "diversity_selected"}},

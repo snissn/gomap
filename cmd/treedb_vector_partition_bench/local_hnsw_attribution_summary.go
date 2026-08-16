@@ -146,13 +146,24 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 	if summary.QueryCount == math.MaxInt {
 		return errors.New("local HNSW calibration query overflow")
 	}
-	for _, partition := range evidence.Partitions {
-		if err := localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, partition.Native.Utility); err != nil {
-			return err
-		}
-		if err := localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, partition.Overlay.Utility); err != nil {
-			return err
-		}
+	nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(evidence.Partitions))
+	overlayRecords := make([]localHNSWAttributionQuerySearchV1, len(evidence.Partitions))
+	for i, partition := range evidence.Partitions {
+		nativeRecords[i], overlayRecords[i] = partition.Native, partition.Overlay
+	}
+	nativeUtility, err := localHNSWAttributionQueryUtilityAggregateV1(nativeRecords)
+	if err != nil {
+		return err
+	}
+	overlayUtility, err := localHNSWAttributionQueryUtilityAggregateV1(overlayRecords)
+	if err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, nativeUtility); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, overlayUtility); err != nil {
+		return err
 	}
 	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "native", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Native.HighResults)); ok {
 		summary.HardMisses = append(summary.HardMisses, miss)

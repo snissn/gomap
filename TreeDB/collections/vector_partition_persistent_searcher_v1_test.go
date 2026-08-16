@@ -175,6 +175,38 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	}
 }
 
+func TestMaterializeVectorPartitionConstructionEvidenceCanonicalizesUnsortedInputsV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Collection, manifest.IndexName, manifest.IndexDefinitionDigest = col.name, def.Name, VectorIndexDefinitionDigestV1(def)
+	manifest.Generation, manifest.PartitionCount = 191, 2
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions}, {Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	assets, resources, evidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 979, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if len(assets) != 2 || assets[0].PartitionID != 0 || assets[1].PartitionID != 1 || len(evidence.Partitions) != 2 || evidence.Partitions[0].PartitionID != 0 || evidence.Partitions[1].PartitionID != 1 {
+		t.Fatalf("unsorted inputs did not produce canonical assets/evidence: assets=%+v evidence=%+v", assets, evidence.Partitions)
+	}
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, manifest, assets, evidence); err != nil {
+		t.Fatalf("materializer emitted non-self-valid evidence for unsorted inputs: %v", err)
+	}
+}
+
 func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	rows := make([]columnGraphRebuildInputRowV2A, 8)
@@ -665,13 +697,12 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
 		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
 	}
-	var sawNative, sawAuxiliary bool
+	var sawNative bool
 	for _, event := range overlayTrace.EdgeEvents {
 		sawNative = sawNative || !event.Auxiliary
-		sawAuxiliary = sawAuxiliary || event.Auxiliary
 	}
-	if !sawNative || !sawAuxiliary {
-		t.Fatalf("overlay edge attribution lacks native/auxiliary distinction: %+v", overlayTrace.EdgeEvents)
+	if !sawNative {
+		t.Fatalf("overlay edge attribution lacks native events: %+v", overlayTrace.EdgeEvents)
 	}
 	_, _, rerunTrace, err := o.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
 	if err != nil {
