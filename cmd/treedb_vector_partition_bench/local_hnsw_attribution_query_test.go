@@ -148,6 +148,14 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if _, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, map[string]struct{}{"overlap": {}}); err == nil {
 		t.Fatal("non-conserved persisted utility accepted")
 	}
+	valid := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{Edges: 1, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 1}}})
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err != nil {
+		t.Fatalf("valid native utility rejected: %v", err)
+	}
+	valid.Utility.ExaminedNative, valid.Utility.ExaminedAuxiliary = 0, 1
+	if _, err := localHNSWAttributionQueryUtilityAggregateV1([]localHNSWAttributionQuerySearchV1{valid}, map[string]struct{}{"overlap": {}}); err == nil {
+		t.Fatal("swapped native/auxiliary examined aggregate accepted")
+	}
 }
 
 func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearchV1) localHNSWAttributionQuerySearchV1 {
