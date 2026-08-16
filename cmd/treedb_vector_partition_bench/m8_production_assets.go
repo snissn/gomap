@@ -410,7 +410,8 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	}
 	offlineGraphVariant := false
 	var retainedGraphVariant collections.VectorPartitionLocalGraphVariantV1
-	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
+	retainedGraphVariant, err = m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+	if err != nil {
 		if !allowOfflineGraphVariant {
 			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
 		}
@@ -436,15 +437,13 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != expectedStaleAssets {
 		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
 	}
-	if offlineGraphVariant {
-		for _, asset := range h.manifest.Assets {
-			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
-			if openErr != nil {
-				return fmt.Errorf("retained M8 offline partition asset %d: %w", asset.PartitionID, openErr)
-			}
-			if closeErr := searcher.Close(); closeErr != nil {
-				return fmt.Errorf("close retained M8 offline partition asset %d: %w", asset.PartitionID, closeErr)
-			}
+	for _, asset := range h.manifest.Assets {
+		searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
+		if openErr != nil {
+			return fmt.Errorf("retained M8 exact-variant partition asset %d: %w", asset.PartitionID, openErr)
+		}
+		if closeErr := searcher.Close(); closeErr != nil {
+			return fmt.Errorf("close retained M8 exact-variant partition asset %d: %w", asset.PartitionID, closeErr)
 		}
 	}
 	h.descriptor = &descriptor

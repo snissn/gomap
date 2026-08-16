@@ -1767,7 +1767,8 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	packDef := def
 	expectAuxiliaryNavigation := false
 	offlineV3 := false
-	graphVariant := VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+	graphVariant := VectorPartitionLocalGraphVariantV1("")
+	undomainSeparatedVariant := recomputedMembershipDigest == expectedMembershipDigest
 	if recomputedMembershipDigest != expectedMembershipDigest {
 		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); production {
 			graphVariant = variant
@@ -1845,9 +1846,6 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 			}
 		}
 	}
-	if expectedGraphVariant != "" && graphVariant != expectedGraphVariant {
-		return nil, fmt.Errorf("%w: offline graph variant=%s want=%s", ErrVectorPartitionSearchUnavailable, graphVariant, expectedGraphVariant)
-	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
 	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -1885,6 +1883,21 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	if view.Header.Dimensions != packDef.Dimensions || view.Header.M != packDef.M || view.Header.EfConstruction != packDef.EfConstruction || view.Header.EfSearch != packDef.EfSearch {
 		_ = view.Close()
 		return nil, ErrVectorPartitionSearchUnavailable
+	}
+	if undomainSeparatedVariant {
+		// The historical overlay and canonical auxiliary-navigation variants
+		// intentionally share the authoritative membership digest. Their pack
+		// topology is the remaining exact identity boundary.
+		if view.Header.HasAuxiliaryNavigation {
+			graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
+			expectAuxiliaryNavigation = true
+		} else {
+			graphVariant = VectorPartitionLocalGraphVariantOverlayCurrentV1
+		}
+	}
+	if expectedGraphVariant != "" && graphVariant != expectedGraphVariant {
+		_ = view.Close()
+		return nil, fmt.Errorf("%w: offline graph variant=%s want=%s", ErrVectorPartitionSearchUnavailable, graphVariant, expectedGraphVariant)
 	}
 	if !allowOfflineNative && !view.Header.HasAuxiliaryNavigation {
 		_ = view.Close()
