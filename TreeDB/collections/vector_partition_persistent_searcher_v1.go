@@ -1529,17 +1529,17 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				wantOrigin := strings.TrimSuffix(event.Action, "_add")
 				if event.Origin != wantOrigin {
 					searcher.Close()
-					return ErrVectorPartitionSearchUnavailable
+					return fmt.Errorf("%w: construction rewrite add origin %+v", ErrVectorPartitionSearchUnavailable, event)
 				}
 				if _, ok := live[key]; ok {
 					searcher.Close()
-					return ErrVectorPartitionSearchUnavailable
+					return fmt.Errorf("%w: construction rewrite add live %+v", ErrVectorPartitionSearchUnavailable, event)
 				}
 				live[key] = event.Origin
 			case "reciprocity_repair_drop", "overlay_rewrite_drop":
 				if live[key] != event.Origin {
 					searcher.Close()
-					return ErrVectorPartitionSearchUnavailable
+					return fmt.Errorf("%w: construction rewrite drop live=%q event=%+v", ErrVectorPartitionSearchUnavailable, live[key], event)
 				}
 				delete(live, key)
 			case "final_survivor":
