@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -43,15 +44,22 @@ var localHNSWFixedBudgetScreenArmsV1 = []localHNSWFixedBudgetScreenArmV1{
 }
 
 type localHNSWFixedBudgetScreenArmResultV1 struct {
-	Arm                 localHNSWFixedBudgetScreenArmV1     `json:"arm"`
-	Build               localHNSWAttributionBuildEvidenceV1 `json:"build"`
-	SelectedDiagnostics []localHNSWFixedBudgetDiagnosticV1  `json:"selected_pack_diagnostics"`
-	Cells               []localHNSWFixedBudgetScreenCellV1  `json:"cells"`
-	Control             []localHNSWFixedBudgetControlPackV1 `json:"canonical_m18_control,omitempty"`
+	Arm                  localHNSWFixedBudgetScreenArmV1          `json:"arm"`
+	Build                localHNSWAttributionBuildEvidenceV1      `json:"build"`
+	SelectedDiagnostics  []localHNSWFixedBudgetDiagnosticV1       `json:"selected_pack_diagnostics"`
+	Neighborhood         localHNSWAttributionNeighborhoodOracleV1 `json:"selected_pack_neighborhood_oracle"`
+	SelectedNeighborhood []localHNSWFixedBudgetPackNeighborhoodV1 `json:"selected_pack_neighborhood"`
+	Cells                []localHNSWFixedBudgetScreenCellV1       `json:"cells"`
+	Control              []localHNSWFixedBudgetControlPackV1      `json:"canonical_m18_control,omitempty"`
 }
 type localHNSWFixedBudgetDiagnosticV1 struct {
 	Partition   uint32                                       `json:"partition"`
 	Diagnostics collections.VectorPartitionPackDiagnosticsV1 `json:"diagnostics"`
+}
+
+type localHNSWFixedBudgetPackNeighborhoodV1 struct {
+	Partition    uint32                                   `json:"partition"`
+	Neighborhood localHNSWAttributionNeighborhoodOracleV1 `json:"neighborhood"`
 }
 
 // Every cell is restricted to a route entry that is one of SelectedPacks.
@@ -105,10 +113,16 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) || report.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || report.Provenance.BaseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || report.Provenance.SourceDirty || !m8QualificationGitSHAV1(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.Source.ManifestIntegrity != report.Manifest || report.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || report.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || report.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
 		return errors.New("invalid fixed-budget screen contract")
 	}
+	var expectedOpportunities uint64
+	expectedPerPackOpportunities := make([]uint64, len(report.VariantPacks))
+	haveExpectedOpportunities := false
 	for i, arm := range report.Arms {
 		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Arm.Variant)
-		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
+		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.SelectedNeighborhood) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
 			return errors.New("invalid fixed-budget screen arm")
+		}
+		if err := localHNSWFixedBudgetScreenNeighborhoodV1(arm.Neighborhood, arm.SelectedNeighborhood, arm.SelectedDiagnostics, report.VariantPacks); err != nil {
+			return err
 		}
 		for j, d := range arm.SelectedDiagnostics {
 			if d.Partition != report.VariantPacks[j] || d.Diagnostics.Rows == 0 {
@@ -131,6 +145,21 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			if opportunities != cell.QueryPackOpportunities || hits != cell.LocalTruthHitSlots || work != cell.Work {
 				return errors.New("fixed-budget aggregate decomposition")
 			}
+			if !haveExpectedOpportunities {
+				expectedOpportunities = cell.QueryPackOpportunities
+				for k := range cell.PerPack {
+					expectedPerPackOpportunities[k] = cell.PerPack[k].Opportunities
+				}
+				haveExpectedOpportunities = true
+			} else if cell.QueryPackOpportunities != expectedOpportunities {
+				return errors.New("fixed-budget query opportunities vary by arm or EF")
+			} else {
+				for k := range cell.PerPack {
+					if cell.PerPack[k].Opportunities != expectedPerPackOpportunities[k] {
+						return errors.New("fixed-budget per-pack opportunities vary by arm or EF")
+					}
+				}
+			}
 		}
 		if i < len(report.Arms)-1 && len(arm.Control) != 0 || i == len(report.Arms)-1 && len(arm.Control) != len(report.VariantPacks) {
 			return errors.New("invalid fixed-budget screen control")
@@ -142,6 +171,55 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeighborhoodOracleV1, perPack []localHNSWFixedBudgetPackNeighborhoodV1, diagnostics []localHNSWFixedBudgetDiagnosticV1, partitions []uint32) error {
+	if aggregate.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || aggregate.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || aggregate.ExactK != localHNSWAttributionNeighborhoodExactKV1 || aggregate.CandidateSamples == 0 || aggregate.FinalSamples == 0 || len(perPack) != len(partitions) || len(diagnostics) != len(partitions) || len(aggregate.PackDiagnostics) != len(partitions) {
+		return errors.New("invalid fixed-budget neighborhood oracle")
+	}
+	var totals localHNSWAttributionNeighborhoodOracleV1
+	for i, partition := range partitions {
+		one := perPack[i].Neighborhood
+		if perPack[i].Partition != partition || one.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || one.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || one.ExactK != localHNSWAttributionNeighborhoodExactKV1 || one.CandidateSamples == 0 || one.FinalSamples == 0 || len(one.PackDiagnostics) != 1 || !reflect.DeepEqual(one.PackDiagnostics[0], diagnostics[i].Diagnostics) || !reflect.DeepEqual(aggregate.PackDiagnostics[i], diagnostics[i].Diagnostics) {
+			return errors.New("invalid fixed-budget selected neighborhood binding")
+		}
+		if err := localHNSWFixedBudgetScreenNeighborhoodAddV1(&totals, one); err != nil {
+			return err
+		}
+	}
+	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
+		return errors.New("fixed-budget neighborhood aggregate decomposition")
+	}
+	return nil
+}
+
+func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighborhoodOracleV1, src localHNSWAttributionNeighborhoodOracleV1) error {
+	if dst == nil {
+		return errors.New("invalid fixed-budget neighborhood total")
+	}
+	fields := [][2]uint64{{dst.CandidateSamples, src.CandidateSamples}, {dst.CandidateTruthNeighbors, src.CandidateTruthNeighbors}, {dst.CandidateTruthRecovered, src.CandidateTruthRecovered}, {dst.FinalSamples, src.FinalSamples}, {dst.FinalSampleTruthNeighbors, src.FinalSampleTruthNeighbors}, {dst.FinalSampleTruthRecovered, src.FinalSampleTruthRecovered}, {dst.AngularPairs, src.AngularPairs}}
+	for _, field := range fields {
+		if ^uint64(0)-field[0] < field[1] {
+			return errors.New("fixed-budget neighborhood overflow")
+		}
+	}
+	for i := range dst.FinalEdgesByOrigin {
+		if ^uint64(0)-dst.FinalEdgesByOrigin[i] < src.FinalEdgesByOrigin[i] || ^uint64(0)-dst.FinalTruthByOrigin[i] < src.FinalTruthByOrigin[i] {
+			return errors.New("fixed-budget neighborhood origin overflow")
+		}
+	}
+	dst.CandidateSamples += src.CandidateSamples
+	dst.CandidateTruthNeighbors += src.CandidateTruthNeighbors
+	dst.CandidateTruthRecovered += src.CandidateTruthRecovered
+	dst.FinalSamples += src.FinalSamples
+	dst.FinalSampleTruthNeighbors += src.FinalSampleTruthNeighbors
+	dst.FinalSampleTruthRecovered += src.FinalSampleTruthRecovered
+	dst.AngularPairs += src.AngularPairs
+	for i := range dst.FinalEdgesByOrigin {
+		dst.FinalEdgesByOrigin[i] += src.FinalEdgesByOrigin[i]
+		dst.FinalTruthByOrigin[i] += src.FinalTruthByOrigin[i]
 	}
 	return nil
 }
@@ -164,6 +242,10 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 	if source == nil || len(calibration.Queries) != 806 || len(calibration.Truth) != 806 {
 		return nil, errors.New("invalid fixed-budget screen inputs")
 	}
+	vectors, err := localHNSWAttributionNeighborhoodVectorsV1(&localHNSWVariantHarnessV1{assets: source})
+	if err != nil {
+		return nil, err
+	}
 	out := make([]localHNSWFixedBudgetScreenArmResultV1, len(localHNSWFixedBudgetScreenArmsV1))
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		h, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, tempRoot, arm.Variant, 4172000+uint32(i), localHNSWM18EdgeDiagnosisPacksV1)
@@ -183,6 +265,12 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		diagnostics, err := localHNSWAttributionPackDiagnosticsV1(h.searchers)
 		if err == nil {
 			out[i].SelectedDiagnostics, err = localHNSWFixedBudgetScreenSelectedDiagnosticsV1(diagnostics)
+		}
+		if err == nil {
+			out[i].Neighborhood, err = localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
+		}
+		if err == nil {
+			out[i].SelectedNeighborhood, err = localHNSWFixedBudgetScreenSelectedNeighborhoodV1(h, diagnostics, vectors)
 		}
 		if err == nil {
 			out[i].Cells, err = localHNSWFixedBudgetScreenCellsV1(ctx, source, h, calibration)
@@ -210,6 +298,30 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		if err := h.Close(); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+func localHNSWFixedBudgetScreenSelectedNeighborhoodV1(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1, vectors map[string][]float32) ([]localHNSWFixedBudgetPackNeighborhoodV1, error) {
+	if h == nil || len(h.searchers) != len(localHNSWM18EdgeDiagnosisPacksV1) || len(h.documentIDs) != len(h.searchers) || len(h.packAssets) != len(h.searchers) || len(h.constructionEvidence.Partitions) != len(h.searchers) || len(diagnostics) != len(h.searchers) || len(vectors) == 0 {
+		return nil, errors.New("invalid fixed-budget selected neighborhood inputs")
+	}
+	out := make([]localHNSWFixedBudgetPackNeighborhoodV1, len(h.searchers))
+	for i, partition := range localHNSWM18EdgeDiagnosisPacksV1 {
+		if h.packAssets[i].PartitionID != partition || h.constructionEvidence.Partitions[i].PartitionID != partition {
+			return nil, errors.New("invalid fixed-budget selected neighborhood order")
+		}
+		one := *h
+		one.searchers = []*collections.VectorPartitionLocalSearcherV1{h.searchers[i]}
+		one.documentIDs = [][]string{h.documentIDs[i]}
+		one.packAssets = []collections.VectorPartitionAssetV1{h.packAssets[i]}
+		one.constructionEvidence = h.constructionEvidence
+		one.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{h.constructionEvidence.Partitions[i]}
+		neighborhood, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&one, []collections.VectorPartitionPackDiagnosticsV1{diagnostics[i]}, vectors)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = localHNSWFixedBudgetPackNeighborhoodV1{Partition: partition, Neighborhood: neighborhood}
 	}
 	return out, nil
 }

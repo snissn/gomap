@@ -49,6 +49,19 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		for j := range report.Arms[i].SelectedDiagnostics {
 			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 1}}
 		}
+		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
+		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
+		for j, partition := range report.VariantPacks {
+			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			report.Arms[i].SelectedNeighborhood[j] = localHNSWFixedBudgetPackNeighborhoodV1{Partition: partition, Neighborhood: one}
+			report.Arms[i].Neighborhood.CandidateSamples++
+			report.Arms[i].Neighborhood.CandidateTruthNeighbors++
+			report.Arms[i].Neighborhood.CandidateTruthRecovered++
+			report.Arms[i].Neighborhood.FinalSamples++
+			report.Arms[i].Neighborhood.FinalSampleTruthNeighbors++
+			report.Arms[i].Neighborhood.FinalSampleTruthRecovered++
+			report.Arms[i].Neighborhood.PackDiagnostics = append(report.Arms[i].Neighborhood.PackDiagnostics, report.Arms[i].SelectedDiagnostics[j].Diagnostics)
+		}
 		report.Arms[i].Cells = make([]localHNSWFixedBudgetScreenCellV1, len(report.EFSearch))
 		for j, ef := range report.EFSearch {
 			packs := make([]localHNSWFixedBudgetPackWorkV1, len(report.VariantPacks))
@@ -99,6 +112,25 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	reorderedControl.Arms[last].Control[0], reorderedControl.Arms[last].Control[1] = reorderedControl.Arms[last].Control[1], reorderedControl.Arms[last].Control[0]
 	if err := localHNSWFixedBudgetScreenContractV1(reorderedControl); err == nil {
 		t.Fatal("reordered M18 control accepted")
+	}
+
+	reorderedNeighborhood := localHNSWFixedBudgetScreenCloneV1(t, report)
+	reorderedNeighborhood.Arms[0].SelectedNeighborhood[0], reorderedNeighborhood.Arms[0].SelectedNeighborhood[1] = reorderedNeighborhood.Arms[0].SelectedNeighborhood[1], reorderedNeighborhood.Arms[0].SelectedNeighborhood[0]
+	if err := localHNSWFixedBudgetScreenContractV1(reorderedNeighborhood); err == nil {
+		t.Fatal("reordered selected neighborhood accepted")
+	}
+
+	badNeighborhoodAggregate := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badNeighborhoodAggregate.Arms[0].Neighborhood.CandidateSamples++
+	if err := localHNSWFixedBudgetScreenContractV1(badNeighborhoodAggregate); err == nil {
+		t.Fatal("tampered neighborhood aggregate accepted")
+	}
+
+	varyingOpportunities := localHNSWFixedBudgetScreenCloneV1(t, report)
+	varyingOpportunities.Arms[1].Cells[0].PerPack[0].Opportunities++
+	varyingOpportunities.Arms[1].Cells[0].QueryPackOpportunities++
+	if err := localHNSWFixedBudgetScreenContractV1(varyingOpportunities); err == nil {
+		t.Fatal("EF or arm-dependent query opportunities accepted")
 	}
 }
 
