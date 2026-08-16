@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -311,7 +310,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	if err != nil {
 		return nil, err
 	}
-	if output, err := exec.Command("cp", "-a", "--reflink=auto", source.dir+"/.", clone).CombinedOutput(); err != nil {
+	if output, err := vectorPartitionCloneTreeCommandV1(source.dir, clone).CombinedOutput(); err != nil {
 		_ = os.RemoveAll(clone)
 		return nil, fmt.Errorf("reflink clone retained DB: %w: %s", err, strings.TrimSpace(string(output)))
 	}
