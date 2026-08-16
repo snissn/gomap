@@ -197,3 +197,30 @@ func TestMaterializeRetainedLocalHNSWVariantSinglePartitionV1(t *testing.T) {
 		t.Fatal("accepted out-of-range retained partition")
 	}
 }
+
+func TestMaterializeRetainedLocalHNSWVariantAllPartitionsV1(t *testing.T) {
+	requireM8PersistentAssetSupportV1(t)
+	const partitions = 40
+	vectors := make([][]float64, partitions*2)
+	for i := range vectors {
+		vectors[i] = []float64{float64(i + 1), float64(i%5 + 1), 1}
+	}
+	source, err := newM8ProductionMultiGroupAssetsV1(vectors, []string{"a", "b"}, partitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	h, err := materializeRetainedLocalHNSWVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 9998)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if len(h.packAssets) != partitions || len(h.searchers) != partitions || len(h.constructionEvidence.Partitions) != partitions || len(h.finalOrigins) != partitions {
+		t.Fatalf("full retained M18 materialization assets=%d searchers=%d evidence=%d origins=%d", len(h.packAssets), len(h.searchers), len(h.constructionEvidence.Partitions), len(h.finalOrigins))
+	}
+	for partition := range h.packAssets {
+		if h.packAssets[partition].PartitionID != uint32(partition) || h.constructionEvidence.Partitions[partition].PartitionID != uint32(partition) || h.searchers[partition].Status().PartitionID != uint32(partition) || len(h.finalOrigins[partition]) == 0 {
+			t.Fatalf("retained M18 partition mapping=%d asset=%d evidence=%d status=%d origins=%d", partition, h.packAssets[partition].PartitionID, h.constructionEvidence.Partitions[partition].PartitionID, h.searchers[partition].Status().PartitionID, len(h.finalOrigins[partition]))
+		}
+	}
+}
