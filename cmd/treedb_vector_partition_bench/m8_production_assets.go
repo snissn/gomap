@@ -332,6 +332,8 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 		}
 		seenPartitions[partitionID] = struct{}{}
 	}
+	partitionIDs = append([]uint32(nil), partitionIDs...)
+	sort.Slice(partitionIDs, func(i, j int) bool { return partitionIDs[i] < partitionIDs[j] })
 	clone, err := os.MkdirTemp(tempRoot, "treedb-4105-variant-*")
 	if err != nil {
 		return nil, err

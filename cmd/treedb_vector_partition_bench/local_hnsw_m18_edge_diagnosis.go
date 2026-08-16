@@ -84,8 +84,11 @@ func runLocalHNSWM18PreparationSmokeV1(args []string, stdout io.Writer) (runErr 
 		return err
 	}
 	defer func() { runErr = errors.Join(runErr, h.Close()) }()
+	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
+		return errors.New("M18 preparation smoke bounded evidence reconciliation")
+	}
 	part := h.constructionEvidence.Partitions[0]
-	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != uint32(partition) || part.PartitionID != uint32(partition) || (part.TraceMode != "detailed" && part.TraceMode != "compact") || (part.TraceMode == "detailed" && len(part.Events) == 0) || (part.TraceMode == "compact" && (len(part.Events) != 0 || len(part.FinalOrigins) == 0)) || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
+	if h.packAssets[0].PartitionID != uint32(partition) || part.PartitionID != uint32(partition) || (part.TraceMode != "detailed" && part.TraceMode != "compact") || (part.TraceMode == "detailed" && len(part.Events) == 0) || (part.TraceMode == "compact" && (len(part.Events) != 0 || len(part.FinalOrigins) == 0)) {
 		return errors.New("M18 preparation smoke bounded evidence reconciliation")
 	}
 	status := h.searchers[0].Status()

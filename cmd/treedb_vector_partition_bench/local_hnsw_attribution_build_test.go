@@ -137,6 +137,42 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(oracle, shared) {
 		t.Fatalf("shared-vector oracle differs: first=%+v shared=%+v err=%v", oracle, shared, err)
 	}
+	// Compact evidence stores final survivors in FinalOrigins rather than the
+	// historical Events stream. The neighborhood oracle must produce the same
+	// answer from either representation.
+	m18Diagnostics, err := localHNSWAttributionPackDiagnosticsV1(m18.searchers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m18Vectors, err := localHNSWAttributionNeighborhoodVectorsV1(m18)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compactPart := m18.constructionEvidence.Partitions[2]
+	compactHarness := &localHNSWVariantHarnessV1{
+		assets:               m18.assets,
+		searchers:            []*collections.VectorPartitionLocalSearcherV1{m18.searchers[2]},
+		documentIDs:          [][]string{m18.documentIDs[2]},
+		constructionEvidence: m18.constructionEvidence,
+	}
+	compactHarness.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{compactPart}
+	compactOracle, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(compactHarness, []collections.VectorPartitionPackDiagnosticsV1{m18Diagnostics[2]}, m18Vectors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detailedPart := compactPart
+	detailedPart.TraceMode = "detailed"
+	detailedPart.Events = make([]collections.VectorPartitionConstructionEdgeEventV1, 0, len(compactPart.FinalOrigins))
+	for _, final := range compactPart.FinalOrigins {
+		detailedPart.Events = append(detailedPart.Events, collections.VectorPartitionConstructionEdgeEventV1{Action: "final_survivor", Origin: final.Origin, Layer: final.Layer, From: final.From, To: final.To})
+	}
+	detailedPart.FinalOrigins = nil
+	detailedHarness := *compactHarness
+	detailedHarness.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{detailedPart}
+	detailedOracle, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&detailedHarness, []collections.VectorPartitionPackDiagnosticsV1{m18Diagnostics[2]}, m18Vectors)
+	if err != nil || !reflect.DeepEqual(compactOracle, detailedOracle) || compactOracle.FinalEdgesByOrigin == [5]uint64{} {
+		t.Fatalf("compact final origins differ from detailed events: compact=%+v detailed=%+v err=%v", compactOracle, detailedOracle, err)
+	}
 	bad := harness.constructionEvidence.Partitions[0].Selections[0]
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateSampled = true
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateOrdinals = []int{len(harness.documentIDs[0])}
@@ -195,6 +231,14 @@ func TestMaterializeRetainedLocalHNSWVariantSinglePartitionV1(t *testing.T) {
 	}
 	if _, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), variant, 9997, []uint32{4}); err == nil {
 		t.Fatal("accepted out-of-range retained partition")
+	}
+	ordered, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), variant, 9999, []uint32{3, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ordered.Close()
+	if len(ordered.packAssets) != 2 || ordered.packAssets[0].PartitionID != 1 || ordered.packAssets[1].PartitionID != 3 {
+		t.Fatalf("retained partitions were not canonicalized: %+v", ordered.packAssets)
 	}
 }
 

@@ -843,16 +843,34 @@ func localHNSWAttributionNeighborhoodOracleWithVectorsV1(h *localHNSWVariantHarn
 			to     int
 			origin string
 		}{}
-		for _, event := range part.Events {
-			if event.Action == "final_survivor" && event.Layer == 0 {
-				if event.From < 0 || event.From >= len(ids) || event.To < 0 || event.To >= len(ids) {
-					return out, errors.New("local HNSW oracle final ordinal")
-				}
-				final[event.From] = append(final[event.From], struct {
-					to     int
-					origin string
-				}{event.To, event.Origin})
+		finalOrigins, err := localHNSWAttributionFinalOriginsV1(h.constructionEvidence, int(part.PartitionID))
+		if err != nil {
+			return out, err
+		}
+		finalEdges := make([]localHNSWAttributionFinalEdgeKeyV1, 0, len(finalOrigins))
+		for edge := range finalOrigins {
+			finalEdges = append(finalEdges, edge)
+		}
+		sort.Slice(finalEdges, func(i, j int) bool {
+			if finalEdges[i].From != finalEdges[j].From {
+				return finalEdges[i].From < finalEdges[j].From
 			}
+			if finalEdges[i].Layer != finalEdges[j].Layer {
+				return finalEdges[i].Layer < finalEdges[j].Layer
+			}
+			return finalEdges[i].To < finalEdges[j].To
+		})
+		for _, edge := range finalEdges {
+			if edge.Layer != 0 {
+				continue
+			}
+			if edge.From < 0 || edge.From >= len(ids) || edge.To < 0 || edge.To >= len(ids) {
+				return out, errors.New("local HNSW oracle final ordinal")
+			}
+			final[edge.From] = append(final[edge.From], struct {
+				to     int
+				origin string
+			}{edge.To, finalOrigins[edge]})
 		}
 		samples := make(map[int]collections.VectorPartitionConstructionSelectionV1)
 		sampleNodes := make([]int, 0)

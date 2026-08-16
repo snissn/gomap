@@ -237,7 +237,7 @@ func localHNSWM18EdgeCheckpointValidateV1(value localHNSWM18EdgeCheckpointV1, so
 }
 
 func localHNSWM18EdgeCheckpointWriteV1(path, headSHA, descriptorSHA, tempRoot string, source *m8ProductionMultiGroupAssetsV1, h *localHNSWVariantHarnessV1, build localHNSWAttributionBuildEvidenceV1, construction localHNSWAttributionConstructionTotalsV1, selectedConstruction []localHNSWM18EdgeDiagnosisPackConstructionV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1, neighborhood localHNSWAttributionNeighborhoodOracleV1, selectedNeighborhood []localHNSWM18EdgeDiagnosisPackNeighborhoodV1) (localHNSWM18EdgeCheckpointV1, error) {
-	if h == nil || h.assets == nil || h.assets.dir == "" || len(diagnostics) != 40 {
+	if source == nil || h == nil || h.assets == nil || h.assets.dir == "" || len(diagnostics) != 40 {
 		return localHNSWM18EdgeCheckpointV1{}, errors.New("invalid M18 checkpoint harness")
 	}
 	originsPath := path + ".origins.bin"
