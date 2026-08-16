@@ -67,6 +67,28 @@ type localHNSWAttributionDistanceAggregateV1 struct {
 	Max   float64 `json:"max"`
 }
 
+// localHNSWAttributionNeighborhoodOracleV1 is an offline-only exact-vector
+// audit. Candidate coverage is restricted to the bounded construction sample;
+// final overlap scans each immutable partition and is never request-path work.
+type localHNSWAttributionNeighborhoodOracleV1 struct {
+	Schema                    string                                         `json:"schema"`
+	ExactK                    int                                            `json:"exact_k"`
+	CandidateSamples          uint64                                         `json:"candidate_samples"`
+	CandidateTruthNeighbors   uint64                                         `json:"candidate_truth_neighbors"`
+	CandidateTruthRecovered   uint64                                         `json:"candidate_truth_recovered"`
+	FinalSamples              uint64                                         `json:"final_samples"`
+	FinalSampleTruthNeighbors uint64                                         `json:"final_sample_truth_neighbors"`
+	FinalSampleTruthRecovered uint64                                         `json:"final_sample_truth_recovered"`
+	FinalEdgesByOrigin        [3]uint64                                      `json:"final_edges_by_origin"`
+	FinalTruthByOrigin        [3]uint64                                      `json:"final_truth_recovered_by_origin"`
+	AngularPairs              uint64                                         `json:"angular_pairs"`
+	AngularCosineDistanceMean float64                                        `json:"angular_cosine_distance_mean"`
+	PackDiagnostics           []collections.VectorPartitionPackDiagnosticsV1 `json:"pack_diagnostics"`
+}
+
+const localHNSWAttributionNeighborhoodOracleSchemaV1 = "treedb_local_hnsw_attribution_neighborhood_oracle_v1"
+const localHNSWAttributionNeighborhoodExactKV1 = 10
+
 type localHNSWAttributionHardMissV1 struct {
 	QueryOrdinal int    `json:"query_ordinal"`
 	QuerySHA256  string `json:"query_sha256"`
@@ -87,6 +109,8 @@ type localHNSWAttributionInstrumentationSummaryV1 struct {
 	OverlayQuery           localHNSWAttributionQueryUtilityV1       `json:"overlay_query"`
 	NativeLayer0Distances  localHNSWAttributionDistanceAggregateV1  `json:"native_layer0_distances"`
 	OverlayLayer0Distances localHNSWAttributionDistanceAggregateV1  `json:"overlay_layer0_distances"`
+	NativeNeighborhood     localHNSWAttributionNeighborhoodOracleV1 `json:"native_neighborhood_oracle"`
+	OverlayNeighborhood    localHNSWAttributionNeighborhoodOracleV1 `json:"overlay_neighborhood_oracle"`
 	HardMisses             []localHNSWAttributionHardMissV1         `json:"hard_misses"`
 }
 
@@ -323,12 +347,201 @@ func localHNSWAttributionInstrumentationSummaryV1Build(source *m8ProductionMulti
 	if err != nil {
 		return out, err
 	}
+	nativeNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(native)
+	if err != nil {
+		return out, err
+	}
+	overlayNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(overlay)
+	if err != nil {
+		return out, err
+	}
 	if calibration.QueryCount == 0 || calibration.NativeUtility.ExaminedNative+calibration.NativeUtility.ExaminedAuxiliary == 0 || calibration.OverlayUtility.ExaminedNative+calibration.OverlayUtility.ExaminedAuxiliary == 0 {
 		return out, errors.New("empty local HNSW instrumentation query utility")
 	}
-	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(native.searchers), OverlayLayer0Distances: graphDistanceAggregateV1(overlay.searchers), HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
-	if out.NativeVariant != "native" || out.OverlayVariant != "overlay_current" || !localHNSWAttributionSHA256V1(out.IndexDefinitionDigest) || out.NativeLayer0Distances.Count == 0 || out.OverlayLayer0Distances.Count == 0 {
+	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(native.searchers), OverlayLayer0Distances: graphDistanceAggregateV1(overlay.searchers), NativeNeighborhood: nativeNeighborhood, OverlayNeighborhood: overlayNeighborhood, HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
+	if out.NativeVariant != "native" || out.OverlayVariant != "overlay_current" || !localHNSWAttributionSHA256V1(out.IndexDefinitionDigest) || out.NativeLayer0Distances.Count == 0 || out.OverlayLayer0Distances.Count == 0 || out.NativeNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || out.OverlayNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 {
 		return localHNSWAttributionInstrumentationSummaryV1{}, errors.New("invalid local HNSW instrumentation summary")
+	}
+	return out, nil
+}
+
+func localHNSWAttributionNeighborhoodOriginV1(origin string) (int, bool) {
+	switch origin {
+	case "diversity_selected":
+		return 0, true
+	case "nearest_backfill":
+		return 1, true
+	case "reciprocal_add":
+		return 2, true
+	}
+	return 0, false
+}
+
+func localHNSWAttributionCosineDistanceV1(a, b []float32) (float64, bool) {
+	if len(a) == 0 || len(a) != len(b) {
+		return 0, false
+	}
+	var dot, an, bn float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		an += float64(a[i]) * float64(a[i])
+		bn += float64(b[i]) * float64(b[i])
+	}
+	if an == 0 || bn == 0 {
+		return 0, false
+	}
+	return 1 - dot/math.Sqrt(an*bn), true
+}
+
+func localHNSWAttributionNearestIDsV1(ids []string, vectors map[string][]float32, source string, allowed func(string) bool, k int) ([]string, error) {
+	type scored struct {
+		id       string
+		distance float64
+	}
+	query, ok := vectors[source]
+	if !ok {
+		return nil, errors.New("missing local HNSW oracle source vector")
+	}
+	all := make([]scored, 0, len(ids))
+	for _, id := range ids {
+		if id == source || !allowed(id) {
+			continue
+		}
+		d, ok := localHNSWAttributionCosineDistanceV1(query, vectors[id])
+		if !ok {
+			return nil, errors.New("invalid local HNSW oracle vector")
+		}
+		all = append(all, scored{id, d})
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].distance != all[j].distance {
+			return all[i].distance < all[j].distance
+		}
+		return all[i].id < all[j].id
+	})
+	if len(all) > k {
+		all = all[:k]
+	}
+	out := make([]string, len(all))
+	for i := range all {
+		out[i] = all[i].id
+	}
+	return out, nil
+}
+
+func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
+	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
+	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) {
+		return out, errors.New("invalid local HNSW oracle harness")
+	}
+	_, rows, err := h.assets.collection.ReadVectorPartitionRouterSourceRowsV1(h.assets.manifest.IndexName)
+	if err != nil {
+		return out, err
+	}
+	vectors := make(map[string][]float32, len(rows))
+	for _, row := range rows {
+		vectors[string(row.DocumentID)] = row.Values
+	}
+	for p, part := range h.constructionEvidence.Partitions {
+		ids := h.documentIDs[p]
+		if len(ids) != len(part.NativeInsertionOrdinals) {
+			return out, errors.New("local HNSW oracle ordinal binding")
+		}
+		diagnostics, err := h.searchers[p].PackDiagnosticsV1()
+		if err != nil {
+			return out, err
+		}
+		out.PackDiagnostics = append(out.PackDiagnostics, diagnostics)
+		final := map[int][]struct {
+			to     int
+			origin string
+		}{}
+		for _, event := range part.Events {
+			if event.Action == "final_survivor" && event.Layer == 0 {
+				if event.From < 0 || event.From >= len(ids) || event.To < 0 || event.To >= len(ids) {
+					return out, errors.New("local HNSW oracle final ordinal")
+				}
+				final[event.From] = append(final[event.From], struct {
+					to     int
+					origin string
+				}{event.To, event.Origin})
+			}
+		}
+		samples := make(map[int]collections.VectorPartitionConstructionSelectionV1)
+		idOrdinal := make(map[string]int, len(ids))
+		for ordinal, id := range ids {
+			idOrdinal[id] = ordinal
+		}
+		for _, selection := range part.Selections {
+			if !selection.CandidateSampled {
+				continue
+			}
+			if selection.Node < 0 || selection.Node >= len(ids) {
+				return out, errors.New("local HNSW oracle sample ordinal")
+			}
+			samples[selection.Node] = selection
+			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[selection.Node], func(id string) bool {
+				ordinal, ok := idOrdinal[id]
+				return ok && part.NativeInsertionOrdinals[ordinal] < part.NativeInsertionOrdinals[selection.Node]
+			}, out.ExactK)
+			if err != nil {
+				return out, err
+			}
+			candidate := map[string]struct{}{}
+			for _, ordinal := range selection.CandidateOrdinals {
+				if ordinal < 0 || ordinal >= len(ids) {
+					return out, errors.New("local HNSW oracle candidate ordinal")
+				}
+				candidate[ids[ordinal]] = struct{}{}
+			}
+			out.CandidateSamples++
+			out.CandidateTruthNeighbors += uint64(len(exact))
+			for _, id := range exact {
+				if _, ok := candidate[id]; ok {
+					out.CandidateTruthRecovered++
+				}
+			}
+		}
+		for from := range samples {
+			edges := final[from]
+			exact, err := localHNSWAttributionNearestIDsV1(ids, vectors, ids[from], func(string) bool { return true }, out.ExactK)
+			if err != nil {
+				return out, err
+			}
+			truth := map[string]struct{}{}
+			for _, id := range exact {
+				truth[id] = struct{}{}
+			}
+			out.FinalSamples++
+			out.FinalSampleTruthNeighbors += uint64(len(exact))
+			for _, edge := range edges {
+				oi, ok := localHNSWAttributionNeighborhoodOriginV1(edge.origin)
+				if !ok {
+					return out, errors.New("local HNSW oracle final origin")
+				}
+				out.FinalEdgesByOrigin[oi]++
+				if _, ok := truth[ids[edge.to]]; ok {
+					out.FinalSampleTruthRecovered++
+					out.FinalTruthByOrigin[oi]++
+				}
+			}
+			for i := 0; i < len(edges); i++ {
+				for j := i + 1; j < len(edges); j++ {
+					d, ok := localHNSWAttributionCosineDistanceV1(vectors[ids[edges[i].to]], vectors[ids[edges[j].to]])
+					if !ok {
+						return out, errors.New("invalid local HNSW angular vector")
+					}
+					out.AngularPairs++
+					out.AngularCosineDistanceMean += d
+				}
+			}
+		}
+	}
+	if out.CandidateSamples == 0 || out.FinalSamples == 0 || len(out.PackDiagnostics) != len(h.searchers) {
+		return localHNSWAttributionNeighborhoodOracleV1{}, errors.New("empty local HNSW oracle")
+	}
+	if out.AngularPairs != 0 {
+		out.AngularCosineDistanceMean /= float64(out.AngularPairs)
 	}
 	return out, nil
 }

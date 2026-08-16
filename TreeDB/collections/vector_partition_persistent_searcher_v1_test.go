@@ -1397,7 +1397,7 @@ func TestVectorPartitionMaterializationBuildsPartitionLocalConnectedGraphV1(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.Rows != uint64(len(selected)) || diagnostics.ReachableRows != diagnostics.Rows || diagnostics.TraversalRoots != 1 || len(diagnostics.RowsByLayer) == 0 || len(diagnostics.EdgesByLayer) == 0 {
+	if diagnostics.Rows != uint64(len(selected)) || diagnostics.ReachableRows != diagnostics.Rows || diagnostics.TraversalRoots != 1 || len(diagnostics.RowsByLayer) == 0 || len(diagnostics.EdgesByLayer) == 0 || diagnostics.Layer0StrongComponents == 0 || diagnostics.Layer0LargestComponent == 0 || len(diagnostics.Layer0DegreeHistogram) == 0 || len(diagnostics.Layer0IndegreeHistogram) == 0 {
 		t.Fatalf("partition-local pack diagnostics=%+v", diagnostics)
 	}
 	for id, query := range selected {

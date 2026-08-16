@@ -661,24 +661,28 @@ type VectorPartitionSearchStatusV1 struct {
 // computing connectivity walks the full persisted graph and must never become
 // request-path work.
 type VectorPartitionPackDiagnosticsV1 struct {
-	Rows                   uint64                                          `json:"rows"`
-	ReachableRows          uint64                                          `json:"reachable_rows"`
-	TraversalRoots         uint64                                          `json:"traversal_roots"`
-	MaxLayer               int                                             `json:"max_layer"`
-	RowsByLayer            []uint64                                        `json:"rows_by_layer"`
-	EdgesByLayer           []uint64                                        `json:"edges_by_layer"`
-	Layer0DegreeLimit      uint64                                          `json:"layer0_degree_limit"`
-	Layer0SaturatedRows    uint64                                          `json:"layer0_saturated_rows"`
-	Layer0ZeroIndegreeRows uint64                                          `json:"layer0_zero_indegree_rows"`
-	Layer0DuplicateEdges   uint64                                          `json:"layer0_duplicate_edges"`
-	Layer0ReciprocalEdges  uint64                                          `json:"layer0_reciprocal_edges"`
-	Layer0ReciprocalRatio  float64                                         `json:"layer0_reciprocal_ratio"`
-	Layer0Distances        VectorPartitionLocalGraphDistanceDistributionV1 `json:"layer0_distances"`
-	AuxiliaryEdges         uint64                                          `json:"auxiliary_edges"`
-	AuxiliaryCSRBytes      uint64                                          `json:"auxiliary_csr_bytes"`
-	AuxiliaryMaxDegree     uint64                                          `json:"auxiliary_max_degree"`
-	AuxiliaryDistances     VectorPartitionLocalGraphDistanceDistributionV1 `json:"auxiliary_distances"`
-	CombinedReachableRows  uint64                                          `json:"combined_reachable_rows"`
+	Rows                    uint64                                          `json:"rows"`
+	ReachableRows           uint64                                          `json:"reachable_rows"`
+	TraversalRoots          uint64                                          `json:"traversal_roots"`
+	MaxLayer                int                                             `json:"max_layer"`
+	RowsByLayer             []uint64                                        `json:"rows_by_layer"`
+	EdgesByLayer            []uint64                                        `json:"edges_by_layer"`
+	Layer0DegreeLimit       uint64                                          `json:"layer0_degree_limit"`
+	Layer0SaturatedRows     uint64                                          `json:"layer0_saturated_rows"`
+	Layer0ZeroIndegreeRows  uint64                                          `json:"layer0_zero_indegree_rows"`
+	Layer0DuplicateEdges    uint64                                          `json:"layer0_duplicate_edges"`
+	Layer0ReciprocalEdges   uint64                                          `json:"layer0_reciprocal_edges"`
+	Layer0ReciprocalRatio   float64                                         `json:"layer0_reciprocal_ratio"`
+	Layer0DegreeHistogram   map[uint64]uint64                               `json:"layer0_degree_histogram"`
+	Layer0IndegreeHistogram map[uint64]uint64                               `json:"layer0_indegree_histogram"`
+	Layer0StrongComponents  uint64                                          `json:"layer0_strongly_connected_components"`
+	Layer0LargestComponent  uint64                                          `json:"layer0_largest_scc_rows"`
+	Layer0Distances         VectorPartitionLocalGraphDistanceDistributionV1 `json:"layer0_distances"`
+	AuxiliaryEdges          uint64                                          `json:"auxiliary_edges"`
+	AuxiliaryCSRBytes       uint64                                          `json:"auxiliary_csr_bytes"`
+	AuxiliaryMaxDegree      uint64                                          `json:"auxiliary_max_degree"`
+	AuxiliaryDistances      VectorPartitionLocalGraphDistanceDistributionV1 `json:"auxiliary_distances"`
+	CombinedReachableRows   uint64                                          `json:"combined_reachable_rows"`
 }
 
 // PackDiagnosticsV1 scans the immutable prepared pack and reports topology
@@ -708,7 +712,7 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 	if err := validateVectorPartitionPackDiagnosticsMaxLayerV1(pack.Header.MaxLayer, len(pack.AdjacencyLayers)); err != nil {
 		return VectorPartitionPackDiagnosticsV1{}, err
 	}
-	d := VectorPartitionPackDiagnosticsV1{Rows: uint64(rows), MaxLayer: pack.Header.MaxLayer, RowsByLayer: make([]uint64, pack.Header.MaxLayer+1), EdgesByLayer: make([]uint64, len(pack.AdjacencyLayers)), Layer0DegreeLimit: uint64(max(1, pack.Header.M*2))}
+	d := VectorPartitionPackDiagnosticsV1{Rows: uint64(rows), MaxLayer: pack.Header.MaxLayer, RowsByLayer: make([]uint64, pack.Header.MaxLayer+1), EdgesByLayer: make([]uint64, len(pack.AdjacencyLayers)), Layer0DegreeLimit: uint64(max(1, pack.Header.M*2)), Layer0DegreeHistogram: map[uint64]uint64{}, Layer0IndegreeHistogram: map[uint64]uint64{}}
 	for ordinal, level := range pack.Levels {
 		if int(level) > pack.Header.MaxLayer || ordinal >= rows {
 			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
@@ -745,6 +749,7 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 	}
 	base := pack.AdjacencyLayers[0]
 	indegree := make([]uint64, rows)
+	reverse := make([][]uint32, rows)
 	edges := make(map[uint64]struct{}, len(base.Neighbors))
 	layer0Distances := make([]float64, 0, len(base.Neighbors))
 	auxiliaryDistances := make([]float64, 0, len(auxiliary.Neighbors))
@@ -768,11 +773,13 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		if end < start || end > uint64(len(base.Neighbors)) {
 			return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
 		}
+		d.Layer0DegreeHistogram[end-start]++
 		for _, neighbor := range base.Neighbors[start:end] {
 			if int(neighbor) >= rows || neighbor == uint32(ordinal) {
 				return VectorPartitionPackDiagnosticsV1{}, ErrVectorPartitionSearchUnavailable
 			}
 			indegree[neighbor]++
+			reverse[neighbor] = append(reverse[neighbor], uint32(ordinal))
 			edge := uint64(uint32(ordinal))<<32 | uint64(neighbor)
 			if _, duplicate := edges[edge]; duplicate {
 				d.Layer0DuplicateEdges++
@@ -796,8 +803,57 @@ func (s *VectorPartitionLocalSearcherV1) PackDiagnosticsV1() (VectorPartitionPac
 		}
 	}
 	for _, count := range indegree {
+		d.Layer0IndegreeHistogram[count]++
 		if count == 0 {
 			d.Layer0ZeroIndegreeRows++
+		}
+	}
+	// Kosaraju is intentionally offline diagnostics: it distinguishes a graph
+	// that is merely entry-reachable from one with fragmented directed regions.
+	order := make([]int, 0, rows)
+	seenSCC := make([]bool, rows)
+	type finishFrame struct{ node, next int }
+	for start := range rows {
+		if seenSCC[start] {
+			continue
+		}
+		seenSCC[start] = true
+		stack := []finishFrame{{node: start}}
+		for len(stack) != 0 {
+			top := &stack[len(stack)-1]
+			neighbors := base.Neighbors[base.Offsets[top.node]:base.Offsets[top.node+1]]
+			if top.next < len(neighbors) {
+				next := int(neighbors[top.next])
+				top.next++
+				if !seenSCC[next] {
+					seenSCC[next] = true
+					stack = append(stack, finishFrame{node: next})
+				}
+				continue
+			}
+			order = append(order, top.node)
+			stack = stack[:len(stack)-1]
+		}
+	}
+	assigned := make([]bool, rows)
+	for i := len(order) - 1; i >= 0; i-- {
+		start := order[i]
+		if assigned[start] {
+			continue
+		}
+		assigned[start] = true
+		queue := []int{start}
+		for head := 0; head < len(queue); head++ {
+			for _, previous := range reverse[queue[head]] {
+				if !assigned[previous] {
+					assigned[previous] = true
+					queue = append(queue, int(previous))
+				}
+			}
+		}
+		d.Layer0StrongComponents++
+		if uint64(len(queue)) > d.Layer0LargestComponent {
+			d.Layer0LargestComponent = uint64(len(queue))
 		}
 	}
 	for edge := range edges {
