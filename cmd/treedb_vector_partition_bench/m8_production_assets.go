@@ -368,6 +368,10 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 }
 
 func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest) error {
+	return m8BindRetainedM3DescriptorWithPolicyV1(h, fixture, false)
+}
+
+func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, fixture fixtureManifest, allowOfflineGraphVariant bool) error {
 	if h == nil || h.collection == nil || h.router == nil {
 		return errors.New("retained M8 assets are not open")
 	}
@@ -405,7 +409,12 @@ func m8BindRetainedM3DescriptorV1(h *m8ProductionMultiGroupAssetsV1, fixture fix
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
 	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
-		return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+		if !allowOfflineGraphVariant {
+			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
+		}
+		if _, offlineErr := m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); offlineErr != nil {
+			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
+		}
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {

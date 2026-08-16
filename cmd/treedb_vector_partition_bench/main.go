@@ -1351,6 +1351,28 @@ func m3PartitionLocalGraphVariantV1(m, efConstruction int) (collections.VectorPa
 	}
 }
 
+func m3PartitionLocalOfflineGraphVariantV1(m, efConstruction int) (collections.VectorPartitionLocalGraphVariantV1, error) {
+	if variant, err := m3PartitionLocalGraphVariantV1(m, efConstruction); err == nil {
+		return variant, nil
+	}
+	switch {
+	case m == 16 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, nil
+	case m == 16 && efConstruction == 512:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, nil
+	case m == 20 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, nil
+	case m == 22 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, nil
+	case m == 24 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, nil
+	case m == 32 && efConstruction == 256:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, nil
+	default:
+		return "", fmt.Errorf("unsupported offline partition-local HNSW M/efConstruction=%d/%d", m, efConstruction)
+	}
+}
+
 func runPartitionStage(cfg config, fixture fixtureManifest, vectors, queries [][]float64, stdout io.Writer) error {
 	input := make([]vectorpartition.Vector, len(vectors))
 	for i, values := range vectors {
