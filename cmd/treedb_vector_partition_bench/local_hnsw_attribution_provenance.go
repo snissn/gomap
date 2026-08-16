@@ -382,12 +382,23 @@ func localHNSWAttributionBucketsSumV1(values [5][4]uint64) uint64 {
 
 type localHNSWAttributionFinalEdgeKeyV1 struct{ From, To, Layer int }
 
-func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionConstructionEvidenceV1, partition int) (map[localHNSWAttributionFinalEdgeKeyV1]string, error) {
-	if partition < 0 || partition >= len(evidence.Partitions) {
+func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionConstructionEvidenceV1, partitionID int) (map[localHNSWAttributionFinalEdgeKeyV1]string, error) {
+	if partitionID < 0 {
+		return nil, errors.New("invalid local HNSW construction partition")
+	}
+	var part *collections.VectorPartitionConstructionPartitionEvidenceV1
+	for i := range evidence.Partitions {
+		if evidence.Partitions[i].PartitionID == uint32(partitionID) {
+			if part != nil {
+				return nil, errors.New("duplicate local HNSW construction partition")
+			}
+			part = &evidence.Partitions[i]
+		}
+	}
+	if part == nil {
 		return nil, errors.New("invalid local HNSW construction partition")
 	}
 	out := map[localHNSWAttributionFinalEdgeKeyV1]string{}
-	part := evidence.Partitions[partition]
 	if part.TraceMode == "compact" {
 		for _, final := range part.FinalOrigins {
 			key := localHNSWAttributionFinalEdgeKeyV1{final.From, final.To, final.Layer}
