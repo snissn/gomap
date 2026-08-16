@@ -121,7 +121,7 @@ func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
 	}
-	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{1, 1}, []uint32{0, 1}, map[string]struct{}{"first": {}, "second": {}})
+	_, work, err := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), localHNSWAttributionTestQueryPartitionRowsV1(records), []uint32{0, 1}, map[string]struct{}{"first": {}, "second": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records, []uint32{1, 1}, map[string]struct{}{"overlap": {}})
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(records, localHNSWAttributionTestQueryPartitionRowsV1(records), map[string]struct{}{"overlap": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, []uint32{1, 1}, map[string]struct{}{"overlap": {}})
+	utility, err := localHNSWAttributionQueryUtilityAggregateV1(decoded, localHNSWAttributionTestQueryPartitionRowsV1(decoded), map[string]struct{}{"overlap": {}})
 	if err != nil || utility.TruthRecovered != 1 || utility.Diversity.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
 		t.Fatalf("decoded overlap truth was not deduplicated: utility=%+v err=%v", utility, err)
 	}
@@ -237,7 +237,7 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 			},
 		},
 	})
-	if _, err := localHNSWAttributionQueryRecordValidateV1(record, 1, map[string]struct{}{"truth": {}}); err != nil {
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, localHNSWAttributionTestQueryRecordRowsV1(record), map[string]struct{}{"truth": {}}); err != nil {
 		t.Fatalf("valid seeded record rejected: %v", err)
 	}
 	raw, err := json.Marshal(record)
@@ -321,6 +321,18 @@ func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearc
 		record.Results = []localHNSWAttributionQueryResultV1{{ID: "result", ScoreBits: 0}}
 	}
 	return record
+}
+
+func localHNSWAttributionTestQueryRecordRowsV1(record localHNSWAttributionQuerySearchV1) uint32 {
+	return uint32(len(record.VisitedOrdinals))
+}
+
+func localHNSWAttributionTestQueryPartitionRowsV1(records []localHNSWAttributionQuerySearchV1) []uint32 {
+	rows := make([]uint32, len(records))
+	for i, record := range records {
+		rows[i] = localHNSWAttributionTestQueryRecordRowsV1(record)
+	}
+	return rows
 }
 
 func TestLocalHNSWAttributionTruthRecoverySerializationAndUnderflowV1(t *testing.T) {
