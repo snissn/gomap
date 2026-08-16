@@ -186,6 +186,13 @@ func TestMaterializeRetainedLocalHNSWVariantSinglePartitionV1(t *testing.T) {
 	if len(h.packAssets) != 1 || len(h.searchers) != 1 || len(h.constructionEvidence.Partitions) != 1 || h.packAssets[0].PartitionID != 3 || h.constructionEvidence.Partitions[0].PartitionID != 3 || h.constructionEvidence.Partitions[0].TraceMode != "detailed" || len(h.constructionEvidence.Partitions[0].Events) == 0 || len(h.finalOrigins) != 1 || len(h.finalOrigins[0]) == 0 {
 		t.Fatalf("single retained M18 materialization=%+v evidence=%+v origins=%v", h.packAssets, h.constructionEvidence, h.finalOrigins)
 	}
+	wantOrigins, err := localHNSWAttributionFinalOriginsV1(h.constructionEvidence, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(h.finalOrigins[0], wantOrigins) {
+		t.Fatalf("singleton final origins must use retained partition ID: got=%v want=%v", h.finalOrigins[0], wantOrigins)
+	}
 	if _, err := materializeRetainedLocalHNSWVariantPartitionsV1(source, t.TempDir(), variant, 9997, []uint32{4}); err == nil {
 		t.Fatal("accepted out-of-range retained partition")
 	}

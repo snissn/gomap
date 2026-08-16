@@ -407,7 +407,9 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 	}
 	h.finalOrigins = make([]map[localHNSWAttributionFinalEdgeKeyV1]string, len(assets))
 	for p := range h.finalOrigins {
-		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, p)
+		// construction evidence is keyed by its retained partition ID, not this
+		// materialization's (possibly singleton) asset-slice position.
+		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, int(h.packAssets[p].PartitionID))
 		if err != nil {
 			return nil, err
 		}
