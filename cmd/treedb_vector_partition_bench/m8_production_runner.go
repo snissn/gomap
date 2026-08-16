@@ -3841,6 +3841,16 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 			(diagnostic.ReachableRows < diagnostic.Rows && diagnostic.TraversalRoots == 1) {
 			return false
 		}
+		if diagnostic.MaxLayer < 0 || len(diagnostic.RowsByLayer) != diagnostic.MaxLayer+1 || len(diagnostic.EdgesByLayer) != len(diagnostic.RowsByLayer) ||
+			diagnostic.RowsByLayer[0] != diagnostic.Rows || diagnostic.Layer0DegreeLimit == 0 ||
+			diagnostic.Layer0SaturatedRows > diagnostic.Rows || diagnostic.Layer0ZeroIndegreeRows > diagnostic.Rows ||
+			diagnostic.Layer0DuplicateEdges > diagnostic.EdgesByLayer[0] || diagnostic.Layer0ReciprocalEdges > diagnostic.EdgesByLayer[0] ||
+			diagnostic.Layer0Distances.Count != diagnostic.EdgesByLayer[0] ||
+			!validM8GraphDistanceDistributionV1(diagnostic.Layer0Distances) ||
+			!validM8ReciprocalRatioV1(diagnostic.Layer0ReciprocalEdges, diagnostic.EdgesByLayer[0], diagnostic.Layer0ReciprocalRatio) ||
+			diagnostic.AuxiliaryDistances.Count != diagnostic.AuxiliaryEdges || !validM8GraphDistanceDistributionV1(diagnostic.AuxiliaryDistances) {
+			return false
+		}
 		nativeReachable := diagnostic.ReachableRows == diagnostic.Rows && diagnostic.TraversalRoots == 1
 		auxiliaryPresent := diagnostic.AuxiliaryEdges != 0 || diagnostic.AuxiliaryCSRBytes != 0 || diagnostic.AuxiliaryMaxDegree != 0
 		if auxiliaryPresent {
@@ -3898,6 +3908,29 @@ func validM8PartitionPackDiagnosticsV1(diagnostics []m8PartitionPackDiagnosticsV
 		seen[partition] = true
 	}
 	return true
+}
+
+func validM8ReciprocalRatioV1(reciprocal, edges uint64, ratio float64) bool {
+	want := float64(0)
+	if edges != 0 {
+		want = float64(reciprocal) / float64(edges)
+	}
+	return !math.IsNaN(ratio) && !math.IsInf(ratio, 0) && math.Abs(ratio-want) <= 1e-12
+}
+
+func validM8GraphDistanceDistributionV1(distribution collections.VectorPartitionLocalGraphDistanceDistributionV1) bool {
+	values := [...]float64{distribution.Min, distribution.Mean, distribution.P50, distribution.P95, distribution.P99, distribution.Max}
+	if distribution.Count == 0 {
+		return values == [6]float64{}
+	}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < -1e-6 || value > 2.000001 {
+			return false
+		}
+	}
+	return distribution.Min <= distribution.Mean && distribution.Mean <= distribution.Max &&
+		distribution.Min <= distribution.P50 && distribution.P50 <= distribution.P95 &&
+		distribution.P95 <= distribution.P99 && distribution.P99 <= distribution.Max
 }
 
 // validM8PartitionLoadsV1 binds diagnostic row counts to manifest-derived
