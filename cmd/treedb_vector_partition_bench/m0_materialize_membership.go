@@ -34,6 +34,11 @@ type m0MaterializeReportV1 struct {
 	CloneLogicalBytes         int64  `json:"clone_logical_bytes"`
 }
 
+// m0MaterializeBuildIdentityProviderV1 is injectable only so persistence
+// tests need not treat a Go test binary as a production benchmark executable.
+// Production retains m0CurrentCleanBuildIdentityV1 and revalidates its result.
+var m0MaterializeBuildIdentityProviderV1 = m0CurrentCleanBuildIdentityV1
+
 func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVariantV1, int, int, error) {
 	switch collections.VectorPartitionLocalGraphVariantV1(raw) {
 	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1:
@@ -67,9 +72,12 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	build, err := m0CurrentCleanBuildIdentityV1()
-	if err != nil {
-		return err
+	build, err := m0MaterializeBuildIdentityProviderV1()
+	if err != nil || !m0CleanBuildIdentityValidV1(build) {
+		if err != nil {
+			return err
+		}
+		return errors.New("M0 materialization requires a clean build identity")
 	}
 	artifactRaw, err := os.ReadFile(artifactPath)
 	if err != nil {

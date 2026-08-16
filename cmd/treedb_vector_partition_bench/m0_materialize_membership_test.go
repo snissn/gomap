@@ -23,10 +23,20 @@ func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
 	}
 }
 
+func testM0MaterializeBuildIdentityV1(t *testing.T) {
+	t.Helper()
+	previous := m0MaterializeBuildIdentityProviderV1
+	m0MaterializeBuildIdentityProviderV1 = func() (m0CleanBuildIdentityV1, error) {
+		return m0CleanBuildIdentityV1{BinarySHA256: strings.Repeat("f", 64), SourceRevision: strings.Repeat("e", 40)}, nil
+	}
+	t.Cleanup(func() { m0MaterializeBuildIdentityProviderV1 = previous })
+}
+
 func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
+	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
@@ -126,6 +136,7 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
+	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-useful-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
