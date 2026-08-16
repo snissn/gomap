@@ -345,7 +345,14 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	for p := range inputs {
 		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: dimensions}
 	}
-	assets, resources, constructionEvidence, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	var assets []collections.VectorPartitionAssetV1
+	var resources interface{ Release() }
+	var constructionEvidence collections.VectorPartitionConstructionEvidenceV1
+	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	} else {
+		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	}
 	if err != nil {
 		return nil, errors.Join(err, owned.Close())
 	}

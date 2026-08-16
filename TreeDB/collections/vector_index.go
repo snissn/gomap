@@ -325,12 +325,18 @@ type vectorIndexLayer0ConstructionPolicyV1 struct {
 // vectorIndexConstructionTraceV1 is deliberately private: construction
 // provenance is benchmark evidence, not a runtime index contract.
 type vectorIndexConstructionTraceV1 struct {
+	// detailed is enabled only for predeclared offline diagnostic partitions.
+	// Compact traces retain live origins/final survivors but never allocate a
+	// historical event per reciprocal maintenance operation.
+	detailed                bool
 	selections              []vectorIndexConstructionSelectionV1
 	events                  []vectorIndexConstructionEdgeEventV1
 	pending                 map[vectorIndexConstructionEdgeKeyV1]string
 	origins                 map[vectorIndexConstructionEdgeKeyV1]string
 	sampleIDs               map[string]struct{}
 	nativeInsertionOrdinals []int
+	pruneKeeps              uint64
+	compactLifecycle        VectorPartitionConstructionCompactLifecycleV1
 }
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
@@ -341,6 +347,44 @@ type vectorIndexConstructionEdgeKeyV1 struct{ From, To, Layer int }
 type vectorIndexConstructionEdgeEventV1 struct {
 	From, To, Layer, InsertionOrdinal int
 	Origin, Action                    string
+}
+
+func vectorIndexConstructionOriginIndexV1(origin string) (int, bool) {
+	switch origin {
+	case "diversity_selected":
+		return 0, true
+	case "nearest_backfill":
+		return 1, true
+	case "reciprocal_add":
+		return 2, true
+	case "reciprocity_repair":
+		return 3, true
+	case "overlay_rewrite":
+		return 4, true
+	}
+	return 0, false
+}
+
+func (t *vectorIndexConstructionTraceV1) countLifecycle(origin, action string) {
+	originIndex, ok := vectorIndexConstructionOriginIndexV1(origin)
+	if !ok {
+		return
+	}
+	switch action {
+	case "initial_add":
+		t.compactLifecycle.InitialAdd[originIndex]++
+	case "reciprocal_add":
+		t.compactLifecycle.ReciprocalAdd[originIndex]++
+	case "reciprocal_prune_keep":
+		t.pruneKeeps++
+		t.compactLifecycle.PruneKeep[originIndex]++
+	case "reciprocal_prune_drop":
+		t.compactLifecycle.PruneDrop[originIndex]++
+	case "reciprocity_repair_add", "overlay_rewrite_add":
+		t.compactLifecycle.VariantAdd[originIndex]++
+	case "reciprocity_repair_drop", "overlay_rewrite_drop":
+		t.compactLifecycle.VariantDrop[originIndex]++
+	}
 }
 
 func (t *vectorIndexConstructionTraceV1) selectEdge(from, to, layer int, origin string) {
@@ -364,6 +408,12 @@ func (t *vectorIndexConstructionTraceV1) record(from, to, layer int, origin, act
 	if t == nil {
 		return
 	}
+	if action != "final_survivor" {
+		t.countLifecycle(origin, action)
+	}
+	if action == "reciprocal_prune_keep" {
+		return
+	}
 	insertionOrdinal := from
 	if to > insertionOrdinal {
 		insertionOrdinal = to
@@ -376,6 +426,12 @@ func (t *vectorIndexConstructionTraceV1) record(from, to, layer int, origin, act
 		if t.nativeInsertionOrdinals[to] > insertionOrdinal {
 			insertionOrdinal = t.nativeInsertionOrdinals[to]
 		}
+	}
+	if !t.detailed && action != "final_survivor" {
+		return
+	}
+	if !t.detailed { // compact final survivors live in origins, not events.
+		return
 	}
 	t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: to, Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: action})
 }

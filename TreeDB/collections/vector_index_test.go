@@ -371,7 +371,7 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
 		t.Fatal(err)
 	}
-	trace := &vectorIndexConstructionTraceV1{}
+	trace := &vectorIndexConstructionTraceV1{detailed: true}
 	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(traced, def, trace); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.
 	candidates := []vectorIndexCandidate{{nodeID: 0, distance: 0}}
 
 	plain := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
-	trace := &vectorIndexConstructionTraceV1{sampleIDs: map[string]struct{}{"sampled": {}}}
+	trace := &vectorIndexConstructionTraceV1{detailed: true, sampleIDs: map[string]struct{}{"sampled": {}}}
 	index.constructionTrace = trace
 	traced := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
 	if !reflect.DeepEqual(plain, traced) {
@@ -432,7 +432,7 @@ func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *test
 	}
 	plain := append([]columnVectorGraphAssetRow(nil), rows...)
 	traced := append([]columnVectorGraphAssetRow(nil), rows...)
-	trace := &vectorIndexConstructionTraceV1{}
+	trace := &vectorIndexConstructionTraceV1{detailed: true}
 	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
 		t.Fatal(err)
 	}
@@ -455,10 +455,13 @@ func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *test
 			final[vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}] = struct{}{}
 		}
 	}
-	for _, action := range []string{"initial_add", "reciprocal_add", "reciprocal_prune_keep", "reciprocal_prune_drop", "final_survivor"} {
+	for _, action := range []string{"initial_add", "reciprocal_add", "reciprocal_prune_drop", "final_survivor"} {
 		if counts[action] == 0 {
 			t.Fatalf("toy graph did not exercise %s: counts=%v", action, counts)
 		}
+	}
+	if trace.pruneKeeps == 0 {
+		t.Fatalf("toy graph did not exercise count-only prune keep: lifecycle=%+v", trace.compactLifecycle)
 	}
 	if origins["diversity_selected"] == 0 || origins["nearest_backfill"] == 0 {
 		t.Fatalf("toy graph did not exercise selection origins: origins=%v", origins)
@@ -483,7 +486,7 @@ func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *test
 		t.Fatalf("final survivor trace does not exactly reconcile adjacency: got=%v want=%v", final, wantFinal)
 	}
 	again := append([]columnVectorGraphAssetRow(nil), rows...)
-	againTrace := &vectorIndexConstructionTraceV1{}
+	againTrace := &vectorIndexConstructionTraceV1{detailed: true}
 	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(again, def, againTrace); err != nil {
 		t.Fatal(err)
 	}
