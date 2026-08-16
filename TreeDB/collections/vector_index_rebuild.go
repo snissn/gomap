@@ -690,6 +690,11 @@ func (t *vectorIndexConstructionTraceV1) recordFinalSurvivors(rows []columnVecto
 	if t == nil {
 		return nil
 	}
+	// Compact evidence exports the already-live origin map separately. Do not
+	// turn its final adjacency into a full historical event slice.
+	if !t.detailed {
+		return nil
+	}
 	for from := range rows {
 		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
 		if err != nil {
