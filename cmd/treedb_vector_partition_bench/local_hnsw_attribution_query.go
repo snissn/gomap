@@ -204,14 +204,24 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 		work.Candidates += records[partition].Candidates
 		work.Edges += records[partition].Edges
 		work.FrontierAdmissions += records[partition].FrontierAdmissions
-		work.Utility.ExaminedNative += records[partition].Utility.ExaminedNative
-		work.Utility.ExaminedAuxiliary += records[partition].Utility.ExaminedAuxiliary
-		work.Utility.NewlyVisited += records[partition].Utility.NewlyVisited
-		work.Utility.Scored += records[partition].Utility.Scored
-		work.Utility.TopAdmissions += records[partition].Utility.TopAdmissions
-		work.Utility.FrontierAdmissions += records[partition].Utility.FrontierAdmissions
+		localHNSWAttributionQueryUtilityAddV1(&work.Utility, records[partition].Utility)
 	}
 	return m8CanonicalResultsV1(merged, 10), work
+}
+
+func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
+	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Auxiliary, value.Unattributed}
+	var examined, newlyVisited, scored, topAdmissions, frontierAdmissions, stateImprovements, truthRecovered uint64
+	for _, origin := range origins {
+		examined += origin.Examined
+		newlyVisited += origin.NewlyVisited
+		scored += origin.Scored
+		topAdmissions += origin.TopAdmissions
+		frontierAdmissions += origin.FrontierAdmissions
+		stateImprovements += origin.StateImprovements
+		truthRecovered += origin.TruthRecovered
+	}
+	return value.ExaminedNative+value.ExaminedAuxiliary == edges && examined == edges && newlyVisited == value.NewlyVisited && scored == value.Scored && topAdmissions == value.TopAdmissions && frontierAdmissions == value.FrontierAdmissions && stateImprovements == value.StateImprovements && truthRecovered == value.TruthRecovered
 }
 
 func localHNSWAttributionCanonicalResultsV1(results []m8CanonicalResultV1, requireTen bool) ([]m8CanonicalResultV1, error) {

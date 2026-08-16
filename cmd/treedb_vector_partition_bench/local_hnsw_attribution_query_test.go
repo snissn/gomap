@@ -54,7 +54,7 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || len(evidence.QueryFP32SHA256) != 64 || len(evidence.GlobalTruth) != 10 || len(evidence.LowRoute) != 2 || len(evidence.HighRoute) != 4 || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, 4) || len(evidence.Partitions) != 4 || evidence.RoutingRecall != evidence.Native.RoutingRecall || evidence.RoutingRecall != evidence.Overlay.RoutingRecall || evidence.Native.LowSelectedWork.Candidates == 0 || evidence.Native.LowSelectedWork.Edges == 0 || evidence.Overlay.LowSelectedWork.Candidates == 0 || evidence.Overlay.LowSelectedWork.Edges == 0 {
+	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || len(evidence.QueryFP32SHA256) != 64 || len(evidence.GlobalTruth) != 10 || len(evidence.LowRoute) != 2 || len(evidence.HighRoute) != 4 || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, 4) || len(evidence.Partitions) != 4 || evidence.RoutingRecall != evidence.Native.RoutingRecall || evidence.RoutingRecall != evidence.Overlay.RoutingRecall || evidence.Native.LowSelectedWork.Candidates == 0 || evidence.Native.LowSelectedWork.Edges == 0 || evidence.Overlay.LowSelectedWork.Candidates == 0 || evidence.Overlay.LowSelectedWork.Edges == 0 || !localHNSWAttributionQueryUtilityConservedV1(evidence.Native.LowSelectedWork.Utility, evidence.Native.LowSelectedWork.Edges) || !localHNSWAttributionQueryUtilityConservedV1(evidence.Overlay.HighSelectedWork.Utility, evidence.Overlay.HighSelectedWork.Edges) {
 		t.Fatalf("evidence=%+v", evidence)
 	}
 	for partition, row := range evidence.Partitions {
@@ -64,5 +64,16 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	}
 	if _, err := localHNSWAttributionQueryEvidenceV1Build(t.Context(), source, native, overlay, 0, []float32{1, 1}, global); err == nil {
 		t.Fatal("malformed query accepted")
+	}
+}
+
+func TestLocalHNSWAttributionQueryMergePreservesOriginUtilityV1(t *testing.T) {
+	records := []localHNSWAttributionQuerySearchV1{
+		{Edges: 2, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 2, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: 2, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1}}},
+		{Edges: 3, Utility: localHNSWAttributionQueryUtilityV1{ExaminedNative: 1, ExaminedAuxiliary: 2, NewlyVisited: 2, Scored: 3, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1, Reciprocal: localHNSWAttributionQueryOriginUtilityV1{Examined: 1, NewlyVisited: 1, Scored: 1}, Auxiliary: localHNSWAttributionQueryOriginUtilityV1{Examined: 2, NewlyVisited: 1, Scored: 2, TopAdmissions: 1, FrontierAdmissions: 1, TruthRecovered: 1}}},
+	}
+	_, work := localHNSWAttributionQueryMergeV1(records, make([][]m8CanonicalResultV1, len(records)), []uint32{0, 1})
+	if work.Edges != 5 || work.Utility.TruthRecovered != 2 || work.Utility.Diversity.Examined != 2 || work.Utility.Reciprocal.Examined != 1 || work.Utility.Auxiliary.Examined != 2 || !localHNSWAttributionQueryUtilityConservedV1(work.Utility, work.Edges) {
+		t.Fatalf("merged work=%+v", work)
 	}
 }

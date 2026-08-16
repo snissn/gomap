@@ -80,11 +80,11 @@ type columnHNSWSearchPackAttributionTrace struct {
 	SeedAdmissions uint64
 }
 type columnHNSWSearchPackEdgeAttribution struct {
-	Layer, SourceOrdinal, DestinationOrdinal int
-	Auxiliary                                bool
-	NewlyVisited, Scored                     bool
-	Score                                    float64
-	TopAdmission, FrontierAdmission          bool
+	Layer, SourceOrdinal, DestinationOrdinal          int
+	Auxiliary                                         bool
+	NewlyVisited, Scored                              bool
+	Score                                             float64
+	TopAdmission, FrontierAdmission, StateImprovement bool
 }
 
 func (v *columnHNSWSearchPackPreparedView) searchCosineWithContext(ctx context.Context, query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
@@ -227,7 +227,6 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	traversalSteps := 0
-	termination := ""
 	for {
 		if traversalSteps&63 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -236,13 +235,11 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 		}
 		traversalSteps++
 		if opts.CandidateLimit > 0 && visitedCandidates >= uint64(candidateLimit) {
-			termination = "candidate_limit"
 			break
 		}
 		candidate, ok := scratch.popFrontierAccounting(&stats)
 		if !ok {
 			if len(scratch.top) >= efSearch {
-				termination = "frontier_empty_retained_full"
 				break
 			}
 			seed, seedOK, err := columnHNSWSearchPackNextCandidateSeedWithContext(ctx, nextSeed, rowCount, visitMarks, visitEpoch)
@@ -250,7 +247,6 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 				return nil, stats, err
 			}
 			if !seedOK {
-				termination = "frontier_empty_no_seed"
 				break
 			}
 			nextSeed = seed + 1
@@ -262,7 +258,6 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 			continue
 		}
 		if columnVectorGraphLayer0SearchShouldStop(candidate, scratch.top, efSearch) {
-			termination = "distance_bound"
 			break
 		}
 
@@ -363,7 +358,6 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	if err := ctx.Err(); err != nil {
 		return nil, stats, err
 	}
-	_ = termination
 	stats.Candidates = visitedCandidates
 	if countLoopEdges {
 		stats.Edges = loopEdgeVisits
@@ -962,6 +956,9 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextTrace(
 			neighborOrdinal := int(neighborRowID)
 			score := scores[i]
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+				if trace != nil {
+					trace.EdgeEvents[len(trace.EdgeEvents)-len(adjacency)+i].StateImprovement = true
+				}
 				best = neighborOrdinal
 				bestScore = score
 				changed = true
@@ -1035,7 +1032,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 				}
 				if i < len(eventIndices) {
 					event := &trace.EdgeEvents[eventIndices[i]]
-					event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission = true, candidate.score, admitted, admitted
+					event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission, event.StateImprovement = true, candidate.score, admitted, admitted, admitted
 				}
 			}
 			return nil
@@ -1057,7 +1054,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisitedTile(norma
 		}
 		if i < len(eventIndices) {
 			event := &trace.EdgeEvents[eventIndices[i]]
-			event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission = true, candidate.score, admitted, admitted
+			event.Scored, event.Score, event.TopAdmission, event.FrontierAdmission, event.StateImprovement = true, candidate.score, admitted, admitted, admitted
 		}
 	}
 	return nil
