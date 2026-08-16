@@ -128,33 +128,35 @@ type localHNSWM18EdgeDiagnosisHardMissV1 struct {
 }
 
 type localHNSWM18EdgeDiagnosisReportV1 struct {
-	Schema               string                                         `json:"schema"`
-	ResultKind           string                                         `json:"result_kind"`
-	Status               string                                         `json:"status"`
-	GeneratedAt          string                                         `json:"generated_at"`
-	Provenance           localHNSWAttributionProvenanceV1               `json:"provenance"`
-	Variant              string                                         `json:"variant"`
-	Probes               int                                            `json:"probes"`
-	EFSearch             []int                                          `json:"ef_search"`
-	Calibration          localHNSWAttributionFileInputV1                `json:"calibration_split"`
-	Truth                localHNSWAttributionFileInputV1                `json:"truth_artifact"`
-	Descriptor           localHNSWAttributionFileInputV1                `json:"retained_descriptor"`
-	RawSidecar           localHNSWAttributionFileInputV1                `json:"raw_sidecar"`
-	Manifest             string                                         `json:"manifest_integrity_digest"`
-	Source               localHNSWAttributionSourceEvidenceV1           `json:"source"`
-	Build                localHNSWAttributionBuildEvidenceV1            `json:"build"`
-	Construction         localHNSWAttributionConstructionTotalsV1       `json:"construction"`
-	Neighborhood         localHNSWAttributionNeighborhoodOracleV1       `json:"neighborhood"`
-	SelectedPacks        []uint32                                       `json:"selected_packs"`
-	SelectedDiagnostics  []collections.VectorPartitionPackDiagnosticsV1 `json:"selected_pack_diagnostics"`
-	SelectedConstruction []localHNSWM18EdgeDiagnosisPackConstructionV1  `json:"selected_pack_construction"`
-	SelectedNeighborhood []localHNSWM18EdgeDiagnosisPackNeighborhoodV1  `json:"selected_pack_neighborhood"`
-	Cells                []localHNSWM18EdgeDiagnosisCellV1              `json:"cells"`
-	Limitations          []string                                       `json:"limitations"`
+	Schema                string                                         `json:"schema"`
+	ResultKind            string                                         `json:"result_kind"`
+	Status                string                                         `json:"status"`
+	GeneratedAt           string                                         `json:"generated_at"`
+	Provenance            localHNSWAttributionProvenanceV1               `json:"provenance"`
+	Variant               string                                         `json:"variant"`
+	Probes                int                                            `json:"probes"`
+	EFSearch              []int                                          `json:"ef_search"`
+	Calibration           localHNSWAttributionFileInputV1                `json:"calibration_split"`
+	Truth                 localHNSWAttributionFileInputV1                `json:"truth_artifact"`
+	Descriptor            localHNSWAttributionFileInputV1                `json:"retained_descriptor"`
+	RawSidecar            localHNSWAttributionFileInputV1                `json:"raw_sidecar"`
+	PreparationHeadSHA    string                                         `json:"preparation_head_sha"`
+	PreparationCheckpoint localHNSWAttributionFileInputV1                `json:"preparation_checkpoint"`
+	Manifest              string                                         `json:"manifest_integrity_digest"`
+	Source                localHNSWAttributionSourceEvidenceV1           `json:"source"`
+	Build                 localHNSWAttributionBuildEvidenceV1            `json:"build"`
+	Construction          localHNSWAttributionConstructionTotalsV1       `json:"construction"`
+	Neighborhood          localHNSWAttributionNeighborhoodOracleV1       `json:"neighborhood"`
+	SelectedPacks         []uint32                                       `json:"selected_packs"`
+	SelectedDiagnostics   []collections.VectorPartitionPackDiagnosticsV1 `json:"selected_pack_diagnostics"`
+	SelectedConstruction  []localHNSWM18EdgeDiagnosisPackConstructionV1  `json:"selected_pack_construction"`
+	SelectedNeighborhood  []localHNSWM18EdgeDiagnosisPackNeighborhoodV1  `json:"selected_pack_neighborhood"`
+	Cells                 []localHNSWM18EdgeDiagnosisCellV1              `json:"cells"`
+	Limitations           []string                                       `json:"limitations"`
 }
 
 func localHNSWM18EdgeDiagnosisReportValidateV1(r localHNSWM18EdgeDiagnosisReportV1) error {
-	if r.Schema != localHNSWM18EdgeDiagnosisSchemaV1 || r.ResultKind != "local_hnsw_m18_edge_diagnosis_v1" || r.Status != "valid" || r.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || r.Probes != 2 || !localHNSWM18EdgeDiagnosisPointsV1(r.EFSearch) || !slices.Equal(r.SelectedPacks, localHNSWM18EdgeDiagnosisPacksV1) || len(r.SelectedDiagnostics) != len(r.SelectedPacks) || len(r.SelectedConstruction) != len(r.SelectedPacks) || len(r.SelectedNeighborhood) != len(r.SelectedPacks) || r.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || r.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || r.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || !localHNSWAttributionSHA256V1(r.RawSidecar.SHA256) || r.Source.Partitions != 40 || r.Source.SourceRows != 250000 || r.Source.ManifestIntegrity != r.Manifest || r.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || r.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || r.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 || r.Source.Descriptor.PartitionHNSWM != 18 || r.Source.Descriptor.PartitionHNSWEfC != 256 || len(r.Source.PartitionLoads) != 40 || r.Build.Variant != r.Variant || r.Build.Partitions != 40 || len(r.Cells) != len(r.EFSearch) {
+	if r.Schema != localHNSWM18EdgeDiagnosisSchemaV1 || r.ResultKind != "local_hnsw_m18_edge_diagnosis_v1" || r.Status != "valid" || r.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || r.Probes != 2 || !localHNSWM18EdgeDiagnosisPointsV1(r.EFSearch) || !slices.Equal(r.SelectedPacks, localHNSWM18EdgeDiagnosisPacksV1) || len(r.SelectedDiagnostics) != len(r.SelectedPacks) || len(r.SelectedConstruction) != len(r.SelectedPacks) || len(r.SelectedNeighborhood) != len(r.SelectedPacks) || r.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || r.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || r.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || !localHNSWAttributionSHA256V1(r.RawSidecar.SHA256) || !m8QualificationGitSHAV1(r.PreparationHeadSHA) || r.PreparationCheckpoint.Path == "" || !localHNSWAttributionSHA256V1(r.PreparationCheckpoint.SHA256) || r.Source.Partitions != 40 || r.Source.SourceRows != 250000 || r.Source.ManifestIntegrity != r.Manifest || r.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || r.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || r.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 || r.Source.Descriptor.PartitionHNSWM != 18 || r.Source.Descriptor.PartitionHNSWEfC != 256 || len(r.Source.PartitionLoads) != 40 || r.Build.Variant != r.Variant || r.Build.Partitions != 40 || len(r.Cells) != len(r.EFSearch) {
 		return errors.New("invalid M18 edge diagnosis report")
 	}
 	for i, p := range r.SelectedPacks {
@@ -208,6 +210,20 @@ type localHNSWM18EdgeSidecarCellV1 struct {
 
 func localHNSWM18EdgeDiagnosisPointsV1(points []int) bool {
 	return slices.Equal(points, localHNSWM18EdgeDiagnosisEFV1)
+}
+
+// localHNSWM18EdgePreparationHeadV1 keeps graph preparation provenance
+// separate from the executable that later runs the calibration queries. A new
+// checkpoint must be produced by the current executable; reopening one always
+// requires its historical, explicit commit identity.
+func localHNSWM18EdgePreparationHeadV1(preparationHeadSHA, currentHeadSHA string, creating bool) error {
+	if !m8QualificationGitSHAV1(preparationHeadSHA) || !m8QualificationGitSHAV1(currentHeadSHA) {
+		return errors.New("M18 edge diagnosis preparation head")
+	}
+	if creating && preparationHeadSHA != currentHeadSHA {
+		return errors.New("M18 edge diagnosis new checkpoint preparation head")
+	}
+	return nil
 }
 
 func localHNSWM18EdgeDiagnosisWorkAddV1(dst *localHNSWAttributionQueryWorkV1, candidates, edges, frontier uint64, utility localHNSWAttributionQueryUtilityV1) error {
@@ -298,13 +314,16 @@ func localHNSWM18EdgeSidecarValidateV1(sidecar localHNSWM18EdgeSidecarV1, cells 
 		}
 		counts := make(map[string]int, len(expected))
 		partitions := make(map[string]map[uint32]struct{}, len(expected))
-		for _, trace := range sidecarCell.Traces {
+		for traceIndex, trace := range sidecarCell.Traces {
 			if _, ok := expected[trace.QuerySHA]; !ok || int(trace.Partition) >= len(h.documentIDs) {
-				return errors.New("unexpected M18 edge sidecar trace")
+				return fmt.Errorf("unexpected M18 edge sidecar trace cell=%d ef=%d trace=%d query=%s partition=%d", i, sidecarCell.EFSearch, traceIndex, trace.QuerySHA, trace.Partition)
 			}
 			truth, ok := truthByQuery[trace.QuerySHA]
-			if !ok || localHNSWM18EdgeTraceValidateV1(trace, h.documentIDs[trace.Partition], h.finalOrigins[trace.Partition], truth) != nil {
-				return errors.New("M18 edge sidecar replay")
+			if !ok {
+				return fmt.Errorf("M18 edge sidecar trace lacks truth cell=%d ef=%d trace=%d query=%s partition=%d", i, sidecarCell.EFSearch, traceIndex, trace.QuerySHA, trace.Partition)
+			}
+			if err := localHNSWM18EdgeTraceValidateV1(trace, h.documentIDs[trace.Partition], h.finalOrigins[trace.Partition], truth); err != nil {
+				return fmt.Errorf("M18 edge sidecar replay cell=%d ef=%d trace=%d query=%s partition=%d: %w", i, sidecarCell.EFSearch, traceIndex, trace.QuerySHA, trace.Partition, err)
 			}
 			if partitions[trace.QuerySHA] == nil {
 				partitions[trace.QuerySHA] = map[uint32]struct{}{}
@@ -424,7 +443,7 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench local-hnsw-m18-edge-diagnosis", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, checkpointPath, out, rawSidecar, baseSHA, headSHA, sourceCheckout string
+	var dataset, retainedDB, calibrationPath, truthPath, tempRoot, checkpointPath, out, rawSidecar, baseSHA, headSHA, preparationHeadSHA, sourceCheckout string
 	fs.StringVar(&dataset, "dataset", "", "frozen fixture directory")
 	fs.StringVar(&retainedDB, "retained-db", "", "literal M18 retained database")
 	fs.StringVar(&calibrationPath, "calibration-split", "", "frozen calibration manifest")
@@ -435,8 +454,9 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	fs.StringVar(&rawSidecar, "raw-sidecar", "", "fresh local bounded trace sidecar")
 	fs.StringVar(&baseSHA, "base-sha", "", "exact main base SHA")
 	fs.StringVar(&headSHA, "head-sha", "", "exact diagnosis implementation SHA")
+	fs.StringVar(&preparationHeadSHA, "preparation-head-sha", "", "exact SHA that created the immutable preparation checkpoint")
 	fs.StringVar(&sourceCheckout, "source-checkout", "", "clean exact-head checkout")
-	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || checkpointPath == "" || out == "" || rawSidecar == "" || baseSHA == "" || headSHA == "" || sourceCheckout == "" {
+	if fs.Parse(args) != nil || fs.NArg() != 0 || dataset == "" || retainedDB == "" || calibrationPath == "" || truthPath == "" || tempRoot == "" || checkpointPath == "" || out == "" || rawSidecar == "" || baseSHA == "" || headSHA == "" || preparationHeadSHA == "" || sourceCheckout == "" {
 		return errors.New("local-hnsw-m18-edge-diagnosis requires frozen inputs, temp root, and fresh output")
 	}
 	var err error
@@ -509,7 +529,11 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	var selectedDiagnostics []collections.VectorPartitionPackDiagnosticsV1
 	var selectedConstruction []localHNSWM18EdgeDiagnosisPackConstructionV1
 	var selectedNeighborhood []localHNSWM18EdgeDiagnosisPackNeighborhoodV1
+	var checkpointSHA string
 	if _, statErr := os.Lstat(checkpointPath); errors.Is(statErr, os.ErrNotExist) {
+		if err := localHNSWM18EdgePreparationHeadV1(preparationHeadSHA, headSHA, true); err != nil {
+			return err
+		}
 		h, build, err = localHNSWAttributionBuildVariantV1(source, tempRoot, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 4171001)
 		if err != nil {
 			return err
@@ -545,6 +569,10 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 		if checkpointErr != nil {
 			return checkpointErr
 		}
+		checkpointSHA, err = localHNSWAttributionRegularFileSHA256V1(checkpointPath, m8ProfileArtifactMaxBytesV1)
+		if err != nil {
+			return err
+		}
 		selectedDiagnostics = checkpoint.SelectedDiagnostics
 		// The checkpoint now owns the clone. Closing this preparation process
 		// releases mappings and heap without deleting its immutable assets.
@@ -554,7 +582,14 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	} else if statErr != nil {
 		return statErr
 	} else {
-		checkpoint, opened, openErr := localHNSWM18EdgeCheckpointOpenV1(checkpointPath, headSHA, descriptorSHA, tempRoot, source)
+		if err := localHNSWM18EdgePreparationHeadV1(preparationHeadSHA, headSHA, false); err != nil {
+			return err
+		}
+		checkpointSHA, err = localHNSWAttributionRegularFileSHA256V1(checkpointPath, m8ProfileArtifactMaxBytesV1)
+		if err != nil {
+			return err
+		}
+		checkpoint, opened, openErr := localHNSWM18EdgeCheckpointOpenV1(checkpointPath, preparationHeadSHA, descriptorSHA, tempRoot, source)
 		if openErr != nil {
 			return openErr
 		}
@@ -606,6 +641,9 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	if digest, err := m8BenchmarkExecutableSHA256V1(executable); err != nil || digest != executableSHA || !m8QualificationBenchmarkExecutableV1(sourceCheckout, executable, headSHA, executableSHA) {
 		return errors.New("M18 edge diagnosis executable changed")
 	}
+	if digest, err := localHNSWAttributionRegularFileSHA256V1(checkpointPath, m8ProfileArtifactMaxBytesV1); err != nil || digest != checkpointSHA {
+		return errors.New("M18 edge diagnosis checkpoint changed")
+	}
 	loads, err := m8PartitionLoadsV1(source.manifest)
 	if err != nil || source.descriptor == nil {
 		return errors.New("M18 edge diagnosis source binding")
@@ -615,6 +653,7 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 		Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-m18-edge-diagnosis", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA},
 		Variant:    string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...),
 		Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, RawSidecar: localHNSWAttributionFileInputV1{Path: rawSidecar, SHA256: sidecarSHA},
+		PreparationHeadSHA: preparationHeadSHA, PreparationCheckpoint: localHNSWAttributionFileInputV1{Path: checkpointPath, SHA256: checkpointSHA},
 		Manifest: source.manifest.IntegrityDigest,
 		Source:   localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor},
 		Build:    build, Construction: construction, Neighborhood: neighborhood,
