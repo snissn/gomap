@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -175,11 +176,62 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 	}
 }
 
+func TestMaterializeVectorPartitionConstructionEvidenceCanonicalizesUnsortedInputsV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0, 0}}, {id: "b", vector: []float32{0, 1, 0}}})
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State, manifest.RouterGeneration, manifest.RouterAsset, manifest.ReadySetDigest = "building", 0, VectorPartitionAssetV1{}, ""
+	manifest.Collection, manifest.IndexName, manifest.IndexDefinitionDigest = col.name, def.Name, VectorIndexDefinitionDigestV1(def)
+	manifest.Generation, manifest.PartitionCount = 191, 2
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = []VectorPartitionMembershipV1{{VectorOrdinal: 0, PartitionID: 0}, {VectorOrdinal: 1, PartitionID: 1}}
+	manifest.Canonicalize()
+	inputs := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 1, Dimensions: def.Dimensions}, {Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	assets, resources, evidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 979, inputs, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if len(assets) != 2 || assets[0].PartitionID != 0 || assets[1].PartitionID != 1 || len(evidence.Partitions) != 2 || evidence.Partitions[0].PartitionID != 0 || evidence.Partitions[1].PartitionID != 1 {
+		t.Fatalf("unsorted inputs did not produce canonical assets/evidence: assets=%+v evidence=%+v", assets, evidence.Partitions)
+	}
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, manifest, assets, evidence); err != nil {
+		t.Fatalf("materializer emitted non-self-valid evidence for unsorted inputs: %v", err)
+	}
+}
+
 func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
-	rows := make([]columnGraphRebuildInputRowV2A, 8)
-	for i := range rows {
-		rows[i] = columnGraphRebuildInputRowV2A{id: fmt.Sprintf("v%d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}}
+	// The 32 domain-separated sample IDs are deliberately late in stable-ID
+	// insertion order. With more than eFC=128 predecessors, this guarantees a
+	// sampled selection with a valid predecessor outside its candidate pool for
+	// the replay-substitution regression below.
+	rows := make([]columnGraphRebuildInputRowV2A, 0, 160)
+	for i := 0; i < 128; i++ {
+		rows = append(rows, columnGraphRebuildInputRowV2A{id: fmt.Sprintf("a%03d", i), vector: []float32{float32(i + 1), float32(i%3 + 1), 1}})
+	}
+	type lateID struct {
+		id   string
+		hash [32]byte
+	}
+	late := make([]lateID, 4096)
+	for i := range late {
+		late[i] = lateID{id: fmt.Sprintf("z%04d", i)}
+		late[i].hash = vectorPartitionConstructionSampleHashV1([]byte(late[i].id))
+	}
+	sort.Slice(late, func(i, j int) bool {
+		return vectorPartitionConstructionSampleLessV1(late[i].hash, []byte(late[i].id), late[j].hash, []byte(late[j].id))
+	})
+	for i := 0; i < 32; i++ {
+		rows = append(rows, columnGraphRebuildInputRowV2A{id: late[i].id, vector: []float32{float32(i + 129), float32(i%3 + 1), 1}})
 	}
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
 	defer d.Close()
@@ -209,11 +261,257 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer nr.Release()
-	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	auxiliary, ar, constructionEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ar.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, constructionEvidence); err != nil {
+		t.Fatalf("construction evidence: %v", err)
+	}
+	emptyEvidence := constructionEvidence
+	emptyEvidence.Partitions = nil
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, emptyEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("empty construction evidence err=%v", err)
+	}
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, nil, constructionEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("empty construction assets err=%v", err)
+	}
+	overlay, overlayResources, overlayEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 988, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer overlayResources.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, overlay, overlayEvidence); err != nil {
+		t.Fatalf("overlay construction evidence: %v", err)
+	}
+	overlayAdds, overlayDrops := 0, 0
+	for _, event := range overlayEvidence.Partitions[0].Events {
+		switch event.Action {
+		case "overlay_rewrite_add":
+			overlayAdds++
+			if event.Origin != "overlay_rewrite" {
+				t.Fatalf("overlay add origin=%q", event.Origin)
+			}
+		case "overlay_rewrite_drop":
+			overlayDrops++
+		}
+	}
+	if overlayAdds == 0 || overlayDrops == 0 {
+		t.Fatalf("overlay mutation evidence adds=%d drops=%d events=%+v", overlayAdds, overlayDrops, overlayEvidence.Partitions[0].Events)
+	}
+	badEvidence := constructionEvidence
+	badEvidence.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
+	badEvidence.Partitions[0].AssetChecksum = "wrong"
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, badEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("bad evidence err=%v", err)
+	}
+	cloneEvidence := func() VectorPartitionConstructionEvidenceV1 {
+		out := constructionEvidence
+		out.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
+		out.Partitions[0].Selections = append([]VectorPartitionConstructionSelectionV1(nil), constructionEvidence.Partitions[0].Selections...)
+		out.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1(nil), constructionEvidence.Partitions[0].Events...)
+		out.Partitions[0].NativeInsertionOrdinals = append([]int(nil), constructionEvidence.Partitions[0].NativeInsertionOrdinals...)
+		for i := range out.Partitions[0].Selections {
+			out.Partitions[0].Selections[i].CandidateOrdinals = append([]int(nil), constructionEvidence.Partitions[0].Selections[i].CandidateOrdinals...)
+		}
+		return out
+	}
+	finalEvent := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Events {
+			if e.Partitions[0].Events[i].Action == "final_survivor" {
+				return i
+			}
+		}
+		return -1
+	}
+	initialEvent := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Events {
+			if e.Partitions[0].Events[i].Action == "initial_add" {
+				return i
+			}
+		}
+		return -1
+	}
+	sampledSelection := func(e *VectorPartitionConstructionEvidenceV1) int {
+		for i := range e.Partitions[0].Selections {
+			if e.Partitions[0].Selections[i].CandidateSampled && len(e.Partitions[0].Selections[i].CandidateOrdinals) > 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	if len(constructionEvidence.Partitions[0].Selections) == 0 || finalEvent(&constructionEvidence) < 0 || initialEvent(&constructionEvidence) < 0 || sampledSelection(&constructionEvidence) < 0 {
+		t.Fatalf("fixture lacks lifecycle coverage: %+v", constructionEvidence)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*VectorPartitionConstructionEvidenceV1)
+	}{
+		{"wrong_variant", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Variant = string(VectorPartitionLocalGraphVariantNativeV1)
+		}},
+		{"wrong_manifest", func(e *VectorPartitionConstructionEvidenceV1) { e.ManifestChecksum = "wrong" }},
+		{"wrong_index", func(e *VectorPartitionConstructionEvidenceV1) { e.IndexDefinitionDigest = "wrong" }},
+		{"wrong_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PartitionID++ }},
+		{"duplicate_partition", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions = append(e.Partitions, e.Partitions[0]) }},
+		{"bad_selection", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].Selections[0].Selected++ }},
+		{"duplicate_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].NativeInsertionOrdinals[0] = e.Partitions[0].NativeInsertionOrdinals[1]
+		}},
+		{"replayed_insertion_permutation", func(e *VectorPartitionConstructionEvidenceV1) {
+			p := &e.Partitions[0]
+			p.NativeInsertionOrdinals[0], p.NativeInsertionOrdinals[1] = p.NativeInsertionOrdinals[1], p.NativeInsertionOrdinals[0]
+			for i := range p.Events {
+				p.Events[i].InsertionOrdinal = max(p.NativeInsertionOrdinals[p.Events[i].From], p.NativeInsertionOrdinals[p.Events[i].To])
+			}
+		}},
+		{"wrong_event_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].InsertionOrdinal = 0
+		}},
+		{"sample_missing", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			e.Partitions[0].Selections[i].CandidateSampled = false
+			e.Partitions[0].Selections[i].CandidateOrdinals = nil
+			e.Partitions[0].Selections[i].CandidateDigest = ""
+		}},
+		{"sample_candidate_self", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals[0] = s.Node
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
+		{"sample_candidate_missing", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals = s.CandidateOrdinals[:len(s.CandidateOrdinals)-1]
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
+		{"sample_candidate_extra", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := sampledSelection(e)
+			s := &e.Partitions[0].Selections[i]
+			s.CandidateOrdinals = append(s.CandidateOrdinals, s.CandidateOrdinals[len(s.CandidateOrdinals)-1])
+			s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		}},
+		{"postfill", func(e *VectorPartitionConstructionEvidenceV1) { e.Partitions[0].PostfillEdges = 1 }},
+		{"bad_origin", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].Origin = "reciprocal_add"
+		}},
+		{"bad_action", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := initialEvent(e)
+			e.Partitions[0].Events[i].Action = "reciprocal_prune_keep"
+		}},
+		{"keep_absent", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1{{From: 0, To: 0, Layer: 0, InsertionOrdinal: 0, Origin: "reciprocal_add", Action: "reciprocal_prune_keep"}}, e.Partitions[0].Events...)
+		}},
+		{"drop_absent", func(e *VectorPartitionConstructionEvidenceV1) {
+			e.Partitions[0].Events = append([]VectorPartitionConstructionEdgeEventV1{{From: 0, To: 0, Layer: 0, InsertionOrdinal: 0, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}}, e.Partitions[0].Events...)
+		}},
+		{"origin_mismatch", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			if e.Partitions[0].Events[i].Origin == "reciprocal_add" {
+				e.Partitions[0].Events[i].Origin = "diversity_selected"
+			} else {
+				e.Partitions[0].Events[i].Origin = "reciprocal_add"
+			}
+		}},
+		{"after_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, e.Partitions[0].Events[i-1])
+		}},
+		{"missing_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events[:i], e.Partitions[0].Events[i+1:]...)
+		}},
+		{"duplicate_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, e.Partitions[0].Events[i])
+		}},
+		{"extra_final", func(e *VectorPartitionConstructionEvidenceV1) {
+			i := finalEvent(e)
+			x := e.Partitions[0].Events[i]
+			x.To = (x.To + 1) % len(rows)
+			e.Partitions[0].Events = append(e.Partitions[0].Events, x)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := cloneEvidence()
+			tc.mutate(&e)
+			if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+	t.Run("sample_candidate_replay_substitution", func(t *testing.T) {
+		e := cloneEvidence()
+		i, replacement := -1, -1
+		for selection := range e.Partitions[0].Selections {
+			s := &e.Partitions[0].Selections[selection]
+			if !s.CandidateSampled || len(s.CandidateOrdinals) == 0 {
+				continue
+			}
+			present := make(map[int]struct{}, len(s.CandidateOrdinals))
+			for _, ordinal := range s.CandidateOrdinals {
+				present[ordinal] = struct{}{}
+			}
+			for ordinal, insertion := range e.Partitions[0].NativeInsertionOrdinals {
+				if ordinal != s.Node && insertion < e.Partitions[0].NativeInsertionOrdinals[s.Node] {
+					if _, exists := present[ordinal]; !exists {
+						i, replacement = selection, ordinal
+						break
+					}
+				}
+			}
+			if replacement >= 0 {
+				break
+			}
+		}
+		if i < 0 || replacement < 0 {
+			t.Fatal("deterministic replay fixture lacks a non-pool predecessor")
+		}
+		s := &e.Partitions[0].Selections[i]
+		s.CandidateOrdinals[0] = replacement
+		sort.Ints(s.CandidateOrdinals)
+		s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+		if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("substituted sampled candidate accepted: %v", err)
+		}
+	})
+	t.Run("replayed_lifecycle_origin", func(t *testing.T) {
+		e := cloneEvidence()
+		p := &e.Partitions[0]
+		selectionIndex, eventIndex := -1, -1
+		for i, selection := range p.Selections {
+			if selection.DiversitySelected == 0 {
+				continue
+			}
+			for j, event := range p.Events {
+				if event.Action == "initial_add" && event.Origin == "diversity_selected" && event.From == selection.Node && event.Layer == selection.Layer {
+					selectionIndex, eventIndex = i, j
+					break
+				}
+			}
+			if eventIndex >= 0 {
+				break
+			}
+		}
+		if selectionIndex < 0 || eventIndex < 0 {
+			t.Fatal("fixture lacks diversity lifecycle event")
+		}
+		p.Selections[selectionIndex].DiversitySelected--
+		p.Selections[selectionIndex].BackfillSelected++
+		key := p.Events[eventIndex]
+		for i := range p.Events {
+			if p.Events[i].From == key.From && p.Events[i].To == key.To && p.Events[i].Layer == key.Layer && p.Events[i].Origin == "diversity_selected" {
+				p.Events[i].Origin = "nearest_backfill"
+			}
+		}
+		if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("replayed lifecycle origin mutation accepted: %v", err)
+		}
+	})
 	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
 	if err != nil {
 		t.Fatal(err)
@@ -233,6 +531,14 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	if !slices.Equal(auxiliaryRaw, auxiliaryAgainRaw) {
 		t.Fatal("auxiliary rebuild bytes differ")
+	}
+	tracedAgain, tracedAgainResources, tracedAgainEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 987, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tracedAgainResources.Release()
+	if !reflect.DeepEqual(constructionEvidence, tracedAgainEvidence) || auxiliary[0].Checksum != tracedAgain[0].Checksum || auxiliary[0].Bytes != tracedAgain[0].Bytes {
+		t.Fatalf("traced evidence/assets are not deterministic: first=%+v again=%+v", constructionEvidence, tracedAgainEvidence)
 	}
 	nativeDigest, err := decodeVectorPartitionMembershipDigestV1(native[0].MembershipDigest)
 	if err != nil {
@@ -331,6 +637,35 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	if attribution.Schema != "treedb_vector_partition_search_attribution_v1" || attribution.VisitedRows == 0 || attribution.VisitedRows != uint64(len(attribution.VisitedOrdinals)) || attribution.FrontierAdmissions == 0 || len(attribution.VisitedOrdinalsSHA256) != 64 {
 		t.Fatalf("attribution=%+v", attribution)
+	}
+	if len(attribution.EdgeEvents) == 0 {
+		t.Fatal("missing per-edge attribution events")
+	}
+	var nativeEdges, auxiliaryEdges, newlyVisited, admissions uint64
+	for i, event := range attribution.EdgeEvents {
+		if event.SourceOrdinal < 0 || event.SourceOrdinal >= len(rows) || event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(rows) {
+			t.Fatalf("event[%d] ordinal=%+v", i, event)
+		}
+		if event.Auxiliary {
+			auxiliaryEdges++
+		} else {
+			nativeEdges++
+		}
+		if event.NewlyVisited {
+			newlyVisited++
+			if !event.Scored {
+				t.Fatalf("new event[%d] was not scored: %+v", i, event)
+			}
+		}
+		if event.FrontierAdmission {
+			admissions++
+			if !event.TopAdmission {
+				t.Fatalf("frontier event[%d] was not retained: %+v", i, event)
+			}
+		}
+	}
+	if nativeEdges+auxiliaryEdges != attributedMetrics.Edges || auxiliaryEdges != attributedMetrics.AuxiliaryEdges || newlyVisited+attribution.SeedCandidates != attributedMetrics.Candidates || admissions+attribution.SeedAdmissions != attribution.FrontierAdmissions {
+		t.Fatalf("edge attribution does not reconcile metrics=%+v attribution=%+v native=%d aux=%d new=%d admissions=%d", attributedMetrics, attribution, nativeEdges, auxiliaryEdges, newlyVisited, admissions)
 	}
 	h := sha256.New()
 	h.Write([]byte("treedb_vector_partition_search_attribution_v1/visited/"))
@@ -465,6 +800,20 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	if !slices.Contains(nativeTrace.VisitedOrdinals, uint32(3)) || slices.Contains(overlayTrace.VisitedOrdinals, uint32(3)) {
 		t.Fatalf("displaced endpoint traversal native=%v overlay=%v", nativeTrace.VisitedOrdinals, overlayTrace.VisitedOrdinals)
 	}
+	var sawNative bool
+	for _, event := range overlayTrace.EdgeEvents {
+		sawNative = sawNative || !event.Auxiliary
+	}
+	if !sawNative {
+		t.Fatalf("overlay edge attribution lacks native events: %+v", overlayTrace.EdgeEvents)
+	}
+	_, _, rerunTrace, err := o.SearchWithAttributionV1(t.Context(), rows[0].vector, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(overlayTrace.EdgeEvents, rerunTrace.EdgeEvents) {
+		t.Fatalf("edge attribution is not deterministic: first=%+v rerun=%+v", overlayTrace.EdgeEvents, rerunTrace.EdgeEvents)
+	}
 }
 
 func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
@@ -531,6 +880,11 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	membershipDigest, err := vectorPartitionMembershipDigestV1(sourceReader, m.Generation, 0, members)
 	if err != nil {
 		t.Fatal(err)
+	}
+	badReplayReader := *sourceReader
+	badReplayReader.reader = &columnPhysicalRowReader{closed: true}
+	if _, err := vectorPartitionConstructionReplayEvidenceV1(&badReplayReader, members, def, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); err == nil || !strings.Contains(err.Error(), "physical column row reader is closed") {
+		t.Fatalf("unexpected replay fetch error did not fail closed: %v", err)
 	}
 	canonicalDigest, err := decodeVectorPartitionMembershipDigestV1(canonical[0].MembershipDigest)
 	if err != nil {
@@ -667,7 +1021,7 @@ func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.Layer0ZeroIndegreeRows != 1 || diagnostics.Layer0DuplicateEdges != 0 || diagnostics.Layer0ReciprocalEdges != 2 || diagnostics.Layer0ReciprocalRatio != 1 || diagnostics.Layer0Distances.Count != 2 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 || diagnostics.AuxiliaryDistances.Count != 2 {
+	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.Layer0ZeroIndegreeRows != 1 || diagnostics.Layer0DuplicateEdges != 0 || diagnostics.Layer0ReciprocalEdges != 2 || diagnostics.Layer0ReciprocalRatio != 1 || diagnostics.Layer0Distances.Count != 2 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 || diagnostics.AuxiliaryDistances.Count != 2 || !reflect.DeepEqual(diagnostics.Layer0DegreeHistogram, map[uint64]uint64{0: 1, 1: 2}) || !reflect.DeepEqual(diagnostics.Layer0IndegreeHistogram, map[uint64]uint64{0: 1, 1: 2}) || diagnostics.Layer0StrongComponents != 2 || diagnostics.Layer0LargestComponent != 2 {
 		t.Fatalf("diagnostics=%+v", diagnostics)
 	}
 	status := searcher.Status()
@@ -707,6 +1061,84 @@ func TestVectorPartitionLocalLayer0ReciprocityRepairPreservesEdgeBudgetV1(t *tes
 	}
 	if len(auxiliary.Neighbors) != 0 {
 		t.Fatalf("connected native graph still needed component bridges: %v", auxiliary.Neighbors)
+	}
+}
+
+func TestVectorPartitionConstructionEvidenceReconcilesReciprocityRepairV1(t *testing.T) {
+	requireVectorPartitionPersistenceV1(t)
+	const seed = 148 // Deterministically produces layer-0 reciprocity rewrites.
+	inputs := make([]columnGraphRebuildInputRowV2A, 24)
+	for i := range inputs {
+		inputs[i] = columnGraphRebuildInputRowV2A{
+			id: fmt.Sprintf("r-%03d-%03d", seed, i),
+			vector: []float32{
+				float32(math.Sin(float64(seed*31 + i*7))),
+				float32(math.Cos(float64(seed*17 + i*13))),
+				float32(math.Sin(float64(seed*11 + i*19))),
+				float32(math.Cos(float64(seed*23 + i*3))),
+			},
+		}
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 4, 1, inputs)
+	defer d.Close()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	source, err := col.VectorPartitionSourceIdentityV1(def.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := testVectorPartitionManifestV1()
+	manifest.State = "building"
+	manifest.Collection = col.name
+	manifest.IndexName = def.Name
+	manifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(def)
+	manifest.Generation = 148
+	manifest.PartitionCount = 1
+	manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, manifest.SourceRowCount = source.Generation, source.Checksum, source.SchemaHash, source.RowCount
+	manifest.Memberships = make([]VectorPartitionMembershipV1, len(inputs))
+	for i := range inputs {
+		manifest.Memberships[i] = VectorPartitionMembershipV1{VectorOrdinal: uint64(i), PartitionID: 0}
+	}
+	manifest.Canonicalize()
+	in := []VectorPartitionSearchAssetV1{{Source: source, Generation: manifest.Generation, PartitionID: 0, Dimensions: def.Dimensions}}
+	assets, resources, evidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 1481, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, manifest, assets, evidence); err != nil {
+		t.Fatalf("repaired construction evidence: %v", err)
+	}
+	adds, drops, finalRepair := 0, 0, 0
+	for _, event := range evidence.Partitions[0].Events {
+		switch event.Action {
+		case "reciprocity_repair_add":
+			adds++
+			if event.Origin != "reciprocity_repair" {
+				t.Fatalf("repair add origin=%q", event.Origin)
+			}
+		case "reciprocity_repair_drop":
+			drops++
+		case "final_survivor":
+			if event.Origin == "reciprocity_repair" {
+				finalRepair++
+			}
+		}
+	}
+	if adds == 0 || drops == 0 || finalRepair == 0 {
+		t.Fatalf("repair lifecycle adds=%d drops=%d final-repair=%d", adds, drops, finalRepair)
+	}
+	again, againResources, againEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, manifest, 1482, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer againResources.Release()
+	if !reflect.DeepEqual(evidence, againEvidence) {
+		t.Fatalf("repair evidence is not deterministic\nfirst=%+v\nagain=%+v", evidence, againEvidence)
+	}
+	if assets[0].Checksum != again[0].Checksum || assets[0].Bytes != again[0].Bytes {
+		t.Fatalf("repair materialization payload differs first=%+v again=%+v", assets[0], again[0])
 	}
 }
 
@@ -1209,7 +1641,7 @@ func TestVectorPartitionMaterializationBuildsPartitionLocalConnectedGraphV1(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.Rows != uint64(len(selected)) || diagnostics.ReachableRows != diagnostics.Rows || diagnostics.TraversalRoots != 1 || len(diagnostics.RowsByLayer) == 0 || len(diagnostics.EdgesByLayer) == 0 {
+	if diagnostics.Rows != uint64(len(selected)) || diagnostics.ReachableRows != diagnostics.Rows || diagnostics.TraversalRoots != 1 || len(diagnostics.RowsByLayer) == 0 || len(diagnostics.EdgesByLayer) == 0 || diagnostics.Layer0StrongComponents == 0 || diagnostics.Layer0LargestComponent == 0 || len(diagnostics.Layer0DegreeHistogram) == 0 || len(diagnostics.Layer0IndegreeHistogram) == 0 {
 		t.Fatalf("partition-local pack diagnostics=%+v", diagnostics)
 	}
 	for id, query := range selected {

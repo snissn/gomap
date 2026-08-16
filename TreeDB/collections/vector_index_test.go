@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -359,6 +360,135 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 3, 0)
 	if len(got) != 3 {
 		t.Fatalf("selected %d neighbors=%v, want backfilled degree 3", len(got), got)
+	}
+}
+
+func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 4}
+	rows := []columnVectorGraphAssetRow{{ID: []byte("a"), Vector: []float32{1, 0}}, {ID: []byte("b"), Vector: []float32{.99, .01}}, {ID: []byte("c"), Vector: []float32{0, 1}}, {ID: []byte("d"), Vector: []float32{-1, 0}}}
+	plain := append([]columnVectorGraphAssetRow(nil), rows...)
+	traced := append([]columnVectorGraphAssetRow(nil), rows...)
+	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
+		t.Fatal(err)
+	}
+	trace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(traced, def, trace); err != nil {
+		t.Fatal(err)
+	}
+	if len(trace.selections) == 0 {
+		t.Fatal("missing opt-in construction selections")
+	}
+	if len(trace.events) == 0 {
+		t.Fatal("missing opt-in construction edge events")
+	}
+	for _, event := range trace.events {
+		if event.From < 0 || event.From >= len(traced) || event.To < 0 || event.To >= len(traced) {
+			t.Fatalf("construction event has non-locality ordinal: %+v", event)
+		}
+	}
+	for i := range plain {
+		if string(plain[i].ID) != string(traced[i].ID) || !reflect.DeepEqual(plain[i].Adjacency, traced[i].Adjacency) {
+			t.Fatalf("trace changed graph row=%d", i)
+		}
+	}
+}
+
+func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{{documentID: []byte("sampled"), vector: []float32{1, 0}, level: 0}}
+	index.nodes[0].cacheVectorNorms()
+	candidates := []vectorIndexCandidate{{nodeID: 0, distance: 0}}
+
+	plain := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
+	trace := &vectorIndexConstructionTraceV1{sampleIDs: map[string]struct{}{"sampled": {}}}
+	index.constructionTrace = trace
+	traced := index.selectLayerNeighborsLocked(index.nodes[0].vector, vectorNormSquared(index.nodes[0].vector), nil, append([]vectorIndexCandidate(nil), candidates...), 0, 2, 0)
+	if !reflect.DeepEqual(plain, traced) {
+		t.Fatalf("trace changed zero-candidate selection: plain=%v traced=%v", plain, traced)
+	}
+	if len(trace.selections) != 1 {
+		t.Fatalf("selections=%d want 1", len(trace.selections))
+	}
+	selection := trace.selections[0]
+	if !selection.Sampled || selection.CandidateNodes == nil || len(selection.CandidateNodes) != 0 || selection.Candidates != 0 || selection.Selected != 0 {
+		t.Fatalf("zero-candidate sampled selection=%+v", selection)
+	}
+}
+
+func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 1, EfConstruction: 10}
+	rows := make([]columnVectorGraphAssetRow, 10)
+	for i := range rows {
+		angle := float64(i) * 2 * math.Pi / float64(len(rows))
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("node-%02d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	plain := append([]columnVectorGraphAssetRow(nil), rows...)
+	traced := append([]columnVectorGraphAssetRow(nil), rows...)
+	trace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacency(plain, def); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(traced, def, trace); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plain, traced) {
+		t.Fatal("construction trace changed adjacency")
+	}
+	counts := make(map[string]int)
+	origins := make(map[string]int)
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for _, event := range trace.events {
+		if event.From < 0 || event.From >= len(traced) || event.To < 0 || event.To >= len(traced) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= len(traced) {
+			t.Fatalf("invalid remapped construction event: %+v", event)
+		}
+		counts[event.Action]++
+		origins[event.Origin]++
+		if event.Action == "final_survivor" {
+			final[vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}] = struct{}{}
+		}
+	}
+	for _, action := range []string{"initial_add", "reciprocal_add", "reciprocal_prune_keep", "reciprocal_prune_drop", "final_survivor"} {
+		if counts[action] == 0 {
+			t.Fatalf("toy graph did not exercise %s: counts=%v", action, counts)
+		}
+	}
+	if origins["diversity_selected"] == 0 || origins["nearest_backfill"] == 0 {
+		t.Fatalf("toy graph did not exercise selection origins: origins=%v", origins)
+	}
+	wantFinal := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from, row := range traced {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(row.Adjacency)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for layer := 0; layer <= maxLayer; layer++ {
+			neighbors, err := columnVectorGraphAdjacencyLayer(row.Adjacency, layer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, to := range neighbors {
+				wantFinal[vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}] = struct{}{}
+			}
+		}
+	}
+	if !reflect.DeepEqual(final, wantFinal) {
+		t.Fatalf("final survivor trace does not exactly reconcile adjacency: got=%v want=%v", final, wantFinal)
+	}
+	again := append([]columnVectorGraphAssetRow(nil), rows...)
+	againTrace := &vectorIndexConstructionTraceV1{}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceV1(again, def, againTrace); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(trace.selections, againTrace.selections) || !reflect.DeepEqual(trace.events, againTrace.events) {
+		t.Fatal("construction trace is not deterministic")
 	}
 }
 

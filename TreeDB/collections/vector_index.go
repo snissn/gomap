@@ -308,6 +308,67 @@ type VectorIndex struct {
 	dirtyDocs              map[string]struct{}
 	lastRebuildDuration    time.Duration
 	insertQuantScratch     []int8
+	// constructionTrace is an offline-only nullable sink installed by the
+	// partition-pack diagnostic builder. Normal collection indexes never set it.
+	constructionTrace *vectorIndexConstructionTraceV1
+}
+
+// vectorIndexConstructionTraceV1 is deliberately private: construction
+// provenance is benchmark evidence, not a runtime index contract.
+type vectorIndexConstructionTraceV1 struct {
+	selections              []vectorIndexConstructionSelectionV1
+	events                  []vectorIndexConstructionEdgeEventV1
+	pending                 map[vectorIndexConstructionEdgeKeyV1]string
+	origins                 map[vectorIndexConstructionEdgeKeyV1]string
+	sampleIDs               map[string]struct{}
+	nativeInsertionOrdinals []int
+}
+type vectorIndexConstructionSelectionV1 struct {
+	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
+	CandidateNodes                                                         []int
+	Sampled                                                                bool
+}
+type vectorIndexConstructionEdgeKeyV1 struct{ From, To, Layer int }
+type vectorIndexConstructionEdgeEventV1 struct {
+	From, To, Layer, InsertionOrdinal int
+	Origin, Action                    string
+}
+
+func (t *vectorIndexConstructionTraceV1) selectEdge(from, to, layer int, origin string) {
+	if t == nil {
+		return
+	}
+	t.init()
+	t.pending[vectorIndexConstructionEdgeKeyV1{from, to, layer}] = origin
+}
+
+func (t *vectorIndexConstructionTraceV1) init() {
+	if t.pending == nil {
+		t.pending = make(map[vectorIndexConstructionEdgeKeyV1]string)
+	}
+	if t.origins == nil {
+		t.origins = make(map[vectorIndexConstructionEdgeKeyV1]string)
+	}
+}
+
+func (t *vectorIndexConstructionTraceV1) record(from, to, layer int, origin, action string) {
+	if t == nil {
+		return
+	}
+	insertionOrdinal := from
+	if to > insertionOrdinal {
+		insertionOrdinal = to
+	}
+	// Variant rewrites are recorded after BFS locality remapping. Translate
+	// those persisted ordinals back to causal insertion order; pre-remap build
+	// events intentionally retain their native node ordinals directly.
+	if len(t.nativeInsertionOrdinals) != 0 && from >= 0 && to >= 0 && from < len(t.nativeInsertionOrdinals) && to < len(t.nativeInsertionOrdinals) {
+		insertionOrdinal = t.nativeInsertionOrdinals[from]
+		if t.nativeInsertionOrdinals[to] > insertionOrdinal {
+			insertionOrdinal = t.nativeInsertionOrdinals[to]
+		}
+	}
+	t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: to, Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: action})
 }
 
 type vectorIndexNode struct {
@@ -1055,6 +1116,8 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
 		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
 		for _, neighborID := range neighbors {
+			// selectLayerNeighborsLocked records the exact selection origin before
+			// this directed initial link is made.
 			idx.linkLayerLocked(nodeID, neighborID, layer)
 			idx.linkLayerLocked(neighborID, nodeID, layer)
 		}
@@ -1380,6 +1443,14 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		return
 	}
 	neighbors := idx.nodes[fromNodeID].neighbors[layer]
+	// Preserve the pre-link slice for trace-only reciprocal-prune accounting.
+	// append may reuse the node slice's backing array, so reading the node's
+	// old slice after append can incorrectly treat the newly linked edge as an
+	// existing edge and produce a contradictory lifecycle.
+	var preexisting []vectorIndexNeighbor
+	if idx.constructionTrace != nil {
+		preexisting = append(preexisting, neighbors...)
+	}
 	for _, existing := range neighbors {
 		if existing.nodeID == toNodeID {
 			return
@@ -1392,9 +1463,50 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		return
 	}
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: toNodeID, distance: distance})
+	trace := idx.constructionTrace
+	var origin string
+	if trace != nil {
+		trace.init()
+		key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: toNodeID, Layer: layer}
+		origin = trace.pending[key]
+		if origin != "" {
+			delete(trace.pending, key)
+			trace.record(fromNodeID, toNodeID, layer, origin, "initial_add")
+		} else {
+			origin = "reciprocal_add"
+			trace.record(fromNodeID, toNodeID, layer, origin, "reciprocal_add")
+		}
+		trace.origins[key] = origin
+	}
 	limit := idx.maxNeighborsForLayer(layer)
 	if len(neighbors) > limit {
 		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
+		if trace != nil {
+			kept := make(map[int]struct{}, len(neighbors))
+			for _, neighbor := range neighbors {
+				kept[neighbor.nodeID] = struct{}{}
+			}
+			// The just-pruned list is the authoritative reciprocal maintenance
+			// outcome for every edge that was present before the prune.
+			for _, neighbor := range preexisting {
+				key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: neighbor.nodeID, Layer: layer}
+				edgeOrigin := trace.origins[key]
+				if _, ok := kept[neighbor.nodeID]; ok {
+					trace.record(fromNodeID, neighbor.nodeID, layer, edgeOrigin, "reciprocal_prune_keep")
+					continue
+				}
+				trace.record(fromNodeID, neighbor.nodeID, layer, edgeOrigin, "reciprocal_prune_drop")
+				delete(trace.origins, key)
+			}
+			// The newly added edge is not yet in the node slice above.
+			key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: toNodeID, Layer: layer}
+			if _, ok := kept[toNodeID]; ok {
+				trace.record(fromNodeID, toNodeID, layer, trace.origins[key], "reciprocal_prune_keep")
+			} else {
+				trace.record(fromNodeID, toNodeID, layer, trace.origins[key], "reciprocal_prune_drop")
+				delete(trace.origins, key)
+			}
+		}
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 	idx.markVectorNodeDirtyLocked(fromNodeID)
@@ -1423,7 +1535,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	scored = idx.selectDiverseCandidatesLocked(scored, limit)
+	scored, _ = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
@@ -2135,6 +2247,36 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	if limit <= 0 {
 		return nil
 	}
+	trace := idx.constructionTrace
+	candidateCount := len(candidates)
+	var sampledCandidates []int
+	sampled := false
+	if trace != nil {
+		// Evidence counts candidate ordinals, not raw heap entries. The search
+		// selection itself deliberately retains duplicate entries for historical
+		// behavior, but sampled and unsampled accounting must share set semantics.
+		distinct := make(map[int]struct{}, len(candidates))
+		sampled = layer == 0 && excludeNodeID >= 0 && excludeNodeID < len(idx.nodes)
+		if sampled {
+			_, sampled = trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]
+			if sampled {
+				sampledCandidates = make([]int, 0, len(candidates))
+			}
+		}
+		for _, candidate := range candidates {
+			if candidate.nodeID == excludeNodeID || candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) || idx.nodes[candidate.nodeID].level < layer || math.IsInf(float64(candidate.distance), 1) {
+				continue
+			}
+			if _, seen := distinct[candidate.nodeID]; seen {
+				continue
+			}
+			distinct[candidate.nodeID] = struct{}{}
+			if sampled {
+				sampledCandidates = append(sampledCandidates, candidate.nodeID)
+			}
+		}
+		candidateCount = len(distinct)
+	}
 	scored := candidates[:0]
 	for _, candidate := range candidates {
 		if candidate.nodeID == excludeNodeID || candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
@@ -2148,7 +2290,28 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		}
 		scored = append(scored, candidate)
 	}
-	scored = idx.selectDiverseCandidatesLocked(scored, limit)
+	var diversitySelected int
+	var diversity map[int]bool
+	if trace == nil {
+		scored, diversitySelected = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
+	} else {
+		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithOriginsLocked(scored, limit)
+	}
+	if trace != nil {
+		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
+		if sampled {
+			selection.Sampled = true
+			selection.CandidateNodes = sampledCandidates
+		}
+		trace.selections = append(trace.selections, selection)
+		for _, candidate := range scored {
+			origin := "nearest_backfill"
+			if diversity[candidate.nodeID] {
+				origin = "diversity_selected"
+			}
+			trace.selectEdge(excludeNodeID, candidate.nodeID, layer, origin)
+		}
+	}
 	out := make([]int, len(scored))
 	for i := range scored {
 		out[i] = scored[i].nodeID
@@ -2157,15 +2320,45 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
+	selected, _ := idx.selectDiverseCandidatesWithAccountingLocked(candidates, limit)
+	return selected
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
+	selected, diversitySelected, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false)
+	return selected, diversitySelected
+}
+
+// selectDiverseCandidatesWithOriginsLocked preserves the existing candidate
+// order while retaining the causal classification of each selected edge.
+func (idx *VectorIndex) selectDiverseCandidatesWithOriginsLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int, map[int]bool) {
+	return idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true)
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins bool) ([]vectorIndexCandidate, int, map[int]bool) {
 	if limit <= 0 || len(candidates) == 0 {
-		return nil
+		return nil, 0, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	if len(candidates) <= limit {
-		return candidates
+		if !includeOrigins {
+			return candidates, len(candidates), nil
+		}
+		diversity := make(map[int]bool, len(candidates))
+		for _, candidate := range candidates {
+			diversity[candidate.nodeID] = true
+		}
+		return candidates, len(candidates), diversity
 	}
 	if idx.metric == VectorMetricInnerProduct {
-		return candidates[:limit]
+		if !includeOrigins {
+			return candidates[:limit], limit, nil
+		}
+		diversity := make(map[int]bool, limit)
+		for _, candidate := range candidates[:limit] {
+			diversity[candidate.nodeID] = true
+		}
+		return candidates[:limit], limit, diversity
 	}
 	var selectedStack [128]vectorIndexCandidate
 	selected := selectedStack[:0]
@@ -2189,10 +2382,17 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 		}
 	}
 	out := candidates[:0]
+	var diversity map[int]bool
+	if includeOrigins {
+		diversity = make(map[int]bool, len(selected))
+		for _, candidate := range selected {
+			diversity[candidate.nodeID] = true
+		}
+	}
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {
 		out = append(out, selected...)
-		return out
+		return out, len(selected), diversity
 	}
 	selectedPos := 0
 	rejectedPos := 0
@@ -2207,7 +2407,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	out = append(out, selected[selectedPos:]...)
 	out = append(out, rejected[rejectedPos:backfill]...)
-	return out
+	return out, len(selected), diversity
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {

@@ -28,6 +28,90 @@ type vectorPartitionMembershipSourceV1 struct {
 	kind    VectorPartitionMembershipKindV1
 }
 
+// VectorPartitionConstructionEvidenceV1 is offline-only, versioned HNSW
+// construction provenance. It is never serialized into the search pack.
+type VectorPartitionConstructionEvidenceV1 struct {
+	Schema                string                                           `json:"schema"`
+	Variant               string                                           `json:"variant"`
+	ManifestChecksum      string                                           `json:"manifest_checksum"`
+	IndexDefinitionDigest string                                           `json:"index_definition_digest"`
+	Partitions            []VectorPartitionConstructionPartitionEvidenceV1 `json:"partitions"`
+}
+type VectorPartitionConstructionPartitionEvidenceV1 struct {
+	PartitionID             uint32                                   `json:"partition_id"`
+	AssetChecksum           string                                   `json:"asset_checksum"`
+	MembershipDigest        string                                   `json:"membership_digest"`
+	AssetBytes              uint64                                   `json:"asset_bytes"`
+	Selections              []VectorPartitionConstructionSelectionV1 `json:"selections"`
+	Events                  []VectorPartitionConstructionEdgeEventV1 `json:"events"`
+	PostfillEdges           uint64                                   `json:"postfill_edges"`
+	NativeInsertionOrdinals []int                                    `json:"native_insertion_ordinals"`
+}
+type VectorPartitionConstructionSelectionV1 struct {
+	Node              int    `json:"node"`
+	Layer             int    `json:"layer"`
+	Candidates        int    `json:"candidates"`
+	Selected          int    `json:"selected"`
+	DiversitySelected int    `json:"diversity_selected"`
+	BackfillSelected  int    `json:"backfill_selected"`
+	CandidateOrdinals []int  `json:"candidate_ordinals,omitempty"`
+	CandidateDigest   string `json:"candidate_digest,omitempty"`
+	CandidateSampled  bool   `json:"candidate_sampled"`
+}
+type VectorPartitionConstructionEdgeEventV1 struct {
+	From             int    `json:"from"`
+	To               int    `json:"to"`
+	Layer            int    `json:"layer"`
+	InsertionOrdinal int    `json:"insertion_ordinal"`
+	Origin           string `json:"origin"`
+	Action           string `json:"action"`
+}
+
+func vectorPartitionConstructionOriginValidV1(origin string) bool {
+	switch origin {
+	case "diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite":
+		return true
+	default:
+		return false
+	}
+}
+
+func vectorPartitionConstructionActionValidV1(action string) bool {
+	switch action {
+	case "initial_add", "reciprocal_add", "reciprocal_prune_keep", "reciprocal_prune_drop", "reciprocity_repair_add", "reciprocity_repair_drop", "overlay_rewrite_add", "overlay_rewrite_drop", "final_survivor":
+		return true
+	default:
+		return false
+	}
+}
+
+func vectorPartitionConstructionVariantMutationAllowedV1(variant VectorPartitionLocalGraphVariantV1, action string) bool {
+	if !strings.Contains(action, "_rewrite_") && !strings.Contains(action, "_repair_") {
+		return true
+	}
+	if strings.HasPrefix(action, "overlay_rewrite_") {
+		return variant == VectorPartitionLocalGraphVariantOverlayCurrentV1
+	}
+	if strings.HasPrefix(action, "reciprocity_repair_") {
+		switch variant {
+		case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
+			return true
+		}
+	}
+	return false
+}
+
+func vectorPartitionConstructionCandidateDigestV1(ordinals []int) string {
+	h := sha256.New()
+	h.Write([]byte("treedb-4170-candidate-ordinals-v1/"))
+	var raw [8]byte
+	for _, ordinal := range ordinals {
+		binary.LittleEndian.PutUint64(raw[:], uint64(ordinal))
+		h.Write(raw[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func compactPartitionAdjacencyV1(in []uint32) []uint32 {
 	if len(in) < 2 {
 		return in
@@ -640,25 +724,113 @@ func buildVectorPartitionLocalGraphAdjacencyVariantV1(rows []columnVectorGraphAs
 }
 
 func buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
+	return buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, def, variant, nil)
+}
+
+func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1, trace *vectorIndexConstructionTraceV1) (vectorPartitionLocalAuxiliaryNavigationV1, error) {
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
-	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, false); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
 	switch variant {
 	case VectorPartitionLocalGraphVariantNativeV1:
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantOverlayCurrentV1:
-		return vectorPartitionLocalAuxiliaryNavigationV1{}, addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2)
+		if err := addVectorPartitionLocalNavigationOverlayV1(rows, def.M*2); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.reconcileVariantMutation(rows, "overlay_rewrite"); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		return vectorPartitionLocalAuxiliaryNavigationV1{}, nil
 	case VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1:
 		if _, err := repairVectorPartitionLocalLayer0ReciprocityV1(rows, 0); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.reconcileVariantMutation(rows, "reciprocity_repair"); err != nil {
+			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
+		}
+		if err := trace.recordFinalSurvivors(rows); err != nil {
 			return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 		}
 		return buildVectorPartitionLocalAuxiliaryNavigationV1(rows, 0)
 	default:
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, fmt.Errorf("partition-local graph variant=%q", variant)
 	}
+}
+
+// reconcileVariantMutation accounts every layer-0 rewrite made after the
+// native HNSW builder. The origin of a removed edge remains its causal native
+// origin; a replacement is explicitly attributed to the variant rewrite.
+func (t *vectorIndexConstructionTraceV1) reconcileVariantMutation(rows []columnVectorGraphAssetRow, mutation string) error {
+	if t == nil {
+		return nil
+	}
+	if mutation != "reciprocity_repair" && mutation != "overlay_rewrite" {
+		return fmt.Errorf("collections: construction trace mutation=%q", mutation)
+	}
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
+			for _, to := range neighbors {
+				final[vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}] = struct{}{}
+			}
+		}
+	}
+	dropAction, addAction := mutation+"_drop", mutation+"_add"
+	less := func(left, right vectorIndexConstructionEdgeKeyV1) bool {
+		if left.Layer != right.Layer {
+			return left.Layer < right.Layer
+		}
+		if left.From != right.From {
+			return left.From < right.From
+		}
+		return left.To < right.To
+	}
+	drops := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range t.origins {
+		if _, survives := final[key]; survives {
+			continue
+		}
+		if key.Layer != 0 {
+			return fmt.Errorf("collections: construction trace unexpected variant removal layer=%d", key.Layer)
+		}
+		drops = append(drops, key)
+	}
+	sort.Slice(drops, func(i, j int) bool { return less(drops[i], drops[j]) })
+	for _, key := range drops {
+		origin := t.origins[key]
+		t.record(key.From, key.To, key.Layer, origin, dropAction)
+		delete(t.origins, key)
+	}
+	adds := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range final {
+		if _, existed := t.origins[key]; existed {
+			continue
+		}
+		if key.Layer != 0 {
+			return fmt.Errorf("collections: construction trace unexpected variant layer=%d", key.Layer)
+		}
+		adds = append(adds, key)
+	}
+	sort.Slice(adds, func(i, j int) bool { return less(adds[i], adds[j]) })
+	for _, key := range adds {
+		t.origins[key] = mutation
+		t.record(key.From, key.To, key.Layer, mutation, addAction)
+	}
+	return nil
 }
 
 func addVectorPartitionLocalNavigationOverlayV1(rows []columnVectorGraphAssetRow, degreeLimit int) error {
@@ -1150,7 +1322,7 @@ func (c *Collection) validateVectorPartitionAssetMembershipBindingsV1(manifest V
 // Callers install the returned descriptors in the generation M1 manifest;
 // publication then validates the exact ref, size, CRC and SHA-256.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, vectorPartitionLocalDefaultGraphVariantV1, nil)
 }
 
 // MaterializeVectorPartitionLocalSearchAssetsVariantV1 constructs explicit
@@ -1158,14 +1330,385 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsV1(index string,
 // The authoritative-definition and selected M18/eFC256 auxiliary V3 variants
 // are production-openable.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, nil)
+}
+
+// MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1 is an
+// offline diagnostic sibling of the normal materializer. Pack bytes are
+// identical; only the temporary builder receives the nullable trace sink.
+func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, VectorPartitionConstructionEvidenceV1, error) {
+	evidence := VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
+	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence)
+	return assets, resources, evidence, err
+}
+
+// ValidateVectorPartitionLocalConstructionEvidenceV1 fail-closes unless the
+// trace binds the supplied immutable assets and its final survivors are their
+// exact native packed adjacency.
+func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, assets []VectorPartitionAssetV1, evidence VectorPartitionConstructionEvidenceV1) error {
+	if c == nil || evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) == 0 || len(assets) != len(evidence.Partitions) {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	variant := VectorPartitionLocalGraphVariantV1(evidence.Variant)
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
+	if !ok || manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	buildDef, _, err := vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
+	if err != nil {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	_, sourceGraph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(index)
+	if err != nil || sourceGraph.BaseManifestGeneration != manifest.SourceGeneration || sourceGraph.BaseManifestChecksum != manifest.SourceChecksum || sourceGraph.BaseSchemaHash != manifest.SourceSchemaHash || uint64(sourceGraph.RowCount) != manifest.SourceRowCount {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	reader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		return ErrVectorPartitionSearchUnavailable
+	}
+	defer reader.Close()
+	members := make(map[uint32][]vectorPartitionMembershipSourceV1)
+	for _, membership := range manifest.Memberships {
+		members[membership.PartitionID] = append(members[membership.PartitionID], vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipHomeV1})
+	}
+	for _, membership := range manifest.OverlapMemberships {
+		members[membership.PartitionID] = append(members[membership.PartitionID], vectorPartitionMembershipSourceV1{ordinal: int(membership.VectorOrdinal), kind: VectorPartitionMembershipOverlapV1})
+	}
+	seenPartitions := make(map[uint32]struct{}, len(assets))
+	for i, asset := range assets {
+		part := evidence.Partitions[i]
+		if _, duplicate := seenPartitions[part.PartitionID]; duplicate || (i > 0 && evidence.Partitions[i-1].PartitionID >= part.PartitionID) {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		seenPartitions[part.PartitionID] = struct{}{}
+		if asset.PartitionID != part.PartitionID || asset.Checksum != part.AssetChecksum || asset.MembershipDigest != part.MembershipDigest || asset.Bytes != part.AssetBytes {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		searcher, err := c.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(ctx, index, manifest, asset, variant)
+		if err != nil {
+			return ErrVectorPartitionSearchUnavailable
+		}
+		searcher.mu.Lock()
+		pack := searcher.prepared
+		searcher.mu.Unlock()
+		if pack == nil {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		if part.PostfillEdges != 0 {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		if len(part.NativeInsertionOrdinals) != pack.Header.Rows {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		seenInsertion := make([]bool, pack.Header.Rows)
+		for _, native := range part.NativeInsertionOrdinals {
+			if native < 0 || native >= pack.Header.Rows || seenInsertion[native] {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			seenInsertion[native] = true
+		}
+		live := make(map[vectorIndexConstructionEdgeKeyV1]string)
+		selectionCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
+		for _, selection := range part.Selections {
+			if selection.Node < 0 || selection.Node >= pack.Header.Rows || selection.Layer < 0 || selection.Layer >= len(pack.AdjacencyLayers) || selection.Candidates < 0 || selection.Selected < 0 || selection.DiversitySelected < 0 || selection.BackfillSelected < 0 || selection.Selected != selection.DiversitySelected+selection.BackfillSelected || selection.Selected > selection.Candidates {
+				searcher.Close()
+				return fmt.Errorf("%w: construction selection invalid %+v", ErrVectorPartitionSearchUnavailable, selection)
+			}
+			if selection.CandidateSampled {
+				if selection.Layer != 0 || len(selection.CandidateOrdinals) != selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
+					searcher.Close()
+					return fmt.Errorf("%w: construction candidate sample node=%d candidates=%d ordinals=%d", ErrVectorPartitionSearchUnavailable, selection.Node, selection.Candidates, len(selection.CandidateOrdinals))
+				}
+				seenCandidates := make(map[int]struct{}, len(selection.CandidateOrdinals))
+				for candidateIndex, candidate := range selection.CandidateOrdinals {
+					if candidate < 0 || candidate >= pack.Header.Rows || candidate == selection.Node || candidateIndex > 0 && selection.CandidateOrdinals[candidateIndex-1] >= candidate {
+						searcher.Close()
+						return fmt.Errorf("%w: construction candidate ordinal node=%d candidate=%d index=%d", ErrVectorPartitionSearchUnavailable, selection.Node, candidate, candidateIndex)
+					}
+					if _, duplicate := seenCandidates[candidate]; duplicate {
+						searcher.Close()
+						return ErrVectorPartitionSearchUnavailable
+					}
+					seenCandidates[candidate] = struct{}{}
+					if part.NativeInsertionOrdinals[candidate] >= part.NativeInsertionOrdinals[selection.Node] {
+						searcher.Close()
+						return fmt.Errorf("%w: construction candidate insertion order node=%d candidate=%d", ErrVectorPartitionSearchUnavailable, selection.Node, candidate)
+					}
+				}
+			} else if len(selection.CandidateOrdinals) != 0 || selection.CandidateDigest != "" {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			key := vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}
+			if _, duplicate := selectionCounts[key]; duplicate {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			selectionCounts[key] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
+		}
+		// The sampled subset is independently derived from every eligible L0
+		// selection and the persisted document IDs; evidence cannot nominate it.
+		type sampleNode struct {
+			node int
+			hash [32]byte
+			id   []byte
+		}
+		eligible := make([]sampleNode, 0)
+		actualSampled := make(map[int]bool)
+		for _, selection := range part.Selections {
+			if selection.Layer != 0 {
+				continue
+			}
+			start, end := pack.DocumentIDOffsets[selection.Node], pack.DocumentIDOffsets[selection.Node+1]
+			if end < start || end > uint64(len(pack.DocumentIDBytes)) {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			id := append([]byte(nil), pack.DocumentIDBytes[start:end]...)
+			eligible = append(eligible, sampleNode{node: selection.Node, id: id, hash: vectorPartitionConstructionSampleHashV1(id)})
+			if selection.CandidateSampled {
+				actualSampled[selection.Node] = true
+			}
+		}
+		sort.Slice(eligible, func(i, j int) bool {
+			return vectorPartitionConstructionSampleLessV1(eligible[i].hash, eligible[i].id, eligible[j].hash, eligible[j].id)
+		})
+		// HNSW's entry point is the only row without a layer-zero insertion
+		// selection. This makes the eligible sample population derivable from
+		// the packed asset rather than from a self-declared trace subset.
+		if len(eligible) != pack.Header.Rows-1 {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		limit := min(vectorPartitionConstructionCandidateSampleLimitV1, len(eligible))
+		if len(actualSampled) != limit {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		for _, node := range eligible[:limit] {
+			if !actualSampled[node.node] {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
+		replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
+		if replayErr != nil {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay partition=%d: %v", ErrVectorPartitionSearchUnavailable, part.PartitionID, replayErr)
+		}
+		if part.PostfillEdges != replayed.PostfillEdges {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay postfill mismatch partition=%d evidence=%d replay=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, part.PostfillEdges, replayed.PostfillEdges)
+		}
+		if !slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay insertion ordinals mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+		}
+		if !vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay selections mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+		}
+		if !slices.Equal(part.Events, replayed.Events) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay events mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+		}
+		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
+		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
+		seenFinal := false
+		for _, event := range part.Events {
+			if event.From < 0 || event.To < 0 || event.From == event.To || event.From >= pack.Header.Rows || event.To >= pack.Header.Rows || event.Layer < 0 || event.Layer >= len(pack.AdjacencyLayers) || event.InsertionOrdinal < 0 || event.InsertionOrdinal >= pack.Header.Rows || event.InsertionOrdinal != max(part.NativeInsertionOrdinals[event.From], part.NativeInsertionOrdinals[event.To]) || !vectorPartitionConstructionOriginValidV1(event.Origin) || !vectorPartitionConstructionActionValidV1(event.Action) || !vectorPartitionConstructionVariantMutationAllowedV1(variant, event.Action) {
+				searcher.Close()
+				return fmt.Errorf("%w: construction event invalid %+v", ErrVectorPartitionSearchUnavailable, event)
+			}
+			key := vectorIndexConstructionEdgeKeyV1{From: event.From, To: event.To, Layer: event.Layer}
+			switch event.Action {
+			case "initial_add":
+				if event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				live[key] = event.Origin
+				counts := initialCounts[vectorIndexConstructionEdgeKeyV1{From: event.From, Layer: event.Layer}]
+				if event.Origin == "diversity_selected" {
+					counts[0]++
+				} else {
+					counts[1]++
+				}
+				initialCounts[vectorIndexConstructionEdgeKeyV1{From: event.From, Layer: event.Layer}] = counts
+			case "reciprocal_add":
+				if event.Origin != "reciprocal_add" {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				live[key] = event.Origin
+			case "reciprocal_prune_keep":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+			case "reciprocal_prune_drop":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				delete(live, key)
+			case "reciprocity_repair_add", "overlay_rewrite_add":
+				wantOrigin := strings.TrimSuffix(event.Action, "_add")
+				if event.Origin != wantOrigin {
+					searcher.Close()
+					return fmt.Errorf("%w: construction rewrite add origin %+v", ErrVectorPartitionSearchUnavailable, event)
+				}
+				if _, ok := live[key]; ok {
+					searcher.Close()
+					return fmt.Errorf("%w: construction rewrite add live %+v", ErrVectorPartitionSearchUnavailable, event)
+				}
+				live[key] = event.Origin
+			case "reciprocity_repair_drop", "overlay_rewrite_drop":
+				if live[key] != event.Origin {
+					searcher.Close()
+					return fmt.Errorf("%w: construction rewrite drop live=%q event=%+v", ErrVectorPartitionSearchUnavailable, live[key], event)
+				}
+				delete(live, key)
+			case "final_survivor":
+				seenFinal = true
+				if origin, ok := finals[key]; ok || live[key] != event.Origin || origin != "" {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				finals[key] = event.Origin
+			default:
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			if event.Action != "final_survivor" && seenFinal {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
+		for key, counts := range initialCounts {
+			if selectionCounts[key] != counts {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
+		for key, counts := range selectionCounts {
+			if initialCounts[key] != counts {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+		}
+		want := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+		for layer, adjacency := range pack.AdjacencyLayers {
+			for from := 0; from < pack.Header.Rows; from++ {
+				for _, to := range adjacency.Neighbors[adjacency.Offsets[from]:adjacency.Offsets[from+1]] {
+					want[vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}] = struct{}{}
+				}
+			}
+		}
+		searcher.Close()
+		if (len(want) != 0 && !seenFinal) || len(finals) != len(want) || len(live) != len(finals) {
+			return fmt.Errorf("%w: construction final reconciliation want=%d finals=%d live=%d seen_final=%t", ErrVectorPartitionSearchUnavailable, len(want), len(finals), len(live), seenFinal)
+		}
+		for key := range want {
+			if _, ok := finals[key]; !ok || live[key] != finals[key] {
+				return fmt.Errorf("%w: construction final edge from=%d to=%d layer=%d", ErrVectorPartitionSearchUnavailable, key.From, key.To, key.Layer)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
-	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1)
+	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1, nil)
 }
 
-func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
+// vectorPartitionConstructionReplayEvidenceV1 deterministically reconstructs
+// the complete trace from manifest-bound source vectors. Candidate pools depend
+// on the evolving HNSW graph, so a self-hash of evidence is not independent.
+func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysicalRowReader, selected []vectorPartitionMembershipSourceV1, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (VectorPartitionConstructionPartitionEvidenceV1, error) {
+	if reader == nil || len(selected) == 0 {
+		return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
+	}
+	type selectedRow struct {
+		ordinal int
+		id      []byte
+	}
+	sourceRows := make([]selectedRow, len(selected))
+	for i, source := range selected {
+		id, ok := reader.documentIDForOrdinal(source.ordinal)
+		if !ok || len(id) == 0 {
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		sourceRows[i] = selectedRow{ordinal: source.ordinal, id: id}
+	}
+	sort.Slice(sourceRows, func(i, j int) bool { return sourceRows[i].ordinal < sourceRows[j].ordinal })
+	rows := make([]columnVectorGraphAssetRow, len(sourceRows))
+	scratch := &columnPhysicalRowReaderScratch{}
+	for i, source := range sourceRows {
+		if i > 0 && source.ordinal == sourceRows[i-1].ordinal {
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		row, fetchErr := reader.FetchRow(source.ordinal, scratch)
+		if fetchErr != nil && !errors.Is(fetchErr, errNilColumnVectorGraphPhysicalRowReader) {
+			return VectorPartitionConstructionPartitionEvidenceV1{}, fmt.Errorf("construction replay fetch ordinal=%d: %w", source.ordinal, fetchErr)
+		}
+		if fetchErr != nil {
+			row = columnVectorGraphPhysicalRow{}
+		}
+		if len(row.Vector) != def.Dimensions {
+			row.Vector, _, _, _ = reader.typedVectorForOrdinal(source.ordinal)
+		}
+		if len(row.Vector) != def.Dimensions {
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
+		}
+		if invNorm, _, _, ok := reader.invNormForOrdinal(source.ordinal); ok {
+			row.InvNorm = invNorm
+		}
+		rows[i] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), row.Vector...), InvNorm: row.InvNorm}
+	}
+	trace := &vectorIndexConstructionTraceV1{}
+	if _, err := buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, def, variant, trace); err != nil {
+		return VectorPartitionConstructionPartitionEvidenceV1{}, err
+	}
+	out := VectorPartitionConstructionPartitionEvidenceV1{NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...)}
+	for _, selection := range trace.selections {
+		item := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
+		if selection.Sampled {
+			item.CandidateSampled = true
+			item.CandidateOrdinals = append([]int(nil), selection.CandidateNodes...)
+			sort.Ints(item.CandidateOrdinals)
+			item.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(item.CandidateOrdinals)
+		}
+		out.Selections = append(out.Selections, item)
+	}
+	for _, event := range trace.events {
+		out.Events = append(out.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})
+	}
+	return out, nil
+}
+
+func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorPartitionConstructionSelectionV1) bool {
+	return slices.EqualFunc(actual, replayed, func(a, b VectorPartitionConstructionSelectionV1) bool {
+		return a.Node == b.Node && a.Layer == b.Layer && a.Candidates == b.Candidates && a.Selected == b.Selected && a.DiversitySelected == b.DiversitySelected && a.BackfillSelected == b.BackfillSelected && a.CandidateSampled == b.CandidateSampled && a.CandidateDigest == b.CandidateDigest && slices.Equal(a.CandidateOrdinals, b.CandidateOrdinals)
+	})
+}
+
+func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, maxAssetBytes int64, variant VectorPartitionLocalGraphVariantV1, evidence *VectorPartitionConstructionEvidenceV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, error) {
 	generation := manifest.Generation
 	if c == nil || c.db == nil || generation == 0 || len(inputs) == 0 || maxAssetBytes <= 0 || maxAssetBytes > vectorPartitionSearchAssetMaxBytesV1 {
 		return nil, nil, ErrVectorPartitionSearchUnavailable
@@ -1173,6 +1716,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
+	// The public materializer accepts a set of partition assets. Canonicalize it
+	// before publishing so its companion evidence is likewise canonical.
+	inputs = append([]VectorPartitionSearchAssetV1(nil), inputs...)
+	sort.Slice(inputs, func(i, j int) bool { return inputs[i].PartitionID < inputs[j].PartitionID })
 	limits := DefaultVectorPartitionManifestLimits()
 	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
 		return nil, nil, fmt.Errorf("%w: manifest count cap", ErrVectorPartitionSearchUnavailable)
@@ -1218,6 +1765,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		members[x.PartitionID] = append(members[x.PartitionID], vectorPartitionMembershipSourceV1{int(x.VectorOrdinal), VectorPartitionMembershipOverlapV1})
 	}
 	items := make([]StableColumnPhysicalAssetAppend, len(inputs))
+	traces := make([]*vectorIndexConstructionTraceV1, len(inputs))
 	seenParts := make(map[uint32]struct{}, len(inputs))
 	for i, in := range inputs {
 		if in.Generation != generation || in.Dimensions != def.Dimensions || in.Source.Generation != manifest.SourceGeneration || in.Source.Checksum != manifest.SourceChecksum || in.Source.SchemaHash != manifest.SourceSchemaHash || in.Source.RowCount != manifest.SourceRowCount {
@@ -1298,7 +1846,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			}
 			rows[j] = columnVectorGraphAssetRow{ID: append([]byte(nil), source.id...), Vector: append([]float32(nil), r.Vector...), InvNorm: r.InvNorm, BaseRowRef: ref}
 		}
-		auxiliary, err := buildVectorPartitionLocalGraphAdjacencyVariantWithAuxiliaryV1(rows, buildDef, variant)
+		var trace *vectorIndexConstructionTraceV1
+		if evidence != nil {
+			trace = &vectorIndexConstructionTraceV1{}
+			traces[i] = trace
+		}
+		auxiliary, err := buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, buildDef, variant, trace)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: build partition-local graph: %v", ErrVectorPartitionSearchUnavailable, err)
 		}
@@ -1375,6 +1928,27 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 		out[i] = VectorPartitionAssetV1{ID: vectorPartitionLocalAssetIDV1(inputs[i].PartitionID), PartitionID: inputs[i].PartitionID, Checksum: hex.EncodeToString(sum[:]), MembershipDigest: hex.EncodeToString(headerDigest), Bytes: uint64(len(items[i].Payload)), Ref: refs[i]}
 		if out[i].Ref.PartID != uint64(inputs[i].PartitionID)+1 {
 			return nil, nil, fmt.Errorf("%w: partition ref", ErrVectorPartitionSearchUnavailable)
+		}
+		if evidence != nil {
+			trace := traces[i]
+			if trace == nil {
+				return nil, nil, fmt.Errorf("%w: construction trace", ErrVectorPartitionSearchUnavailable)
+			}
+			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: out[i].PartitionID, AssetChecksum: out[i].Checksum, MembershipDigest: out[i].MembershipDigest, AssetBytes: out[i].Bytes, NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...)}
+			for _, selection := range trace.selections {
+				selectionEvidence := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
+				if selection.Sampled {
+					selectionEvidence.CandidateSampled = true
+					selectionEvidence.CandidateOrdinals = append([]int(nil), selection.CandidateNodes...)
+					sort.Ints(selectionEvidence.CandidateOrdinals)
+					selectionEvidence.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(selectionEvidence.CandidateOrdinals)
+				}
+				partition.Selections = append(partition.Selections, selectionEvidence)
+			}
+			for _, event := range trace.events {
+				partition.Events = append(partition.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})
+			}
+			evidence.Partitions = append(evidence.Partitions, partition)
 		}
 	}
 	return out, resources, nil

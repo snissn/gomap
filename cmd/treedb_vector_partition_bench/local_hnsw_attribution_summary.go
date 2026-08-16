@@ -46,6 +46,12 @@ type localHNSWAttributionCalibrationSummaryV1 struct {
 	ChangedPackVisitedDigest uint64                                    `json:"changed_pack_visited_digest"`
 	ChangedPackTermination   uint64                                    `json:"changed_pack_termination"`
 	FirstWitness             *localHNSWAttributionCalibrationWitnessV1 `json:"first_witness,omitempty"`
+	// NativeUtility aggregates all partition-local native-pack work, before
+	// routed result merging; it is not a global unique-document count.
+	NativeUtility localHNSWAttributionQueryUtilityV1 `json:"native_utility"`
+	// OverlayUtility has the same partition-local scope for overlay-current.
+	OverlayUtility localHNSWAttributionQueryUtilityV1 `json:"overlay_utility"`
+	HardMisses     []localHNSWAttributionHardMissV1   `json:"hard_misses"`
 }
 
 func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarPath string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, ordinals []int, queries [][]float32, truths [][]m8CanonicalResultV1) (localHNSWAttributionArtifactV1, []localHNSWAttributionTimingCaseV1, localHNSWAttributionCalibrationSummaryV1, error) {
@@ -54,6 +60,10 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 		return localHNSWAttributionArtifactV1{}, nil, summary, errors.New("invalid local HNSW calibration alignment")
 	}
 	summary.Schema = localHNSWAttributionCalibrationSummarySchemaV1
+	partitionDocumentIDs, err := localHNSWAttributionQueryPartitionDocumentIDsV1(source, native, overlay)
+	if err != nil {
+		return localHNSWAttributionArtifactV1{}, nil, summary, err
+	}
 	cases := make([]localHNSWAttributionTimingCaseV1, 0, len(ordinals))
 	artifact, err := localHNSWAttributionWriteGzipJSONLV1(sidecarPath, func(encoder *json.Encoder) (int, error) {
 		for i, ordinal := range ordinals {
@@ -69,7 +79,7 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 			if err != nil || evidence.Schema != localHNSWAttributionQuerySchemaV1 || evidence.QueryOrdinal != ordinal || evidence.QueryFP32SHA256 != localHNSWAttributionQueryFP32SHA256V1(queries[i]) {
 				return 0, errors.New("invalid local HNSW calibration evidence")
 			}
-			if err := localHNSWAttributionCalibrationSummaryAddV1(&summary, evidence); err != nil {
+			if err := localHNSWAttributionCalibrationSummaryAddV1(ctx, &summary, evidence, partitionDocumentIDs, source, native, overlay, queries[i], canonical); err != nil {
 				return 0, err
 			}
 			cases = append(cases, localHNSWAttributionTimingCaseV1{Ordinal: ordinal, Query: append([]float32(nil), queries[i]...), QueryFP32SHA256: evidence.QueryFP32SHA256, LowRoute: append([]uint32(nil), evidence.LowRoute...), HighRoute: append([]uint32(nil), evidence.HighRoute...)})
@@ -91,7 +101,22 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 	return artifact, cases, summary, nil
 }
 
-func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1) error {
+func localHNSWAttributionCalibrationSummaryAddV1(ctx context.Context, summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1, partitionDocumentIDs [][]string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, query []float32, authoritativeGlobal []m8CanonicalResultV1) error {
+	if err := localHNSWAttributionQueryEvidenceRouteValidateV1(ctx, source, query, evidence); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryEvidenceTruthValidateV1(ctx, source, native, query, authoritativeGlobal, evidence); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, evidence, partitionDocumentIDs); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence, partitionDocumentIDs); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryEvidenceReplayValidateV1(ctx, native, overlay, query, evidence); err != nil {
+		return err
+	}
 	if len(evidence.Partitions) == 0 || !localHNSWAttributionFiniteRecallV1(evidence.RoutingRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.LocalRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.LocalRecall) {
 		return errors.New("invalid local HNSW calibration recall")
 	}
@@ -139,6 +164,35 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 	}
 	if summary.QueryCount == math.MaxInt {
 		return errors.New("local HNSW calibration query overflow")
+	}
+	nativeRecords := make([]localHNSWAttributionQuerySearchV1, len(evidence.Partitions))
+	overlayRecords := make([]localHNSWAttributionQuerySearchV1, len(evidence.Partitions))
+	for i, partition := range evidence.Partitions {
+		nativeRecords[i], overlayRecords[i] = partition.Native, partition.Overlay
+	}
+	truth := make(map[string]struct{}, len(evidence.GlobalTruth))
+	for _, result := range evidence.GlobalTruth {
+		truth[result.ID] = struct{}{}
+	}
+	nativeUtility, err := localHNSWAttributionQueryUtilityAggregateV1(nativeRecords, partitionDocumentIDs, truth)
+	if err != nil {
+		return err
+	}
+	overlayUtility, err := localHNSWAttributionQueryUtilityAggregateV1(overlayRecords, partitionDocumentIDs, truth)
+	if err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, nativeUtility); err != nil {
+		return err
+	}
+	if err := localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, overlayUtility); err != nil {
+		return err
+	}
+	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "native", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Native.HighResults)); ok {
+		summary.HardMisses = append(summary.HardMisses, miss)
+	}
+	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "overlay_current", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Overlay.HighResults)); ok {
+		summary.HardMisses = append(summary.HardMisses, miss)
 	}
 	summary.QueryCount++
 	return nil
@@ -207,6 +261,41 @@ func localHNSWAttributionCalibrationSummaryFinishV1(summary *localHNSWAttributio
 		aggregate.Mean /= divisor
 		if !localHNSWAttributionFiniteRecallV1(aggregate.Mean) || !localHNSWAttributionFiniteRecallV1(aggregate.Min) {
 			return errors.New("invalid local HNSW calibration aggregate")
+		}
+	}
+	summary.HardMisses = localHNSWAttributionHardMissesV1(summary.HardMisses)
+	return nil
+}
+
+func localHNSWAttributionCheckedAddV1(dst *uint64, value uint64) error {
+	if dst == nil || math.MaxUint64-*dst < value {
+		return errors.New("local HNSW query utility overflow")
+	}
+	*dst += value
+	return nil
+}
+
+func localHNSWAttributionQueryOriginUtilityAddV1(dst *localHNSWAttributionQueryOriginUtilityV1, value localHNSWAttributionQueryOriginUtilityV1) error {
+	for _, pair := range [][2]*uint64{{&dst.Examined, &value.Examined}, {&dst.NewlyVisited, &value.NewlyVisited}, {&dst.Scored, &value.Scored}, {&dst.TopAdmissions, &value.TopAdmissions}, {&dst.FrontierAdmissions, &value.FrontierAdmissions}, {&dst.StateImprovements, &value.StateImprovements}, {&dst.TruthRecovered, &value.TruthRecovered}} {
+		if err := localHNSWAttributionCheckedAddV1(pair[0], *pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtilityV1, value localHNSWAttributionQueryUtilityV1) error {
+	if dst == nil {
+		return errors.New("local HNSW nil query utility")
+	}
+	for _, pair := range [][2]*uint64{{&dst.ExaminedNative, &value.ExaminedNative}, {&dst.ExaminedAuxiliary, &value.ExaminedAuxiliary}, {&dst.NewlyVisited, &value.NewlyVisited}, {&dst.Scored, &value.Scored}, {&dst.TopAdmissions, &value.TopAdmissions}, {&dst.FrontierAdmissions, &value.FrontierAdmissions}, {&dst.StateImprovements, &value.StateImprovements}, {&dst.TruthRecovered, &value.TruthRecovered}} {
+		if err := localHNSWAttributionCheckedAddV1(pair[0], *pair[1]); err != nil {
+			return err
+		}
+	}
+	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
+		if err := localHNSWAttributionQueryOriginUtilityAddV1(pair[0], *pair[1]); err != nil {
+			return err
 		}
 	}
 	return nil

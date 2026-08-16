@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +18,42 @@ const (
 	maxColumnVectorGraphAdjacencyOrdinal    = uint64(^uint32(0))
 	columnVectorGraphLayeredAdjacencyMagic  = ^uint32(0)
 )
+
+const vectorPartitionConstructionCandidateSampleLimitV1 = 32
+const vectorPartitionConstructionCandidateCaptureLimitV1 = 33
+
+func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) map[string]struct{} {
+	type item struct {
+		id   string
+		hash [32]byte
+	}
+	items := make([]item, len(rows))
+	for i := range rows {
+		items[i] = item{id: string(rows[i].ID), hash: vectorPartitionConstructionSampleHashV1(rows[i].ID)}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return vectorPartitionConstructionSampleLessV1(items[i].hash, []byte(items[i].id), items[j].hash, []byte(items[j].id))
+	})
+	if len(items) > vectorPartitionConstructionCandidateCaptureLimitV1 {
+		items = items[:vectorPartitionConstructionCandidateCaptureLimitV1]
+	}
+	out := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		out[item.id] = struct{}{}
+	}
+	return out
+}
+
+func vectorPartitionConstructionSampleHashV1(id []byte) [32]byte {
+	return sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))
+}
+
+func vectorPartitionConstructionSampleLessV1(leftHash [32]byte, leftID []byte, rightHash [32]byte, rightID []byte) bool {
+	if cmp := bytes.Compare(leftHash[:], rightHash[:]); cmp != 0 {
+		return cmp < 0
+	}
+	return bytes.Compare(leftID, rightID) < 0
+}
 
 var (
 	errColumnVectorGraphInvNormEmpty          = errors.New("collections: column_graph vector is empty")
@@ -444,8 +481,22 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	return buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows, def, nil)
+}
+
+func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
+	return buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, true)
+}
+
+// buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1 lets a
+// partition variant defer final survivors until after its own adjacency rewrite.
+// Generic graph construction finalizes immediately.
+func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
+	}
+	if trace != nil {
+		trace.sampleIDs = vectorPartitionConstructionSampleIDsV1(rows)
 	}
 	for i := range rows {
 		if len(rows[i].Vector) != def.Dimensions {
@@ -457,6 +508,7 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 	if err != nil {
 		return err
 	}
+	index.constructionTrace = trace
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	for i := range rows {
@@ -496,6 +548,9 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 		orderedRows[ordinal] = rows[inputOrdinal]
 		nodeOrdinal[nodeID] = ordinal
 	}
+	if err := trace.remap(index, nodeOrdinal); err != nil {
+		return err
+	}
 	copy(rows, orderedRows)
 	nodeIDByOrdinal := order
 	for i := range rows {
@@ -506,7 +561,213 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 		}
 		rows[i].Adjacency = adjacency
 	}
+	if err := trace.reconcileNativeAdjacency(rows); err != nil {
+		return err
+	}
+	if recordFinal {
+		if err := trace.recordFinalSurvivors(rows); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// remap converts temporary native node IDs to the exact BFS-locality ordinals
+// written into the pack. InsertionOrdinal intentionally remains in native
+// insertion order: it is causal age, not a persisted graph ordinal. Final
+// survivors are deliberately recorded later, after a variant has made every
+// native-adjacency mutation (overlay or reciprocity repair).
+func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal []int) error {
+	if t == nil {
+		return nil
+	}
+	remap := func(nodeID int) (int, error) {
+		if nodeID < 0 || nodeID >= len(nodeOrdinal) || nodeOrdinal[nodeID] < 0 {
+			return 0, fmt.Errorf("collections: construction trace node=%d has no locality ordinal", nodeID)
+		}
+		return nodeOrdinal[nodeID], nil
+	}
+	// Only the lowest domain-separated eligible L0 selections survive as
+	// samples. We captured one extra ID because the entry has no selection.
+	type sampleSelection struct {
+		index int
+		hash  [32]byte
+		id    []byte
+	}
+	var samples []sampleSelection
+	for i := range t.selections {
+		s := &t.selections[i]
+		if s.Layer == 0 && s.Sampled {
+			id := index.nodes[s.Node].documentID
+			samples = append(samples, sampleSelection{index: i, id: id, hash: vectorPartitionConstructionSampleHashV1(id)})
+		}
+	}
+	sort.Slice(samples, func(i, j int) bool {
+		return vectorPartitionConstructionSampleLessV1(samples[i].hash, samples[i].id, samples[j].hash, samples[j].id)
+	})
+	for i := vectorPartitionConstructionCandidateSampleLimitV1; i < len(samples); i++ {
+		t.selections[samples[i].index].Sampled = false
+		t.selections[samples[i].index].CandidateNodes = nil
+	}
+	t.nativeInsertionOrdinals = make([]int, len(nodeOrdinal))
+	for native, bfs := range nodeOrdinal {
+		if bfs < 0 || bfs >= len(t.nativeInsertionOrdinals) {
+			return fmt.Errorf("collections: construction trace native ordinal")
+		}
+		t.nativeInsertionOrdinals[bfs] = native
+	}
+	for i := range t.selections {
+		ordinal, err := remap(t.selections[i].Node)
+		if err != nil {
+			return err
+		}
+		t.selections[i].Node = ordinal
+		for j, candidate := range t.selections[i].CandidateNodes {
+			mapped, err := remap(candidate)
+			if err != nil {
+				return err
+			}
+			t.selections[i].CandidateNodes[j] = mapped
+		}
+		// The evidence contract stores sampled candidates in canonical packed
+		// ordinal order, independent of the transient HNSW score ordering.
+		sort.Ints(t.selections[i].CandidateNodes)
+		if t.selections[i].Sampled {
+			unique := t.selections[i].CandidateNodes[:0]
+			for _, candidate := range t.selections[i].CandidateNodes {
+				if len(unique) == 0 || unique[len(unique)-1] != candidate {
+					unique = append(unique, candidate)
+				}
+			}
+			t.selections[i].CandidateNodes = unique
+			// Candidate-pool evidence is a set for sampled and unsampled
+			// selections alike; selectLayerNeighborsLocked recorded that count
+			// before this BFS ordinal remap.
+			if len(unique) != t.selections[i].Candidates {
+				return fmt.Errorf("collections: construction trace sampled candidate count")
+			}
+		}
+	}
+	for i := range t.events {
+		from, err := remap(t.events[i].From)
+		if err != nil {
+			return err
+		}
+		to, err := remap(t.events[i].To)
+		if err != nil {
+			return err
+		}
+		t.events[i].From, t.events[i].To = from, to
+	}
+	remapOrigins := make(map[vectorIndexConstructionEdgeKeyV1]string, len(t.origins))
+	for key, origin := range t.origins {
+		from, err := remap(key.From)
+		if err != nil {
+			return err
+		}
+		to, err := remap(key.To)
+		if err != nil {
+			return err
+		}
+		remapOrigins[vectorIndexConstructionEdgeKeyV1{From: from, To: to, Layer: key.Layer}] = origin
+	}
+	t.origins = remapOrigins
+	if len(t.pending) != 0 {
+		return fmt.Errorf("collections: construction trace has pending selected edges")
+	}
+	return nil
+}
+
+func (t *vectorIndexConstructionTraceV1) recordFinalSurvivors(rows []columnVectorGraphAssetRow) error {
+	if t == nil {
+		return nil
+	}
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
+			for _, neighbor := range neighbors {
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: int(neighbor), Layer: layer}
+				origin, ok := t.origins[key]
+				if !ok {
+					return fmt.Errorf("collections: construction trace missing final edge origin from=%d to=%d layer=%d", from, neighbor, layer)
+				}
+				insertionOrdinal := t.nativeInsertionOrdinals[from]
+				if t.nativeInsertionOrdinals[int(neighbor)] > insertionOrdinal {
+					insertionOrdinal = t.nativeInsertionOrdinals[int(neighbor)]
+				}
+				t.events = append(t.events, vectorIndexConstructionEdgeEventV1{From: from, To: int(neighbor), Layer: layer, InsertionOrdinal: insertionOrdinal, Origin: origin, Action: "final_survivor"})
+			}
+		}
+	}
+	return nil
+}
+
+// reconcileNativeAdjacency makes the traced live edge map agree with the
+// serialized native graph before a partition variant mutates layer 0. The
+// builder can prune a reciprocal edge while maintaining a node; record that
+// loss explicitly rather than allowing a stale in-memory trace to masquerade
+// as a variant rewrite. Every packed native edge must already have an origin.
+func (t *vectorIndexConstructionTraceV1) reconcileNativeAdjacency(rows []columnVectorGraphAssetRow) error {
+	if t == nil {
+		return nil
+	}
+	final := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
+	for from := range rows {
+		layers, err := vectorPartitionConstructionAdjacencyLayersV1(rows[from].Adjacency)
+		if err != nil {
+			return err
+		}
+		for layer, neighbors := range layers {
+			for _, to := range neighbors {
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: int(to), Layer: layer}
+				if _, ok := t.origins[key]; !ok {
+					return fmt.Errorf("collections: construction trace missing native edge origin from=%d to=%d layer=%d", from, to, layer)
+				}
+				final[key] = struct{}{}
+			}
+		}
+	}
+	drops := make([]vectorIndexConstructionEdgeKeyV1, 0)
+	for key := range t.origins {
+		if _, ok := final[key]; !ok {
+			drops = append(drops, key)
+		}
+	}
+	sort.Slice(drops, func(i, j int) bool {
+		if drops[i].Layer != drops[j].Layer {
+			return drops[i].Layer < drops[j].Layer
+		}
+		if drops[i].From != drops[j].From {
+			return drops[i].From < drops[j].From
+		}
+		return drops[i].To < drops[j].To
+	})
+	for _, key := range drops {
+		t.record(key.From, key.To, key.Layer, t.origins[key], "reciprocal_prune_drop")
+		delete(t.origins, key)
+	}
+	return nil
+}
+
+func vectorPartitionConstructionAdjacencyLayersV1(adjacency []uint32) ([][]uint32, error) {
+	maxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
+	if err != nil {
+		return nil, err
+	}
+	if maxLayer < 0 {
+		return nil, nil
+	}
+	layers := make([][]uint32, maxLayer+1)
+	for layer := range layers {
+		layers[layer], err = columnVectorGraphAdjacencyLayer(adjacency, layer)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return layers, nil
 }
 
 func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -35,6 +36,60 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	defer harness.Close()
 	if evidence.Schema != localHNSWAttributionBuildSchemaV1 || evidence.Variant != "native" || evidence.VariantIdentity == "" || evidence.FileID != 9989 || evidence.Partitions != 4 || evidence.ElapsedNanos <= 0 || evidence.CloneLogicalBytes <= 0 || evidence.PackBytes == 0 || evidence.MappedBytes == 0 || evidence.CPUAvailable && evidence.CPUDeltaNanos < 0 {
 		t.Fatalf("evidence=%+v", evidence)
+	}
+	construction, err := localHNSWAttributionConstructionReduceV1(harness.constructionEvidence)
+	if err != nil || construction.FinalSurvivors == 0 || construction.InitialAdded == 0 || harness.constructionEvidence.Variant != "native" {
+		t.Fatalf("construction=%+v evidence=%+v err=%v", construction, harness.constructionEvidence, err)
+	}
+	sampled := false
+	for _, partition := range harness.constructionEvidence.Partitions {
+		for _, selection := range partition.Selections {
+			if selection.CandidateSampled {
+				sampled = true
+				if selection.Layer != 0 || selection.CandidateDigest == "" || len(selection.CandidateOrdinals) != selection.Candidates {
+					t.Fatalf("sample=%+v", selection)
+				}
+			}
+		}
+	}
+	if !sampled {
+		t.Fatal("missing deterministic candidate sample")
+	}
+	m18, m18Evidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 9992)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m18.Close()
+	if m18Evidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || m18Evidence.VariantIdentity == "" || len(m18.constructionEvidence.Partitions) != 4 {
+		t.Fatalf("M18 construction evidence=%+v trace=%+v", m18Evidence, m18.constructionEvidence)
+	}
+	diagnostics, err := localHNSWAttributionPackDiagnosticsV1(harness.searchers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics)
+	if err != nil || oracle.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || oracle.CandidateSamples == 0 || oracle.CandidateTruthNeighbors == 0 || oracle.FinalSamples == 0 || len(oracle.PackDiagnostics) != 4 {
+		t.Fatalf("oracle=%+v err=%v", oracle, err)
+	}
+	again, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics)
+	if err != nil || !reflect.DeepEqual(oracle, again) {
+		t.Fatalf("non-deterministic oracle: first=%+v again=%+v err=%v", oracle, again, err)
+	}
+	bad := harness.constructionEvidence.Partitions[0].Selections[0]
+	harness.constructionEvidence.Partitions[0].Selections[0].CandidateSampled = true
+	harness.constructionEvidence.Partitions[0].Selections[0].CandidateOrdinals = []int{len(harness.documentIDs[0])}
+	if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics); err == nil {
+		t.Fatal("invalid sampled candidate ordinal accepted")
+	}
+	harness.constructionEvidence.Partitions[0].Selections[0] = bad
+	if len(harness.constructionEvidence.Partitions[0].Selections) > 1 {
+		duplicate := harness.constructionEvidence.Partitions[0].Selections[1]
+		harness.constructionEvidence.Partitions[0].Selections[1].CandidateSampled = true
+		harness.constructionEvidence.Partitions[0].Selections[1].Node = harness.constructionEvidence.Partitions[0].Selections[0].Node
+		if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics); err == nil {
+			t.Fatal("duplicate sampled node accepted")
+		}
+		harness.constructionEvidence.Partitions[0].Selections[1] = duplicate
 	}
 	repaired, repairEvidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 9990)
 	if err != nil {
