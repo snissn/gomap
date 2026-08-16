@@ -1580,11 +1580,11 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		}
 		searcher.Close()
 		if (len(want) != 0 && !seenFinal) || len(finals) != len(want) || len(live) != len(finals) {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction final reconciliation want=%d finals=%d live=%d seen_final=%t", ErrVectorPartitionSearchUnavailable, len(want), len(finals), len(live), seenFinal)
 		}
 		for key := range want {
 			if _, ok := finals[key]; !ok || live[key] != finals[key] {
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction final edge from=%d to=%d layer=%d", ErrVectorPartitionSearchUnavailable, key.From, key.To, key.Layer)
 			}
 		}
 	}
