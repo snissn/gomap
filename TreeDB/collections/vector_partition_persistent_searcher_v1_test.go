@@ -143,7 +143,7 @@ func TestOpenVectorPartitionLocalSearcherForOfflineAssetV1FailsClosed(t *testing
 		t.Fatal(err)
 	}
 	members := vectorPartitionMembershipsForPartitionV1(manifest, assets[0].PartitionID)
-	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+	if _, err := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, manifest.Generation, assets[0].PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &assets[0], members, len(members), 0, false, ""); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("production open accepted native v2 pack: %v", err)
 	}
 	nativeManifest := manifest
@@ -601,11 +601,25 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil || closeErr != nil || diagnostics.CombinedReachableRows != diagnostics.Rows {
 			t.Fatalf("variant=%s diagnostics=%+v err=%v close=%v", test.variant, diagnostics, err, closeErr)
 		}
+		exact, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], test.variant)
+		if err != nil {
+			t.Fatalf("variant=%s exact open err=%v", test.variant, err)
+		}
+		if err := exact.Close(); err != nil {
+			t.Fatal(err)
+		}
+		wrongVariant := VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1
+		if test.variant == wrongVariant {
+			wrongVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
+		}
+		if _, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], wrongVariant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("variant=%s exact open accepted descriptor variant=%s: %v", test.variant, wrongVariant, err)
+		}
 		members, err := vectorPartitionMembershipsForPartitionWithContextV1(t.Context(), m, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false)
+		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false, "")
 		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 			if productionErr != nil {
 				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)

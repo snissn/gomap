@@ -1552,6 +1552,21 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationV1(index strin
 // a production generation pin. It is for bounded offline attribution only.
 // The caller keeps the materializer's StableResourceSet alive until Close.
 func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1) (*VectorPartitionLocalSearcherV1, error) {
+	return c.openVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx, index, manifest, asset, "")
+}
+
+// OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1 opens
+// one offline pack only when its domain-separated membership identity and pack
+// header bind it to expectedVariant. Use this boundary when benchmark metadata
+// attributes retained assets to a particular construction variant.
+func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1, expectedVariant VectorPartitionLocalGraphVariantV1) (*VectorPartitionLocalSearcherV1, error) {
+	if _, err := VectorPartitionLocalGraphVariantIdentityV1(expectedVariant); err != nil {
+		return nil, fmt.Errorf("%w: offline graph variant", ErrVectorPartitionSearchUnavailable)
+	}
+	return c.openVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx, index, manifest, asset, expectedVariant)
+}
+
+func (c *Collection) openVectorPartitionLocalSearcherForOfflineAssetWithContextV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, asset VectorPartitionAssetV1, expectedVariant VectorPartitionLocalGraphVariantV1) (*VectorPartitionLocalSearcherV1, error) {
 	if c == nil || c.db == nil || ctx == nil {
 		return nil, ErrVectorPartitionSearchUnavailable
 	}
@@ -1583,7 +1598,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV
 			return nil, ErrVectorPartitionSearchUnavailable
 		}
 	}
-	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true)
+	return c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(ctx, index, manifest.Generation, asset.PartitionID, manifest.IndexDefinitionDigest, manifest.SourceGeneration, manifest.SourceChecksum, manifest.SourceSchemaHash, &asset, members, home, overlap, true, expectedVariant)
 }
 
 // OpenVectorPartitionLocalSearcherForGenerationWithContextV1 is the
@@ -1651,7 +1666,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationWithContextV1(
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash,
-		asset, members, home, overlap, false,
+		asset, members, home, overlap, false, "",
 	)
 	if err != nil {
 		return nil, err
@@ -1700,7 +1715,7 @@ func (c *Collection) OpenVectorPartitionLocalSearcherForGenerationSearchPlanWith
 	searcher, err := c.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(
 		ctx, index, generation, partition,
 		plan.indexDefinitionDigest, plan.sourceGeneration, plan.sourceChecksum, plan.sourceSchemaHash,
-		asset, members, home, overlap, false,
+		asset, members, home, overlap, false, "",
 	)
 	if err != nil {
 		return nil, err
@@ -1724,6 +1739,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	home int,
 	overlap int,
 	allowOfflineNative bool,
+	expectedGraphVariant VectorPartitionLocalGraphVariantV1,
 ) (*VectorPartitionLocalSearcherV1, error) {
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || indexDefinitionDigest != VectorIndexDefinitionDigestV1(def) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
@@ -1751,8 +1767,10 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 	packDef := def
 	expectAuxiliaryNavigation := false
 	offlineV3 := false
+	graphVariant := VectorPartitionLocalGraphVariantAuxiliaryNavigationV1
 	if recomputedMembershipDigest != expectedMembershipDigest {
 		if variant, production := vectorPartitionLocalProductionGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); production {
+			graphVariant = variant
 			var definitionErr error
 			packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
 			if definitionErr != nil {
@@ -1765,7 +1783,9 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 			}
 			switch {
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantNativeV1
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1)
 				if definitionErr != nil {
@@ -1773,6 +1793,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1)
 				if definitionErr != nil {
@@ -1780,6 +1801,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
 				if definitionErr != nil {
@@ -1787,6 +1809,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)
 				if definitionErr != nil {
@@ -1794,6 +1817,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)
 				if definitionErr != nil {
@@ -1801,6 +1825,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1)
 				if definitionErr != nil {
@@ -1808,6 +1833,7 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				}
 				offlineV3 = true
 			case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1) == expectedMembershipDigest:
+				graphVariant = VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1
 				var definitionErr error
 				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1)
 				if definitionErr != nil {
@@ -1818,6 +1844,9 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 				return nil, fmt.Errorf("%w: descriptor membership digest mismatch", ErrVectorPartitionSearchUnavailable)
 			}
 		}
+	}
+	if expectedGraphVariant != "" && graphVariant != expectedGraphVariant {
+		return nil, fmt.Errorf("%w: offline graph variant=%s want=%s", ErrVectorPartitionSearchUnavailable, graphVariant, expectedGraphVariant)
 	}
 	namespace := c.meta.Options.ColumnStore.AssetManager.Namespace
 	if err := verifyVectorPartitionAssetsWithContextV1(ctx, c.db.ColumnAssetRootDir(), namespace, []VectorPartitionAssetV1{*asset}); err != nil {

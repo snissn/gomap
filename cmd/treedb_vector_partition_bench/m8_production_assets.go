@@ -409,11 +409,14 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
 	offlineGraphVariant := false
+	var retainedGraphVariant collections.VectorPartitionLocalGraphVariantV1
 	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
 		if !allowOfflineGraphVariant {
 			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
 		}
-		if _, offlineErr := m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); offlineErr != nil {
+		var offlineErr error
+		retainedGraphVariant, offlineErr = m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor))
+		if offlineErr != nil {
 			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
 		}
 		offlineGraphVariant = true
@@ -435,7 +438,7 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	}
 	if offlineGraphVariant {
 		for _, asset := range h.manifest.Assets {
-			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset)
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset, retainedGraphVariant)
 			if openErr != nil {
 				return fmt.Errorf("retained M8 offline partition asset %d: %w", asset.PartitionID, openErr)
 			}
