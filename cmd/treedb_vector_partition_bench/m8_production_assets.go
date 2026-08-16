@@ -408,6 +408,7 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 	if err != nil || digest != descriptor.SourceOrdinalDigest {
 		return errors.New("retained M8 source ordinal mapping does not match descriptor")
 	}
+	offlineGraphVariant := false
 	if _, err := m3PartitionLocalGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); err != nil {
 		if !allowOfflineGraphVariant {
 			return errors.New("retained M8 descriptor local HNSW construction is not production-selected")
@@ -415,14 +416,33 @@ func m8BindRetainedM3DescriptorWithPolicyV1(h *m8ProductionMultiGroupAssetsV1, f
 		if _, offlineErr := m3PartitionLocalOfflineGraphVariantV1(descriptor.PartitionHNSWM, m3DescriptorPartitionHNSWEfCV1(descriptor)); offlineErr != nil {
 			return errors.New("retained M8 descriptor local HNSW construction is not a recognized offline variant")
 		}
+		offlineGraphVariant = true
 	}
 	assetStatus, err := h.collection.VectorPartitionStatusV1(partitionHNSWIndex, h.status.Manifest.Generation)
 	if err != nil {
 		return fmt.Errorf("verify retained M8 partition assets: %w", err)
 	}
+	expectedStaleAssets := uint64(0)
+	if offlineGraphVariant {
+		// Offline variants deliberately domain-separate their membership digest,
+		// so the production status boundary must classify every local pack as
+		// stale. Validate those packs through the explicit offline opener below.
+		expectedStaleAssets = uint64(len(h.manifest.Assets))
+	}
 	if !assetStatus.Ready || !assetStatus.Active || assetStatus.Manifest.IntegrityDigest != h.status.Manifest.IntegrityDigest ||
-		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != 0 {
+		assetStatus.MissingAssets != 0 || assetStatus.CorruptAssets != 0 || assetStatus.StaleAssets != expectedStaleAssets {
 		return fmt.Errorf("retained M8 partition assets are unavailable: ready=%t active=%t missing=%d corrupt=%d stale=%d", assetStatus.Ready, assetStatus.Active, assetStatus.MissingAssets, assetStatus.CorruptAssets, assetStatus.StaleAssets)
+	}
+	if offlineGraphVariant {
+		for _, asset := range h.manifest.Assets {
+			searcher, openErr := h.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), h.manifest.IndexName, h.manifest, asset)
+			if openErr != nil {
+				return fmt.Errorf("retained M8 offline partition asset %d: %w", asset.PartitionID, openErr)
+			}
+			if closeErr := searcher.Close(); closeErr != nil {
+				return fmt.Errorf("close retained M8 offline partition asset %d: %w", asset.PartitionID, closeErr)
+			}
+		}
 	}
 	h.descriptor = &descriptor
 	return nil
