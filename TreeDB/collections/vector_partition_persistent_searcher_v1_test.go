@@ -209,11 +209,20 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer nr.Release()
-	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
+	auxiliary, ar, constructionEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ar.Release()
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, constructionEvidence); err != nil {
+		t.Fatalf("construction evidence: %v", err)
+	}
+	badEvidence := constructionEvidence
+	badEvidence.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), constructionEvidence.Partitions...)
+	badEvidence.Partitions[0].AssetChecksum = "wrong"
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, badEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("bad evidence err=%v", err)
+	}
 	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
 	if err != nil {
 		t.Fatal(err)
