@@ -149,7 +149,7 @@ func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
 	for i := range records {
 		records[i] = localHNSWAttributionTestQueryRecordV1(records[i])
 	}
-	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, []uint32{1, 1}, []uint32{0, 1}, map[string]struct{}{"same": {}})
+	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, localHNSWAttributionTestQueryPartitionDocumentIDsV1(records), []uint32{0, 1}, map[string]struct{}{"same": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
