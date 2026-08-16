@@ -102,7 +102,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		return errors.New("invalid fixed-budget screen contract")
 	}
 	for i, arm := range report.Arms {
-		if arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
+		if arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity == "" || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
 			return errors.New("invalid fixed-budget screen arm")
 		}
 		for j, cell := range arm.Cells {
@@ -169,7 +169,11 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 			return nil, err
 		}
 		out[i].Arm = arm
-		out[i].Build = localHNSWAttributionBuildEvidenceV1{Schema: localHNSWAttributionBuildSchemaV1, Variant: string(arm.Variant), Partitions: len(localHNSWM18EdgeDiagnosisPacksV1)}
+		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)
+		if identityErr != nil {
+			return nil, identityErr
+		}
+		out[i].Build = localHNSWAttributionBuildEvidenceV1{Schema: localHNSWAttributionBuildSchemaV1, Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(localHNSWM18EdgeDiagnosisPacksV1)}
 		for _, asset := range h.packAssets {
 			out[i].Build.PackBytes += asset.Bytes
 		}
