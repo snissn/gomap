@@ -23,6 +23,38 @@ func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
 	}
 }
 
+func TestM0MaterializeAcceptsHistoricalDescriptorGraphDigestV1(t *testing.T) {
+	config := vectorpartition.DefaultConfig()
+	config.Partitions, config.Degree = 2, 1
+	graph, err := vectorpartition.BuildWithPartitioner([]vectorpartition.Vector{{ID: "a", Values: []float64{1}}, {ID: "b", Values: []float64{-1}}}, config, vectorpartition.Source{SourceID: "m0-historical-descriptor"}, m0StaticPartitionerV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := graph
+	assignment.Assignment = []int{1, 0}
+	graphRaw, err := vectorpartition.CanonicalJSON(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignmentRaw, err := vectorpartition.CanonicalJSON(assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw)}
+	descriptor := m3VariantDescriptorV1{Source: assignment.Source, ArtifactSHA256: account.AssignmentArtifactSHA256, GraphArtifactSHA256: account.AssignmentArtifactSHA256}
+	if err := m0MaterializeRetainedDescriptorBindingV1(descriptor, assignment, account); err != nil {
+		t.Fatalf("historical descriptor rejected: %v", err)
+	}
+	if err := m0AssignmentBindsFrozenGraphV1(graph, assignment, graphRaw, account); err != nil {
+		t.Fatalf("valid frozen graph binding rejected: %v", err)
+	}
+	bad := account
+	bad.GraphArtifactSHA256 = account.AssignmentArtifactSHA256
+	if err := m0AssignmentBindsFrozenGraphV1(graph, assignment, graphRaw, bad); err == nil {
+		t.Fatal("unrelated graph/account accepted")
+	}
+}
+
 func testM0MaterializeBuildIdentityV1(t *testing.T) {
 	t.Helper()
 	previous := m0MaterializeBuildIdentityProviderV1

@@ -50,6 +50,19 @@ func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVa
 	}
 }
 
+func m0MaterializeRetainedDescriptorBindingV1(d m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1) error {
+	if d.Source != artifact.Source {
+		return errors.New("retained source does not match assignment artifact lineage")
+	}
+	// Historical M3 descriptors recorded the assignment digest in both artifact
+	// fields. The account plus m0AssignmentBindsFrozenGraphV1 is the authority
+	// for the separately frozen raw graph digest.
+	if d.ArtifactSHA256 != account.AssignmentArtifactSHA256 {
+		return errors.New("retained descriptor does not bind assignment artifact")
+	}
+	return nil
+}
+
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -114,11 +127,8 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	if d.Source != artifact.Source {
-		return errors.New("retained source does not match assignment artifact lineage")
-	}
-	if d.ArtifactSHA256 != account.AssignmentArtifactSHA256 || d.GraphArtifactSHA256 != account.GraphArtifactSHA256 {
-		return errors.New("retained descriptor does not bind frozen assignment artifacts")
+	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
+		return err
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
