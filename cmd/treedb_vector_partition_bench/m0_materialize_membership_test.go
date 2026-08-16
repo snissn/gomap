@@ -21,14 +21,15 @@ func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
 	}{
 		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128},
 		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256},
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256},
 	} {
 		variant, m, efConstruction, err := m0MaterializeVariantV1(string(want.variant))
 		if err != nil || variant != want.variant || m != want.m || efConstruction != want.ef {
 			t.Fatalf("variant %q = (%q,%d,%d,%v)", want.variant, variant, m, efConstruction, err)
 		}
 	}
-	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)); err == nil {
-		t.Fatal("unsupported M20 variant accepted")
+	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1)); err == nil {
+		t.Fatal("unsupported M22 variant accepted")
 	}
 }
 
