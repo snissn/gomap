@@ -325,6 +325,7 @@ type vectorIndexConstructionTraceV1 struct {
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
 	CandidateNodes                                                         []int
+	Sampled                                                                bool
 }
 type vectorIndexConstructionEdgeKeyV1 struct{ From, To, Layer int }
 type vectorIndexConstructionEdgeEventV1 struct {
@@ -2246,6 +2247,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: len(candidates), Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
 		if layer == 0 {
 			if _, sampled := trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]; sampled {
+				selection.Sampled = true
 				selection.CandidateNodes = make([]int, len(candidates))
 				for i := range candidates {
 					selection.CandidateNodes[i] = candidates[i].nodeID

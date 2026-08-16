@@ -20,6 +20,7 @@ const (
 )
 
 const vectorPartitionConstructionCandidateSampleLimitV1 = 32
+const vectorPartitionConstructionCandidateCaptureLimitV1 = 33
 
 func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) map[string]struct{} {
 	type item struct {
@@ -31,8 +32,8 @@ func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) ma
 		items[i] = item{id: string(rows[i].ID), hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), rows[i].ID...))}
 	}
 	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].hash[:], items[j].hash[:]) < 0 })
-	if len(items) > vectorPartitionConstructionCandidateSampleLimitV1 {
-		items = items[:vectorPartitionConstructionCandidateSampleLimitV1]
+	if len(items) > vectorPartitionConstructionCandidateCaptureLimitV1 {
+		items = items[:vectorPartitionConstructionCandidateCaptureLimitV1]
 	}
 	out := make(map[string]struct{}, len(items))
 	for _, item := range items {
@@ -555,6 +556,31 @@ func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdina
 			return 0, fmt.Errorf("collections: construction trace node=%d has no locality ordinal", nodeID)
 		}
 		return nodeOrdinal[nodeID], nil
+	}
+	// Only the lowest domain-separated eligible L0 selections survive as
+	// samples. We captured one extra ID because the entry has no selection.
+	type sampleSelection struct {
+		index int
+		hash  [32]byte
+		id    []byte
+	}
+	var samples []sampleSelection
+	for i := range t.selections {
+		s := &t.selections[i]
+		if s.Layer == 0 && s.Sampled {
+			id := index.nodes[s.Node].documentID
+			samples = append(samples, sampleSelection{index: i, id: id, hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))})
+		}
+	}
+	sort.Slice(samples, func(i, j int) bool {
+		if cmp := bytes.Compare(samples[i].hash[:], samples[j].hash[:]); cmp != 0 {
+			return cmp < 0
+		}
+		return bytes.Compare(samples[i].id, samples[j].id) < 0
+	})
+	for i := vectorPartitionConstructionCandidateSampleLimitV1; i < len(samples); i++ {
+		t.selections[samples[i].index].Sampled = false
+		t.selections[samples[i].index].CandidateNodes = nil
 	}
 	for i := range t.selections {
 		ordinal, err := remap(t.selections[i].Node)

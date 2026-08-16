@@ -55,6 +55,7 @@ type VectorPartitionConstructionSelectionV1 struct {
 	BackfillSelected  int    `json:"backfill_selected"`
 	CandidateOrdinals []int  `json:"candidate_ordinals,omitempty"`
 	CandidateDigest   string `json:"candidate_digest,omitempty"`
+	CandidateSampled  bool   `json:"candidate_sampled"`
 }
 type VectorPartitionConstructionEdgeEventV1 struct {
 	From             int    `json:"from"`
@@ -1265,14 +1266,14 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
-			if len(selection.CandidateOrdinals) != 0 {
-				if selection.Layer != 0 || len(selection.CandidateOrdinals) > selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
+			if selection.CandidateSampled {
+				if selection.Layer != 0 || len(selection.CandidateOrdinals) != selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
 					searcher.Close()
 					return ErrVectorPartitionSearchUnavailable
 				}
 				seenCandidates := make(map[int]struct{}, len(selection.CandidateOrdinals))
-				for _, candidate := range selection.CandidateOrdinals {
-					if candidate < 0 || candidate >= pack.Header.Rows {
+				for candidateIndex, candidate := range selection.CandidateOrdinals {
+					if candidate < 0 || candidate >= pack.Header.Rows || candidate == selection.Node || candidateIndex > 0 && selection.CandidateOrdinals[candidateIndex-1] >= candidate {
 						searcher.Close()
 						return ErrVectorPartitionSearchUnavailable
 					}
@@ -1282,7 +1283,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 					}
 					seenCandidates[candidate] = struct{}{}
 				}
-			} else if selection.CandidateDigest != "" {
+			} else if len(selection.CandidateOrdinals) != 0 || selection.CandidateDigest != "" {
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
@@ -1292,6 +1293,47 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return ErrVectorPartitionSearchUnavailable
 			}
 			selectionCounts[key] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
+		}
+		// The sampled subset is independently derived from every eligible L0
+		// selection and the persisted document IDs; evidence cannot nominate it.
+		type sampleNode struct {
+			node int
+			hash [32]byte
+			id   []byte
+		}
+		eligible := make([]sampleNode, 0)
+		actualSampled := make(map[int]bool)
+		for _, selection := range part.Selections {
+			if selection.Layer != 0 {
+				continue
+			}
+			start, end := pack.DocumentIDOffsets[selection.Node], pack.DocumentIDOffsets[selection.Node+1]
+			if end < start || end > uint64(len(pack.DocumentIDBytes)) {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
+			id := append([]byte(nil), pack.DocumentIDBytes[start:end]...)
+			eligible = append(eligible, sampleNode{node: selection.Node, id: id, hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))})
+			if selection.CandidateSampled {
+				actualSampled[selection.Node] = true
+			}
+		}
+		sort.Slice(eligible, func(i, j int) bool {
+			if cmp := bytes.Compare(eligible[i].hash[:], eligible[j].hash[:]); cmp != 0 {
+				return cmp < 0
+			}
+			return bytes.Compare(eligible[i].id, eligible[j].id) < 0
+		})
+		limit := min(vectorPartitionConstructionCandidateSampleLimitV1, len(eligible))
+		if len(actualSampled) != limit {
+			searcher.Close()
+			return ErrVectorPartitionSearchUnavailable
+		}
+		for _, node := range eligible[:limit] {
+			if !actualSampled[node.node] {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
 		}
 		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
@@ -1619,8 +1661,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: out[i].PartitionID, AssetChecksum: out[i].Checksum, MembershipDigest: out[i].MembershipDigest, AssetBytes: out[i].Bytes}
 			for _, selection := range trace.selections {
 				selectionEvidence := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
-				if len(selection.CandidateNodes) != 0 {
+				if selection.Sampled {
+					selectionEvidence.CandidateSampled = true
 					selectionEvidence.CandidateOrdinals = append([]int(nil), selection.CandidateNodes...)
+					sort.Ints(selectionEvidence.CandidateOrdinals)
 					selectionEvidence.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(selectionEvidence.CandidateOrdinals)
 				}
 				partition.Selections = append(partition.Selections, selectionEvidence)
