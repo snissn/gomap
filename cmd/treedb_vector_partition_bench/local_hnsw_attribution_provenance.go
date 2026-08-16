@@ -68,8 +68,9 @@ type localHNSWAttributionDistanceAggregateV1 struct {
 }
 
 // localHNSWAttributionNeighborhoodOracleV1 is an offline-only exact-vector
-// audit. Candidate coverage is restricted to the bounded construction sample;
-// final overlap scans each immutable partition and is never request-path work.
+// audit. Candidate coverage, final overlap, and angular diversity are all
+// restricted to the same bounded construction sample; none is request-path
+// work.
 type localHNSWAttributionNeighborhoodOracleV1 struct {
 	Schema                    string                                         `json:"schema"`
 	ExactK                    int                                            `json:"exact_k"`
@@ -395,27 +396,31 @@ func localHNSWAttributionCosineDistanceV1(a, b []float32) (float64, bool) {
 
 func localHNSWAttributionNearestIDsV1(ids []string, vectors map[string][]float32, source string, allowed func(string) bool, k int) ([]string, error) {
 	type scored struct {
-		id       string
-		distance float64
+		id    string
+		score float32
 	}
 	query, ok := vectors[source]
 	if !ok {
 		return nil, errors.New("missing local HNSW oracle source vector")
+	}
+	scorer, err := collections.NewCanonicalVectorPartitionCosineScorerV1(query)
+	if err != nil {
+		return nil, err
 	}
 	all := make([]scored, 0, len(ids))
 	for _, id := range ids {
 		if id == source || !allowed(id) {
 			continue
 		}
-		d, ok := localHNSWAttributionCosineDistanceV1(query, vectors[id])
-		if !ok {
-			return nil, errors.New("invalid local HNSW oracle vector")
+		score, err := scorer.ScoreV1(vectors[id])
+		if err != nil {
+			return nil, err
 		}
-		all = append(all, scored{id, d})
+		all = append(all, scored{id, score})
 	}
 	sort.Slice(all, func(i, j int) bool {
-		if all[i].distance != all[j].distance {
-			return all[i].distance < all[j].distance
+		if all[i].score != all[j].score {
+			return all[i].score > all[j].score
 		}
 		return all[i].id < all[j].id
 	})

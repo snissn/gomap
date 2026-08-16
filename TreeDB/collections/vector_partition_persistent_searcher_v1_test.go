@@ -855,7 +855,7 @@ func TestVectorPartitionLocalSearcherV1AuxiliaryMetricsAndDiagnostics(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.Layer0ZeroIndegreeRows != 1 || diagnostics.Layer0DuplicateEdges != 0 || diagnostics.Layer0ReciprocalEdges != 2 || diagnostics.Layer0ReciprocalRatio != 1 || diagnostics.Layer0Distances.Count != 2 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 || diagnostics.AuxiliaryDistances.Count != 2 {
+	if diagnostics.ReachableRows != 2 || diagnostics.TraversalRoots != 2 || diagnostics.CombinedReachableRows != 3 || diagnostics.Layer0ZeroIndegreeRows != 1 || diagnostics.Layer0DuplicateEdges != 0 || diagnostics.Layer0ReciprocalEdges != 2 || diagnostics.Layer0ReciprocalRatio != 1 || diagnostics.Layer0Distances.Count != 2 || diagnostics.AuxiliaryEdges != 2 || diagnostics.AuxiliaryCSRBytes != 40 || diagnostics.AuxiliaryMaxDegree != 1 || diagnostics.AuxiliaryDistances.Count != 2 || !reflect.DeepEqual(diagnostics.Layer0DegreeHistogram, map[uint64]uint64{0: 1, 1: 2}) || !reflect.DeepEqual(diagnostics.Layer0IndegreeHistogram, map[uint64]uint64{0: 1, 1: 2}) || diagnostics.Layer0StrongComponents != 2 || diagnostics.Layer0LargestComponent != 2 {
 		t.Fatalf("diagnostics=%+v", diagnostics)
 	}
 	status := searcher.Status()
