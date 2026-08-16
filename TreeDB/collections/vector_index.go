@@ -310,7 +310,16 @@ type VectorIndex struct {
 	insertQuantScratch     []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
-	constructionTrace *vectorIndexConstructionTraceV1
+	constructionTrace        *vectorIndexConstructionTraceV1
+	layer0ConstructionPolicy *vectorIndexLayer0ConstructionPolicyV1
+}
+
+// vectorIndexLayer0ConstructionPolicyV1 is an offline-only experiment seam.
+// It changes the new node's layer-0 selection but deliberately leaves the
+// reciprocal adjacency capacity and prune limit at the canonical 2M.
+type vectorIndexLayer0ConstructionPolicyV1 struct {
+	initialSelectionFactor int
+	backfill               bool
 }
 
 // vectorIndexConstructionTraceV1 is deliberately private: construction
@@ -1114,7 +1123,11 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
 		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
-		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
+		selectionLimit := idx.maxNeighborsForLayer(layer)
+		if layer == 0 && idx.layer0ConstructionPolicy != nil {
+			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
+		}
+		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, selectionLimit, nodeID)
 		for _, neighborID := range neighbors {
 			// selectLayerNeighborsLocked records the exact selection origin before
 			// this directed initial link is made.
@@ -2292,10 +2305,14 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	}
 	var diversitySelected int
 	var diversity map[int]bool
+	backfill := true
+	if layer == 0 && idx.layer0ConstructionPolicy != nil {
+		backfill = idx.layer0ConstructionPolicy.backfill
+	}
 	if trace == nil {
-		scored, diversitySelected = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
+		scored, diversitySelected, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill)
 	} else {
-		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithOriginsLocked(scored, limit)
+		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill)
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
@@ -2325,22 +2342,22 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
-	selected, diversitySelected, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false)
+	selected, diversitySelected, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false, true)
 	return selected, diversitySelected
 }
 
 // selectDiverseCandidatesWithOriginsLocked preserves the existing candidate
 // order while retaining the causal classification of each selected edge.
 func (idx *VectorIndex) selectDiverseCandidatesWithOriginsLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int, map[int]bool) {
-	return idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true)
+	return idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true, true)
 }
 
-func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins bool) ([]vectorIndexCandidate, int, map[int]bool) {
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled bool) ([]vectorIndexCandidate, int, map[int]bool) {
 	if limit <= 0 || len(candidates) == 0 {
 		return nil, 0, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
-	if len(candidates) <= limit {
+	if backfillEnabled && len(candidates) <= limit {
 		if !includeOrigins {
 			return candidates, len(candidates), nil
 		}
@@ -2365,20 +2382,27 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 	if limit > len(selectedStack) {
 		selected = make([]vectorIndexCandidate, 0, limit)
 	}
-	var rejectedStack [128]vectorIndexCandidate
-	rejected := rejectedStack[:0]
-	if len(candidates) > len(rejectedStack) {
-		rejected = make([]vectorIndexCandidate, 0, len(candidates))
+	var rejected []vectorIndexCandidate
+	if backfillEnabled {
+		var rejectedStack [128]vectorIndexCandidate
+		rejected = rejectedStack[:0]
+		if len(candidates) > len(rejectedStack) {
+			rejected = make([]vectorIndexCandidate, 0, len(candidates))
+		}
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
-			rejected = append(rejected, candidate)
+			if backfillEnabled {
+				rejected = append(rejected, candidate)
+			}
 			continue
 		}
 		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
 			selected = append(selected, candidate)
 		} else {
-			rejected = append(rejected, candidate)
+			if backfillEnabled {
+				rejected = append(rejected, candidate)
+			}
 		}
 	}
 	out := candidates[:0]
@@ -2388,6 +2412,10 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 		for _, candidate := range selected {
 			diversity[candidate.nodeID] = true
 		}
+	}
+	if !backfillEnabled {
+		out = append(out, selected...)
+		return out, len(selected), diversity
 	}
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {

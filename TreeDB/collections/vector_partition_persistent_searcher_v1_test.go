@@ -838,6 +838,34 @@ func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
+	for _, test := range []struct {
+		variant       VectorPartitionLocalGraphVariantV1
+		initialFactor int
+		backfill      bool
+	}{
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 1, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 1, true},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 2, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 2, true},
+	} {
+		policy, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(test.variant)
+		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill {
+			t.Fatalf("variant=%q policy=%+v ok=%t", test.variant, policy, ok)
+		}
+		def, auxiliary, err := vectorPartitionLocalGraphVariantDefinitionV1(VectorIndexDefinition{M: 16, EfConstruction: 128}, test.variant)
+		if err != nil || !auxiliary || def.M != 18 || def.EfConstruction != 256 {
+			t.Fatalf("variant=%q definition=%+v auxiliary=%t err=%v", test.variant, def, auxiliary, err)
+		}
+		if _, err := VectorPartitionLocalGraphVariantIdentityV1(test.variant); err != nil {
+			t.Fatalf("variant=%q identity: %v", test.variant, err)
+		}
+	}
+	if _, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); ok {
+		t.Fatal("production M18 control unexpectedly carries an experimental layer-0 construction policy")
+	}
+}
+
 func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	rows := make([]columnGraphRebuildInputRowV2A, 8)
@@ -920,6 +948,10 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 18, 256, 995, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 18, 256, 996, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 18, 256, 997, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 18, 256, 998, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1, 20, 256, 990, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992, true, columnHNSWSearchPackVersionV3},
