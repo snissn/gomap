@@ -26,6 +26,17 @@ func TestLocalHNSWM18EdgeDiagnosisContractV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWM18PreparationSmokePartitionContractV1(t *testing.T) {
+	if !localHNSWM18PreparationSmokePartitionV1(16) || !localHNSWM18PreparationSmokePartitionV1(36) {
+		t.Fatal("selected smoke partition rejected")
+	}
+	for _, partition := range []uint{0, 1, 3, 15, 17, 35, 37} {
+		if localHNSWM18PreparationSmokePartitionV1(partition) {
+			t.Fatalf("unselected smoke partition accepted: %d", partition)
+		}
+	}
+}
+
 func TestLocalHNSWM18EdgeDiagnosisHardMissSelectionIsOnlineAndBoundedV1(t *testing.T) {
 	var cell localHNSWM18EdgeDiagnosisCellV1
 	all := make([]localHNSWM18EdgeDiagnosisHardMissV1, 0, 40)
