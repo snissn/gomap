@@ -534,6 +534,89 @@ func TestVectorIndexSelectDiverseCandidatesKeepsBackfillDistanceSorted(t *testin
 	}
 }
 
+func TestColumnVectorGraphLayer0ConstructionPolicyReservesReciprocalCapacityV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 64)
+	for i := range rows {
+		// Uneven angular spacing creates both redundant candidates and useful
+		// distant alternatives while retaining a deterministic insertion order.
+		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("policy-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	invalidDef := def
+	invalidDef.Metric = VectorMetricInnerProduct
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), invalidDef, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1}); err == nil {
+		t.Fatal("offline layer-0 policy accepted a non-cosine builder")
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), def, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 3}); err == nil {
+		t.Fatal("offline layer-0 policy accepted an unknown initial-selection factor")
+	}
+	build := func(policy *vectorIndexLayer0ConstructionPolicyV1) ([]columnVectorGraphAssetRow, *vectorIndexConstructionTraceV1) {
+		t.Helper()
+		got := append([]columnVectorGraphAssetRow(nil), rows...)
+		trace := &vectorIndexConstructionTraceV1{}
+		if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(got, def, trace, true, policy); err != nil {
+			t.Fatal(err)
+		}
+		return got, trace
+	}
+	control, controlTrace := build(nil)
+	explicitControl, explicitControlTrace := build(&vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: true})
+	if !reflect.DeepEqual(control, explicitControl) || !reflect.DeepEqual(controlTrace.selections, explicitControlTrace.selections) || !reflect.DeepEqual(controlTrace.events, explicitControlTrace.events) {
+		t.Fatal("explicit layer-0 2M/backfill-on policy changed the current construction")
+	}
+
+	for _, test := range []struct {
+		name         string
+		policy       vectorIndexLayer0ConstructionPolicyV1
+		wantBackfill bool
+		wantReserved bool
+	}{
+		{"m_off", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, backfill: false}, false, true},
+		{"m_on", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, backfill: true}, true, true},
+		{"2m_off", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: false}, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, trace := build(&test.policy)
+			backfill := 0
+			underfilled := false
+			for _, selection := range trace.selections {
+				if selection.Layer != 0 {
+					continue
+				}
+				limit := def.M * test.policy.initialSelectionFactor
+				if selection.Selected > limit {
+					t.Fatalf("initial layer-0 selected=%d exceeds limit=%d: %+v", selection.Selected, limit, selection)
+				}
+				backfill += selection.BackfillSelected
+				if selection.Candidates >= limit && selection.Selected < limit {
+					underfilled = true
+				}
+			}
+			if test.wantBackfill != (backfill > 0) {
+				t.Fatalf("backfill=%d want enabled=%t", backfill, test.wantBackfill)
+			}
+			if !test.wantBackfill && !underfilled {
+				t.Fatal("backfill-off policy did not retain any diversity-underfilled selection")
+			}
+			maxDegree := 0
+			for _, row := range got {
+				neighbors, err := columnVectorGraphAdjacencyLayer(row.Adjacency, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(neighbors) > 2*def.M {
+					t.Fatalf("final degree=%d exceeds reciprocal capacity=%d", len(neighbors), 2*def.M)
+				}
+				maxDegree = max(maxDegree, len(neighbors))
+			}
+			if test.wantReserved && maxDegree <= def.M {
+				t.Fatalf("reciprocal insertion never consumed reserved capacity: max degree=%d", maxDegree)
+			}
+		})
+	}
+}
+
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
