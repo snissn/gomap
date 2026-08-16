@@ -1498,8 +1498,8 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return ErrVectorPartitionSearchUnavailable
 			}
 		}
-		replayed, replayErr := vectorPartitionConstructionReplaySampleSelectionsV1(reader, members[part.PartitionID], buildDef, variant)
-		if replayErr != nil || !vectorPartitionConstructionSampleSelectionsEqualV1(part.Selections, replayed) {
+		replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
+		if replayErr != nil || part.PostfillEdges != replayed.PostfillEdges || !slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals) || !vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections) || !slices.Equal(part.Events, replayed.Events) {
 			searcher.Close()
 			return ErrVectorPartitionSearchUnavailable
 		}
@@ -1621,13 +1621,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsV1(index string,
 	return c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, maxAssetBytes, vectorPartitionLocalDefaultGraphVariantV1, nil)
 }
 
-// vectorPartitionConstructionReplaySampleSelectionsV1 deterministically
-// reconstructs the bounded sampled candidate pools from manifest-bound source
-// vectors. Candidate pools depend on the evolving HNSW graph, so a self-hash
-// of evidence alone is not an independent binding.
-func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGraphPhysicalRowReader, selected []vectorPartitionMembershipSourceV1, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionConstructionSelectionV1, error) {
+// vectorPartitionConstructionReplayEvidenceV1 deterministically reconstructs
+// the complete trace from manifest-bound source vectors. Candidate pools depend
+// on the evolving HNSW graph, so a self-hash of evidence is not independent.
+func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysicalRowReader, selected []vectorPartitionMembershipSourceV1, def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (VectorPartitionConstructionPartitionEvidenceV1, error) {
 	if reader == nil || len(selected) == 0 {
-		return nil, ErrVectorPartitionSearchUnavailable
+		return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
 	}
 	type selectedRow struct {
 		ordinal int
@@ -1637,7 +1636,7 @@ func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGra
 	for i, source := range selected {
 		id, ok := reader.documentIDForOrdinal(source.ordinal)
 		if !ok || len(id) == 0 {
-			return nil, ErrVectorPartitionSearchUnavailable
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		sourceRows[i] = selectedRow{ordinal: source.ordinal, id: id}
 	}
@@ -1646,7 +1645,7 @@ func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGra
 	scratch := &columnPhysicalRowReaderScratch{}
 	for i, source := range sourceRows {
 		if i > 0 && source.ordinal == sourceRows[i-1].ordinal {
-			return nil, ErrVectorPartitionSearchUnavailable
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		row, fetchErr := reader.FetchRow(source.ordinal, scratch)
 		if fetchErr != nil {
@@ -1656,7 +1655,7 @@ func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGra
 			row.Vector, _, _, _ = reader.typedVectorForOrdinal(source.ordinal)
 		}
 		if len(row.Vector) != def.Dimensions {
-			return nil, ErrVectorPartitionSearchUnavailable
+			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		if invNorm, _, _, ok := reader.invNormForOrdinal(source.ordinal); ok {
 			row.InvNorm = invNorm
@@ -1665,29 +1664,26 @@ func vectorPartitionConstructionReplaySampleSelectionsV1(reader *columnVectorGra
 	}
 	trace := &vectorIndexConstructionTraceV1{}
 	if _, err := buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows, def, variant, trace); err != nil {
-		return nil, err
+		return VectorPartitionConstructionPartitionEvidenceV1{}, err
 	}
-	out := make([]VectorPartitionConstructionSelectionV1, 0)
+	out := VectorPartitionConstructionPartitionEvidenceV1{NativeInsertionOrdinals: append([]int(nil), trace.nativeInsertionOrdinals...)}
 	for _, selection := range trace.selections {
-		if !selection.Sampled {
-			continue
+		item := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
+		if selection.Sampled {
+			item.CandidateSampled = true
+			item.CandidateOrdinals = append([]int(nil), selection.CandidateNodes...)
+			sort.Ints(item.CandidateOrdinals)
+			item.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(item.CandidateOrdinals)
 		}
-		candidates := append([]int(nil), selection.CandidateNodes...)
-		sort.Ints(candidates)
-		out = append(out, VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected, CandidateSampled: true, CandidateOrdinals: candidates, CandidateDigest: vectorPartitionConstructionCandidateDigestV1(candidates)})
+		out.Selections = append(out.Selections, item)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Node < out[j].Node })
+	for _, event := range trace.events {
+		out.Events = append(out.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})
+	}
 	return out, nil
 }
 
-func vectorPartitionConstructionSampleSelectionsEqualV1(selections, replayed []VectorPartitionConstructionSelectionV1) bool {
-	actual := make([]VectorPartitionConstructionSelectionV1, 0, len(replayed))
-	for _, selection := range selections {
-		if selection.CandidateSampled {
-			actual = append(actual, selection)
-		}
-	}
-	sort.Slice(actual, func(i, j int) bool { return actual[i].Node < actual[j].Node })
+func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorPartitionConstructionSelectionV1) bool {
 	return slices.EqualFunc(actual, replayed, func(a, b VectorPartitionConstructionSelectionV1) bool {
 		return a.Node == b.Node && a.Layer == b.Layer && a.Candidates == b.Candidates && a.Selected == b.Selected && a.DiversitySelected == b.DiversitySelected && a.BackfillSelected == b.BackfillSelected && a.CandidateSampled == b.CandidateSampled && a.CandidateDigest == b.CandidateDigest && slices.Equal(a.CandidateOrdinals, b.CandidateOrdinals)
 	})

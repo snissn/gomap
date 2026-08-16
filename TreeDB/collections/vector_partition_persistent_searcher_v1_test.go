@@ -337,6 +337,13 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		{"duplicate_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
 			e.Partitions[0].NativeInsertionOrdinals[0] = e.Partitions[0].NativeInsertionOrdinals[1]
 		}},
+		{"replayed_insertion_permutation", func(e *VectorPartitionConstructionEvidenceV1) {
+			p := &e.Partitions[0]
+			p.NativeInsertionOrdinals[0], p.NativeInsertionOrdinals[1] = p.NativeInsertionOrdinals[1], p.NativeInsertionOrdinals[0]
+			for i := range p.Events {
+				p.Events[i].InsertionOrdinal = max(p.NativeInsertionOrdinals[p.Events[i].From], p.NativeInsertionOrdinals[p.Events[i].To])
+			}
+		}},
 		{"wrong_event_insertion_ordinal", func(e *VectorPartitionConstructionEvidenceV1) {
 			i := initialEvent(e)
 			e.Partitions[0].Events[i].InsertionOrdinal = 0
@@ -440,6 +447,39 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
 		if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 			t.Fatalf("substituted sampled candidate accepted: %v", err)
+		}
+	})
+	t.Run("replayed_lifecycle_origin", func(t *testing.T) {
+		e := cloneEvidence()
+		p := &e.Partitions[0]
+		selectionIndex, eventIndex := -1, -1
+		for i, selection := range p.Selections {
+			if selection.DiversitySelected == 0 {
+				continue
+			}
+			for j, event := range p.Events {
+				if event.Action == "initial_add" && event.Origin == "diversity_selected" && event.From == selection.Node && event.Layer == selection.Layer {
+					selectionIndex, eventIndex = i, j
+					break
+				}
+			}
+			if eventIndex >= 0 {
+				break
+			}
+		}
+		if selectionIndex < 0 || eventIndex < 0 {
+			t.Fatal("fixture lacks diversity lifecycle event")
+		}
+		p.Selections[selectionIndex].DiversitySelected--
+		p.Selections[selectionIndex].BackfillSelected++
+		key := p.Events[eventIndex]
+		for i := range p.Events {
+			if p.Events[i].From == key.From && p.Events[i].To == key.To && p.Events[i].Layer == key.Layer && p.Events[i].Origin == "diversity_selected" {
+				p.Events[i].Origin = "nearest_backfill"
+			}
+		}
+		if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, e); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+			t.Fatalf("replayed lifecycle origin mutation accepted: %v", err)
 		}
 	})
 	nativeRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), native[0].Ref)
