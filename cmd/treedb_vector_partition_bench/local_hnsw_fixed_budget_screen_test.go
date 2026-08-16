@@ -26,7 +26,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		report.Arms[i].Arm = arm
-		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), Partitions: 5, PackBytes: 1}
+		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), VariantIdentity: "identity", FileID: 4172000 + uint32(i), Partitions: 5, PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]collections.VectorPartitionPackDiagnosticsV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
 			report.Arms[i].SelectedDiagnostics[j].Rows = 1
