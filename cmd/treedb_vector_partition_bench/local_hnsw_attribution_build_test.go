@@ -40,6 +40,20 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if err != nil || construction.FinalSurvivors == 0 || construction.InitialAdded == 0 || harness.constructionEvidence.Variant != "native" {
 		t.Fatalf("construction=%+v evidence=%+v err=%v", construction, harness.constructionEvidence, err)
 	}
+	sampled := false
+	for _, partition := range harness.constructionEvidence.Partitions {
+		for _, selection := range partition.Selections {
+			if len(selection.CandidateOrdinals) != 0 {
+				sampled = true
+				if selection.Layer != 0 || selection.CandidateDigest == "" || len(selection.CandidateOrdinals) > selection.Candidates {
+					t.Fatalf("sample=%+v", selection)
+				}
+			}
+		}
+	}
+	if !sampled {
+		t.Fatal("missing deterministic candidate sample")
+	}
 	repaired, repairEvidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 9990)
 	if err != nil {
 		t.Fatal(err)

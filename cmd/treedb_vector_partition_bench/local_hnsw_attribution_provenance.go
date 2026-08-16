@@ -22,6 +22,9 @@ type localHNSWAttributionConstructionTotalsV1 struct {
 	PruneKept         uint64    `json:"prune_kept"`
 	PruneDropped      uint64    `json:"prune_dropped"`
 	FinalSurvivors    uint64    `json:"final_survivors"`
+	FinalDiversity    uint64    `json:"final_diversity_selected"`
+	FinalBackfill     uint64    `json:"final_nearest_backfill"`
+	FinalReciprocal   uint64    `json:"final_reciprocal_add"`
 	InsertionAge      [4]uint64 `json:"insertion_age_buckets"`
 }
 
@@ -93,6 +96,16 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 				out.PruneDropped++
 			case "final_survivor":
 				out.FinalSurvivors++
+				switch event.Origin {
+				case "diversity_selected":
+					out.FinalDiversity++
+				case "nearest_backfill":
+					out.FinalBackfill++
+				case "reciprocal_add":
+					out.FinalReciprocal++
+				default:
+					return out, errors.New("invalid local HNSW final origin")
+				}
 			default:
 				return out, errors.New("invalid local HNSW construction action")
 			}
@@ -109,6 +122,9 @@ func localHNSWAttributionConstructionReduceV1(evidence collections.VectorPartiti
 			}
 			out.InsertionAge[bucket]++
 		}
+	}
+	if out.FinalSurvivors != out.FinalDiversity+out.FinalBackfill+out.FinalReciprocal {
+		return localHNSWAttributionConstructionTotalsV1{}, errors.New("local HNSW final origin conservation")
 	}
 	return out, nil
 }

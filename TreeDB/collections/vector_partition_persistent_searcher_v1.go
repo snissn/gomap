@@ -47,12 +47,14 @@ type VectorPartitionConstructionPartitionEvidenceV1 struct {
 	PostfillEdges    uint64                                   `json:"postfill_edges"`
 }
 type VectorPartitionConstructionSelectionV1 struct {
-	Node              int `json:"node"`
-	Layer             int `json:"layer"`
-	Candidates        int `json:"candidates"`
-	Selected          int `json:"selected"`
-	DiversitySelected int `json:"diversity_selected"`
-	BackfillSelected  int `json:"backfill_selected"`
+	Node              int    `json:"node"`
+	Layer             int    `json:"layer"`
+	Candidates        int    `json:"candidates"`
+	Selected          int    `json:"selected"`
+	DiversitySelected int    `json:"diversity_selected"`
+	BackfillSelected  int    `json:"backfill_selected"`
+	CandidateOrdinals []int  `json:"candidate_ordinals,omitempty"`
+	CandidateDigest   string `json:"candidate_digest,omitempty"`
 }
 type VectorPartitionConstructionEdgeEventV1 struct {
 	From             int    `json:"from"`
@@ -61,6 +63,17 @@ type VectorPartitionConstructionEdgeEventV1 struct {
 	InsertionOrdinal int    `json:"insertion_ordinal"`
 	Origin           string `json:"origin"`
 	Action           string `json:"action"`
+}
+
+func vectorPartitionConstructionCandidateDigestV1(ordinals []int) string {
+	h := sha256.New()
+	h.Write([]byte("treedb-4170-candidate-ordinals-v1/"))
+	var raw [8]byte
+	for _, ordinal := range ordinals {
+		binary.LittleEndian.PutUint64(raw[:], uint64(ordinal))
+		h.Write(raw[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func compactPartitionAdjacencyV1(in []uint32) []uint32 {
@@ -1252,6 +1265,27 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				searcher.Close()
 				return ErrVectorPartitionSearchUnavailable
 			}
+			if len(selection.CandidateOrdinals) != 0 {
+				if selection.Layer != 0 || len(selection.CandidateOrdinals) > selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
+					searcher.Close()
+					return ErrVectorPartitionSearchUnavailable
+				}
+				seenCandidates := make(map[int]struct{}, len(selection.CandidateOrdinals))
+				for _, candidate := range selection.CandidateOrdinals {
+					if candidate < 0 || candidate >= pack.Header.Rows {
+						searcher.Close()
+						return ErrVectorPartitionSearchUnavailable
+					}
+					if _, duplicate := seenCandidates[candidate]; duplicate {
+						searcher.Close()
+						return ErrVectorPartitionSearchUnavailable
+					}
+					seenCandidates[candidate] = struct{}{}
+				}
+			} else if selection.CandidateDigest != "" {
+				searcher.Close()
+				return ErrVectorPartitionSearchUnavailable
+			}
 			key := vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}
 			if _, duplicate := selectionCounts[key]; duplicate {
 				searcher.Close()
@@ -1584,7 +1618,12 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 			}
 			partition := VectorPartitionConstructionPartitionEvidenceV1{PartitionID: out[i].PartitionID, AssetChecksum: out[i].Checksum, MembershipDigest: out[i].MembershipDigest, AssetBytes: out[i].Bytes}
 			for _, selection := range trace.selections {
-				partition.Selections = append(partition.Selections, VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected})
+				selectionEvidence := VectorPartitionConstructionSelectionV1{Node: selection.Node, Layer: selection.Layer, Candidates: selection.Candidates, Selected: selection.Selected, DiversitySelected: selection.DiversitySelected, BackfillSelected: selection.BackfillSelected}
+				if len(selection.CandidateNodes) != 0 {
+					selectionEvidence.CandidateOrdinals = append([]int(nil), selection.CandidateNodes...)
+					selectionEvidence.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(selectionEvidence.CandidateOrdinals)
+				}
+				partition.Selections = append(partition.Selections, selectionEvidence)
 			}
 			for _, event := range trace.events {
 				partition.Events = append(partition.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})

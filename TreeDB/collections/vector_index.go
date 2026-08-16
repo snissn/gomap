@@ -320,9 +320,11 @@ type vectorIndexConstructionTraceV1 struct {
 	events     []vectorIndexConstructionEdgeEventV1
 	pending    map[vectorIndexConstructionEdgeKeyV1]string
 	origins    map[vectorIndexConstructionEdgeKeyV1]string
+	sampleIDs  map[string]struct{}
 }
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
+	CandidateNodes                                                         []int
 }
 type vectorIndexConstructionEdgeKeyV1 struct{ From, To, Layer int }
 type vectorIndexConstructionEdgeEventV1 struct {
@@ -2241,7 +2243,16 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithOriginsLocked(scored, limit)
 	}
 	if trace != nil {
-		trace.selections = append(trace.selections, vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: len(candidates), Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected})
+		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: len(candidates), Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
+		if layer == 0 {
+			if _, sampled := trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]; sampled {
+				selection.CandidateNodes = make([]int, len(candidates))
+				for i := range candidates {
+					selection.CandidateNodes[i] = candidates[i].nodeID
+				}
+			}
+		}
+		trace.selections = append(trace.selections, selection)
 		for _, candidate := range scored {
 			origin := "nearest_backfill"
 			if diversity[candidate.nodeID] {

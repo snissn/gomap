@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -17,6 +18,28 @@ const (
 	maxColumnVectorGraphAdjacencyOrdinal    = uint64(^uint32(0))
 	columnVectorGraphLayeredAdjacencyMagic  = ^uint32(0)
 )
+
+const vectorPartitionConstructionCandidateSampleLimitV1 = 32
+
+func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) map[string]struct{} {
+	type item struct {
+		id   string
+		hash [32]byte
+	}
+	items := make([]item, len(rows))
+	for i := range rows {
+		items[i] = item{id: string(rows[i].ID), hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), rows[i].ID...))}
+	}
+	sort.Slice(items, func(i, j int) bool { return bytes.Compare(items[i].hash[:], items[j].hash[:]) < 0 })
+	if len(items) > vectorPartitionConstructionCandidateSampleLimitV1 {
+		items = items[:vectorPartitionConstructionCandidateSampleLimitV1]
+	}
+	out := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		out[item.id] = struct{}{}
+	}
+	return out
+}
 
 var (
 	errColumnVectorGraphInvNormEmpty          = errors.New("collections: column_graph vector is empty")
@@ -451,6 +474,9 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
+	if trace != nil {
+		trace.sampleIDs = vectorPartitionConstructionSampleIDsV1(rows)
+	}
 	for i := range rows {
 		if len(rows[i].Vector) != def.Dimensions {
 			return fmt.Errorf("collections: column vector graph row[%d] vector dims=%d want %d", i, len(rows[i].Vector), def.Dimensions)
@@ -536,6 +562,13 @@ func (t *vectorIndexConstructionTraceV1) finalize(index *VectorIndex, nodeOrdina
 			return err
 		}
 		t.selections[i].Node = ordinal
+		for j, candidate := range t.selections[i].CandidateNodes {
+			mapped, err := remap(candidate)
+			if err != nil {
+				return err
+			}
+			t.selections[i].CandidateNodes[j] = mapped
+		}
 	}
 	for i := range t.events {
 		from, err := remap(t.events[i].From)
