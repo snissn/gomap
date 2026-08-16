@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -20,15 +21,23 @@ type localHNSWAttributionQueryResultV1 struct {
 }
 
 type localHNSWAttributionQuerySearchV1 struct {
-	Results               []localHNSWAttributionQueryResultV1 `json:"results"`
-	Candidates            uint64                              `json:"candidates"`
-	Edges                 uint64                              `json:"edges"`
-	FrontierAdmissions    uint64                              `json:"frontier_admissions"`
-	TerminationReason     string                              `json:"termination_reason"`
-	VisitedOrdinalsSHA256 string                              `json:"visited_ordinals_sha256"`
-	VisitedOrdinals       []uint32                            `json:"visited_ordinals"`
-	Utility               localHNSWAttributionQueryUtilityV1  `json:"utility"`
+	Results               []localHNSWAttributionQueryResultV1   `json:"results"`
+	Candidates            uint64                                `json:"candidates"`
+	Edges                 uint64                                `json:"edges"`
+	FrontierAdmissions    uint64                                `json:"frontier_admissions"`
+	TerminationReason     string                                `json:"termination_reason"`
+	VisitedOrdinalsSHA256 string                                `json:"visited_ordinals_sha256"`
+	VisitedOrdinals       []uint32                              `json:"visited_ordinals"`
+	Utility               localHNSWAttributionQueryUtilityV1    `json:"utility"`
+	TruthRecoveries       []localHNSWAttributionTruthRecoveryV1 `json:"truth_recoveries"`
 	truthRecoveries       map[string]string
+}
+
+// localHNSWAttributionTruthRecoveryV1 makes the per-query stable-ID owner
+// explicit in JSONL so downstream reducers can reproduce overlap de-dup.
+type localHNSWAttributionTruthRecoveryV1 struct {
+	ID     string `json:"id"`
+	Origin string `json:"origin"`
 }
 
 type localHNSWAttributionQueryPartitionV1 struct {
@@ -191,7 +200,8 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 		if err != nil {
 			return nil, nil, err
 		}
-		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, truthRecoveries: localHNSWAttributionTruthRecoveriesV1(attribution, origins, harness.documentIDs[partition], truth)}
+		recoveries := localHNSWAttributionTruthRecoveriesV1(attribution, origins, harness.documentIDs[partition], truth)
+		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries), truthRecoveries: recoveries}
 		resultsByPartition[partition] = canonical
 	}
 	return records, resultsByPartition, nil
@@ -221,7 +231,9 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 		utility := records[partition].Utility
 		for id, origin := range records[partition].truthRecoveries {
 			if _, seen := recovered[id]; seen {
-				localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin)
+				if err := localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin); err != nil {
+					return nil, localHNSWAttributionQueryWorkV1{}, err
+				}
 				continue
 			}
 			recovered[id] = struct{}{}
@@ -243,7 +255,9 @@ func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQ
 		utility := record.Utility
 		for id, origin := range record.truthRecoveries {
 			if _, seen := recovered[id]; seen {
-				localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin)
+				if err := localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin); err != nil {
+					return localHNSWAttributionQueryUtilityV1{}, err
+				}
 				continue
 			}
 			recovered[id] = struct{}{}
@@ -253,6 +267,22 @@ func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQ
 		}
 	}
 	return out, nil
+}
+
+func localHNSWAttributionTruthRecoveryRecordsV1(recoveries map[string]string) []localHNSWAttributionTruthRecoveryV1 {
+	if len(recoveries) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(recoveries))
+	for id := range recoveries {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]localHNSWAttributionTruthRecoveryV1, len(ids))
+	for i, id := range ids {
+		out[i] = localHNSWAttributionTruthRecoveryV1{ID: id, Origin: recoveries[id]}
+	}
+	return out
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {

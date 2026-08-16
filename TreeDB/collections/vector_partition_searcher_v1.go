@@ -1422,6 +1422,7 @@ type VectorPartitionSearchSeedEventV1 struct {
 	Ordinal                         int
 	Score                           float64
 	TopAdmission, FrontierAdmission bool
+	InitialEntry                    bool
 }
 type VectorPartitionSearchPageReadV1 struct {
 	Layer     int
@@ -1825,7 +1826,7 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 				attribution.EdgeEvents = append(attribution.EdgeEvents, VectorPartitionSearchEdgeEventV1{Layer: event.Layer, SourceOrdinal: event.SourceOrdinal, DestinationOrdinal: event.DestinationOrdinal, Auxiliary: event.Auxiliary, NewlyVisited: event.NewlyVisited, Scored: event.Scored, Score: event.Score, TopAdmission: event.TopAdmission, FrontierAdmission: event.FrontierAdmission, StateImprovement: event.StateImprovement})
 			}
 			for _, event := range trace.SeedEvents {
-				attribution.SeedEvents = append(attribution.SeedEvents, VectorPartitionSearchSeedEventV1{Ordinal: event.Ordinal, Score: event.Score, TopAdmission: event.TopAdmission, FrontierAdmission: event.FrontierAdmission})
+				attribution.SeedEvents = append(attribution.SeedEvents, VectorPartitionSearchSeedEventV1{Ordinal: event.Ordinal, Score: event.Score, TopAdmission: event.TopAdmission, FrontierAdmission: event.FrontierAdmission, InitialEntry: event.InitialEntry})
 			}
 			attribution.FrontierAdmissions = stats.FrontierPushes
 			attribution.SeedCandidates = trace.SeedCandidates

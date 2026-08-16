@@ -457,27 +457,35 @@ func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartiti
 	return out
 }
 
-func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttributionQueryUtilityV1, origin string) {
+func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttributionQueryUtilityV1, origin string) error {
 	if out == nil || out.TruthRecovered == 0 {
-		return
+		return errors.New("local HNSW truth recovery underflow")
 	}
-	out.TruthRecovered--
+	var bucket *uint64
 	switch origin {
 	case "diversity_selected":
-		out.Diversity.TruthRecovered--
+		bucket = &out.Diversity.TruthRecovered
 	case "nearest_backfill":
-		out.Backfill.TruthRecovered--
+		bucket = &out.Backfill.TruthRecovered
 	case "reciprocal_add":
-		out.Reciprocal.TruthRecovered--
+		bucket = &out.Reciprocal.TruthRecovered
 	case "reciprocity_repair":
-		out.Repair.TruthRecovered--
+		bucket = &out.Repair.TruthRecovered
 	case "overlay_rewrite":
-		out.Overlay.TruthRecovered--
+		bucket = &out.Overlay.TruthRecovered
 	case "auxiliary":
-		out.Auxiliary.TruthRecovered--
+		bucket = &out.Auxiliary.TruthRecovered
 	case "unattributed":
-		out.Unattributed.TruthRecovered--
+		bucket = &out.Unattributed.TruthRecovered
+	default:
+		return errors.New("invalid local HNSW truth recovery origin")
 	}
+	if *bucket == 0 {
+		return errors.New("local HNSW truth recovery origin underflow")
+	}
+	out.TruthRecovered--
+	*bucket = *bucket - 1
+	return nil
 }
 
 func localHNSWAttributionHardMissesV1(in []localHNSWAttributionHardMissV1) []localHNSWAttributionHardMissV1 {
@@ -639,23 +647,13 @@ func localHNSWAttributionPackDiagnosticsV1(searchers []*collections.VectorPartit
 	return out, nil
 }
 
-func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1, cached ...[]collections.VectorPartitionPackDiagnosticsV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
+func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
 	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) {
 		return out, errors.New("invalid local HNSW oracle harness")
 	}
-	var diagnostics []collections.VectorPartitionPackDiagnosticsV1
-	if len(cached) != 0 {
-		diagnostics = cached[0]
-		if len(diagnostics) != len(h.searchers) {
-			return out, errors.New("invalid local HNSW cached diagnostics")
-		}
-	} else {
-		var err error
-		diagnostics, err = localHNSWAttributionPackDiagnosticsV1(h.searchers)
-		if err != nil {
-			return out, err
-		}
+	if len(diagnostics) != len(h.searchers) {
+		return out, errors.New("invalid local HNSW cached diagnostics")
 	}
 	_, rows, err := h.assets.collection.ReadVectorPartitionRouterSourceRowsV1(h.assets.manifest.IndexName)
 	if err != nil {

@@ -183,6 +183,13 @@ func TestColumnHNSWSearchPackAuxiliaryNavigationUpperSeedAnchorV3(t *testing.T) 
 	if len(attribution.LevelOrdinals) != 1 || len(attribution.ScoreOrdinals) == 0 || !upper || !layer0 || !auxiliary {
 		t.Fatalf("incomplete read trace levels=%v scores=%v reads=%+v", attribution.LevelOrdinals, attribution.ScoreOrdinals, attribution.AdjacencyReads)
 	}
+	initialEntry := false
+	for _, seed := range attribution.SeedEvents {
+		initialEntry = initialEntry || seed.InitialEntry && seed.Ordinal == input.EntryOrdinal && !seed.TopAdmission && !seed.FrontierAdmission
+	}
+	if !initialEntry {
+		t.Fatalf("missing upper-descent initial entry evidence: %+v", attribution.SeedEvents)
+	}
 	pages, pageErr := searcher.PageAttributionForTraceV1(attribution, 64)
 	if pageErr != nil || pages.UniquePages != 4 || pages.VectorPages != 2 || pages.AdjacencyPages != 3 {
 		t.Fatalf("page mapping=%+v err=%v", pages, pageErr)

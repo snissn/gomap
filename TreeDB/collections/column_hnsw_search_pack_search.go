@@ -84,6 +84,9 @@ type columnHNSWSearchPackSeedAttribution struct {
 	Ordinal                         int
 	Score                           float64
 	TopAdmission, FrontierAdmission bool
+	// InitialEntry is the one score used to begin upper-layer greedy descent.
+	// It is evidence-only and is not a frontier seed.
+	InitialEntry bool
 }
 type columnHNSWSearchPackEdgeAttribution struct {
 	Layer, SourceOrdinal, DestinationOrdinal          int
@@ -512,7 +515,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 			if err := ctx.Err(); err != nil {
 				return nil, stats, err
 			}
-			entryOrdinal, err = v.greedyNearestAtLayerWithContextTrace(ctx, normalizedQuery, entryOrdinal, layer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits, trace)
+			entryOrdinal, err = v.greedyNearestAtLayerWithContextTrace(ctx, normalizedQuery, entryOrdinal, layer, layer == maxLayer, opts.ScoreBatchMode, scratch, &stats, countLoopEdges, &loopEdgeVisits, trace)
 			if err != nil {
 				return nil, stats, err
 			}
@@ -802,7 +805,7 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextFast(c
 	}
 	return best, nil
 }
-func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextTrace(ctx context.Context, normalizedQuery []float32, entryOrdinal int, layer int, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64, trace *columnHNSWSearchPackAttributionTrace) (int, error) {
+func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextTrace(ctx context.Context, normalizedQuery []float32, entryOrdinal int, layer int, initialEntry bool, scoreBatchMode columnVectorGraphScoreBatchMode, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, countLoopEdges bool, loopEdgeVisits *uint64, trace *columnHNSWSearchPackAttributionTrace) (int, error) {
 	if trace == nil {
 		return 0, errColumnHNSWSearchPackSearchUnavailable
 	}
@@ -817,6 +820,9 @@ func (v *columnHNSWSearchPackPreparedView) greedyNearestAtLayerWithContextTrace(
 	bestScore, err := v.scoreOrdinal(normalizedQuery, best, scoreBatchMode, scratch, stats)
 	if err != nil {
 		return 0, err
+	}
+	if initialEntry {
+		trace.SeedEvents = append(trace.SeedEvents, columnHNSWSearchPackSeedAttribution{Ordinal: best, Score: bestScore, InitialEntry: true})
 	}
 	changed := true
 	for changed {

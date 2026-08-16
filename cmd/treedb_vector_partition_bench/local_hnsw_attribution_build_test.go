@@ -63,18 +63,22 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if m18Evidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || m18Evidence.VariantIdentity == "" || len(m18.constructionEvidence.Partitions) != 4 {
 		t.Fatalf("M18 construction evidence=%+v trace=%+v", m18Evidence, m18.constructionEvidence)
 	}
-	oracle, err := localHNSWAttributionNeighborhoodOracleV1Build(harness)
+	diagnostics, err := localHNSWAttributionPackDiagnosticsV1(harness.searchers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics)
 	if err != nil || oracle.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || oracle.CandidateSamples == 0 || oracle.CandidateTruthNeighbors == 0 || oracle.FinalSamples == 0 || len(oracle.PackDiagnostics) != 4 {
 		t.Fatalf("oracle=%+v err=%v", oracle, err)
 	}
-	again, err := localHNSWAttributionNeighborhoodOracleV1Build(harness)
+	again, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics)
 	if err != nil || !reflect.DeepEqual(oracle, again) {
 		t.Fatalf("non-deterministic oracle: first=%+v again=%+v err=%v", oracle, again, err)
 	}
 	bad := harness.constructionEvidence.Partitions[0].Selections[0]
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateSampled = true
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateOrdinals = []int{len(harness.documentIDs[0])}
-	if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness); err == nil {
+	if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics); err == nil {
 		t.Fatal("invalid sampled candidate ordinal accepted")
 	}
 	harness.constructionEvidence.Partitions[0].Selections[0] = bad
@@ -82,7 +86,7 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 		duplicate := harness.constructionEvidence.Partitions[0].Selections[1]
 		harness.constructionEvidence.Partitions[0].Selections[1].CandidateSampled = true
 		harness.constructionEvidence.Partitions[0].Selections[1].Node = harness.constructionEvidence.Partitions[0].Selections[0].Node
-		if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness); err == nil {
+		if _, err := localHNSWAttributionNeighborhoodOracleV1Build(harness, diagnostics); err == nil {
 			t.Fatal("duplicate sampled node accepted")
 		}
 		harness.constructionEvidence.Partitions[0].Selections[1] = duplicate

@@ -640,10 +640,12 @@ func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal [
 				}
 			}
 			t.selections[i].CandidateNodes = unique
-			// Candidate-pool evidence is a set. The transient layer-search
-			// scratch may encounter an ordinal more than once, but it does not
-			// create another selectable predecessor or oracle candidate.
-			t.selections[i].Candidates = len(unique)
+			// Candidate-pool evidence is a set for sampled and unsampled
+			// selections alike; selectLayerNeighborsLocked recorded that count
+			// before this BFS ordinal remap.
+			if len(unique) != t.selections[i].Candidates {
+				return fmt.Errorf("collections: construction trace sampled candidate count")
+			}
 		}
 	}
 	for i := range t.events {

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -92,5 +95,21 @@ func TestLocalHNSWAttributionQueryUtilityAggregateDeduplicatesOverlapTruthV1(t *
 	}
 	if utility.TruthRecovered != 1 || utility.Diversity.TruthRecovered != 1 || utility.Reciprocal.TruthRecovered != 0 {
 		t.Fatalf("overlap truth was counted more than once: %+v", utility)
+	}
+}
+
+func TestLocalHNSWAttributionTruthRecoverySerializationAndUnderflowV1(t *testing.T) {
+	records := localHNSWAttributionTruthRecoveryRecordsV1(map[string]string{"z": "auxiliary", "a": "diversity_selected"})
+	if want := []localHNSWAttributionTruthRecoveryV1{{ID: "a", Origin: "diversity_selected"}, {ID: "z", Origin: "auxiliary"}}; !reflect.DeepEqual(records, want) {
+		t.Fatalf("truth recovery records=%+v want=%+v", records, want)
+	}
+	encoded, err := json.Marshal(localHNSWAttributionQuerySearchV1{TruthRecoveries: records})
+	again, againErr := json.Marshal(localHNSWAttributionQuerySearchV1{TruthRecoveries: records})
+	if err != nil || againErr != nil || string(encoded) != string(again) || !strings.Contains(string(encoded), `"truth_recoveries":[{"id":"a","origin":"diversity_selected"},{"id":"z","origin":"auxiliary"}]`) {
+		t.Fatalf("truth recovery JSON err=%v json=%s", err, encoded)
+	}
+	utility := localHNSWAttributionQueryUtilityV1{TruthRecovered: 1}
+	if err := localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, "diversity_selected"); err == nil || utility.TruthRecovered != 1 {
+		t.Fatalf("truth recovery underflow accepted or mutated utility=%+v err=%v", utility, err)
 	}
 }
