@@ -461,23 +461,8 @@ func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttribu
 	if out == nil || out.TruthRecovered == 0 {
 		return errors.New("local HNSW truth recovery underflow")
 	}
-	var bucket *uint64
-	switch origin {
-	case "diversity_selected":
-		bucket = &out.Diversity.TruthRecovered
-	case "nearest_backfill":
-		bucket = &out.Backfill.TruthRecovered
-	case "reciprocal_add":
-		bucket = &out.Reciprocal.TruthRecovered
-	case "reciprocity_repair":
-		bucket = &out.Repair.TruthRecovered
-	case "overlay_rewrite":
-		bucket = &out.Overlay.TruthRecovered
-	case "auxiliary":
-		bucket = &out.Auxiliary.TruthRecovered
-	case "unattributed":
-		bucket = &out.Unattributed.TruthRecovered
-	default:
+	bucket, ok := localHNSWAttributionTruthRecoveryBucketV1(out, origin)
+	if !ok {
 		return errors.New("invalid local HNSW truth recovery origin")
 	}
 	if *bucket == 0 {
@@ -486,6 +471,30 @@ func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttribu
 	out.TruthRecovered--
 	*bucket = *bucket - 1
 	return nil
+}
+
+func localHNSWAttributionTruthRecoveryBucketV1(out *localHNSWAttributionQueryUtilityV1, origin string) (*uint64, bool) {
+	if out == nil {
+		return nil, false
+	}
+	switch origin {
+	case "diversity_selected":
+		return &out.Diversity.TruthRecovered, true
+	case "nearest_backfill":
+		return &out.Backfill.TruthRecovered, true
+	case "reciprocal_add":
+		return &out.Reciprocal.TruthRecovered, true
+	case "reciprocity_repair":
+		return &out.Repair.TruthRecovered, true
+	case "overlay_rewrite":
+		return &out.Overlay.TruthRecovered, true
+	case "auxiliary":
+		return &out.Auxiliary.TruthRecovered, true
+	case "unattributed":
+		return &out.Unattributed.TruthRecovered, true
+	default:
+		return nil, false
+	}
 }
 
 func localHNSWAttributionHardMissesV1(in []localHNSWAttributionHardMissV1) []localHNSWAttributionHardMissV1 {

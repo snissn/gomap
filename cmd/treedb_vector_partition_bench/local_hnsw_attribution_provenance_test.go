@@ -116,8 +116,8 @@ func TestLocalHNSWAttributionQueryUtilityReducerCreditsUpperLayerBeforeSeedV1(t 
 
 func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
 	records := []localHNSWAttributionQuerySearchV1{
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"same": "diversity_selected"}},
-		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"same": "overlay_rewrite"}},
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "diversity_selected"}}},
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, TruthRecoveries: []localHNSWAttributionTruthRecoveryV1{{ID: "same", Origin: "overlay_rewrite"}}},
 	}
 	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, []uint32{0, 1})
 	if err != nil {

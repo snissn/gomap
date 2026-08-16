@@ -30,7 +30,6 @@ type localHNSWAttributionQuerySearchV1 struct {
 	VisitedOrdinals       []uint32                              `json:"visited_ordinals"`
 	Utility               localHNSWAttributionQueryUtilityV1    `json:"utility"`
 	TruthRecoveries       []localHNSWAttributionTruthRecoveryV1 `json:"truth_recoveries"`
-	truthRecoveries       map[string]string
 }
 
 // localHNSWAttributionTruthRecoveryV1 makes the per-query stable-ID owner
@@ -201,7 +200,7 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 			return nil, nil, err
 		}
 		recoveries := localHNSWAttributionTruthRecoveriesV1(attribution, origins, harness.documentIDs[partition], truth)
-		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries), truthRecoveries: recoveries}
+		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
 		resultsByPartition[partition] = canonical
 	}
 	return records, resultsByPartition, nil
@@ -229,7 +228,11 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 		work.Edges += records[partition].Edges
 		work.FrontierAdmissions += records[partition].FrontierAdmissions
 		utility := records[partition].Utility
-		for id, origin := range records[partition].truthRecoveries {
+		recoveries, err := localHNSWAttributionTruthRecoveryMapV1(records[partition])
+		if err != nil {
+			return nil, localHNSWAttributionQueryWorkV1{}, err
+		}
+		for id, origin := range recoveries {
 			if _, seen := recovered[id]; seen {
 				if err := localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin); err != nil {
 					return nil, localHNSWAttributionQueryWorkV1{}, err
@@ -253,7 +256,11 @@ func localHNSWAttributionQueryUtilityAggregateV1(records []localHNSWAttributionQ
 	recovered := make(map[string]struct{})
 	for _, record := range records {
 		utility := record.Utility
-		for id, origin := range record.truthRecoveries {
+		recoveries, err := localHNSWAttributionTruthRecoveryMapV1(record)
+		if err != nil {
+			return localHNSWAttributionQueryUtilityV1{}, err
+		}
+		for id, origin := range recoveries {
 			if _, seen := recovered[id]; seen {
 				if err := localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin); err != nil {
 					return localHNSWAttributionQueryUtilityV1{}, err
@@ -283,6 +290,39 @@ func localHNSWAttributionTruthRecoveryRecordsV1(recoveries map[string]string) []
 		out[i] = localHNSWAttributionTruthRecoveryV1{ID: id, Origin: recoveries[id]}
 	}
 	return out
+}
+
+// localHNSWAttributionTruthRecoveryMapV1 validates the persisted canonical
+// records before de-duplicating overlap recoveries. JSONL is the sole source
+// of truth; no transient map is retained across serialization.
+func localHNSWAttributionTruthRecoveryMapV1(record localHNSWAttributionQuerySearchV1) (map[string]string, error) {
+	if uint64(len(record.TruthRecoveries)) != record.Utility.TruthRecovered {
+		return nil, errors.New("local HNSW truth recovery count mismatch")
+	}
+	if len(record.TruthRecoveries) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(record.TruthRecoveries))
+	counts := make(map[string]uint64, len(record.TruthRecoveries))
+	previous := ""
+	for i, recovery := range record.TruthRecoveries {
+		if recovery.ID == "" || recovery.Origin == "" || (i != 0 && recovery.ID <= previous) {
+			return nil, errors.New("invalid local HNSW truth recovery records")
+		}
+		if _, ok := localHNSWAttributionTruthRecoveryBucketV1(&record.Utility, recovery.Origin); !ok {
+			return nil, errors.New("invalid local HNSW truth recovery origin")
+		}
+		out[recovery.ID] = recovery.Origin
+		counts[recovery.Origin]++
+		previous = recovery.ID
+	}
+	for _, origin := range []string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "auxiliary", "unattributed"} {
+		bucket, _ := localHNSWAttributionTruthRecoveryBucketV1(&record.Utility, origin)
+		if *bucket != counts[origin] {
+			return nil, errors.New("local HNSW truth recovery origin count mismatch")
+		}
+	}
+	return out, nil
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
