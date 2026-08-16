@@ -44,17 +44,19 @@ within-host deltas are suitable for deciding the graph/EF Pareto frontier.
 The balanced comparison is M18/EF81 against the old M16/EF96 operating point.
 M18 improves recall by 0.1365 percentage points, QPS by 7.24%, p95 by 8.29%,
 candidates by 1.23%, and traversed edges by 4.55%, for 1.85% more pack bytes.
-It is therefore the new balanced default, independent of the old 0.9500 gate.
-This does not change the request EF default globally; EF81 is the qualified
-operating point for this workload.
+It is therefore selected for promotion to the new balanced default by #4166,
+independent of the old 0.9500 gate. Until that dependent change merges, the
+implicit materializer remains M16/eFC128. The promotion does not change the
+request EF default globally; EF81 is the qualified operating point for this
+workload.
 
-M20/EF88 is the explicit high-recall profile. Against M18/EF96 it improves
-recall by 0.1613 percentage points and QPS by 1.44%, with 0.38% lower p95,
-1.73% more candidates, 1.98% more traversed edges, and 2.08% more pack bytes.
-M20/EF96 is the maximum-recall measured point: 95.906% recall, cutting the
-remaining M16/EF96 error by about 40% for about 7.1% less QPS and 7.1% higher
-p95. M20 is production-readable and explicitly selectable, but is not the
-implicit default.
+M20/EF88 is selected for promotion to the explicit high-recall profile by
+#4166. Against M18/EF96 it improves recall by 0.1613 percentage points and QPS
+by 1.44%, with 0.38% lower p95, 1.73% more candidates, 1.98% more traversed
+edges, and 2.08% more pack bytes. M20/EF96 is the maximum-recall measured point:
+95.906% recall, cutting the remaining M16/EF96 error by about 40% for about 7.1%
+less QPS and 7.1% higher p95. Until #4166 merges, M20 remains offline-only and
+is not production-readable.
 
 ### Edge-quality diagnosis
 
