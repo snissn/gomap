@@ -1548,7 +1548,10 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			err := vectorPartitionConstructionValidateCompactPartitionV1(part, pack, selectionCounts, variant)
 			closeErr := searcher.Close()
 			if err != nil || closeErr != nil {
-				return ErrVectorPartitionSearchUnavailable
+				if err != nil {
+					return fmt.Errorf("%w: compact construction partition=%d: %v", ErrVectorPartitionSearchUnavailable, part.PartitionID, err)
+				}
+				return fmt.Errorf("%w: compact construction close partition=%d: %v", ErrVectorPartitionSearchUnavailable, part.PartitionID, closeErr)
 			}
 			continue
 		}
@@ -1701,7 +1704,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 // same origin attribution; it must exactly cover the encoded adjacency.
 func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionConstructionPartitionEvidenceV1, pack *columnHNSWSearchPackPreparedView, selections map[vectorIndexConstructionEdgeKeyV1][2]int, variant VectorPartitionLocalGraphVariantV1) error {
 	if len(part.Events) != 0 || len(part.FinalOrigins) == 0 || part.TraceMode != "compact" || pack == nil {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact trace shape events=%d finals=%d mode=%q pack=%t", ErrVectorPartitionSearchUnavailable, len(part.Events), len(part.FinalOrigins), part.TraceMode, pack != nil)
 	}
 	var initial [5]uint64
 	for _, counts := range selections {
@@ -1710,20 +1713,20 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	}
 	pruneKeeps, ok := vectorPartitionConstructionOriginCountsSumV1(part.CompactLifecycle.PruneKeep)
 	if !ok || part.CompactLifecycle.InitialAdd != initial || part.CompactLifecycle.InitialAdd[2] != 0 || part.CompactLifecycle.InitialAdd[3] != 0 || part.CompactLifecycle.InitialAdd[4] != 0 || part.CompactLifecycle.ReciprocalAdd[0] != 0 || part.CompactLifecycle.ReciprocalAdd[1] != 0 || part.CompactLifecycle.ReciprocalAdd[3] != 0 || part.CompactLifecycle.ReciprocalAdd[4] != 0 || part.PruneKeeps != pruneKeeps {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact lifecycle initial=%v expected=%v reciprocal=%v prune_keeps=%d expected=%d", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.InitialAdd, initial, part.CompactLifecycle.ReciprocalAdd, part.PruneKeeps, pruneKeeps)
 	}
 	if part.CompactLifecycle.VariantAdd[0] != 0 || part.CompactLifecycle.VariantAdd[1] != 0 || part.CompactLifecycle.VariantAdd[2] != 0 {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact variant adds have native origins %v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd)
 	}
 	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
 		if part.CompactLifecycle.VariantAdd[3] != 0 || part.CompactLifecycle.VariantDrop[3] != 0 || part.CompactLifecycle.VariantDrop[4] != 0 {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact overlay variant lifecycle add=%v drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 		}
 	} else if part.CompactLifecycle.VariantAdd[4] != 0 || part.CompactLifecycle.VariantDrop[4] != 0 || (variant == VectorPartitionLocalGraphVariantNativeV1 && (part.CompactLifecycle.VariantAdd[3] != 0 || part.CompactLifecycle.VariantDrop[3] != 0 || part.CompactLifecycle.VariantDrop[0] != 0 || part.CompactLifecycle.VariantDrop[1] != 0 || part.CompactLifecycle.VariantDrop[2] != 0)) {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact variant lifecycle variant=%q add=%v drop=%v", ErrVectorPartitionSearchUnavailable, variant, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 	}
 	if variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 && (part.CompactLifecycle.PruneKeep[3] != 0 || part.CompactLifecycle.PruneKeep[4] != 0 || part.CompactLifecycle.PruneDrop[3] != 0 || part.CompactLifecycle.PruneDrop[4] != 0 || part.CompactLifecycle.VariantAdd[4] != 0 || part.CompactLifecycle.VariantDrop[3] != 0 || part.CompactLifecycle.VariantDrop[4] != 0) {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact M18 lifecycle prune_keep=%v prune_drop=%v variant_add=%v variant_drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.PruneKeep, part.CompactLifecycle.PruneDrop, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 	}
 	want := make(map[vectorIndexConstructionEdgeKeyV1]struct{})
 	for layer, adjacency := range pack.AdjacencyLayers {
@@ -1739,27 +1742,27 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	for i, final := range part.FinalOrigins {
 		key := vectorIndexConstructionEdgeKeyV1{From: final.From, To: final.To, Layer: final.Layer}
 		if final.From < 0 || final.To < 0 || final.From == final.To || final.From >= pack.Header.Rows || final.To >= pack.Header.Rows || final.Layer < 0 || final.Layer >= len(pack.AdjacencyLayers) || !vectorPartitionConstructionOriginValidV1(final.Origin) || (i > 0 && (key.Layer < previous.Layer || key.Layer == previous.Layer && (key.From < previous.From || key.From == previous.From && key.To <= previous.To))) {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact final invalid ordinal/order final=%+v", ErrVectorPartitionSearchUnavailable, final)
 		}
 		if _, ok := want[key]; !ok {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact final missing packed edge final=%+v", ErrVectorPartitionSearchUnavailable, final)
 		}
 		if _, duplicate := seen[key]; duplicate {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact final duplicate final=%+v", ErrVectorPartitionSearchUnavailable, final)
 		}
 		origin, ok := vectorIndexConstructionOriginIndexV1(final.Origin)
 		if !ok {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact final origin=%q", ErrVectorPartitionSearchUnavailable, final.Origin)
 		}
 		if finalCounts[origin] == ^uint64(0) {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact final count overflow origin=%q", ErrVectorPartitionSearchUnavailable, final.Origin)
 		}
 		finalCounts[origin]++
 		seen[key] = struct{}{}
 		previous = key
 	}
 	if len(seen) != len(want) {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: compact finals=%d packed_edges=%d", ErrVectorPartitionSearchUnavailable, len(seen), len(want))
 	}
 	for origin := range finalCounts {
 		adds, ok := vectorPartitionConstructionAddV1(part.CompactLifecycle.InitialAdd[origin], part.CompactLifecycle.ReciprocalAdd[origin])
@@ -1768,7 +1771,7 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 		}
 		drops, dropsOK := vectorPartitionConstructionAddV1(part.CompactLifecycle.PruneDrop[origin], part.CompactLifecycle.VariantDrop[origin])
 		if !ok || !dropsOK || drops > adds || finalCounts[origin] != adds-drops {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: compact lifecycle final origin=%d adds=%d drops=%d finals=%d", ErrVectorPartitionSearchUnavailable, origin, adds, drops, finalCounts[origin])
 		}
 	}
 	return nil
