@@ -46,6 +46,9 @@ type localHNSWAttributionCalibrationSummaryV1 struct {
 	ChangedPackVisitedDigest uint64                                    `json:"changed_pack_visited_digest"`
 	ChangedPackTermination   uint64                                    `json:"changed_pack_termination"`
 	FirstWitness             *localHNSWAttributionCalibrationWitnessV1 `json:"first_witness,omitempty"`
+	NativeUtility            localHNSWAttributionQueryUtilityV1        `json:"native_utility"`
+	OverlayUtility           localHNSWAttributionQueryUtilityV1        `json:"overlay_utility"`
+	HardMisses               []localHNSWAttributionHardMissV1          `json:"hard_misses"`
 }
 
 func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarPath string, source *m8ProductionMultiGroupAssetsV1, native, overlay *localHNSWVariantHarnessV1, ordinals []int, queries [][]float32, truths [][]m8CanonicalResultV1) (localHNSWAttributionArtifactV1, []localHNSWAttributionTimingCaseV1, localHNSWAttributionCalibrationSummaryV1, error) {
@@ -140,6 +143,16 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 	if summary.QueryCount == math.MaxInt {
 		return errors.New("local HNSW calibration query overflow")
 	}
+	for _, partition := range evidence.Partitions {
+		localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, partition.Native.Utility)
+		localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, partition.Overlay.Utility)
+	}
+	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "native", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Native.HighResults)); ok {
+		summary.HardMisses = append(summary.HardMisses, miss)
+	}
+	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "overlay_current", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Overlay.HighResults)); ok {
+		summary.HardMisses = append(summary.HardMisses, miss)
+	}
 	summary.QueryCount++
 	return nil
 }
@@ -209,7 +222,17 @@ func localHNSWAttributionCalibrationSummaryFinishV1(summary *localHNSWAttributio
 			return errors.New("invalid local HNSW calibration aggregate")
 		}
 	}
+	summary.HardMisses = localHNSWAttributionHardMissesV1(summary.HardMisses)
 	return nil
+}
+
+func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtilityV1, value localHNSWAttributionQueryUtilityV1) {
+	dst.ExaminedNative += value.ExaminedNative
+	dst.ExaminedAuxiliary += value.ExaminedAuxiliary
+	dst.NewlyVisited += value.NewlyVisited
+	dst.Scored += value.Scored
+	dst.TopAdmissions += value.TopAdmissions
+	dst.FrontierAdmissions += value.FrontierAdmissions
 }
 
 func localHNSWAttributionFiniteRecallV1(value float64) bool {

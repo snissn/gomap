@@ -265,10 +265,11 @@ func openM8ProductionExistingAssetSetModeV1(dir string, readOnly bool) (_ *m8Pro
 }
 
 type localHNSWVariantHarnessV1 struct {
-	assets     *m8ProductionMultiGroupAssetsV1
-	resources  interface{ Release() }
-	searchers  []*collections.VectorPartitionLocalSearcherV1
-	packAssets []collections.VectorPartitionAssetV1
+	assets               *m8ProductionMultiGroupAssetsV1
+	resources            interface{ Release() }
+	searchers            []*collections.VectorPartitionLocalSearcherV1
+	packAssets           []collections.VectorPartitionAssetV1
+	constructionEvidence collections.VectorPartitionConstructionEvidenceV1
 }
 
 func (h *localHNSWVariantHarnessV1) Close() error {
@@ -342,11 +343,15 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	for p := range inputs {
 		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: dimensions}
 	}
-	assets, resources, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	assets, resources, constructionEvidence, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
 	if err != nil {
 		return nil, errors.Join(err, owned.Close())
 	}
-	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets))}
+	if err := owned.collection.ValidateVectorPartitionLocalConstructionEvidenceV1(context.Background(), source.manifest.IndexName, source.manifest, assets, constructionEvidence); err != nil {
+		resources.Release()
+		return nil, errors.Join(err, owned.Close())
+	}
+	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), constructionEvidence: constructionEvidence, searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets))}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, h.Close())

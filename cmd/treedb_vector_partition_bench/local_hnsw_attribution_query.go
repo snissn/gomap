@@ -27,6 +27,7 @@ type localHNSWAttributionQuerySearchV1 struct {
 	TerminationReason     string                              `json:"termination_reason"`
 	VisitedOrdinalsSHA256 string                              `json:"visited_ordinals_sha256"`
 	VisitedOrdinals       []uint32                            `json:"visited_ordinals"`
+	Utility               localHNSWAttributionQueryUtilityV1  `json:"utility"`
 }
 
 type localHNSWAttributionQueryPartitionV1 struct {
@@ -36,9 +37,10 @@ type localHNSWAttributionQueryPartitionV1 struct {
 }
 
 type localHNSWAttributionQueryWorkV1 struct {
-	Candidates         uint64 `json:"candidates"`
-	Edges              uint64 `json:"edges"`
-	FrontierAdmissions uint64 `json:"frontier_admissions"`
+	Candidates         uint64                             `json:"candidates"`
+	Edges              uint64                             `json:"edges"`
+	FrontierAdmissions uint64                             `json:"frontier_admissions"`
+	Utility            localHNSWAttributionQueryUtilityV1 `json:"utility"`
 }
 
 type localHNSWAttributionQueryVariantV1 struct {
@@ -170,7 +172,11 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 		if err != nil {
 			return nil, nil, err
 		}
-		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...)}
+		utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, attribution)
+		if err != nil {
+			return nil, nil, err
+		}
+		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility}
 		resultsByPartition[partition] = canonical
 	}
 	return records, resultsByPartition, nil
@@ -190,6 +196,12 @@ func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV
 		work.Candidates += records[partition].Candidates
 		work.Edges += records[partition].Edges
 		work.FrontierAdmissions += records[partition].FrontierAdmissions
+		work.Utility.ExaminedNative += records[partition].Utility.ExaminedNative
+		work.Utility.ExaminedAuxiliary += records[partition].Utility.ExaminedAuxiliary
+		work.Utility.NewlyVisited += records[partition].Utility.NewlyVisited
+		work.Utility.Scored += records[partition].Utility.Scored
+		work.Utility.TopAdmissions += records[partition].Utility.TopAdmissions
+		work.Utility.FrontierAdmissions += records[partition].Utility.FrontierAdmissions
 	}
 	return m8CanonicalResultsV1(merged, 10), work
 }

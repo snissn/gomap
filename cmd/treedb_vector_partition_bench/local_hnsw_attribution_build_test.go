@@ -36,6 +36,10 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if evidence.Schema != localHNSWAttributionBuildSchemaV1 || evidence.Variant != "native" || evidence.VariantIdentity == "" || evidence.FileID != 9989 || evidence.Partitions != 4 || evidence.ElapsedNanos <= 0 || evidence.CloneLogicalBytes <= 0 || evidence.PackBytes == 0 || evidence.MappedBytes == 0 || evidence.CPUAvailable && evidence.CPUDeltaNanos < 0 {
 		t.Fatalf("evidence=%+v", evidence)
 	}
+	construction, err := localHNSWAttributionConstructionReduceV1(harness.constructionEvidence)
+	if err != nil || construction.FinalSurvivors == 0 || construction.InitialAdded == 0 || harness.constructionEvidence.Variant != "native" {
+		t.Fatalf("construction=%+v evidence=%+v err=%v", construction, harness.constructionEvidence, err)
+	}
 	repaired, repairEvidence, err := localHNSWAttributionBuildVariantV1(source, t.TempDir(), collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 9990)
 	if err != nil {
 		t.Fatal(err)

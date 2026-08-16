@@ -92,6 +92,11 @@ type localHNSWAttributionCalibrationReportV1 struct {
 	Summary  localHNSWAttributionCalibrationSummaryV1 `json:"summary"`
 }
 
+type localHNSWAttributionInstrumentationReportV1 struct {
+	Artifact localHNSWAttributionArtifactV1               `json:"artifact"`
+	Summary  localHNSWAttributionInstrumentationSummaryV1 `json:"summary"`
+}
+
 type localHNSWAttributionDecisionFactsV1 struct {
 	NativeDisconnected          bool    `json:"native_disconnected"`
 	OverlayConnected            bool    `json:"overlay_connected"`
@@ -106,25 +111,26 @@ type localHNSWAttributionDecisionFactsV1 struct {
 }
 
 type localHNSWAttributionReportV1 struct {
-	Schema       string                                    `json:"schema"`
-	ResultKind   string                                    `json:"result_kind"`
-	Status       string                                    `json:"status"`
-	GeneratedAt  string                                    `json:"generated_at"`
-	Provenance   localHNSWAttributionProvenanceV1          `json:"provenance"`
-	Host         m8ProductionHostEvidenceV1                `json:"host"`
-	Inputs       localHNSWAttributionInputsEvidenceV1      `json:"inputs"`
-	Source       localHNSWAttributionSourceEvidenceV1      `json:"source"`
-	TopK         int                                       `json:"top_k"`
-	EFSearch     int                                       `json:"ef_search"`
-	ProbeCounts  []int                                     `json:"probe_counts"`
-	NativeBuild  localHNSWAttributionBuildEvidenceV1       `json:"native_build"`
-	OverlayBuild localHNSWAttributionBuildEvidenceV1       `json:"overlay_build"`
-	Graph        localHNSWAttributionGraphEvidenceReportV1 `json:"graph"`
-	Calibration  localHNSWAttributionCalibrationReportV1   `json:"calibration"`
-	Timing       localHNSWAttributionTimingEvidenceV1      `json:"timing"`
-	Profiles     m8ProductionProfileEvidenceV1             `json:"profiles"`
-	Decision     localHNSWAttributionDecisionFactsV1       `json:"decision_facts"`
-	Limitations  []string                                  `json:"limitations"`
+	Schema          string                                      `json:"schema"`
+	ResultKind      string                                      `json:"result_kind"`
+	Status          string                                      `json:"status"`
+	GeneratedAt     string                                      `json:"generated_at"`
+	Provenance      localHNSWAttributionProvenanceV1            `json:"provenance"`
+	Host            m8ProductionHostEvidenceV1                  `json:"host"`
+	Inputs          localHNSWAttributionInputsEvidenceV1        `json:"inputs"`
+	Source          localHNSWAttributionSourceEvidenceV1        `json:"source"`
+	TopK            int                                         `json:"top_k"`
+	EFSearch        int                                         `json:"ef_search"`
+	ProbeCounts     []int                                       `json:"probe_counts"`
+	NativeBuild     localHNSWAttributionBuildEvidenceV1         `json:"native_build"`
+	OverlayBuild    localHNSWAttributionBuildEvidenceV1         `json:"overlay_build"`
+	Graph           localHNSWAttributionGraphEvidenceReportV1   `json:"graph"`
+	Calibration     localHNSWAttributionCalibrationReportV1     `json:"calibration"`
+	Instrumentation localHNSWAttributionInstrumentationReportV1 `json:"instrumentation"`
+	Timing          localHNSWAttributionTimingEvidenceV1        `json:"timing"`
+	Profiles        m8ProductionProfileEvidenceV1               `json:"profiles"`
+	Decision        localHNSWAttributionDecisionFactsV1         `json:"decision_facts"`
+	Limitations     []string                                    `json:"limitations"`
 }
 
 func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
@@ -277,6 +283,20 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
+	instrumentation, err := localHNSWAttributionInstrumentationSummaryV1Build(source, native, overlay, graphAggregate, summary)
+	if err != nil {
+		return err
+	}
+	instrumentationPath := filepath.Join(filepath.Dir(out), "local_hnsw_attribution_instrumentation.jsonl.gz")
+	instrumentationArtifact, err := localHNSWAttributionWriteGzipJSONLV1(instrumentationPath, func(encoder *json.Encoder) (int, error) {
+		if err := encoder.Encode(instrumentation); err != nil {
+			return 0, err
+		}
+		return 1, nil
+	})
+	if err != nil {
+		return err
+	}
 	capture, err := startM8ProfileCaptureV1(profiles)
 	if err != nil {
 		return err
@@ -317,7 +337,7 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 		Inputs:     localHNSWAttributionInputsEvidenceV1{DatasetManifest: localHNSWAttributionFileInputV1{Path: datasetManifest, SHA256: localHNSWAttributionFixtureManifestSHA256V1}, Fixture: fixture, RetainedDB: retainedDB, Descriptor: localHNSWAttributionFileInputV1{Path: inputConfig.Descriptor, SHA256: inputConfig.DescriptorSHA256}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationSplit, SHA256: inputConfig.CalibrationSplitSHA256}, CalibrationRows: len(inputs.Calibration.Ordinals), Holdout: localHNSWAttributionFileInputV1{Path: holdoutSplit, SHA256: inputConfig.HoldoutSplitSHA256}, HoldoutRows: len(inputs.Holdout.Ordinals), HoldoutStatus: "manifest_validated_query_outcomes_unopened", Truth: localHNSWAttributionFileInputV1{Path: truthArtifact, SHA256: inputConfig.TruthArtifactSHA256}, TruthStatus: "sha256_only_not_decoded", Historical: historical},
 		Source:     localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor},
 		TopK:       10, EFSearch: 128, ProbeCounts: []int{2, int(source.manifest.PartitionCount)}, NativeBuild: nativeBuild, OverlayBuild: overlayBuild,
-		Graph: localHNSWAttributionGraphEvidenceReportV1{Artifact: graphArtifact, Aggregate: graphAggregate}, Calibration: localHNSWAttributionCalibrationReportV1{Artifact: queryArtifact, Summary: summary}, Timing: timing,
+		Graph: localHNSWAttributionGraphEvidenceReportV1{Artifact: graphArtifact, Aggregate: graphAggregate}, Calibration: localHNSWAttributionCalibrationReportV1{Artifact: queryArtifact, Summary: summary}, Instrumentation: localHNSWAttributionInstrumentationReportV1{Artifact: instrumentationArtifact, Summary: instrumentation}, Timing: timing,
 		Profiles:    m8ProductionProfileEvidenceV1{Directory: profiles, Captured: profilePaths, Artifacts: profileArtifacts, Status: "complete", Scope: "ordinary native-versus-overlay local search; top_k=10 ef_search=128 probes=2,all concurrency=1 four order-balanced repetitions"},
 		Decision:    localHNSWAttributionDecisionFactsV1Build(graphAggregate, summary),
 		Limitations: []string{"offline calibration-only causal evidence; not production qualification", "holdout query outcomes and trusted truth contents remained unopened", "native is diagnostic only when disconnected; no production default changed", "historical distributed p2/p16 cells are source-locked context, while timing here measures local retained-pack search only"},
@@ -422,7 +442,10 @@ func validateLocalHNSWAttributionReportV1(report localHNSWAttributionReportV1) e
 	if report.Profiles.Status != "complete" || len(report.Profiles.Artifacts) != len(m8ProfileArtifactNamesV1) || report.Decision != localHNSWAttributionDecisionFactsV1Build(report.Graph.Aggregate, report.Calibration.Summary) || len(report.Limitations) == 0 {
 		return errors.New("invalid local HNSW attribution report disposition")
 	}
-	for _, artifact := range []localHNSWAttributionArtifactV1{report.Graph.Artifact, report.Calibration.Artifact} {
+	if report.Instrumentation.Summary.Schema != localHNSWAttributionInstrumentationSchemaV1 || report.Instrumentation.Summary.ManifestIntegrity != report.Source.ManifestIntegrity || report.Instrumentation.Summary.DescriptorSHA256 != report.Inputs.Descriptor.SHA256 || report.Instrumentation.Summary.CalibrationSHA256 != report.Inputs.Calibration.SHA256 || report.Instrumentation.Summary.TruthSHA256 != report.Inputs.Truth.SHA256 || report.Instrumentation.Summary.NativeVariant != "native" || report.Instrumentation.Summary.OverlayVariant != "overlay_current" || report.Instrumentation.Summary.NativeConstruction.FinalSurvivors == 0 || report.Instrumentation.Summary.OverlayConstruction.FinalSurvivors == 0 || report.Instrumentation.Summary.NativeQuery.ExaminedNative+report.Instrumentation.Summary.NativeQuery.ExaminedAuxiliary == 0 || report.Instrumentation.Summary.OverlayQuery.ExaminedNative+report.Instrumentation.Summary.OverlayQuery.ExaminedAuxiliary == 0 {
+		return errors.New("invalid local HNSW attribution instrumentation report")
+	}
+	for _, artifact := range []localHNSWAttributionArtifactV1{report.Graph.Artifact, report.Calibration.Artifact, report.Instrumentation.Artifact} {
 		if artifact.Schema != localHNSWAttributionSidecarSchemaV1 || artifact.Bytes < 1 || !localHNSWAttributionSHA256V1(artifact.SHA256) {
 			return errors.New("invalid local HNSW attribution report artifact")
 		}
