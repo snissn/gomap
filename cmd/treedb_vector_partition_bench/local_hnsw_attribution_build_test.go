@@ -75,6 +75,14 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(oracle, again) {
 		t.Fatalf("non-deterministic oracle: first=%+v again=%+v err=%v", oracle, again, err)
 	}
+	oracleVectors, err := localHNSWAttributionNeighborhoodVectorsV1(harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(harness, diagnostics, oracleVectors)
+	if err != nil || !reflect.DeepEqual(oracle, shared) {
+		t.Fatalf("shared-vector oracle differs: first=%+v shared=%+v err=%v", oracle, shared, err)
+	}
 	bad := harness.constructionEvidence.Partitions[0].Selections[0]
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateSampled = true
 	harness.constructionEvidence.Partitions[0].Selections[0].CandidateOrdinals = []int{len(harness.documentIDs[0])}

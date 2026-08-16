@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 
@@ -434,8 +435,24 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 	originsTotal := func(field func(localHNSWAttributionQueryOriginUtilityV1) uint64) uint64 {
 		return field(out.Diversity) + field(out.Backfill) + field(out.Reciprocal) + field(out.Repair) + field(out.Overlay) + field(out.Auxiliary) + field(out.Unattributed)
 	}
-	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Examined }) != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.NewlyVisited }) != out.NewlyVisited || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Scored }) != out.Scored || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TopAdmissions }) != out.TopAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions }) != out.FrontierAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.StateImprovements }) != out.StateImprovements || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered }) != out.TruthRecovered || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || layer0NewlyVisited+attribution.SeedCandidates != metrics.Candidates || layer0Scored != layer0NewlyVisited || out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.TopAdmissions != out.FrontierAdmissions {
-		return localHNSWAttributionQueryUtilityV1{}, errors.New("local HNSW query utility conservation")
+	originExamined := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Examined })
+	originNewlyVisited := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.NewlyVisited })
+	originScored := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Scored })
+	originTopAdmissions := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TopAdmissions })
+	originFrontierAdmissions := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions })
+	originStateImprovements := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.StateImprovements })
+	originTruthRecovered := originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered })
+	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || originExamined != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query edge conservation: native=%d auxiliary=%d origin=%d metrics=%d metrics_auxiliary=%d", out.ExaminedNative, out.ExaminedAuxiliary, originExamined, metrics.Edges, metrics.AuxiliaryEdges)
+	}
+	if originNewlyVisited != out.NewlyVisited || originScored != out.Scored || originTopAdmissions != out.TopAdmissions || originFrontierAdmissions != out.FrontierAdmissions || originStateImprovements != out.StateImprovements || originTruthRecovered != out.TruthRecovered {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query origin conservation: newly=%d/%d scored=%d/%d top=%d/%d frontier=%d/%d improvement=%d/%d truth=%d/%d", originNewlyVisited, out.NewlyVisited, originScored, out.Scored, originTopAdmissions, out.TopAdmissions, originFrontierAdmissions, out.FrontierAdmissions, originStateImprovements, out.StateImprovements, originTruthRecovered, out.TruthRecovered)
+	}
+	if layer0NewlyVisited+attribution.SeedCandidates != metrics.Candidates || layer0Scored != layer0NewlyVisited {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query candidate conservation: layer0_new=%d layer0_scored=%d seeds=%d metrics=%d", layer0NewlyVisited, layer0Scored, attribution.SeedCandidates, metrics.Candidates)
+	}
+	if out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.TopAdmissions != out.FrontierAdmissions {
+		return localHNSWAttributionQueryUtilityV1{}, fmt.Errorf("local HNSW query admission conservation: top=%d edge_frontier=%d seed_frontier=%d total_frontier=%d", out.TopAdmissions, out.FrontierAdmissions, attribution.SeedAdmissions, attribution.FrontierAdmissions)
 	}
 	return out, nil
 }
@@ -681,20 +698,38 @@ func localHNSWAttributionPackDiagnosticsV1(searchers []*collections.VectorPartit
 }
 
 func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
-	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
-	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) {
-		return out, errors.New("invalid local HNSW oracle harness")
+	vectors, err := localHNSWAttributionNeighborhoodVectorsV1(h)
+	if err != nil {
+		return localHNSWAttributionNeighborhoodOracleV1{}, err
 	}
-	if len(diagnostics) != len(h.searchers) {
-		return out, errors.New("invalid local HNSW cached diagnostics")
+	return localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
+}
+
+func localHNSWAttributionNeighborhoodVectorsV1(h *localHNSWVariantHarnessV1) (map[string][]float32, error) {
+	if h == nil || h.assets == nil {
+		return nil, errors.New("invalid local HNSW oracle assets")
 	}
 	_, rows, err := h.assets.collection.ReadVectorPartitionRouterSourceRowsV1(h.assets.manifest.IndexName)
 	if err != nil {
-		return out, err
+		return nil, err
 	}
 	vectors := make(map[string][]float32, len(rows))
 	for _, row := range rows {
 		vectors[string(row.DocumentID)] = row.Values
+	}
+	if len(vectors) == 0 {
+		return nil, errors.New("empty local HNSW oracle vectors")
+	}
+	return vectors, nil
+}
+
+func localHNSWAttributionNeighborhoodOracleWithVectorsV1(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1, vectors map[string][]float32) (localHNSWAttributionNeighborhoodOracleV1, error) {
+	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
+	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) || len(vectors) == 0 {
+		return out, errors.New("invalid local HNSW oracle harness")
+	}
+	if len(diagnostics) != len(h.searchers) {
+		return out, errors.New("invalid local HNSW cached diagnostics")
 	}
 	for p, part := range h.constructionEvidence.Partitions {
 		ids := h.documentIDs[p]

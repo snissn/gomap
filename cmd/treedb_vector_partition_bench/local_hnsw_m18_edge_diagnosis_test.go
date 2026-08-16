@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -19,6 +20,33 @@ func TestLocalHNSWM18EdgeDiagnosisContractV1(t *testing.T) {
 	got := localHNSWM18EdgeDiagnosisMissesV1(misses)
 	if !slices.EqualFunc(got, []localHNSWM18EdgeDiagnosisHardMissV1{{QueryOrdinal: 1, QuerySHA256: "a", Rank: "a"}, {QueryOrdinal: 2, QuerySHA256: "b", Rank: "a"}}, func(a, b localHNSWM18EdgeDiagnosisHardMissV1) bool { return a == b }) {
 		t.Fatalf("non-deterministic hard-miss order: %#v", got)
+	}
+}
+
+func TestLocalHNSWM18EdgeDiagnosisHardMissSelectionIsOnlineAndBoundedV1(t *testing.T) {
+	var cell localHNSWM18EdgeDiagnosisCellV1
+	all := make([]localHNSWM18EdgeDiagnosisHardMissV1, 0, 40)
+	for i := 39; i >= 0; i-- {
+		digest := fmt.Sprintf("%064x", i+1)
+		miss := localHNSWM18EdgeDiagnosisHardMissV1{QueryOrdinal: i, QuerySHA256: digest, Rank: fmt.Sprintf("%064x", i)}
+		all = append(all, miss)
+		localHNSWM18EdgeDiagnosisHardMissAddV1(&cell, miss, []localHNSWM18EdgeTraceV1{{QuerySHA: digest, Partition: 0}, {QuerySHA: digest, Partition: 1}})
+		if len(cell.HardMisses) > 32 || len(cell.Traces) > 64 {
+			t.Fatalf("unbounded online selection: misses=%d traces=%d", len(cell.HardMisses), len(cell.Traces))
+		}
+	}
+	want := localHNSWM18EdgeDiagnosisMissesV1(all)
+	if !slices.Equal(cell.HardMisses, want) {
+		t.Fatalf("online misses differ from batch selection: got=%+v want=%+v", cell.HardMisses, want)
+	}
+	allowed := make(map[string]bool, len(want))
+	for _, miss := range want {
+		allowed[miss.QuerySHA256] = true
+	}
+	for _, trace := range cell.Traces {
+		if !allowed[trace.QuerySHA] {
+			t.Fatalf("retained trace outside selected misses: %+v", trace)
+		}
 	}
 }
 

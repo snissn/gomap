@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -116,8 +117,8 @@ func localHNSWM18EdgeDiagnosisReportValidateV1(r localHNSWM18EdgeDiagnosisReport
 	return nil
 }
 
-func localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1) ([]localHNSWM18EdgeDiagnosisPackNeighborhoodV1, error) {
-	if h == nil || len(h.searchers) != 40 || len(diagnostics) != 40 || len(h.constructionEvidence.Partitions) != 40 {
+func localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1, vectors map[string][]float32) ([]localHNSWM18EdgeDiagnosisPackNeighborhoodV1, error) {
+	if h == nil || len(h.searchers) != 40 || len(diagnostics) != 40 || len(h.constructionEvidence.Partitions) != 40 || len(vectors) == 0 {
 		return nil, errors.New("invalid M18 neighborhood partition count")
 	}
 	out := make([]localHNSWM18EdgeDiagnosisPackNeighborhoodV1, len(localHNSWM18EdgeDiagnosisPacksV1))
@@ -127,7 +128,7 @@ func localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h *localHNSWVariantHarnessV
 		one.documentIDs = [][]string{h.documentIDs[p]}
 		one.constructionEvidence = h.constructionEvidence
 		one.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{h.constructionEvidence.Partitions[p]}
-		neighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(&one, []collections.VectorPartitionPackDiagnosticsV1{diagnostics[p]})
+		neighborhood, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&one, []collections.VectorPartitionPackDiagnosticsV1{diagnostics[p]}, vectors)
 		if err != nil {
 			return nil, err
 		}
@@ -206,6 +207,22 @@ func localHNSWM18EdgeDiagnosisMissesV1(in []localHNSWM18EdgeDiagnosisHardMissV1)
 		in = in[:32]
 	}
 	return in
+}
+
+func localHNSWM18EdgeDiagnosisHardMissAddV1(cell *localHNSWM18EdgeDiagnosisCellV1, miss localHNSWM18EdgeDiagnosisHardMissV1, traces []localHNSWM18EdgeTraceV1) {
+	cell.HardMisses = localHNSWM18EdgeDiagnosisMissesV1(append(cell.HardMisses, miss))
+	allowed := make(map[string]struct{}, len(cell.HardMisses))
+	for _, kept := range cell.HardMisses {
+		allowed[kept.QuerySHA256] = struct{}{}
+	}
+	cell.Traces = append(cell.Traces, traces...)
+	kept := cell.Traces[:0]
+	for _, trace := range cell.Traces {
+		if _, ok := allowed[trace.QuerySHA]; ok {
+			kept = append(kept, trace)
+		}
+	}
+	cell.Traces = kept
 }
 
 func localHNSWM18EdgeSidecarValidateV1(sidecar localHNSWM18EdgeSidecarV1, cells []localHNSWM18EdgeDiagnosisCellV1, h *localHNSWVariantHarnessV1, truthByQuery map[string]map[string]struct{}) error {
@@ -290,7 +307,7 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 				}
 				utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, trace, h.finalOrigins[p], h.documentIDs[p], truthSet)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("M18 edge diagnosis query ordinal=%d query_index=%d ef=%d partition=%d: %w", calibration.Ordinals[i], i, cell.EFSearch, p, err)
 				}
 				recoveries := localHNSWAttributionTruthRecoveriesV1(trace, h.finalOrigins[p], h.documentIDs[p], truthSet)
 				records[p] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: trace.FrontierAdmissions, SeedCandidates: trace.SeedCandidates, SeedAdmissions: trace.SeedAdmissions, TerminationReason: trace.TerminationReason, VisitedOrdinalsSHA256: trace.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), trace.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
@@ -316,8 +333,7 @@ func localHNSWM18EdgeDiagnosisBuildV1(ctx context.Context, source *m8ProductionM
 			out[ci].Queries++
 			if recall < 1 {
 				sum := sha256.Sum256([]byte("treedb-4171-m18-hard-miss-v1/" + localHNSWAttributionQueryFP32SHA256V1(query)))
-				out[ci].HardMisses = append(out[ci].HardMisses, localHNSWM18EdgeDiagnosisHardMissV1{QueryOrdinal: calibration.Ordinals[i], QuerySHA256: localHNSWAttributionQueryFP32SHA256V1(query), RecallBits: math.Float32bits(float32(recall)), Rank: hex.EncodeToString(sum[:])})
-				out[ci].Traces = append(out[ci].Traces, queryTraces...)
+				localHNSWM18EdgeDiagnosisHardMissAddV1(&out[ci], localHNSWM18EdgeDiagnosisHardMissV1{QueryOrdinal: calibration.Ordinals[i], QuerySHA256: localHNSWAttributionQueryFP32SHA256V1(query), RecallBits: math.Float32bits(float32(recall)), Rank: hex.EncodeToString(sum[:])}, queryTraces)
 			}
 		}
 	}
@@ -439,14 +455,20 @@ func runLocalHNSWM18EdgeDiagnosisV1(args []string, stdout io.Writer) (runErr err
 	if err != nil {
 		return err
 	}
-	neighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(h, diagnostics)
+	vectors, err := localHNSWAttributionNeighborhoodVectorsV1(h)
 	if err != nil {
 		return err
 	}
-	selectedNeighborhood, err := localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h, diagnostics)
+	neighborhood, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(h, diagnostics, vectors)
 	if err != nil {
 		return err
 	}
+	selectedNeighborhood, err := localHNSWM18EdgeDiagnosisSelectedNeighborhoodV1(h, diagnostics, vectors)
+	if err != nil {
+		return err
+	}
+	vectors = nil
+	runtime.GC()
 	cells, err := localHNSWM18EdgeDiagnosisBuildV1(context.Background(), source, h, queries)
 	if err != nil {
 		return err
