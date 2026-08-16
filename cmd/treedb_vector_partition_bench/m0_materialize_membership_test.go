@@ -284,7 +284,7 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if descriptor.OverlapMemberships != useful.Used || descriptor.OverlapRealized != useful.Used || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+	if descriptor.AssignmentBasis != partitionAssignmentGraphRepartitionedV1 || descriptor.VariantID != "graph-repartitioned-overlap-020-v1" || descriptor.OverlapRatio != m0OverlapRatioV1 || descriptor.OverlapMemberships != useful.Used || descriptor.OverlapRealized != useful.Used || descriptor.OverlapMemberships != descriptor.OverlapRealized {
 		t.Fatalf("rewritten overlap accounting descriptor=%+v useful=%+v", descriptor, useful)
 	}
 	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
