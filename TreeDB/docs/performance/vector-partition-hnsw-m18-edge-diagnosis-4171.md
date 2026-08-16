@@ -69,37 +69,37 @@ reopened it.
 | Artifact | Identity |
 | --- | --- |
 | frozen base | `2a7d01443d3c842990c259b08bd442a4d0109511` |
-| preparation head | `964bde7437a6f8ae8fda07939b272dc198873b4c` |
-| query/validator head | `b428d38c9b061487c9f2d7b44ae45403aa32eec2` |
-| checkpoint | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-964bde74.json` |
-| checkpoint SHA-256 | `3b934b75e8281a913f7bf15368b1403e3c384c802bdbb61a980fe786025f61e4` |
-| compact report | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-b428d38c.json` |
-| compact report SHA-256 | `020b0259055895c395abe3fa8f2e056671329037e5567b4ed31e22438527de75` |
-| bounded raw sidecar | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-b428d38c.json` |
+| preparation head | `359f22a01cf13febba340a83b0e8e8e56d37373e` |
+| query/validator head | `359f22a01cf13febba340a83b0e8e8e56d37373e` |
+| checkpoint | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-359f22a0.json` |
+| checkpoint SHA-256 | `948ec9eb659706f3a8aae595cb073db06bc011674b29c49c74c9fce0d843a1a8` |
+| compact report | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-359f22a0.json` |
+| compact report SHA-256 | `63558e7921fa09d5624456e4b564d3f95f9b384329001ff57806af6d4721c3ee` |
+| bounded raw sidecar | `/mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-359f22a0.json` |
 | sidecar SHA-256 | `7726624a7c30641c230141dd6647ed3a564e8268a224b16650c3a5b699a8d94b` |
 
-Full 40-pack preparation completed in 7:53 with 3,538,372 kB maximum RSS,
-zero swap, and 172 major faults. Checkpoint reuse plus all four query cells and
-strict sidecar/report reread completed in 2:08.50 with 3,697,936 kB maximum
-RSS, zero swap, and zero major faults. These Linux measurements qualify the
+Full 40-pack preparation completed in 7:41.74 with 3,991,824 kB maximum RSS
+and zero swap. Checkpoint reuse plus all four query cells and strict
+sidecar/report reread completed in 2:05.50 with 3,918,228 kB maximum RSS,
+zero swap, and 81 major faults. These Linux measurements qualify the
 harness and persistence path; they are not cross-host latency claims.
 
 The accepted query invocation was:
 
 ```sh
-/mnt/fast4tb/gomap-4171-m18-diagnosis/clean/bin/treedb-vector-bench-b428d38c \
+/mnt/fast4tb/gomap-4171-m18-diagnosis/source-359f22a0/bin/treedb-vector-partition-bench \
   local-hnsw-m18-edge-diagnosis \
   --dataset /mnt/fast4tb/gomap-4160-m18-default/source/testdata/vector_partition_qualification_embedding_mixture_250k \
   --retained-db /mnt/fast4tb/gomap-4160-m18-default/materialized-m18-edc7f1430/m0-membership-3440095458 \
   --calibration-split /mnt/fast4tb/gomap-hnsw-edge-quality-20260816/inputs/250k-query-calibration-manifest.json \
   --truth-artifact /mnt/fast4tb/gomap-hnsw-edge-quality-20260816/inputs/truth-cache/m8_canonical_truth_f1fab20b88cd3dcdd6e95a284400983230b1432b36bd4d73e321e251159795ab.json \
-  --checkpoint /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-964bde74.json \
-  --out /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-b428d38c.json \
-  --raw-sidecar /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-b428d38c.json \
+  --checkpoint /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-checkpoint-359f22a0.json \
+  --out /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-diagnosis-359f22a0.json \
+  --raw-sidecar /mnt/fast4tb/gomap-4171-m18-diagnosis/reports/m18-edge-traces-359f22a0.json \
   --base-sha 2a7d01443d3c842990c259b08bd442a4d0109511 \
-  --head-sha b428d38c9b061487c9f2d7b44ae45403aa32eec2 \
-  --preparation-head-sha 964bde7437a6f8ae8fda07939b272dc198873b4c \
-  --source-checkout /mnt/fast4tb/gomap-4171-m18-diagnosis/clean
+  --head-sha 359f22a01cf13febba340a83b0e8e8e56d37373e \
+  --preparation-head-sha 359f22a01cf13febba340a83b0e8e8e56d37373e \
+  --source-checkout /mnt/fast4tb/gomap-4171-m18-diagnosis/source-359f22a0
 ```
 
 ## Baseline frontier
@@ -144,6 +144,14 @@ diversity-selected and 1,561 for reciprocal edges. The same ordering persists
 through EF96 (739 versus 1,457 and 1,354). Pack 0 is a useful homogeneous
 exception where local backfill is efficient, which argues for testing policy
 variants rather than deleting backfill unconditionally.
+
+The corrected exact-head validator also reconciles the compact final-origin
+maps for all 40 packs rather than treating compact packs as zero-edge graphs.
+Across the independently bounded 32-node sample in every pack, candidate pools
+contain 12,777/12,793 available exact neighbors (99.87%) and final adjacency
+contains 11,899/12,800 exact-neighbor slots (92.96%). This all-pack check
+supports the same selection/survival diagnosis; the predeclared five-pack
+counts and all query cells above are unchanged.
 
 ## Causal decision
 
