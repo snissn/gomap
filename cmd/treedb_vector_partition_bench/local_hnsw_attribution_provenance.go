@@ -40,7 +40,7 @@ type localHNSWAttributionQueryUtilityV1 struct {
 	Unattributed       localHNSWAttributionQueryOriginUtilityV1 `json:"unattributed_native"`
 }
 
-type localHNSWAttributionQueryOriginUtilityV1 struct{ Examined, NewlyVisited, Scored, TopAdmissions, FrontierAdmissions uint64 }
+type localHNSWAttributionQueryOriginUtilityV1 struct{ Examined, NewlyVisited, Scored, TopAdmissions, FrontierAdmissions, TruthRecovered uint64 }
 
 type localHNSWAttributionHardMissV1 struct {
 	QueryOrdinal int    `json:"query_ordinal"`
@@ -125,7 +125,7 @@ func localHNSWAttributionFinalOriginsV1(evidence collections.VectorPartitionCons
 			continue
 		}
 		key := localHNSWAttributionFinalEdgeKeyV1{event.From, event.To, event.Layer}
-		if _, exists := out[key]; exists || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal") {
+		if _, exists := out[key]; exists || (event.Origin != "diversity_selected" && event.Origin != "nearest_backfill" && event.Origin != "reciprocal_add") {
 			return nil, errors.New("invalid local HNSW final edge origin")
 		}
 		out[key] = event.Origin
@@ -142,6 +142,7 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 		return out, errors.New("invalid local HNSW query attribution")
 	}
 	recovered := map[string]struct{}{}
+	var layer0NewlyVisited, layer0Scored uint64
 	for _, event := range attribution.EdgeEvents {
 		if event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
 			return localHNSWAttributionQueryUtilityV1{}, errors.New("invalid local HNSW trace ordinal")
@@ -157,20 +158,26 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 				origin = &out.Diversity
 			case "nearest_backfill":
 				origin = &out.Backfill
-			case "reciprocal":
+			case "reciprocal_add":
 				origin = &out.Reciprocal
 			default:
-				origin = &out.Unattributed
+				return localHNSWAttributionQueryUtilityV1{}, errors.New("unmatched local HNSW native final edge")
 			}
 		}
 		origin.Examined++
 		if event.NewlyVisited {
 			out.NewlyVisited++
 			origin.NewlyVisited++
+			if event.Layer == 0 {
+				layer0NewlyVisited++
+			}
 		}
 		if event.Scored {
 			out.Scored++
 			origin.Scored++
+			if event.Layer == 0 {
+				layer0Scored++
+			}
 		}
 		if event.TopAdmission {
 			out.TopAdmissions++
@@ -180,14 +187,20 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 			out.FrontierAdmissions++
 			origin.FrontierAdmissions++
 		}
-		if _, wanted := truth[ids[event.DestinationOrdinal]]; wanted {
-			if _, seen := recovered[ids[event.DestinationOrdinal]]; !seen {
-				recovered[ids[event.DestinationOrdinal]] = struct{}{}
-				out.TruthRecovered++
+		if event.NewlyVisited && event.Scored {
+			if _, wanted := truth[ids[event.DestinationOrdinal]]; wanted {
+				if _, seen := recovered[ids[event.DestinationOrdinal]]; !seen {
+					recovered[ids[event.DestinationOrdinal]] = struct{}{}
+					out.TruthRecovered++
+					origin.TruthRecovered++
+				}
 			}
 		}
 	}
-	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || out.NewlyVisited+attribution.SeedCandidates != metrics.Candidates || out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.Scored != out.NewlyVisited || out.TopAdmissions != out.FrontierAdmissions {
+	originsTotal := func(field func(localHNSWAttributionQueryOriginUtilityV1) uint64) uint64 {
+		return field(out.Diversity) + field(out.Backfill) + field(out.Reciprocal) + field(out.Auxiliary)
+	}
+	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Examined }) != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.NewlyVisited }) != out.NewlyVisited || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Scored }) != out.Scored || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TopAdmissions }) != out.TopAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions }) != out.FrontierAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered }) != out.TruthRecovered || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || layer0NewlyVisited+attribution.SeedCandidates != metrics.Candidates || layer0Scored != layer0NewlyVisited || out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.TopAdmissions != out.FrontierAdmissions {
 		return localHNSWAttributionQueryUtilityV1{}, errors.New("local HNSW query utility conservation")
 	}
 	return out, nil

@@ -240,6 +240,7 @@ func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtility
 		pair[0].Scored += pair[1].Scored
 		pair[0].TopAdmissions += pair[1].TopAdmissions
 		pair[0].FrontierAdmissions += pair[1].FrontierAdmissions
+		pair[0].TruthRecovered += pair[1].TruthRecovered
 	}
 }
 

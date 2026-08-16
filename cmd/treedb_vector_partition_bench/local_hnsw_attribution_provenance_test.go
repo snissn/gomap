@@ -34,3 +34,20 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 		t.Fatalf("non-deterministic bounded misses: %d", len(first))
 	}
 }
+
+func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
+	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, SeedCandidates: 1, SeedAdmissions: 1, VisitedRows: 1, VisitedOrdinalsSHA256: strings.Repeat("a", 64), TerminationReason: "candidate_limit", VisitedOrdinals: []uint32{0}, EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
+		{Layer: 1, SourceOrdinal: 0, DestinationOrdinal: 1, Scored: true}, // upper-layer score, not a new candidate
+		{Layer: 0, SourceOrdinal: 0, DestinationOrdinal: 2, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true},
+		{Layer: 0, SourceOrdinal: 2, DestinationOrdinal: 1}, // already visited truth must not recover it
+	}}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{0, 1, 1}: "reciprocal_add", {0, 2, 0}: "diversity_selected", {2, 1, 0}: "nearest_backfill"}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"truth-unscored": {}, "truth-scored": {}})
+	if err != nil || utility.Scored != 2 || utility.NewlyVisited != 1 || utility.TruthRecovered != 1 || utility.Reciprocal.Scored != 1 || utility.Reciprocal.TruthRecovered != 0 || utility.Diversity.TruthRecovered != 1 || utility.Unattributed.Examined != 0 {
+		t.Fatalf("utility=%+v err=%v", utility, err)
+	}
+	delete(origins, localHNSWAttributionFinalEdgeKeyV1{0, 1, 1})
+	if _, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"truth-unscored": {}, "truth-scored": {}}); err == nil {
+		t.Fatal("unmatched final native edge accepted")
+	}
+}
