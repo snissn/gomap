@@ -26,6 +26,23 @@ func TestLocalHNSWM18EdgeDiagnosisContractV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWM18EdgePreparationHeadV1(t *testing.T) {
+	const prepared = "964bde7437a6f8ae8fda07939b272dc198873b4c"
+	const query = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := localHNSWM18EdgePreparationHeadV1(prepared, query, false); err != nil {
+		t.Fatalf("historical checkpoint head rejected: %v", err)
+	}
+	if err := localHNSWM18EdgePreparationHeadV1(prepared, query, true); err == nil {
+		t.Fatal("new checkpoint accepted mismatched preparation head")
+	}
+	if err := localHNSWM18EdgePreparationHeadV1("not-a-sha", query, false); err == nil {
+		t.Fatal("malformed preparation head accepted")
+	}
+	if err := localHNSWM18EdgePreparationHeadV1(query, query, true); err != nil {
+		t.Fatalf("current-head checkpoint rejected: %v", err)
+	}
+}
+
 func TestLocalHNSWM18PreparationSmokePartitionContractV1(t *testing.T) {
 	for _, partition := range []uint{0, 2, 16, 36, 39} {
 		if !localHNSWM18PreparationSmokePartitionV1(partition) {
@@ -91,6 +108,24 @@ func TestLocalHNSWM18EdgeTraceReplayRejectsTamperingV1(t *testing.T) {
 	value := localHNSWM18EdgeTraceV1{Schema: localHNSWM18EdgeTraceSchemaV1, QuerySHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Partition: 0, Record: record, Edges: []collections.VectorPartitionSearchEdgeEventV1{edge}, Seeds: []collections.VectorPartitionSearchSeedEventV1{seed}}
 	if err := localHNSWM18EdgeTraceValidateV1(value, ids, origins, truth); err != nil {
 		t.Fatalf("valid replay rejected: %v", err)
+	}
+	// Records persist total examined edges. A replay must split that total back
+	// into native and auxiliary work before reducing the per-origin utility.
+	auxiliary := value
+	auxiliary.Edges = append([]collections.VectorPartitionSearchEdgeEventV1(nil), value.Edges...)
+	auxiliary.Edges[0].Auxiliary = true
+	auxiliaryOrigins := map[localHNSWAttributionFinalEdgeKeyV1]string{}
+	auxiliaryMetrics := collections.VectorPartitionSearchMetricsV1{Candidates: 2, AuxiliaryEdges: 1, Route: collections.VectorPartitionSearchRouteHNSWSearchPackV1}
+	auxiliaryTrace := trace
+	auxiliaryTrace.EdgeEvents = auxiliary.Edges
+	auxiliaryUtility, err := localHNSWAttributionQueryUtilityReduceV1(auxiliaryMetrics, auxiliaryTrace, auxiliaryOrigins, ids, truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auxiliary.Record.Utility = auxiliaryUtility
+	auxiliary.Record.TruthRecoveries = localHNSWAttributionTruthRecoveryRecordsV1(localHNSWAttributionTruthRecoveriesV1(auxiliaryTrace, auxiliaryOrigins, ids, truth))
+	if err := localHNSWM18EdgeTraceValidateV1(auxiliary, ids, auxiliaryOrigins, truth); err != nil {
+		t.Fatalf("auxiliary total-edge replay rejected: %v", err)
 	}
 	tampered := value
 	tampered.Edges = append([]collections.VectorPartitionSearchEdgeEventV1(nil), value.Edges...)

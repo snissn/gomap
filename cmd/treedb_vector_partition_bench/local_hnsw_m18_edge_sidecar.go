@@ -6,6 +6,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -29,7 +30,7 @@ func localHNSWM18EdgeTraceValidateV1(value localHNSWM18EdgeTraceV1, ids []string
 		return errors.New("invalid M18 edge trace identity")
 	}
 	if _, err := localHNSWAttributionQueryRecordValidateV1(value.Record, ids, truth); err != nil {
-		return err
+		return fmt.Errorf("M18 edge trace record: %w", err)
 	}
 	var auxiliary uint64
 	for _, edge := range value.Edges {
@@ -38,18 +39,27 @@ func localHNSWM18EdgeTraceValidateV1(value localHNSWM18EdgeTraceV1, ids []string
 		}
 	}
 	trace := collections.VectorPartitionSearchAttributionV1{Schema: "treedb_vector_partition_search_attribution_v1", FrontierAdmissions: value.Record.FrontierAdmissions, SeedCandidates: value.Record.SeedCandidates, SeedAdmissions: value.Record.SeedAdmissions, VisitedRows: uint64(len(value.Record.VisitedOrdinals)), VisitedOrdinalsSHA256: value.Record.VisitedOrdinalsSHA256, TerminationReason: value.Record.TerminationReason, VisitedOrdinals: append([]uint32(nil), value.Record.VisitedOrdinals...), EdgeEvents: append([]collections.VectorPartitionSearchEdgeEventV1(nil), value.Edges...), SeedEvents: append([]collections.VectorPartitionSearchSeedEventV1(nil), value.Seeds...)}
-	metrics := collections.VectorPartitionSearchMetricsV1{Candidates: value.Record.Candidates, Edges: value.Record.Edges, AuxiliaryEdges: auxiliary, Route: collections.VectorPartitionSearchRouteHNSWSearchPackV1}
+	// QuerySearch.Edges persists total examined work. The reducer consumes the
+	// native and auxiliary components separately, so reconstruct native work
+	// from the trace before replaying rather than counting auxiliary edges twice.
+	if value.Record.Edges < auxiliary {
+		return fmt.Errorf("M18 edge trace auxiliary edges exceed total: auxiliary=%d total=%d", auxiliary, value.Record.Edges)
+	}
+	metrics := collections.VectorPartitionSearchMetricsV1{Candidates: value.Record.Candidates, Edges: value.Record.Edges - auxiliary, AuxiliaryEdges: auxiliary, Route: collections.VectorPartitionSearchRouteHNSWSearchPackV1}
 	utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, trace, origins, ids, truth)
-	if err != nil || utility != value.Record.Utility {
-		return errors.New("M18 edge trace utility replay")
+	if err != nil {
+		return fmt.Errorf("M18 edge trace utility replay: %w", err)
+	}
+	if utility != value.Record.Utility {
+		return fmt.Errorf("M18 edge trace utility replay mismatch: got=%+v want=%+v", utility, value.Record.Utility)
 	}
 	recoveries := localHNSWAttributionTruthRecoveryRecordsV1(localHNSWAttributionTruthRecoveriesV1(trace, origins, ids, truth))
 	if len(recoveries) != len(value.Record.TruthRecoveries) {
-		return errors.New("M18 edge trace recovery replay")
+		return fmt.Errorf("M18 edge trace recovery replay count: got=%d want=%d", len(recoveries), len(value.Record.TruthRecoveries))
 	}
 	for i := range recoveries {
 		if recoveries[i] != value.Record.TruthRecoveries[i] {
-			return errors.New("M18 edge trace recovery replay")
+			return fmt.Errorf("M18 edge trace recovery replay index=%d got=%+v want=%+v", i, recoveries[i], value.Record.TruthRecoveries[i])
 		}
 	}
 	return nil
