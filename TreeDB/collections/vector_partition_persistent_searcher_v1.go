@@ -1429,27 +1429,27 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithBoundedConst
 // exact native packed adjacency.
 func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, assets []VectorPartitionAssetV1, evidence VectorPartitionConstructionEvidenceV1) error {
 	if c == nil || evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) == 0 || len(assets) != len(evidence.Partitions) {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence envelope assets=%d partitions=%d schema=%q", ErrVectorPartitionSearchUnavailable, len(assets), len(evidence.Partitions), evidence.Schema)
 	}
 	variant := VectorPartitionLocalGraphVariantV1(evidence.Variant)
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence variant %q", ErrVectorPartitionSearchUnavailable, variant)
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, index)
 	if !ok || manifest.IndexDefinitionDigest != VectorIndexDefinitionDigestV1(def) {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence index definition", ErrVectorPartitionSearchUnavailable)
 	}
 	buildDef, _, err := vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
 	if err != nil {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence variant definition: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	_, sourceGraph, _, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(index)
 	if err != nil || sourceGraph.BaseManifestGeneration != manifest.SourceGeneration || sourceGraph.BaseManifestChecksum != manifest.SourceChecksum || sourceGraph.BaseSchemaHash != manifest.SourceSchemaHash || uint64(sourceGraph.RowCount) != manifest.SourceRowCount {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence authoritative source", ErrVectorPartitionSearchUnavailable)
 	}
 	reader, err := c.openColumnVectorGraphPhysicalRowReader(index, columnVectorGraphPhysicalRowReaderOptions{})
 	if err != nil {
-		return ErrVectorPartitionSearchUnavailable
+		return fmt.Errorf("%w: construction evidence source reader: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
 	defer reader.Close()
 	members := make(map[uint32][]vectorPartitionMembershipSourceV1)
@@ -1463,36 +1463,36 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 	for i, asset := range assets {
 		part := evidence.Partitions[i]
 		if _, duplicate := seenPartitions[part.PartitionID]; duplicate || (i > 0 && evidence.Partitions[i-1].PartitionID >= part.PartitionID) {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence partition order index=%d partition=%d", ErrVectorPartitionSearchUnavailable, i, part.PartitionID)
 		}
 		seenPartitions[part.PartitionID] = struct{}{}
 		if asset.PartitionID != part.PartitionID || asset.Checksum != part.AssetChecksum || asset.MembershipDigest != part.MembershipDigest || asset.Bytes != part.AssetBytes {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence asset binding index=%d partition=%d", ErrVectorPartitionSearchUnavailable, i, part.PartitionID)
 		}
 		searcher, err := c.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(ctx, index, manifest, asset, variant)
 		if err != nil {
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence open partition=%d: %v", ErrVectorPartitionSearchUnavailable, part.PartitionID, err)
 		}
 		searcher.mu.Lock()
 		pack := searcher.prepared
 		searcher.mu.Unlock()
 		if pack == nil {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence missing pack partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
 		}
 		if part.PostfillEdges != 0 {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence unexpected postfill partition=%d edges=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, part.PostfillEdges)
 		}
 		if len(part.NativeInsertionOrdinals) != pack.Header.Rows {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction evidence insertion count partition=%d got=%d rows=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, len(part.NativeInsertionOrdinals), pack.Header.Rows)
 		}
 		seenInsertion := make([]bool, pack.Header.Rows)
 		for _, native := range part.NativeInsertionOrdinals {
 			if native < 0 || native >= pack.Header.Rows || seenInsertion[native] {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction evidence insertion permutation partition=%d ordinal=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, native)
 			}
 			seenInsertion[native] = true
 		}
@@ -1516,7 +1516,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 					}
 					if _, duplicate := seenCandidates[candidate]; duplicate {
 						searcher.Close()
-						return ErrVectorPartitionSearchUnavailable
+						return fmt.Errorf("%w: construction candidate duplicate partition=%d node=%d candidate=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, selection.Node, candidate)
 					}
 					seenCandidates[candidate] = struct{}{}
 					if part.NativeInsertionOrdinals[candidate] >= part.NativeInsertionOrdinals[selection.Node] {
@@ -1526,12 +1526,12 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				}
 			} else if len(selection.CandidateOrdinals) != 0 || selection.CandidateDigest != "" {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction unsampled candidate payload partition=%d node=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, selection.Node)
 			}
 			key := vectorIndexConstructionEdgeKeyV1{From: selection.Node, Layer: selection.Layer}
 			if _, duplicate := selectionCounts[key]; duplicate {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction selection duplicate partition=%d node=%d layer=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, selection.Node, selection.Layer)
 			}
 			selectionCounts[key] = [2]int{selection.DiversitySelected, selection.BackfillSelected}
 		}
@@ -1551,7 +1551,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			start, end := pack.DocumentIDOffsets[selection.Node], pack.DocumentIDOffsets[selection.Node+1]
 			if end < start || end > uint64(len(pack.DocumentIDBytes)) {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction document ID offsets partition=%d node=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, selection.Node)
 			}
 			id := append([]byte(nil), pack.DocumentIDBytes[start:end]...)
 			eligible = append(eligible, sampleNode{node: selection.Node, id: id, hash: vectorPartitionConstructionSampleHashV1(id)})
@@ -1567,17 +1567,17 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		// the packed asset rather than from a self-declared trace subset.
 		if len(eligible) != pack.Header.Rows-1 {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction eligible selections partition=%d got=%d want=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, len(eligible), pack.Header.Rows-1)
 		}
 		limit := min(vectorPartitionConstructionCandidateSampleLimitV1, len(eligible))
 		if len(actualSampled) != limit {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction sampled count partition=%d got=%d want=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, len(actualSampled), limit)
 		}
 		for _, node := range eligible[:limit] {
 			if !actualSampled[node.node] {
 				searcher.Close()
-				return ErrVectorPartitionSearchUnavailable
+				return fmt.Errorf("%w: construction canonical sample missing partition=%d node=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, node.node)
 			}
 		}
 		// Compact M18 evidence intentionally has no historical edge events. It
