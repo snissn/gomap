@@ -252,8 +252,11 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	}
 	emptyEvidence := constructionEvidence
 	emptyEvidence.Partitions = nil
-	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, nil, emptyEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, auxiliary, emptyEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 		t.Fatalf("empty construction evidence err=%v", err)
+	}
+	if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, nil, constructionEvidence); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("empty construction assets err=%v", err)
 	}
 	overlay, overlayResources, overlayEvidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(def.Name, m, 988, in, VectorPartitionLocalGraphVariantOverlayCurrentV1)
 	if err != nil {
@@ -850,6 +853,11 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	membershipDigest, err := vectorPartitionMembershipDigestV1(sourceReader, m.Generation, 0, members)
 	if err != nil {
 		t.Fatal(err)
+	}
+	badReplayReader := *sourceReader
+	badReplayReader.reader = &columnPhysicalRowReader{closed: true}
+	if _, err := vectorPartitionConstructionReplayEvidenceV1(&badReplayReader, members, def, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); err == nil || !strings.Contains(err.Error(), "physical column row reader is closed") {
+		t.Fatalf("unexpected replay fetch error did not fail closed: %v", err)
 	}
 	canonicalDigest, err := decodeVectorPartitionMembershipDigestV1(canonical[0].MembershipDigest)
 	if err != nil {

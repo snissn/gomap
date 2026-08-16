@@ -1499,9 +1499,25 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 			}
 		}
 		replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
-		if replayErr != nil || part.PostfillEdges != replayed.PostfillEdges || !slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals) || !vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections) || !slices.Equal(part.Events, replayed.Events) {
+		if replayErr != nil {
 			searcher.Close()
-			return ErrVectorPartitionSearchUnavailable
+			return fmt.Errorf("%w: construction replay partition=%d: %v", ErrVectorPartitionSearchUnavailable, part.PartitionID, replayErr)
+		}
+		if part.PostfillEdges != replayed.PostfillEdges {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay postfill mismatch partition=%d evidence=%d replay=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID, part.PostfillEdges, replayed.PostfillEdges)
+		}
+		if !slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay insertion ordinals mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+		}
+		if !vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay selections mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
+		}
+		if !slices.Equal(part.Events, replayed.Events) {
+			searcher.Close()
+			return fmt.Errorf("%w: construction replay events mismatch partition=%d", ErrVectorPartitionSearchUnavailable, part.PartitionID)
 		}
 		initialCounts := make(map[vectorIndexConstructionEdgeKeyV1][2]int)
 		finals := make(map[vectorIndexConstructionEdgeKeyV1]string)
@@ -1648,6 +1664,9 @@ func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysic
 			return VectorPartitionConstructionPartitionEvidenceV1{}, ErrVectorPartitionSearchUnavailable
 		}
 		row, fetchErr := reader.FetchRow(source.ordinal, scratch)
+		if fetchErr != nil && !errors.Is(fetchErr, errNilColumnVectorGraphPhysicalRowReader) {
+			return VectorPartitionConstructionPartitionEvidenceV1{}, fmt.Errorf("construction replay fetch ordinal=%d: %w", source.ordinal, fetchErr)
+		}
 		if fetchErr != nil {
 			row = columnVectorGraphPhysicalRow{}
 		}

@@ -80,59 +80,55 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if _, err := localHNSWAttributionQueryEvidenceV1Build(t.Context(), source, native, overlay, 0, []float32{1, 1}, global); err == nil {
 		t.Fatal("malformed query accepted")
 	}
-	bad := evidence
-	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
-	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
-		t.Fatal("tampered partition result accepted")
-	}
-	bad = evidence
-	bad.HighRoute[0], bad.HighRoute[1] = bad.HighRoute[1], bad.HighRoute[0]
-	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
-		t.Fatal("noncanonical route accepted")
-	}
 	raw, err := json.Marshal(evidence)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(raw, &bad); err != nil {
-		t.Fatal(err)
+	decodeEvidence := func() localHNSWAttributionQueryEvidenceV1 {
+		var decoded localHNSWAttributionQueryEvidenceV1
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		return decoded
 	}
+	bad := decodeEvidence()
+	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
+		t.Fatal("tampered partition result accepted")
+	}
+	bad = decodeEvidence()
+	bad.HighRoute[0], bad.HighRoute[1] = bad.HighRoute[1], bad.HighRoute[0]
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
+		t.Fatal("noncanonical route accepted")
+	}
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	var decodedSummary localHNSWAttributionCalibrationSummaryV1
 	if err := localHNSWAttributionCalibrationSummaryAddV1(&decodedSummary, bad, partitionDocumentIDs, source, query); err == nil {
 		t.Fatal("decoded canonical result score accepted by calibration summary")
 	}
-	if err := json.Unmarshal(raw, &bad); err != nil {
-		t.Fatal(err)
-	}
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.TerminationReason = "candidate_limit"
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
 		t.Fatal("decoded uncapped candidate-limit termination accepted")
 	}
-	bad = evidence
-	bad.PartitionRows = append([]uint32(nil), evidence.PartitionRows...)
+	bad = decodeEvidence()
 	bad.PartitionRows[0]++
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
 		t.Fatal("self-declared partition row count accepted")
 	}
-	bad = evidence
-	bad.Partitions = append([]localHNSWAttributionQueryPartitionV1(nil), evidence.Partitions...)
-	bad.Partitions[0].Native.VisitedOrdinals = append([]uint32(nil), evidence.Partitions[0].Native.VisitedOrdinals...)
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.VisitedOrdinals[len(bad.Partitions[0].Native.VisitedOrdinals)-1] = math.MaxUint32
 	bad.Partitions[0].Native.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(bad.Partitions[0].Native.VisitedOrdinals)
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
 		t.Fatal("out-of-range visited ordinal accepted")
 	}
-	bad = evidence
-	bad.Partitions = append([]localHNSWAttributionQueryPartitionV1(nil), evidence.Partitions...)
-	bad.Partitions[0].Native.Results = append([]localHNSWAttributionQueryResultV1(nil), evidence.Partitions[0].Native.Results...)
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ID = "substituted-result-id"
 	if err := localHNSWAttributionQueryEvidenceValidateV1(bad, partitionDocumentIDs); err == nil {
 		t.Fatal("result ID outside authoritative pack accepted")
 	}
-	bad = evidence
-	bad.Partitions = append([]localHNSWAttributionQueryPartitionV1(nil), evidence.Partitions...)
-	bad.Partitions[0].Native.Results = append([]localHNSWAttributionQueryResultV1(nil), evidence.Partitions[0].Native.Results...)
+	bad = decodeEvidence()
 	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
 	if err := localHNSWAttributionQueryEvidenceScoresValidateV1(source, query, bad); err == nil {
 		t.Fatal("tampered canonical result score accepted")
