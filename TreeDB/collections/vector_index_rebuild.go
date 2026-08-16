@@ -627,6 +627,19 @@ func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal [
 		// The evidence contract stores sampled candidates in canonical packed
 		// ordinal order, independent of the transient HNSW score ordering.
 		sort.Ints(t.selections[i].CandidateNodes)
+		if t.selections[i].Sampled {
+			unique := t.selections[i].CandidateNodes[:0]
+			for _, candidate := range t.selections[i].CandidateNodes {
+				if len(unique) == 0 || unique[len(unique)-1] != candidate {
+					unique = append(unique, candidate)
+				}
+			}
+			t.selections[i].CandidateNodes = unique
+			// Candidate-pool evidence is a set. The transient layer-search
+			// scratch may encounter an ordinal more than once, but it does not
+			// create another selectable predecessor or oracle candidate.
+			t.selections[i].Candidates = len(unique)
+		}
 	}
 	for i := range t.events {
 		from, err := remap(t.events[i].From)
