@@ -57,6 +57,9 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence); err != nil {
+		t.Fatalf("valid query evidence rejected: %v", err)
+	}
 	if evidence.Schema != localHNSWAttributionQuerySchemaV1 || len(evidence.QueryFP32SHA256) != 64 || len(evidence.GlobalTruth) != 10 || len(evidence.LowRoute) != 2 || len(evidence.HighRoute) != 4 || !localHNSWAttributionRoutePrefixV1(evidence.LowRoute, evidence.HighRoute) || !localHNSWAttributionRoutePermutationV1(evidence.HighRoute, 4) || len(evidence.Partitions) != 4 || evidence.RoutingRecall != evidence.Native.RoutingRecall || evidence.RoutingRecall != evidence.Overlay.RoutingRecall || evidence.Native.LowSelectedWork.Candidates == 0 || evidence.Native.LowSelectedWork.Edges == 0 || evidence.Overlay.LowSelectedWork.Candidates == 0 || evidence.Overlay.LowSelectedWork.Edges == 0 || !localHNSWAttributionQueryUtilityConservedV1(evidence.Native.LowSelectedWork.Utility, evidence.Native.LowSelectedWork.Edges) || !localHNSWAttributionQueryUtilityConservedV1(evidence.Overlay.HighSelectedWork.Utility, evidence.Overlay.HighSelectedWork.Edges) {
 		t.Fatalf("evidence=%+v", evidence)
 	}
@@ -67,6 +70,16 @@ func TestLocalHNSWAttributionQueryEvidenceV1(t *testing.T) {
 	}
 	if _, err := localHNSWAttributionQueryEvidenceV1Build(t.Context(), source, native, overlay, 0, []float32{1, 1}, global); err == nil {
 		t.Fatal("malformed query accepted")
+	}
+	bad := evidence
+	bad.Partitions[0].Native.Results[0].ScoreBits ^= 1
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+		t.Fatal("tampered partition result accepted")
+	}
+	bad = evidence
+	bad.HighRoute[0], bad.HighRoute[1] = bad.HighRoute[1], bad.HighRoute[0]
+	if err := localHNSWAttributionQueryEvidenceValidateV1(bad); err == nil {
+		t.Fatal("noncanonical route accepted")
 	}
 }
 
@@ -175,10 +188,72 @@ func TestLocalHNSWAttributionDecodedTruthRecoveriesDeduplicateV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T) {
+	record := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{
+		Candidates:         1,
+		Edges:              1,
+		FrontierAdmissions: 1,
+		SeedCandidates:     0,
+		SeedAdmissions:     0,
+		TerminationReason:  "candidate_limit",
+		Utility: localHNSWAttributionQueryUtilityV1{
+			ExaminedNative:     1,
+			NewlyVisited:       1,
+			Scored:             1,
+			TopAdmissions:      1,
+			FrontierAdmissions: 1,
+			Diversity: localHNSWAttributionQueryOriginUtilityV1{
+				Examined: 1, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1,
+			},
+		},
+	})
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err != nil {
+		t.Fatalf("valid seeded record rejected: %v", err)
+	}
+	raw, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatal(err)
+	}
+	record.SeedAdmissions++
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("tampered seed admissions accepted")
+	}
+	record.SeedAdmissions--
+	record.SeedCandidates++
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("tampered seed candidates accepted")
+	}
+	record.SeedCandidates--
+	record.FrontierAdmissions++
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("tampered frontier admissions accepted")
+	}
+	record.FrontierAdmissions--
+	record.TerminationReason = "invalid"
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("invalid termination accepted")
+	}
+}
+
 func localHNSWAttributionTestQueryRecordV1(record localHNSWAttributionQuerySearchV1) localHNSWAttributionQuerySearchV1 {
-	record.Candidates = 1
-	record.VisitedOrdinals = []uint32{0}
+	record.SeedCandidates = 1
+	record.Candidates = record.Utility.NewlyVisited + record.SeedCandidates
+	record.SeedAdmissions = 0
+	record.FrontierAdmissions = record.Utility.FrontierAdmissions
+	if record.TerminationReason == "" {
+		record.TerminationReason = "candidate_limit"
+	}
+	record.VisitedOrdinals = make([]uint32, record.Candidates)
+	for i := range record.VisitedOrdinals {
+		record.VisitedOrdinals[i] = uint32(i)
+	}
 	record.VisitedOrdinalsSHA256 = localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals)
+	if len(record.Results) == 0 {
+		record.Results = []localHNSWAttributionQueryResultV1{{ID: "result", ScoreBits: 0}}
+	}
 	return record
 }
 

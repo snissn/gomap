@@ -98,6 +98,9 @@ func localHNSWAttributionCalibrationSummaryV1Build(ctx context.Context, sidecarP
 }
 
 func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCalibrationSummaryV1, evidence localHNSWAttributionQueryEvidenceV1) error {
+	if err := localHNSWAttributionQueryEvidenceValidateV1(evidence); err != nil {
+		return err
+	}
 	if len(evidence.Partitions) == 0 || !localHNSWAttributionFiniteRecallV1(evidence.RoutingRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Native.LocalRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.EndToEndRecall) || !localHNSWAttributionFiniteRecallV1(evidence.Overlay.LocalRecall) {
 		return errors.New("invalid local HNSW calibration recall")
 	}
