@@ -1938,10 +1938,7 @@ func TestPartitionLocalHNSWConfigIsIndependentAndM3OnlyV1(t *testing.T) {
 	if variant, err := m3PartitionLocalGraphVariantV1(18, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 		t.Fatalf("M18/eFC256 local variant=%q err=%v", variant, err)
 	}
-	if variant, err := m3PartitionLocalGraphVariantV1(20, 256); err != nil || variant != collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1 {
-		t.Fatalf("M20/eFC256 local variant=%q err=%v", variant, err)
-	}
-	if _, err := m3PartitionLocalGraphVariantV1(22, 256); err == nil {
+	if _, err := m3PartitionLocalGraphVariantV1(20, 256); err == nil {
 		t.Fatal("accepted unselected local construction variant")
 	}
 	router := m3RouterBuildOptionsV1(cfg.routerConfig, 1, 2)
