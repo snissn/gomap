@@ -271,6 +271,7 @@ type localHNSWVariantHarnessV1 struct {
 	packAssets           []collections.VectorPartitionAssetV1
 	documentIDs          [][]string
 	constructionEvidence collections.VectorPartitionConstructionEvidenceV1
+	finalOrigins         []map[localHNSWAttributionFinalEdgeKeyV1]string
 }
 
 func (h *localHNSWVariantHarnessV1) Close() error {
@@ -372,6 +373,13 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 		h.documentIDs[p], err = h.searchers[p].PackDocumentIDsForOfflineTraceV1()
 		if err != nil || len(h.documentIDs[p]) == 0 {
 			return nil, errors.New("retained variant document IDs")
+		}
+	}
+	h.finalOrigins = make([]map[localHNSWAttributionFinalEdgeKeyV1]string, len(assets))
+	for p := range h.finalOrigins {
+		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, p)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return h, nil

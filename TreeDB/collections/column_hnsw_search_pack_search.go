@@ -76,8 +76,14 @@ type columnHNSWSearchPackAttributionTrace struct {
 	ScoreOrdinals  []uint32
 	AdjacencyReads []columnHNSWSearchPackPageRead
 	EdgeEvents     []columnHNSWSearchPackEdgeAttribution
+	SeedEvents     []columnHNSWSearchPackSeedAttribution
 	SeedCandidates uint64
 	SeedAdmissions uint64
+}
+type columnHNSWSearchPackSeedAttribution struct {
+	Ordinal                         int
+	Score                           float64
+	TopAdmission, FrontierAdmission bool
 }
 type columnHNSWSearchPackEdgeAttribution struct {
 	Layer, SourceOrdinal, DestinationOrdinal          int
@@ -525,7 +531,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	nextSeed := 0
 	rowCount64 := uint64(rowCount)
 	traversalSteps := 0
-	termination := ""
+	var termination string
 	for {
 		if traversalSteps&63 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -986,6 +992,7 @@ func (v *columnHNSWSearchPackPreparedView) scoreAndPushFrontierVisited(normalize
 		if admitted {
 			trace.SeedAdmissions++
 		}
+		trace.SeedEvents = append(trace.SeedEvents, columnHNSWSearchPackSeedAttribution{Ordinal: ordinal, Score: score, TopAdmission: admitted, FrontierAdmission: admitted})
 	}
 	return nil
 }

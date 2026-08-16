@@ -342,6 +342,18 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 		return out, errors.New("invalid local HNSW query attribution")
 	}
 	recovered := map[string]struct{}{}
+	for _, seed := range attribution.SeedEvents {
+		if seed.Ordinal < 0 || seed.Ordinal >= len(ids) {
+			return out, errors.New("invalid local HNSW seed ordinal")
+		}
+		if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+			if _, seen := recovered[ids[seed.Ordinal]]; !seen {
+				recovered[ids[seed.Ordinal]] = struct{}{}
+				out.TruthRecovered++
+				out.Unattributed.TruthRecovered++
+			}
+		}
+	}
 	var layer0NewlyVisited, layer0Scored uint64
 	for _, event := range attribution.EdgeEvents {
 		if event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
@@ -406,12 +418,64 @@ func localHNSWAttributionQueryUtilityReduceV1(metrics collections.VectorPartitio
 		}
 	}
 	originsTotal := func(field func(localHNSWAttributionQueryOriginUtilityV1) uint64) uint64 {
-		return field(out.Diversity) + field(out.Backfill) + field(out.Reciprocal) + field(out.Repair) + field(out.Overlay) + field(out.Auxiliary)
+		return field(out.Diversity) + field(out.Backfill) + field(out.Reciprocal) + field(out.Repair) + field(out.Overlay) + field(out.Auxiliary) + field(out.Unattributed)
 	}
 	if out.ExaminedNative+out.ExaminedAuxiliary != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Examined }) != metrics.Edges || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.NewlyVisited }) != out.NewlyVisited || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.Scored }) != out.Scored || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TopAdmissions }) != out.TopAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.FrontierAdmissions }) != out.FrontierAdmissions || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.StateImprovements }) != out.StateImprovements || originsTotal(func(v localHNSWAttributionQueryOriginUtilityV1) uint64 { return v.TruthRecovered }) != out.TruthRecovered || out.ExaminedAuxiliary != metrics.AuxiliaryEdges || layer0NewlyVisited+attribution.SeedCandidates != metrics.Candidates || layer0Scored != layer0NewlyVisited || out.FrontierAdmissions+attribution.SeedAdmissions != attribution.FrontierAdmissions || out.TopAdmissions != out.FrontierAdmissions {
 		return localHNSWAttributionQueryUtilityV1{}, errors.New("local HNSW query utility conservation")
 	}
 	return out, nil
+}
+
+func localHNSWAttributionTruthRecoveriesV1(attribution collections.VectorPartitionSearchAttributionV1, origins map[localHNSWAttributionFinalEdgeKeyV1]string, ids []string, truth map[string]struct{}) map[string]string {
+	out := make(map[string]string)
+	for _, seed := range attribution.SeedEvents {
+		if seed.Ordinal >= 0 && seed.Ordinal < len(ids) {
+			if _, wanted := truth[ids[seed.Ordinal]]; wanted {
+				out[ids[seed.Ordinal]] = "unattributed"
+			}
+		}
+	}
+	for _, event := range attribution.EdgeEvents {
+		if !event.Scored || event.DestinationOrdinal < 0 || event.DestinationOrdinal >= len(ids) {
+			continue
+		}
+		id := ids[event.DestinationOrdinal]
+		if _, wanted := truth[id]; !wanted {
+			continue
+		}
+		if _, exists := out[id]; exists {
+			continue
+		}
+		origin := "auxiliary"
+		if !event.Auxiliary {
+			origin = origins[localHNSWAttributionFinalEdgeKeyV1{event.SourceOrdinal, event.DestinationOrdinal, event.Layer}]
+		}
+		out[id] = origin
+	}
+	return out
+}
+
+func localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(out *localHNSWAttributionQueryUtilityV1, origin string) {
+	if out == nil || out.TruthRecovered == 0 {
+		return
+	}
+	out.TruthRecovered--
+	switch origin {
+	case "diversity_selected":
+		out.Diversity.TruthRecovered--
+	case "nearest_backfill":
+		out.Backfill.TruthRecovered--
+	case "reciprocal_add":
+		out.Reciprocal.TruthRecovered--
+	case "reciprocity_repair":
+		out.Repair.TruthRecovered--
+	case "overlay_rewrite":
+		out.Overlay.TruthRecovered--
+	case "auxiliary":
+		out.Auxiliary.TruthRecovered--
+	case "unattributed":
+		out.Unattributed.TruthRecovered--
+	}
 }
 
 func localHNSWAttributionHardMissesV1(in []localHNSWAttributionHardMissV1) []localHNSWAttributionHardMissV1 {
@@ -444,18 +508,26 @@ func localHNSWAttributionInstrumentationSummaryV1Build(source *m8ProductionMulti
 	if err != nil {
 		return out, err
 	}
-	nativeNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(native)
+	nativeDiagnostics, err := localHNSWAttributionPackDiagnosticsV1(native.searchers)
 	if err != nil {
 		return out, err
 	}
-	overlayNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(overlay)
+	overlayDiagnostics, err := localHNSWAttributionPackDiagnosticsV1(overlay.searchers)
+	if err != nil {
+		return out, err
+	}
+	nativeNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(native, nativeDiagnostics)
+	if err != nil {
+		return out, err
+	}
+	overlayNeighborhood, err := localHNSWAttributionNeighborhoodOracleV1Build(overlay, overlayDiagnostics)
 	if err != nil {
 		return out, err
 	}
 	if calibration.QueryCount == 0 || calibration.NativeUtility.ExaminedNative+calibration.NativeUtility.ExaminedAuxiliary == 0 || calibration.OverlayUtility.ExaminedNative+calibration.OverlayUtility.ExaminedAuxiliary == 0 {
 		return out, errors.New("empty local HNSW instrumentation query utility")
 	}
-	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(native.searchers), OverlayLayer0Distances: graphDistanceAggregateV1(overlay.searchers), NativeNeighborhood: nativeNeighborhood, OverlayNeighborhood: overlayNeighborhood, HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
+	out = localHNSWAttributionInstrumentationSummaryV1{Schema: localHNSWAttributionInstrumentationSchemaV1, ManifestIntegrity: source.manifest.IntegrityDigest, IndexDefinitionDigest: native.constructionEvidence.IndexDefinitionDigest, NativeVariant: native.constructionEvidence.Variant, OverlayVariant: overlay.constructionEvidence.Variant, NativeConstruction: nativeConstruction, OverlayConstruction: overlayConstruction, NativeQuery: calibration.NativeUtility, OverlayQuery: calibration.OverlayUtility, NativeLayer0Distances: graphDistanceAggregateV1(nativeDiagnostics), OverlayLayer0Distances: graphDistanceAggregateV1(overlayDiagnostics), NativeNeighborhood: nativeNeighborhood, OverlayNeighborhood: overlayNeighborhood, HardMisses: append([]localHNSWAttributionHardMissV1(nil), calibration.HardMisses...)}
 	if out.NativeVariant != "native" || out.OverlayVariant != "overlay_current" || !localHNSWAttributionSHA256V1(out.IndexDefinitionDigest) || out.NativeLayer0Distances.Count == 0 || out.OverlayLayer0Distances.Count == 0 || out.NativeConstruction.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.OverlayConstruction.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.NativeNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || out.OverlayNeighborhood.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || out.NativeNeighborhood.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || out.OverlayNeighborhood.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 {
 		return localHNSWAttributionInstrumentationSummaryV1{}, errors.New("invalid local HNSW instrumentation summary")
 	}
@@ -539,10 +611,35 @@ func localHNSWAttributionNearestIDsV1(ids []string, vectors map[string][]float32
 	return out, nil
 }
 
-func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
+func localHNSWAttributionPackDiagnosticsV1(searchers []*collections.VectorPartitionLocalSearcherV1) ([]collections.VectorPartitionPackDiagnosticsV1, error) {
+	out := make([]collections.VectorPartitionPackDiagnosticsV1, len(searchers))
+	for i, searcher := range searchers {
+		var err error
+		out[i], err = searcher.PackDiagnosticsV1()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1, cached ...[]collections.VectorPartitionPackDiagnosticsV1) (localHNSWAttributionNeighborhoodOracleV1, error) {
 	out := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 	if h == nil || h.assets == nil || len(h.searchers) != len(h.documentIDs) || len(h.searchers) != len(h.constructionEvidence.Partitions) {
 		return out, errors.New("invalid local HNSW oracle harness")
+	}
+	var diagnostics []collections.VectorPartitionPackDiagnosticsV1
+	if len(cached) != 0 {
+		diagnostics = cached[0]
+		if len(diagnostics) != len(h.searchers) {
+			return out, errors.New("invalid local HNSW cached diagnostics")
+		}
+	} else {
+		var err error
+		diagnostics, err = localHNSWAttributionPackDiagnosticsV1(h.searchers)
+		if err != nil {
+			return out, err
+		}
 	}
 	_, rows, err := h.assets.collection.ReadVectorPartitionRouterSourceRowsV1(h.assets.manifest.IndexName)
 	if err != nil {
@@ -557,11 +654,7 @@ func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1)
 		if len(ids) != len(part.NativeInsertionOrdinals) {
 			return out, errors.New("local HNSW oracle ordinal binding")
 		}
-		diagnostics, err := h.searchers[p].PackDiagnosticsV1()
-		if err != nil {
-			return out, err
-		}
-		out.PackDiagnostics = append(out.PackDiagnostics, diagnostics)
+		out.PackDiagnostics = append(out.PackDiagnostics, diagnostics[p])
 		final := map[int][]struct {
 			to     int
 			origin string
@@ -662,13 +755,12 @@ func localHNSWAttributionNeighborhoodOracleV1Build(h *localHNSWVariantHarnessV1)
 	return out, nil
 }
 
-func graphDistanceAggregateV1(searchers []*collections.VectorPartitionLocalSearcherV1) localHNSWAttributionDistanceAggregateV1 {
+func graphDistanceAggregateV1(diagnostics []collections.VectorPartitionPackDiagnosticsV1) localHNSWAttributionDistanceAggregateV1 {
 	// PackDiagnostics already computes the authoritative per-pack distances.
 	// Keep the report compact: weighted mean and global extrema are sufficient.
 	var out localHNSWAttributionDistanceAggregateV1
-	for _, searcher := range searchers {
-		d, err := searcher.PackDiagnosticsV1()
-		if err != nil || d.Layer0Distances.Count == 0 {
+	for _, d := range diagnostics {
+		if d.Layer0Distances.Count == 0 {
 			return localHNSWAttributionDistanceAggregateV1{}
 		}
 		if out.Count == 0 || d.Layer0Distances.Min < out.Min {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,18 +59,39 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 }
 
 func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
-	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, SeedCandidates: 1, SeedAdmissions: 1, VisitedRows: 1, VisitedOrdinalsSHA256: strings.Repeat("a", 64), TerminationReason: "candidate_limit", VisitedOrdinals: []uint32{0}, EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
+	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, SeedCandidates: 1, SeedAdmissions: 1, SeedEvents: []collections.VectorPartitionSearchSeedEventV1{{Ordinal: 0, Score: 1, TopAdmission: true, FrontierAdmission: true}}, VisitedRows: 1, VisitedOrdinalsSHA256: strings.Repeat("a", 64), TerminationReason: "candidate_limit", VisitedOrdinals: []uint32{0}, EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
 		{Layer: 1, SourceOrdinal: 0, DestinationOrdinal: 1, Scored: true, StateImprovement: true}, // upper-layer score improves the greedy state
 		{Layer: 0, SourceOrdinal: 0, DestinationOrdinal: 2, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true, StateImprovement: true},
 		{Layer: 0, SourceOrdinal: 2, DestinationOrdinal: 1}, // already visited truth must not recover it
 	}}
 	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{0, 1, 1}: "reciprocal_add", {0, 2, 0}: "diversity_selected", {2, 1, 0}: "nearest_backfill"}
-	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"truth-unscored": {}, "truth-scored": {}})
-	if err != nil || utility.Scored != 2 || utility.NewlyVisited != 1 || utility.StateImprovements != 2 || utility.TruthRecovered != 2 || utility.Reciprocal.Scored != 1 || utility.Reciprocal.TruthRecovered != 1 || utility.Reciprocal.StateImprovements != 1 || utility.Diversity.TruthRecovered != 1 || utility.Unattributed.Examined != 0 {
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"seed": {}, "truth-unscored": {}, "truth-scored": {}})
+	if err != nil || utility.Scored != 2 || utility.NewlyVisited != 1 || utility.StateImprovements != 2 || utility.TruthRecovered != 3 || utility.Reciprocal.Scored != 1 || utility.Reciprocal.TruthRecovered != 1 || utility.Reciprocal.StateImprovements != 1 || utility.Diversity.TruthRecovered != 1 || utility.Unattributed.TruthRecovered != 1 {
 		t.Fatalf("utility=%+v err=%v", utility, err)
 	}
 	delete(origins, localHNSWAttributionFinalEdgeKeyV1{0, 1, 1})
 	if _, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"truth-unscored": {}, "truth-scored": {}}); err == nil {
 		t.Fatal("unmatched final native edge accepted")
+	}
+}
+
+func TestLocalHNSWAttributionQueryMergeDeduplicatesTruthV1(t *testing.T) {
+	records := []localHNSWAttributionQuerySearchV1{
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Diversity: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"same": "diversity_selected"}},
+		{Utility: localHNSWAttributionQueryUtilityV1{TruthRecovered: 1, Overlay: localHNSWAttributionQueryOriginUtilityV1{TruthRecovered: 1}}, truthRecoveries: map[string]string{"same": "overlay_rewrite"}},
+	}
+	_, work, err := localHNSWAttributionQueryMergeV1(records, [][]m8CanonicalResultV1{{}, {}}, []uint32{0, 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.Utility.TruthRecovered != 1 || work.Utility.Diversity.TruthRecovered != 1 || work.Utility.Overlay.TruthRecovered != 0 {
+		t.Fatalf("duplicate routed truth recovery=%+v", work.Utility)
+	}
+}
+
+func TestLocalHNSWAttributionQueryUtilityOverflowFailsClosedV1(t *testing.T) {
+	utility := localHNSWAttributionQueryUtilityV1{ExaminedNative: math.MaxUint64}
+	if err := localHNSWAttributionQueryUtilityAddV1(&utility, localHNSWAttributionQueryUtilityV1{ExaminedNative: 1}); err == nil {
+		t.Fatal("utility overflow accepted")
 	}
 }

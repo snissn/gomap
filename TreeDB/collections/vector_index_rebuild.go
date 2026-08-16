@@ -29,13 +29,10 @@ func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) ma
 	}
 	items := make([]item, len(rows))
 	for i := range rows {
-		items[i] = item{id: string(rows[i].ID), hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), rows[i].ID...))}
+		items[i] = item{id: string(rows[i].ID), hash: vectorPartitionConstructionSampleHashV1(rows[i].ID)}
 	}
 	sort.Slice(items, func(i, j int) bool {
-		if cmp := bytes.Compare(items[i].hash[:], items[j].hash[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return items[i].id < items[j].id
+		return vectorPartitionConstructionSampleLessV1(items[i].hash, []byte(items[i].id), items[j].hash, []byte(items[j].id))
 	})
 	if len(items) > vectorPartitionConstructionCandidateCaptureLimitV1 {
 		items = items[:vectorPartitionConstructionCandidateCaptureLimitV1]
@@ -45,6 +42,17 @@ func vectorPartitionConstructionSampleIDsV1(rows []columnVectorGraphAssetRow) ma
 		out[item.id] = struct{}{}
 	}
 	return out
+}
+
+func vectorPartitionConstructionSampleHashV1(id []byte) [32]byte {
+	return sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))
+}
+
+func vectorPartitionConstructionSampleLessV1(leftHash [32]byte, leftID []byte, rightHash [32]byte, rightID []byte) bool {
+	if cmp := bytes.Compare(leftHash[:], rightHash[:]); cmp != 0 {
+		return cmp < 0
+	}
+	return bytes.Compare(leftID, rightID) < 0
 }
 
 var (
@@ -591,14 +599,11 @@ func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal [
 		s := &t.selections[i]
 		if s.Layer == 0 && s.Sampled {
 			id := index.nodes[s.Node].documentID
-			samples = append(samples, sampleSelection{index: i, id: id, hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))})
+			samples = append(samples, sampleSelection{index: i, id: id, hash: vectorPartitionConstructionSampleHashV1(id)})
 		}
 	}
 	sort.Slice(samples, func(i, j int) bool {
-		if cmp := bytes.Compare(samples[i].hash[:], samples[j].hash[:]); cmp != 0 {
-			return cmp < 0
-		}
-		return bytes.Compare(samples[i].id, samples[j].id) < 0
+		return vectorPartitionConstructionSampleLessV1(samples[i].hash, samples[i].id, samples[j].hash, samples[j].id)
 	})
 	for i := vectorPartitionConstructionCandidateSampleLimitV1; i < len(samples); i++ {
 		t.selections[samples[i].index].Sampled = false

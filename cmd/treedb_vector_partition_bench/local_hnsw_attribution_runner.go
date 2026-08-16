@@ -190,12 +190,12 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 		return errors.New("local HNSW attribution profile directory must be empty")
 	}
 	prefix := strings.TrimSuffix(out, filepath.Ext(out))
-	graphPath, queryPath := prefix+".graph.jsonl.gz", prefix+".queries.jsonl.gz"
+	graphPath, queryPath, instrumentationPath := prefix+".graph.jsonl.gz", prefix+".queries.jsonl.gz", prefix+".instrumentation.jsonl.gz"
 	outputParent := filepath.Dir(out)
 	if info, statErr := os.Lstat(outputParent); statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return errors.New("invalid local HNSW attribution output parent")
 	}
-	for _, path := range []string{out, graphPath, queryPath} {
+	for _, path := range []string{out, graphPath, queryPath, instrumentationPath} {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
 			return errors.New("local HNSW attribution output already exists")
 		}
@@ -287,7 +287,6 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	if err != nil {
 		return err
 	}
-	instrumentationPath := filepath.Join(filepath.Dir(out), "local_hnsw_attribution_instrumentation.jsonl.gz")
 	instrumentationArtifact, err := localHNSWAttributionWriteGzipJSONLV1(instrumentationPath, func(encoder *json.Encoder) (int, error) {
 		if err := encoder.Encode(instrumentation); err != nil {
 			return 0, err
@@ -348,7 +347,7 @@ func runLocalHNSWAttributionV1(args []string, stdout io.Writer) (runErr error) {
 	if err := writeVectorPartitionSystemJSONExclusiveV1(out, report); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "report=%s graph=%s graph_sha256=%s queries=%s queries_sha256=%s native_p2=%.6f overlay_p2=%.6f native_all=%.6f overlay_all=%.6f\n", out, graphPath, graphArtifact.SHA256, queryPath, queryArtifact.SHA256, summary.Native.P2EndToEnd.Mean, summary.Overlay.P2EndToEnd.Mean, summary.Native.AllGlobal.Mean, summary.Overlay.AllGlobal.Mean)
+	_, err = fmt.Fprintf(stdout, "report=%s graph=%s graph_sha256=%s queries=%s queries_sha256=%s instrumentation=%s instrumentation_sha256=%s native_p2=%.6f overlay_p2=%.6f native_all=%.6f overlay_all=%.6f\n", out, graphPath, graphArtifact.SHA256, queryPath, queryArtifact.SHA256, instrumentationPath, instrumentationArtifact.SHA256, summary.Native.P2EndToEnd.Mean, summary.Overlay.P2EndToEnd.Mean, summary.Native.AllGlobal.Mean, summary.Overlay.AllGlobal.Mean)
 	return err
 }
 

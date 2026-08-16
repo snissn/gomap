@@ -144,8 +144,12 @@ func localHNSWAttributionCalibrationSummaryAddV1(summary *localHNSWAttributionCa
 		return errors.New("local HNSW calibration query overflow")
 	}
 	for _, partition := range evidence.Partitions {
-		localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, partition.Native.Utility)
-		localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, partition.Overlay.Utility)
+		if err := localHNSWAttributionQueryUtilityAddV1(&summary.NativeUtility, partition.Native.Utility); err != nil {
+			return err
+		}
+		if err := localHNSWAttributionQueryUtilityAddV1(&summary.OverlayUtility, partition.Overlay.Utility); err != nil {
+			return err
+		}
 	}
 	if miss, ok := localHNSWAttributionHardMissV1Build(evidence.QueryOrdinal, evidence.QueryFP32SHA256, "native", localHNSWAttributionQueryBitsRecallV1(evidence.GlobalTruth, evidence.Native.HighResults)); ok {
 		summary.HardMisses = append(summary.HardMisses, miss)
@@ -226,24 +230,38 @@ func localHNSWAttributionCalibrationSummaryFinishV1(summary *localHNSWAttributio
 	return nil
 }
 
-func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtilityV1, value localHNSWAttributionQueryUtilityV1) {
-	dst.ExaminedNative += value.ExaminedNative
-	dst.ExaminedAuxiliary += value.ExaminedAuxiliary
-	dst.NewlyVisited += value.NewlyVisited
-	dst.Scored += value.Scored
-	dst.TopAdmissions += value.TopAdmissions
-	dst.FrontierAdmissions += value.FrontierAdmissions
-	dst.StateImprovements += value.StateImprovements
-	dst.TruthRecovered += value.TruthRecovered
-	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
-		pair[0].Examined += pair[1].Examined
-		pair[0].NewlyVisited += pair[1].NewlyVisited
-		pair[0].Scored += pair[1].Scored
-		pair[0].TopAdmissions += pair[1].TopAdmissions
-		pair[0].FrontierAdmissions += pair[1].FrontierAdmissions
-		pair[0].StateImprovements += pair[1].StateImprovements
-		pair[0].TruthRecovered += pair[1].TruthRecovered
+func localHNSWAttributionCheckedAddV1(dst *uint64, value uint64) error {
+	if dst == nil || math.MaxUint64-*dst < value {
+		return errors.New("local HNSW query utility overflow")
 	}
+	*dst += value
+	return nil
+}
+
+func localHNSWAttributionQueryOriginUtilityAddV1(dst *localHNSWAttributionQueryOriginUtilityV1, value localHNSWAttributionQueryOriginUtilityV1) error {
+	for _, pair := range [][2]*uint64{{&dst.Examined, &value.Examined}, {&dst.NewlyVisited, &value.NewlyVisited}, {&dst.Scored, &value.Scored}, {&dst.TopAdmissions, &value.TopAdmissions}, {&dst.FrontierAdmissions, &value.FrontierAdmissions}, {&dst.StateImprovements, &value.StateImprovements}, {&dst.TruthRecovered, &value.TruthRecovered}} {
+		if err := localHNSWAttributionCheckedAddV1(pair[0], *pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtilityV1, value localHNSWAttributionQueryUtilityV1) error {
+	if dst == nil {
+		return errors.New("local HNSW nil query utility")
+	}
+	for _, pair := range [][2]*uint64{{&dst.ExaminedNative, &value.ExaminedNative}, {&dst.ExaminedAuxiliary, &value.ExaminedAuxiliary}, {&dst.NewlyVisited, &value.NewlyVisited}, {&dst.Scored, &value.Scored}, {&dst.TopAdmissions, &value.TopAdmissions}, {&dst.FrontierAdmissions, &value.FrontierAdmissions}, {&dst.StateImprovements, &value.StateImprovements}, {&dst.TruthRecovered, &value.TruthRecovered}} {
+		if err := localHNSWAttributionCheckedAddV1(pair[0], *pair[1]); err != nil {
+			return err
+		}
+	}
+	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
+		if err := localHNSWAttributionQueryOriginUtilityAddV1(pair[0], *pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func localHNSWAttributionFiniteRecallV1(value float64) bool {

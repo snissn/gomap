@@ -28,6 +28,7 @@ type localHNSWAttributionQuerySearchV1 struct {
 	VisitedOrdinalsSHA256 string                              `json:"visited_ordinals_sha256"`
 	VisitedOrdinals       []uint32                            `json:"visited_ordinals"`
 	Utility               localHNSWAttributionQueryUtilityV1  `json:"utility"`
+	truthRecoveries       map[string]string
 }
 
 type localHNSWAttributionQueryPartitionV1 struct {
@@ -123,8 +124,14 @@ func localHNSWAttributionQueryEvidenceV1Build(ctx context.Context, source *m8Pro
 	for partition := range out.Partitions {
 		out.Partitions[partition] = localHNSWAttributionQueryPartitionV1{Partition: uint32(partition), Native: nativeRecords[partition], Overlay: overlayRecords[partition]}
 	}
-	out.Native = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, nativeRecords, nativeResults, lowRoute, highRoute)
-	out.Overlay = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, overlayRecords, overlayResults, lowRoute, highRoute)
+	out.Native, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, nativeRecords, nativeResults, lowRoute, highRoute)
+	if err != nil {
+		return out, err
+	}
+	out.Overlay, err = localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal, overlayRecords, overlayResults, lowRoute, highRoute)
+	if err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -176,37 +183,54 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 		if err != nil {
 			return nil, nil, err
 		}
-		origins, err := localHNSWAttributionFinalOriginsV1(harness.constructionEvidence, partition)
-		if err != nil {
-			return nil, nil, err
+		if partition >= len(harness.finalOrigins) {
+			return nil, nil, errors.New("missing local HNSW final origins")
 		}
+		origins := harness.finalOrigins[partition]
 		utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, attribution, origins, harness.documentIDs[partition], truth)
 		if err != nil {
 			return nil, nil, err
 		}
-		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility}
+		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, truthRecoveries: localHNSWAttributionTruthRecoveriesV1(attribution, origins, harness.documentIDs[partition], truth)}
 		resultsByPartition[partition] = canonical
 	}
 	return records, resultsByPartition, nil
 }
 
-func localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal []m8CanonicalResultV1, records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, lowRoute, highRoute []uint32) localHNSWAttributionQueryVariantV1 {
-	lowResults, lowWork := localHNSWAttributionQueryMergeV1(records, resultsByPartition, lowRoute)
-	highResults, highWork := localHNSWAttributionQueryMergeV1(records, resultsByPartition, highRoute)
-	return localHNSWAttributionQueryVariantV1{LowResults: localHNSWAttributionQueryResultBitsV1(lowResults), HighResults: localHNSWAttributionQueryResultBitsV1(highResults), EndToEndRecall: m8CanonicalRecallV1(truth, lowResults), LocalRecall: m8CanonicalRecallV1(exactLocal, lowResults), RoutingRecall: m8CanonicalRecallV1(truth, exactLocal), LowSelectedWork: lowWork, HighSelectedWork: highWork}
+func localHNSWAttributionQueryVariantEvidenceV1(truth, exactLocal []m8CanonicalResultV1, records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, lowRoute, highRoute []uint32) (localHNSWAttributionQueryVariantV1, error) {
+	lowResults, lowWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, lowRoute)
+	if err != nil {
+		return localHNSWAttributionQueryVariantV1{}, err
+	}
+	highResults, highWork, err := localHNSWAttributionQueryMergeV1(records, resultsByPartition, highRoute)
+	if err != nil {
+		return localHNSWAttributionQueryVariantV1{}, err
+	}
+	return localHNSWAttributionQueryVariantV1{LowResults: localHNSWAttributionQueryResultBitsV1(lowResults), HighResults: localHNSWAttributionQueryResultBitsV1(highResults), EndToEndRecall: m8CanonicalRecallV1(truth, lowResults), LocalRecall: m8CanonicalRecallV1(exactLocal, lowResults), RoutingRecall: m8CanonicalRecallV1(truth, exactLocal), LowSelectedWork: lowWork, HighSelectedWork: highWork}, nil
 }
 
-func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, route []uint32) ([]m8CanonicalResultV1, localHNSWAttributionQueryWorkV1) {
+func localHNSWAttributionQueryMergeV1(records []localHNSWAttributionQuerySearchV1, resultsByPartition [][]m8CanonicalResultV1, route []uint32) ([]m8CanonicalResultV1, localHNSWAttributionQueryWorkV1, error) {
 	var merged []m8CanonicalResultV1
 	var work localHNSWAttributionQueryWorkV1
+	recovered := make(map[string]struct{})
 	for _, partition := range route {
 		merged = append(merged, resultsByPartition[partition]...)
 		work.Candidates += records[partition].Candidates
 		work.Edges += records[partition].Edges
 		work.FrontierAdmissions += records[partition].FrontierAdmissions
-		localHNSWAttributionQueryUtilityAddV1(&work.Utility, records[partition].Utility)
+		utility := records[partition].Utility
+		for id, origin := range records[partition].truthRecoveries {
+			if _, seen := recovered[id]; seen {
+				localHNSWAttributionQueryUtilityRemoveTruthRecoveryV1(&utility, origin)
+				continue
+			}
+			recovered[id] = struct{}{}
+		}
+		if err := localHNSWAttributionQueryUtilityAddV1(&work.Utility, utility); err != nil {
+			return nil, localHNSWAttributionQueryWorkV1{}, err
+		}
 	}
-	return m8CanonicalResultsV1(merged, 10), work
+	return m8CanonicalResultsV1(merged, 10), work, nil
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {

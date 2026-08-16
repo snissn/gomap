@@ -1402,6 +1402,7 @@ type VectorPartitionSearchAttributionV1 struct {
 	ScoreOrdinals         []uint32                           `json:"-"`
 	AdjacencyReads        []VectorPartitionSearchPageReadV1  `json:"-"`
 	EdgeEvents            []VectorPartitionSearchEdgeEventV1 `json:"-"`
+	SeedEvents            []VectorPartitionSearchSeedEventV1 `json:"-"`
 }
 
 // VectorPartitionSearchEdgeEventV1 records one examined prepared-pack edge.
@@ -1412,6 +1413,15 @@ type VectorPartitionSearchEdgeEventV1 struct {
 	NewlyVisited, Scored                              bool
 	Score                                             float64
 	TopAdmission, FrontierAdmission, StateImprovement bool
+}
+
+// VectorPartitionSearchSeedEventV1 records a scored entry or fallback seed.
+// Seeds have no construction-edge origin, so offline reducers attribute their
+// truth recovery to the explicit unattributed bucket.
+type VectorPartitionSearchSeedEventV1 struct {
+	Ordinal                         int
+	Score                           float64
+	TopAdmission, FrontierAdmission bool
 }
 type VectorPartitionSearchPageReadV1 struct {
 	Layer     int
@@ -1813,6 +1823,9 @@ func (s *VectorPartitionLocalSearcherV1) searchWithOptionsV1(ctx context.Context
 			}
 			for _, event := range trace.EdgeEvents {
 				attribution.EdgeEvents = append(attribution.EdgeEvents, VectorPartitionSearchEdgeEventV1{Layer: event.Layer, SourceOrdinal: event.SourceOrdinal, DestinationOrdinal: event.DestinationOrdinal, Auxiliary: event.Auxiliary, NewlyVisited: event.NewlyVisited, Scored: event.Scored, Score: event.Score, TopAdmission: event.TopAdmission, FrontierAdmission: event.FrontierAdmission, StateImprovement: event.StateImprovement})
+			}
+			for _, event := range trace.SeedEvents {
+				attribution.SeedEvents = append(attribution.SeedEvents, VectorPartitionSearchSeedEventV1{Ordinal: event.Ordinal, Score: event.Score, TopAdmission: event.TopAdmission, FrontierAdmission: event.FrontierAdmission})
 			}
 			attribution.FrontierAdmissions = stats.FrontierPushes
 			attribution.SeedCandidates = trace.SeedCandidates

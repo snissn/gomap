@@ -1448,16 +1448,13 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return ErrVectorPartitionSearchUnavailable
 			}
 			id := append([]byte(nil), pack.DocumentIDBytes[start:end]...)
-			eligible = append(eligible, sampleNode{node: selection.Node, id: id, hash: sha256.Sum256(append([]byte("treedb-4170-candidate-sample-v1/"), id...))})
+			eligible = append(eligible, sampleNode{node: selection.Node, id: id, hash: vectorPartitionConstructionSampleHashV1(id)})
 			if selection.CandidateSampled {
 				actualSampled[selection.Node] = true
 			}
 		}
 		sort.Slice(eligible, func(i, j int) bool {
-			if cmp := bytes.Compare(eligible[i].hash[:], eligible[j].hash[:]); cmp != 0 {
-				return cmp < 0
-			}
-			return bytes.Compare(eligible[i].id, eligible[j].id) < 0
+			return vectorPartitionConstructionSampleLessV1(eligible[i].hash, eligible[i].id, eligible[j].hash, eligible[j].id)
 		})
 		// HNSW's entry point is the only row without a layer-zero insertion
 		// selection. This makes the eligible sample population derivable from
@@ -1603,6 +1600,10 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrVectorPartitionSearchUnavailable, err)
 	}
+	// The public materializer accepts a set of partition assets. Canonicalize it
+	// before publishing so its companion evidence is likewise canonical.
+	inputs = append([]VectorPartitionSearchAssetV1(nil), inputs...)
+	sort.Slice(inputs, func(i, j int) bool { return inputs[i].PartitionID < inputs[j].PartitionID })
 	limits := DefaultVectorPartitionManifestLimits()
 	if manifest.SourceRowCount == 0 || manifest.SourceRowCount > uint64(limits.sourceRowLimit()) || len(manifest.Memberships) != int(manifest.SourceRowCount) || len(manifest.OverlapMemberships) > limits.MaxMemberships || len(inputs) > int(manifest.PartitionCount) {
 		return nil, nil, fmt.Errorf("%w: manifest count cap", ErrVectorPartitionSearchUnavailable)

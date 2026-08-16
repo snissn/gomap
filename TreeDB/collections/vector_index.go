@@ -338,11 +338,17 @@ func (t *vectorIndexConstructionTraceV1) selectEdge(from, to, layer int, origin 
 	if t == nil {
 		return
 	}
+	t.init()
+	t.pending[vectorIndexConstructionEdgeKeyV1{from, to, layer}] = origin
+}
+
+func (t *vectorIndexConstructionTraceV1) init() {
 	if t.pending == nil {
 		t.pending = make(map[vectorIndexConstructionEdgeKeyV1]string)
+	}
+	if t.origins == nil {
 		t.origins = make(map[vectorIndexConstructionEdgeKeyV1]string)
 	}
-	t.pending[vectorIndexConstructionEdgeKeyV1{from, to, layer}] = origin
 }
 
 func (t *vectorIndexConstructionTraceV1) record(from, to, layer int, origin, action string) {
@@ -1460,6 +1466,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	trace := idx.constructionTrace
 	var origin string
 	if trace != nil {
+		trace.init()
 		key := vectorIndexConstructionEdgeKeyV1{From: fromNodeID, To: toNodeID, Layer: layer}
 		origin = trace.pending[key]
 		if origin != "" {
@@ -2240,6 +2247,17 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	if limit <= 0 {
 		return nil
 	}
+	trace := idx.constructionTrace
+	candidateCount := len(candidates)
+	var sampledCandidates []int
+	if trace != nil && layer == 0 && excludeNodeID >= 0 && excludeNodeID < len(idx.nodes) {
+		if _, sampled := trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]; sampled {
+			sampledCandidates = make([]int, candidateCount)
+			for i := range candidates {
+				sampledCandidates[i] = candidates[i].nodeID
+			}
+		}
+	}
 	scored := candidates[:0]
 	for _, candidate := range candidates {
 		if candidate.nodeID == excludeNodeID || candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
@@ -2253,7 +2271,6 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		}
 		scored = append(scored, candidate)
 	}
-	trace := idx.constructionTrace
 	var diversitySelected int
 	var diversity map[int]bool
 	if trace == nil {
@@ -2262,15 +2279,10 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithOriginsLocked(scored, limit)
 	}
 	if trace != nil {
-		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: len(candidates), Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
-		if layer == 0 {
-			if _, sampled := trace.sampleIDs[string(idx.nodes[excludeNodeID].documentID)]; sampled {
-				selection.Sampled = true
-				selection.CandidateNodes = make([]int, len(candidates))
-				for i := range candidates {
-					selection.CandidateNodes[i] = candidates[i].nodeID
-				}
-			}
+		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
+		if sampledCandidates != nil {
+			selection.Sampled = true
+			selection.CandidateNodes = sampledCandidates
 		}
 		trace.selections = append(trace.selections, selection)
 		for _, candidate := range scored {
