@@ -120,7 +120,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&out, "out", "", "fresh report")
 	fs.StringVar(&mode, "mode", "zero", "materialized membership mode")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
-	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
+	fs.StringVar(&efRaw, "ef", "80,81,88,96", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
@@ -137,8 +137,8 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if len(probes) != 3 || probes[0] != 1 || probes[1] != 2 || probes[2] != 4 || len(efs) != 4 || efs[0] != 64 || efs[1] != 80 || efs[2] != 96 || efs[3] != 128 {
-		return errors.New("M0 frontier requires probes 1,2,4 and EFs 64,80,96,128")
+	if len(probes) != 3 || probes[0] != 1 || probes[1] != 2 || probes[2] != 4 || len(efs) != 4 || efs[0] != 80 || efs[1] != 81 || efs[2] != 88 || efs[3] != 96 {
+		return errors.New("M0 frontier requires probes 1,2,4 and EFs 80,81,88,96")
 	}
 	fixture, e := loadFixture(dataset)
 	if e != nil {

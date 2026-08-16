@@ -41,7 +41,7 @@ func TestM0FrontierAccountSeparatesAssignmentAndBuildIdentityV1(t *testing.T) {
 func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
 	base := []string{"-db", "db", "-dataset", "dataset", "-calibration", "calibration", "-truth-cache", "truth", "-membership-report", "membership", "-assignment-artifact", "assignment", "-graph-artifact", "graph", "-out", t.TempDir() + "/report.json"}
 	for _, override := range [][]string{{"-probes", "2,3,4"}, {"-ef", "64,80,128,256"}} {
-		if err := runM0CalibrationFrontierV1(append(base, override...), io.Discard); err == nil || !strings.Contains(err.Error(), "requires probes 1,2,4 and EFs 64,80,96,128") {
+		if err := runM0CalibrationFrontierV1(append(base, override...), io.Discard); err == nil || !strings.Contains(err.Error(), "requires probes 1,2,4 and EFs 80,81,88,96") {
 			t.Fatalf("override %v error = %v", override, err)
 		}
 	}
@@ -64,7 +64,7 @@ func TestM0CleanBuildIdentityValidV1(t *testing.T) {
 }
 
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
-	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}
+	probes, efs := []int{1, 2, 4}, []int{80, 81, 88, 96}
 	cells := make([]m0FrontierCellV1, 0, 12)
 	for _, p := range probes {
 		for _, ef := range efs {
@@ -110,7 +110,7 @@ func TestM0FrontierExecutionOrderV1Counterbalances(t *testing.T) {
 }
 
 func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
-	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}
+	probes, efs := []int{1, 2, 4}, []int{80, 81, 88, 96}
 	sha := strings.Repeat("a", 64)
 	canonical := make([]m0FrontierCellV1, 0, 12)
 	measurements := make([]m0FrontierCellV1, 0, 36)
@@ -200,7 +200,7 @@ func TestM0FrontierLineageV1RejectsDifferentFixtureSource(t *testing.T) {
 }
 
 func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
-	plan := m0FrontierPlanV1([]int{1, 2, 4}, []int{64, 80, 96, 128})
+	plan := m0FrontierPlanV1([]int{1, 2, 4}, []int{80, 81, 88, 96})
 	sha := strings.Repeat("a", 64)
 	measurements := make([]m0FrontierCellV1, 0, 36)
 	for repetition := 0; repetition < 3; repetition++ {
@@ -209,7 +209,7 @@ func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
 		}
 	}
 	aggregates, err := m0FrontierAggregateV1(measurements, plan, 806)
-	if err != nil || len(aggregates) != 12 || !m0FrontierCellsCompleteV1(aggregates, []int{1, 2, 4}, []int{64, 80, 96, 128}, 806) {
+	if err != nil || len(aggregates) != 12 || !m0FrontierCellsCompleteV1(aggregates, []int{1, 2, 4}, []int{80, 81, 88, 96}, 806) {
 		t.Fatalf("counterbalanced aggregate err=%v rows=%d", err, len(aggregates))
 	}
 	for _, cell := range aggregates {
