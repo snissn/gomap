@@ -19,7 +19,7 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	ordinals[2], ordinals[17] = ordinals[17], ordinals[2]
 	ordinals[3], ordinals[300] = ordinals[300], ordinals[3]
 	ordinals[4], ordinals[5000] = ordinals[5000], ordinals[4]
-	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 3, To: 2, InsertionOrdinal: 300, Origin: "reciprocal_add", Action: "reciprocal_prune_keep"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
+	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{TraceMode: "detailed", NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, PruneKeeps: 1, CompactLifecycle: collections.VectorPartitionConstructionCompactLifecycleV1{PruneKeep: [5]uint64{0, 0, 1, 0, 0}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
 	totals, err := localHNSWAttributionConstructionReduceV1(evidence)
 	if err != nil || totals.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [5]uint64{1, 0, 0, 0, 0} || totals.ReciprocalAddByOrigin != [5]uint64{0, 0, 1, 0, 0} || totals.InitialAddAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.InitialAddDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.ReciprocalAddAgeByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.ReciprocalAddDeltaByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.PruneDropAgeByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.PruneDropDeltaByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.FinalAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.FinalDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} {
 		t.Fatalf("totals=%+v err=%v", totals, err)
@@ -83,6 +83,28 @@ func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
 	delete(origins, localHNSWAttributionFinalEdgeKeyV1{0, 1, 1})
 	if _, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 3}, trace, origins, []string{"seed", "truth-unscored", "truth-scored"}, map[string]struct{}{"truth-unscored": {}, "truth-scored": {}}); err == nil {
 		t.Fatal("unmatched final native edge accepted")
+	}
+}
+
+func TestLocalHNSWAttributionQueryUtilityReducerSeparatesAuxiliaryMetricsV1(t *testing.T) {
+	metrics := collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 1, AuxiliaryEdges: 1}
+	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, VisitedRows: 2, VisitedOrdinalsSHA256: strings.Repeat("a", 64), VisitedOrdinals: []uint32{0, 1}, TerminationReason: "distance_bound", EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
+		{Layer: 0, SourceOrdinal: 0, DestinationOrdinal: 1, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true},
+		{Layer: 0, SourceOrdinal: 1, DestinationOrdinal: 0, Auxiliary: true, NewlyVisited: true, Scored: true, TopAdmission: true, FrontierAdmission: true},
+	}}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{From: 0, To: 1, Layer: 0}: "diversity_selected"}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(metrics, trace, origins, []string{"a", "b"}, map[string]struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, err := localHNSWAttributionMetricEdgesV1(metrics)
+	if err != nil || total != 2 || utility.ExaminedNative != 1 || utility.ExaminedAuxiliary != 1 || utility.Diversity.Examined != 1 || utility.Auxiliary.Examined != 1 || !localHNSWAttributionQueryUtilityConservedV1(utility, total) {
+		t.Fatalf("total=%d utility=%+v err=%v", total, utility, err)
+	}
+	overflow := metrics
+	overflow.Edges = math.MaxUint64
+	if _, err := localHNSWAttributionMetricEdgesV1(overflow); err == nil {
+		t.Fatal("accepted overflowing native plus auxiliary edge metrics")
 	}
 }
 

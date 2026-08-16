@@ -300,6 +300,13 @@ func (h *localHNSWVariantHarnessV1) Close() error {
 // builds one graph variant against the literal retained manifest. It never
 // publishes a variant manifest and uses the retained router handle for routes.
 func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV1, tempRoot string, variant collections.VectorPartitionLocalGraphVariantV1, fileID uint32) (_ *localHNSWVariantHarnessV1, err error) {
+	return materializeRetainedLocalHNSWVariantPartitionsV1(source, tempRoot, variant, fileID, nil)
+}
+
+// materializeRetainedLocalHNSWVariantPartitionsV1 is the retained-clone
+// materializer used by bounded preparation smoke checks. A nil partition list
+// preserves the ordinary all-partition offline diagnostic behavior.
+func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGroupAssetsV1, tempRoot string, variant collections.VectorPartitionLocalGraphVariantV1, fileID uint32, partitionIDs []uint32) (_ *localHNSWVariantHarnessV1, err error) {
 	if source == nil || source.collection == nil || source.router == nil || tempRoot == "" || fileID == 0 {
 		return nil, errors.New("retained local HNSW variant inputs")
 	}
@@ -309,6 +316,24 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	if _, err := collections.VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return nil, err
 	}
+	if len(partitionIDs) == 0 {
+		partitionIDs = make([]uint32, source.manifest.PartitionCount)
+		for p := range partitionIDs {
+			partitionIDs[p] = uint32(p)
+		}
+	}
+	seenPartitions := make(map[uint32]struct{}, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		if partitionID >= source.manifest.PartitionCount {
+			return nil, errors.New("retained local HNSW partition out of range")
+		}
+		if _, duplicate := seenPartitions[partitionID]; duplicate {
+			return nil, errors.New("retained local HNSW partition duplicate")
+		}
+		seenPartitions[partitionID] = struct{}{}
+	}
+	partitionIDs = append([]uint32(nil), partitionIDs...)
+	sort.Slice(partitionIDs, func(i, j int) bool { return partitionIDs[i] < partitionIDs[j] })
 	clone, err := os.MkdirTemp(tempRoot, "treedb-4105-variant-*")
 	if err != nil {
 		return nil, err
@@ -330,7 +355,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	if owned.manifest.IntegrityDigest != source.manifest.IntegrityDigest || owned.manifest.SourceChecksum != source.manifest.SourceChecksum || owned.manifest.Generation != source.manifest.Generation {
 		return nil, errors.Join(errors.New("reflink clone retained manifest identity mismatch"), owned.Close())
 	}
-	inputs := make([]collections.VectorPartitionSearchAssetV1, source.manifest.PartitionCount)
+	inputs := make([]collections.VectorPartitionSearchAssetV1, len(partitionIDs))
 	sourceID := collections.VectorPartitionSourceIdentityV1{Generation: source.manifest.SourceGeneration, Checksum: source.manifest.SourceChecksum, SchemaHash: source.manifest.SourceSchemaHash, RowCount: source.manifest.SourceRowCount}
 	var dimensions int
 	for _, candidate := range owned.collection.Meta().VectorIndexes {
@@ -342,10 +367,17 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	if dimensions == 0 {
 		return nil, errors.Join(errors.New("retained index definition missing"), owned.Close())
 	}
-	for p := range inputs {
-		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: uint32(p), Dimensions: dimensions}
+	for p, partitionID := range partitionIDs {
+		inputs[p] = collections.VectorPartitionSearchAssetV1{Source: sourceID, Generation: source.manifest.Generation, PartitionID: partitionID, Dimensions: dimensions}
 	}
-	assets, resources, constructionEvidence, err := owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	var assets []collections.VectorPartitionAssetV1
+	var resources interface{ Release() }
+	var constructionEvidence collections.VectorPartitionConstructionEvidenceV1
+	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	} else {
+		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
+	}
 	if err != nil {
 		return nil, errors.Join(err, owned.Close())
 	}
@@ -363,7 +395,7 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 		return nil, errors.New("retained variant asset count mismatch")
 	}
 	for p, asset := range assets {
-		if asset.PartitionID != uint32(p) {
+		if asset.PartitionID != inputs[p].PartitionID {
 			return nil, errors.New("retained variant partition ordering mismatch")
 		}
 		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset)
@@ -377,7 +409,9 @@ func materializeRetainedLocalHNSWVariantV1(source *m8ProductionMultiGroupAssetsV
 	}
 	h.finalOrigins = make([]map[localHNSWAttributionFinalEdgeKeyV1]string, len(assets))
 	for p := range h.finalOrigins {
-		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, p)
+		// construction evidence is keyed by its retained partition ID, not this
+		// materialization's (possibly singleton) asset-slice position.
+		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, int(h.packAssets[p].PartitionID))
 		if err != nil {
 			return nil, err
 		}

@@ -490,6 +490,12 @@ func run(args []string, stdout io.Writer) error {
 	if len(args) > 0 && args[0] == "local-hnsw-repair-m18-ef-curve" {
 		return runLocalHNSWRepairM18EFCurveV1(args[1:], stdout)
 	}
+	if len(args) > 0 && args[0] == "local-hnsw-m18-edge-diagnosis" {
+		return runLocalHNSWM18EdgeDiagnosisV1(args[1:], stdout)
+	}
+	if len(args) > 0 && args[0] == "local-hnsw-m18-preparation-smoke" {
+		return runLocalHNSWM18PreparationSmokeV1(args[1:], stdout)
+	}
 	if len(args) > 0 && args[0] == "local-hnsw-repair-construction-curve" {
 		return runLocalHNSWRepairConstructionCurveV1(args[1:], stdout)
 	}

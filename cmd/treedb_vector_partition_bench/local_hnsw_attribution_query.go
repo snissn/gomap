@@ -449,8 +449,12 @@ func localHNSWAttributionQueryVariantV1Build(ctx context.Context, harness *local
 		if err != nil {
 			return nil, nil, err
 		}
+		totalEdges, err := localHNSWAttributionMetricEdgesV1(metrics)
+		if err != nil {
+			return nil, nil, err
+		}
 		recoveries := localHNSWAttributionTruthRecoveriesV1(attribution, origins, harness.documentIDs[partition], truth)
-		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: metrics.Edges, FrontierAdmissions: attribution.FrontierAdmissions, SeedCandidates: attribution.SeedCandidates, SeedAdmissions: attribution.SeedAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
+		records[partition] = localHNSWAttributionQuerySearchV1{Results: localHNSWAttributionQueryResultBitsV1(canonical), Candidates: metrics.Candidates, Edges: totalEdges, FrontierAdmissions: attribution.FrontierAdmissions, SeedCandidates: attribution.SeedCandidates, SeedAdmissions: attribution.SeedAdmissions, TerminationReason: attribution.TerminationReason, VisitedOrdinalsSHA256: attribution.VisitedOrdinalsSHA256, VisitedOrdinals: append([]uint32(nil), attribution.VisitedOrdinals...), Utility: utility, TruthRecoveries: localHNSWAttributionTruthRecoveryRecordsV1(recoveries)}
 		resultsByPartition[partition] = canonical
 	}
 	return records, resultsByPartition, nil
