@@ -323,3 +323,120 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestM0MaterializeByteBoundedMembershipReopensDisposableClone covers the
+// case where the retained source has a bound M3 shard-generation sidecar. M0
+// changes its realized overlap from the source's exact 20% form to zero, so it
+// must replace the sidecar rather than leave its old membership provenance
+// under the rewritten descriptor.
+func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
+	}
+	testM0MaterializeBuildIdentityV1(t)
+	root := t.TempDir()
+	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 40, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
+	sourceDB := filepath.Join(root, "source")
+	planConfig := vectorpartition.DefaultConfig()
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil || plan.Partitions != 16 {
+		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
+	}
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
+	vectors := fixtureVectors(fixture)
+	input := make([]vectorpartition.Vector, len(vectors))
+	for i := range vectors {
+		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
+	}
+	config := vectorpartition.DefaultConfig()
+	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.Backend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+	raw, err := vectorpartition.CanonicalJSON(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
+	if err != nil || plan.OverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
+	}
+	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {
+		t.Fatalf("source shard generation: %v", err)
+	}
+
+	artifactPath := filepath.Join(root, "assignment.json")
+	if err = os.WriteFile(artifactPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	if err = os.WriteFile(graphPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroSHA, err := m0MembershipDigestV1(zero.Memberships)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(raw), AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: config.Partitions, Modes: []m0MembershipModeV1{{Name: "zero", Materialize: true, MembershipSHA256: zeroSHA}, {Name: "useful_only_20", EquivalentTo: "zero"}, {Name: "exact_20", Rejected: "exact-20 contains filler"}}}
+	accountRaw, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountPath := filepath.Join(root, "account.json")
+	if err = os.WriteFile(accountPath, accountRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(root, "out.json")
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
+		t.Fatal(err)
+	}
+	var report m0MaterializeReportV1
+	reportRaw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(reportRaw, &report); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ShardPlan != plan || updated.ShardGenerationDigest == sourceDescriptor.ShardGenerationDigest || updated.ShardGenerationBytes == 0 {
+		t.Fatalf("updated descriptor did not replace source shard generation: source=%q updated=%+v", sourceDescriptor.ShardGenerationDigest, updated)
+	}
+	if err = m3VerifyRetainedShardGenerationV1(report.CloneDB, updated); err != nil {
+		t.Fatalf("updated shard generation: %v", err)
+	}
+	retained, err := m3ReadShardGenerationDescriptorV1(report.CloneDB, updated.ShardGenerationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroOrdinals := make([][]int, config.Partitions)
+	for _, membership := range zero.Memberships {
+		zeroOrdinals[membership.Partition] = append(zeroOrdinals[membership.Partition], membership.VectorOrdinal)
+	}
+	if err = m3VerifyShardGenerationMembershipsV1(retained, zeroOrdinals, artifact.Assignment); err != nil {
+		t.Fatalf("updated shard generation membership binding: %v", err)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict byte-bounded reopen: %v", err)
+	}
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

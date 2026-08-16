@@ -205,11 +205,16 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	updated.OverlapUseful, updated.OverlapFiller, updated.EdgeCutBefore, updated.EdgeCutAfter = overlap.Useful, overlap.Filler, overlap.EdgeCutBefore, overlap.EdgeCutAfter
 	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), overlap.Used
 	updated.OverlapUnusedCapacity = overlap.Capacity*len(overlap.Loads) - len(overlap.Memberships)
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(updated.ShardPlan, updated.OverlapRatio, overlap)
+	if err != nil {
+		return fmt.Errorf("M0 materialization shard generation: %w", err)
+	}
+	updated.ShardGenerationDigest, updated.ShardGenerationBytes = shardGenerationDigest, uint64(len(shardGenerationRaw))
 	updated.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(updated)
 	if err != nil {
 		return err
 	}
-	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, updated.BuildIdentityDigest)
+	manifest, membershipOrdinals, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, updated.BuildIdentityDigest)
 	if err != nil {
 		return err
 	}
@@ -288,6 +293,21 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = m3DescriptorMatchesManifestV1(updated, fixtureManifest{Checksum: updated.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
 		return err
 	}
+	if err = m0ReplaceShardGenerationRecordV1(clone, shardGenerationRaw, shardGenerationDigest); err != nil {
+		return err
+	}
+	if err = m3VerifyRetainedShardGenerationV1(clone, updated); err != nil {
+		return fmt.Errorf("M0 materialization shard generation does not bind descriptor: %w", err)
+	}
+	if shardGenerationDigest != "" {
+		retained, readErr := m3ReadShardGenerationDescriptorV1(clone, shardGenerationDigest)
+		if readErr != nil {
+			return fmt.Errorf("M0 materialization shard generation does not reopen: %w", readErr)
+		}
+		if err = m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals, artifact.Assignment); err != nil {
+			return fmt.Errorf("M0 materialization shard generation does not bind packs: %w", err)
+		}
+	}
 	if err = m3ReplaceVariantDescriptorAtomicallyV1(clone, updated); err != nil {
 		return err
 	}
@@ -365,6 +385,44 @@ func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byt
 		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 useful-only membership")
 	}
 	return overlap, selected, nil
+}
+
+// m0ReplaceShardGenerationRecordV1 replaces the source clone's immutable M3
+// record only after the rebuilt membership has produced a new bound record.
+// The clone is disposable on any error, so its old source record is never
+// silently retained under the rewritten descriptor.
+func m0ReplaceShardGenerationRecordV1(dir string, raw []byte, digest string) error {
+	if len(raw) == 0 {
+		if digest != "" {
+			return errors.New("empty M0 shard generation record has a digest")
+		}
+		return nil
+	}
+	tmp, err := os.CreateTemp(dir, ".vector_partition_shard_generation_v1-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0o644); err == nil {
+		_, err = tmp.Write(raw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(tmpName, filepath.Join(dir, m3ShardGenerationFileV1)); err != nil {
+		return err
+	}
+	if _, err = m3ReadShardGenerationDescriptorV1(dir, digest); err != nil {
+		return fmt.Errorf("replaced M0 shard generation record does not reopen: %w", err)
+	}
+	return nil
 }
 
 func m0RouterPartitionsV1(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, rows []collections.VectorPartitionRouterSourceRowV1) ([]vectorpartition.RouterPartitionV1, error) {

@@ -2097,6 +2097,14 @@ func TestM8QualificationTruthCacheAnchorV1(t *testing.T) {
 // phase.  Qualification must open a real router/manifest, not accept a
 // descriptor-shaped directory.
 func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, sourceID ...func(int) string) m3VariantDescriptorV1 {
+	return testM8QualificationRetainedDescriptorWithShardPlanV1(t, dir, head, fixture, variantID, assignment, ratio, vectorpartition.ShardPlanV1{}, sourceID...)
+}
+
+// testM8QualificationRetainedDescriptorWithShardPlanV1 is the plan-aware form
+// of the retained-asset fixture. A byte-bounded record is created before the
+// build identity and manifest policy, so all three bindings are published as a
+// single self-consistent retained source.
+func testM8QualificationRetainedDescriptorWithShardPlanV1(t *testing.T, dir, head string, fixture fixtureManifest, variantID, assignment string, ratio float64, shardPlan vectorpartition.ShardPlanV1, sourceID ...func(int) string) m3VariantDescriptorV1 {
 	t.Helper()
 	const partitions = 16
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -2131,6 +2139,10 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		t.Fatal(err)
 	}
 	overlap, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{Ratio: ratio, Capacity: capacity, RequireExact: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(shardPlan, ratio, overlap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2213,7 +2225,7 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 	routerConfig := vectorpartition.DefaultRouterConfigV1()
 	routerConfig.Seed = fixture.Seed
 	partitionConfig := partition
-	descriptor := m3VariantDescriptorV1{SchemaVersion: 6, ResultKind: "m3_persistent_variant_descriptor_v6", FixtureChecksum: fixture.Checksum, ExecutableSHA256: strings.Repeat("e", 64), BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter}
+	descriptor := m3VariantDescriptorV1{SchemaVersion: 6, ResultKind: "m3_persistent_variant_descriptor_v6", FixtureChecksum: fixture.Checksum, ExecutableSHA256: strings.Repeat("e", 64), BaseSHA: head, HeadSHA: head, VariantID: variantID, AssignmentBasis: assignment, OverlapRatio: ratio, ArtifactSHA256: artifactDigest, GraphArtifactSHA256: graphDigest, GraphBuildSHA256: graphBuildDigest, ArtifactBackend: artifact.Backend, Source: artifact.Source, DatabaseDirectory: dir, IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(meta.VectorIndexes[0]), PartitionHNSWM: partitionHNSWDegree, PartitionConfig: partitionConfig, PartitionMaxDistanceWork: partitionConfig.MaxDistanceWork, RouterMaxScalarWork: 20_000_000_000, RouterConfig: routerConfig, M3MaxBenchmarkVisits: 400_000_000, Capacity: overlap.Capacity, OverlapRequested: overlap.Budget, OverlapUseful: overlap.Useful, OverlapFiller: overlap.Filler, EdgeCutBefore: overlap.EdgeCutBefore, EdgeCutAfter: overlap.EdgeCutAfter, ShardPlan: shardPlan, ShardGenerationDigest: shardGenerationDigest, ShardGenerationBytes: uint64(len(shardGenerationRaw))}
 	if assignment == partitionAssignmentGraphV1 && strings.HasPrefix(artifact.Backend, "kahip_python_") {
 		descriptor.KaHIPPythonSHA256 = m8QualificationKaHIPPythonSHA256V1
 		descriptor.KaHIPAdapterSHA256 = kahipAdapterSHA256
@@ -2292,6 +2304,9 @@ func testM8QualificationRetainedDescriptorV1(t *testing.T, dir, head string, fix
 		t.Fatalf("descriptor: %v: %+v", err, descriptor)
 	}
 	if err := m3DescriptorMatchesManifestV1(descriptor, fixture, routerStatus.Manifest, routerStatus.ModelDigest, routerStatus.Config); err != nil {
+		t.Fatal(err)
+	}
+	if err := m3WriteShardGenerationRecordV1(dir, shardGenerationRaw, shardGenerationDigest); err != nil {
 		t.Fatal(err)
 	}
 	if err := m3WriteVariantDescriptorV1(dir, descriptor); err != nil {
