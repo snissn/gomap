@@ -120,7 +120,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	fs.StringVar(&out, "out", "", "fresh report")
 	fs.StringVar(&mode, "mode", "zero", "materialized membership mode")
 	fs.StringVar(&probesRaw, "probes", "1,2,4", "ordered probes")
-	fs.StringVar(&efRaw, "ef", "64,80,96,128", "ordered EFs")
+	fs.StringVar(&efRaw, "ef", "80,81,88,96", "ordered EFs")
 	fs.IntVar(&candidates, "router-candidates", 64, "router candidates")
 	fs.IntVar(&topK, "top-k", 10, "top K")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || db == "" || dataset == "" || calibration == "" || truthCache == "" || membershipReport == "" || assignmentArtifact == "" || graphArtifact == "" || out == "" || (mode != "zero" && mode != "useful_only_20") || candidates < 1 || topK != 10 {
@@ -137,8 +137,8 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	if e != nil {
 		return e
 	}
-	if len(probes) != 3 || probes[0] != 1 || probes[1] != 2 || probes[2] != 4 || len(efs) != 4 || efs[0] != 64 || efs[1] != 80 || efs[2] != 96 || efs[3] != 128 {
-		return errors.New("M0 frontier requires probes 1,2,4 and EFs 64,80,96,128")
+	if len(probes) != 3 || probes[0] != 1 || probes[1] != 2 || probes[2] != 4 || len(efs) != 4 || efs[0] != 80 || efs[1] != 81 || efs[2] != 88 || efs[3] != 96 {
+		return errors.New("M0 frontier requires probes 1,2,4 and EFs 80,81,88,96")
 	}
 	fixture, e := loadFixture(dataset)
 	if e != nil {
@@ -165,13 +165,16 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 		return e
 	}
 	defer h.Close()
+	if e = m8BindRetainedM3DescriptorV1(h, fixture); e != nil {
+		return fmt.Errorf("M0 frontier retained descriptor: %w", e)
+	}
 	if h.manifest.PartitionCount < 4 || h.status.Manifest.State != "ready" {
 		return errors.New("M0 frontier DB status")
 	}
 	if h.status.Representatives == 0 || uint64(candidates) > h.status.Representatives {
 		return errors.New("M0 frontier router candidate budget")
 	}
-	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, mode)
+	account, selected, accountSHA, e := m0FrontierAccountV1(membershipReport, h.manifest, *h.descriptor, mode)
 	if e != nil {
 		return e
 	}
@@ -244,7 +247,7 @@ func runM0CalibrationFrontierV1(args []string, stdout io.Writer) error {
 	return e
 }
 
-func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManifestV1, mode string) (m0MembershipAccountV1, m0MembershipModeV1, string, error) {
+func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManifestV1, descriptor m3VariantDescriptorV1, mode string) (m0MembershipAccountV1, m0MembershipModeV1, string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return m0MembershipAccountV1{}, m0MembershipModeV1{}, "", err
@@ -254,7 +257,7 @@ func m0FrontierAccountV1(path string, manifest collections.VectorPartitionManife
 		return account, m0MembershipModeV1{}, "", err
 	}
 	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(manifest.BalancePolicy)
-	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || policy.BuildIdentityDigest != account.AssignmentArtifactSHA256 {
+	if !ok || account.Schema != "treedb_vector_partition_m0_membership_account_v1" || account.Partitions < 4 || account.Partitions > math.MaxUint32 || manifest.PartitionCount != uint32(account.Partitions) || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest {
 		return account, m0MembershipModeV1{}, "", errors.New("M0 frontier membership binding")
 	}
 	var zero, useful, exact *m0MembershipModeV1
@@ -665,7 +668,7 @@ func m0FrontierMembershipTopologyV1(path, graphPath string, account m0Membership
 }
 
 func m0FrontierLineageV1(descriptor m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1, fixture fixtureManifest, sourceRows uint64) bool {
-	return descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
+	return descriptor.AssignmentBasis == partitionAssignmentGraphRepartitionedV1 && descriptor.FixtureChecksum == fixture.Checksum && descriptor.Source == artifact.Source && descriptor.ArtifactSHA256 == account.AssignmentArtifactSHA256 && descriptor.GraphArtifactSHA256 == account.GraphArtifactSHA256 &&
 		artifact.Source.SourceID == "m0_fixture:"+fixture.Checksum && artifact.Source.Vectors == fixture.Vectors && artifact.Source.Dimensions == fixture.Dimensions && artifact.Source.Metric == fixture.Metric && sourceRows == uint64(fixture.Vectors)
 }
 

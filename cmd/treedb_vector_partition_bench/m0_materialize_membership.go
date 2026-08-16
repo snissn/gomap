@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -34,10 +35,39 @@ type m0MaterializeReportV1 struct {
 	CloneLogicalBytes         int64  `json:"clone_logical_bytes"`
 }
 
+// m0MaterializeBuildIdentityProviderV1 is injectable only so persistence
+// tests need not treat a Go test binary as a production benchmark executable.
+// Production retains m0CurrentCleanBuildIdentityV1 and revalidates its result.
+var m0MaterializeBuildIdentityProviderV1 = m0CurrentCleanBuildIdentityV1
+
+func m0MaterializeVariantV1(raw string) (collections.VectorPartitionLocalGraphVariantV1, int, int, error) {
+	switch collections.VectorPartitionLocalGraphVariantV1(raw) {
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128, nil
+	case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
+		return collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, nil
+	default:
+		return "", 0, 0, fmt.Errorf("M0 materialization unsupported production graph variant %q", raw)
+	}
+}
+
+func m0MaterializeRetainedDescriptorBindingV1(d m3VariantDescriptorV1, artifact vectorpartition.Artifact, account m0MembershipAccountV1) error {
+	if d.Source != artifact.Source {
+		return errors.New("retained source does not match assignment artifact lineage")
+	}
+	// Historical M3 descriptors recorded the assignment digest in both artifact
+	// fields. The account plus m0AssignmentBindsFrozenGraphV1 is the authority
+	// for the separately frozen raw graph digest.
+	if d.ArtifactSHA256 != account.AssignmentArtifactSHA256 {
+		return errors.New("retained descriptor does not bind assignment artifact")
+	}
+	return nil
+}
+
 func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs := flag.NewFlagSet("treedb_vector_partition_bench m0-materialize-membership", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode string
+	var sourceDB, artifactPath, graphArtifactPath, membershipPath, root, out, mode, variantRaw string
 	fs.StringVar(&sourceDB, "source-db", "", "retained source DB (read only)")
 	fs.StringVar(&artifactPath, "artifact", "", "strict canonical assignment artifact")
 	fs.StringVar(&graphArtifactPath, "graph-artifact", "", "frozen source graph artifact")
@@ -45,11 +75,23 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	fs.StringVar(&root, "root", "", "task-local clone root")
 	fs.StringVar(&out, "out", "", "materialization report")
 	fs.StringVar(&mode, "mode", "zero", "membership mode: zero or useful_only_20")
+	fs.StringVar(&variantRaw, "variant", string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1), "production partition-local HNSW variant")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || sourceDB == "" || artifactPath == "" || graphArtifactPath == "" || membershipPath == "" || root == "" || out == "" || (mode != "zero" && mode != "useful_only_20") {
 		return errors.New("m0-materialize-membership requires source-db, artifact, graph-artifact, membership-report, root, out")
 	}
 	if _, statErr := os.Stat(out); statErr == nil || !errors.Is(statErr, os.ErrNotExist) {
 		return errors.New("M0 materialization output already exists")
+	}
+	variant, variantM, variantEfC, err := m0MaterializeVariantV1(variantRaw)
+	if err != nil {
+		return err
+	}
+	build, err := m0MaterializeBuildIdentityProviderV1()
+	if err != nil || !m0CleanBuildIdentityValidV1(build) {
+		if err != nil {
+			return err
+		}
+		return errors.New("M0 materialization requires a clean build identity")
 	}
 	artifactRaw, err := os.ReadFile(artifactPath)
 	if err != nil {
@@ -84,10 +126,10 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	}
 	d, err := m3ReadVariantDescriptorV1(sourceDB)
 	if err != nil {
-		return err
+		return fmt.Errorf("M0 materialization source descriptor is not admissible: %w", err)
 	}
-	if d.Source != artifact.Source {
-		return errors.New("retained source does not match assignment artifact lineage")
+	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
+		return err
 	}
 	if err = os.MkdirAll(root, 0755); err != nil {
 		return err
@@ -113,6 +155,16 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, h.Close()) }()
+	if err = m8BindRetainedM3DescriptorV1(h, fixtureManifest{Checksum: d.FixtureChecksum}); err != nil {
+		return fmt.Errorf("M0 materialization source descriptor does not bind retained assets: %w", err)
+	}
+	if h.descriptor == nil {
+		return errors.New("M0 materialization retained descriptor is unavailable")
+	}
+	d = *h.descriptor
+	if err = m0MaterializeRetainedDescriptorBindingV1(d, artifact, account); err != nil {
+		return err
+	}
 	source, rows, err := h.collection.VectorPartitionSourceOrdinalsV1(partitionHNSWIndex)
 	if err != nil {
 		return err
@@ -126,7 +178,43 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 		return err
 	}
 	generation := max(h.manifest.Generation, h.manifest.RouterGeneration) + 1
-	manifest, _, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, account.AssignmentArtifactSHA256)
+	graphBuild, err := m3GraphBuildSHA256V1(graph)
+	if err != nil {
+		return err
+	}
+	updated := d
+	updated.AssignmentBasis = partitionAssignmentGraphRepartitionedV1
+	switch mode {
+	case "zero":
+		updated.OverlapRatio = 0
+	case "useful_only_20":
+		updated.OverlapRatio = m0OverlapRatioV1
+	default:
+		return errors.New("M0 materialization overlap mode")
+	}
+	updated.VariantID, err = m3VariantIDV1(updated.AssignmentBasis, updated.OverlapRatio)
+	if err != nil {
+		return err
+	}
+	updated.BaseSHA, updated.HeadSHA, updated.BuildDirty, updated.ExecutableSHA256 = build.SourceRevision, build.SourceRevision, false, build.BinarySHA256
+	updated.ArtifactSHA256, updated.GraphArtifactSHA256, updated.GraphBuildSHA256, updated.ArtifactBackend = account.AssignmentArtifactSHA256, account.GraphArtifactSHA256, graphBuild, artifact.Backend
+	updated.Source, updated.DatabaseDirectory = artifact.Source, clone
+	updated.SourceGeneration, updated.SourceChecksum, updated.SourceSchemaHash, updated.SourceRows, updated.SourceOrdinalDigest = source.Generation, source.Checksum, source.SchemaHash, source.RowCount, before
+	updated.Partitions, updated.PartitionHNSWM, updated.PartitionHNSWEfC, updated.PartitionConfig = uint32(artifact.Config.Partitions), variantM, variantEfC, artifact.Config
+	updated.Capacity, updated.OverlapRequested, updated.OverlapRealized, updated.OverlapRejected = overlap.Capacity, overlap.Budget, overlap.Used, overlap.Unspent
+	updated.OverlapUseful, updated.OverlapFiller, updated.EdgeCutBefore, updated.EdgeCutAfter = overlap.Useful, overlap.Filler, overlap.EdgeCutBefore, overlap.EdgeCutAfter
+	updated.PartitionLoads, updated.OverlapMemberships = append([]int(nil), overlap.Loads...), overlap.Used
+	updated.OverlapUnusedCapacity = overlap.Capacity*len(overlap.Loads) - len(overlap.Memberships)
+	shardGenerationRaw, shardGenerationDigest, err := m3ShardGenerationRecordV1(updated.ShardPlan, updated.OverlapRatio, overlap)
+	if err != nil {
+		return fmt.Errorf("M0 materialization shard generation: %w", err)
+	}
+	updated.ShardGenerationDigest, updated.ShardGenerationBytes = shardGenerationDigest, uint64(len(shardGenerationRaw))
+	updated.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(updated)
+	if err != nil {
+		return err
+	}
+	manifest, membershipOrdinals, err := m3BuildingManifest(h.collection.Meta(), source, artifact, overlap, sourceOrdinals, generation, updated.BuildIdentityDigest)
 	if err != nil {
 		return err
 	}
@@ -146,7 +234,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err != nil {
 		return err
 	}
-	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, fileID, inputs, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+	assets, resources, err := h.collection.MaterializeVectorPartitionLocalSearchAssetsVariantV1(partitionHNSWIndex, manifest, fileID, inputs, variant)
 	if err != nil {
 		return err
 	}
@@ -172,7 +260,7 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	if err = h.Close(); err != nil {
 		return err
 	}
-	h, err = openM8ProductionExistingAssetSetModeV1(clone, true)
+	h, err = openM8ProductionExistingAssetSetModeV1(clone, false)
 	if err != nil {
 		return err
 	}
@@ -191,6 +279,55 @@ func runM0MaterializeMembershipV1(args []string, stdout io.Writer) (err error) {
 	after, err := m3SourceOrdinalDigestV1(afterRows)
 	if err != nil || after != before || afterRowsSource != source {
 		return errors.New("source identity changed during materialization")
+	}
+	updated.OverlapPolicy = h.status.Manifest.BalancePolicy
+	updated.ManifestIntegrity, updated.ReadySetDigest = h.status.Manifest.IntegrityDigest, h.status.Manifest.ReadySetDigest
+	updated.RouterAssetChecksum, updated.RouterModelDigest = h.status.Manifest.RouterAsset.Checksum, h.status.ModelDigest
+	updated.PartitionGeneration, updated.RouterGeneration = h.status.Manifest.Generation, h.status.Manifest.RouterGeneration
+	updated.IndexDefinitionDigest = h.status.Manifest.IndexDefinitionDigest
+	updated.RouterRepresentatives = h.status.Representatives
+	updated.PersistentAssetBytes = h.status.Manifest.RouterAsset.Bytes
+	for _, asset := range h.status.Manifest.Assets {
+		updated.PersistentAssetBytes += asset.Bytes
+	}
+	if err = m3DescriptorMatchesManifestV1(updated, fixtureManifest{Checksum: updated.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+		return err
+	}
+	if err = m0ReplaceShardGenerationRecordV1(clone, shardGenerationRaw, shardGenerationDigest); err != nil {
+		return err
+	}
+	if err = m3VerifyRetainedShardGenerationV1(clone, updated); err != nil {
+		return fmt.Errorf("M0 materialization shard generation does not bind descriptor: %w", err)
+	}
+	if shardGenerationDigest != "" {
+		retained, readErr := m3ReadShardGenerationDescriptorV1(clone, shardGenerationDigest)
+		if readErr != nil {
+			return fmt.Errorf("M0 materialization shard generation does not reopen: %w", readErr)
+		}
+		if err = m3VerifyShardGenerationMembershipsV1(retained, membershipOrdinals, artifact.Assignment); err != nil {
+			return fmt.Errorf("M0 materialization shard generation does not bind packs: %w", err)
+		}
+	}
+	if err = m3ReplaceVariantDescriptorAtomicallyV1(clone, updated); err != nil {
+		return err
+	}
+	if err = h.Close(); err != nil {
+		return err
+	}
+	h, err = openM8ProductionExistingAssetSetModeV1(clone, true)
+	if err != nil {
+		return err
+	}
+	h.status = h.router.Status()
+	persisted, err := m3ReadVariantDescriptorV1(clone)
+	if err != nil {
+		return fmt.Errorf("materialized descriptor is not admissible after reopen: %w", err)
+	}
+	if !reflect.DeepEqual(persisted, updated) {
+		return errors.New("materialized descriptor changed after atomic replacement")
+	}
+	if err = m3DescriptorMatchesManifestV1(persisted, fixtureManifest{Checksum: persisted.FixtureChecksum}, h.status.Manifest, h.status.ModelDigest, h.status.Config); err != nil {
+		return fmt.Errorf("materialized descriptor does not match reopened assets: %w", err)
 	}
 	var packBytes uint64
 	for _, asset := range h.status.Manifest.Assets {
@@ -248,6 +385,44 @@ func m0SelectedMembershipV1(artifact vectorpartition.Artifact, artifactRaw []byt
 		return vectorpartition.OverlapResult{}, m0MembershipModeV1{}, errors.New("M0 useful-only membership")
 	}
 	return overlap, selected, nil
+}
+
+// m0ReplaceShardGenerationRecordV1 replaces the source clone's immutable M3
+// record only after the rebuilt membership has produced a new bound record.
+// The clone is disposable on any error, so its old source record is never
+// silently retained under the rewritten descriptor.
+func m0ReplaceShardGenerationRecordV1(dir string, raw []byte, digest string) error {
+	if len(raw) == 0 {
+		if digest != "" {
+			return errors.New("empty M0 shard generation record has a digest")
+		}
+		return nil
+	}
+	tmp, err := os.CreateTemp(dir, ".vector_partition_shard_generation_v1-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0o644); err == nil {
+		_, err = tmp.Write(raw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(tmpName, filepath.Join(dir, m3ShardGenerationFileV1)); err != nil {
+		return err
+	}
+	if _, err = m3ReadShardGenerationDescriptorV1(dir, digest); err != nil {
+		return fmt.Errorf("replaced M0 shard generation record does not reopen: %w", err)
+	}
+	return nil
 }
 
 func m0RouterPartitionsV1(artifact vectorpartition.Artifact, overlap vectorpartition.OverlapResult, sourceOrdinals []int, rows []collections.VectorPartitionRouterSourceRowV1) ([]vectorpartition.RouterPartitionV1, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,10 +14,70 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+func TestM0MaterializeVariantV1OnlyAcceptsProductionVariants(t *testing.T) {
+	for _, want := range []struct {
+		variant collections.VectorPartitionLocalGraphVariantV1
+		m, ef   int
+	}{
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, 16, 128},
+		{collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256},
+	} {
+		variant, m, efConstruction, err := m0MaterializeVariantV1(string(want.variant))
+		if err != nil || variant != want.variant || m != want.m || efConstruction != want.ef {
+			t.Fatalf("variant %q = (%q,%d,%d,%v)", want.variant, variant, m, efConstruction, err)
+		}
+	}
+	if _, _, _, err := m0MaterializeVariantV1(string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1)); err == nil {
+		t.Fatal("unsupported M20 variant accepted")
+	}
+}
+
+func TestM0MaterializeAcceptsHistoricalDescriptorGraphDigestV1(t *testing.T) {
+	config := vectorpartition.DefaultConfig()
+	config.Partitions, config.Degree = 2, 1
+	graph, err := vectorpartition.BuildWithPartitioner([]vectorpartition.Vector{{ID: "a", Values: []float64{1}}, {ID: "b", Values: []float64{-1}}}, config, vectorpartition.Source{SourceID: "m0-historical-descriptor"}, m0StaticPartitionerV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := graph
+	assignment.Assignment = []int{1, 0}
+	graphRaw, err := vectorpartition.CanonicalJSON(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignmentRaw, err := vectorpartition.CanonicalJSON(assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{GraphArtifactSHA256: m0SHA256V1(graphRaw), AssignmentArtifactSHA256: m0SHA256V1(assignmentRaw)}
+	descriptor := m3VariantDescriptorV1{Source: assignment.Source, ArtifactSHA256: account.AssignmentArtifactSHA256, GraphArtifactSHA256: account.AssignmentArtifactSHA256}
+	if err := m0MaterializeRetainedDescriptorBindingV1(descriptor, assignment, account); err != nil {
+		t.Fatalf("historical descriptor rejected: %v", err)
+	}
+	if err := m0AssignmentBindsFrozenGraphV1(graph, assignment, graphRaw, account); err != nil {
+		t.Fatalf("valid frozen graph binding rejected: %v", err)
+	}
+	bad := account
+	bad.GraphArtifactSHA256 = account.AssignmentArtifactSHA256
+	if err := m0AssignmentBindsFrozenGraphV1(graph, assignment, graphRaw, bad); err == nil {
+		t.Fatal("unrelated graph/account accepted")
+	}
+}
+
+func testM0MaterializeBuildIdentityV1(t *testing.T) {
+	t.Helper()
+	previous := m0MaterializeBuildIdentityProviderV1
+	m0MaterializeBuildIdentityProviderV1 = func() (m0CleanBuildIdentityV1, error) {
+		return m0CleanBuildIdentityV1{BinarySHA256: strings.Repeat("f", 64), SourceRevision: strings.Repeat("e", 40)}, nil
+	}
+	t.Cleanup(func() { m0MaterializeBuildIdentityProviderV1 = previous })
+}
+
 func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
+	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
@@ -94,12 +155,56 @@ func TestM0MaterializeMembershipReopensDisposableClone(t *testing.T) {
 	if report.PartitionCount != 16 || report.OverlapCount != 0 || report.PackBytes == 0 || report.CloneLogicalBytes == 0 || report.SourceOrdinalDigestBefore == "" || report.SourceOrdinalDigestBefore != report.SourceOrdinalDigestAfter {
 		t.Fatalf("report=%+v", report)
 	}
+	descriptor, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict reopen: %v", err)
+	}
+	policy, ok := collections.ParseVectorPartitionOverlapPolicyV1(h.manifest.BalancePolicy)
+	if !ok || descriptor.PartitionHNSWM != 18 || descriptor.PartitionHNSWEfC != 256 || descriptor.ArtifactSHA256 != account.AssignmentArtifactSHA256 || descriptor.GraphArtifactSHA256 != account.GraphArtifactSHA256 || policy.BuildIdentityDigest != descriptor.BuildIdentityDigest || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+		_ = h.Close()
+		t.Fatalf("rewritten descriptor=%+v policy=%+v", descriptor, policy)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The source descriptor remains self-consistent after this edit, but no
+	// longer describes the retained router. M0 must reject it before rebuilding
+	// the disposable clone.
+	badDescriptor, err := m3ReadVariantDescriptorV1(sourceDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDescriptor.RouterMaxScalarWork++
+	badDescriptor.RouterConfig.MaxScalarWork = badDescriptor.RouterMaxScalarWork
+	badDescriptor.BuildIdentityDigest, err = m3VariantBuildIdentityDigestV1(badDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badDescriptor.OverlapPolicy, err = collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: uint64(badDescriptor.Capacity), Budget: uint64(badDescriptor.OverlapRequested), Realized: uint64(badDescriptor.OverlapRealized), Unspent: uint64(badDescriptor.OverlapRejected), BuildIdentityDigest: badDescriptor.BuildIdentityDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m3ReplaceVariantDescriptorAtomicallyV1(sourceDB, badDescriptor); err != nil {
+		t.Fatal(err)
+	}
+	badOut := filepath.Join(root, "bad-retained-descriptor.json")
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-root", filepath.Join(root, "bad-retained-clones"), "-out", badOut}, bytes.NewBuffer(nil)); err == nil {
+		t.Fatal("materialized a descriptor that does not bind retained assets")
+	}
+	if _, statErr := os.Stat(badOut); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("mismatched retained descriptor produced report: %v", statErr)
+	}
 }
 
 func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
 		t.Skip("vector partition namespace persistence unsupported")
 	}
+	testM0MaterializeBuildIdentityV1(t)
 	root := t.TempDir()
 	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-useful-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 32, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
 	sourceDB := filepath.Join(root, "source")
@@ -110,8 +215,10 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
 	}
 	config := vectorpartition.DefaultConfig()
-	config.Partitions, config.Seed, config.MaxDistanceWork = 4, fixture.Seed, 20_000_000_000
-	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, m0ModuloPartitionerV1{})
+	// Match the retained source descriptor exactly: M0 must reject a different
+	// assignment artifact before cloning, even when it has the same source.
+	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,16 +308,135 @@ func TestM0MaterializeUsefulMembershipReopensDisposableClone(t *testing.T) {
 	if report.Mode != "useful_only_20" || report.MembershipSHA256 != usefulSHA || report.OverlapCount != useful.Used || report.PartitionCount != uint32(config.Partitions) || report.SourceOrdinalDigestBefore == "" || report.SourceOrdinalDigestBefore != report.SourceOrdinalDigestAfter {
 		t.Fatalf("report=%+v", report)
 	}
+	descriptor, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.AssignmentBasis != partitionAssignmentGraphRepartitionedV1 || descriptor.VariantID != "graph-repartitioned-overlap-020-v1" || descriptor.OverlapRatio != m0OverlapRatioV1 || descriptor.OverlapMemberships != useful.Used || descriptor.OverlapRealized != useful.Used || descriptor.OverlapMemberships != descriptor.OverlapRealized {
+		t.Fatalf("rewritten overlap accounting descriptor=%+v useful=%+v", descriptor, useful)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict useful reopen: %v", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
-type m0ModuloPartitionerV1 struct{}
-
-func (m0ModuloPartitionerV1) Name() string    { return "m0_modulo_test" }
-func (m0ModuloPartitionerV1) License() string { return "test" }
-func (m0ModuloPartitionerV1) Partition(graph vectorpartition.Graph, partitions, _ int) ([]int, error) {
-	assignment := make([]int, len(graph.Neighbors))
-	for i := range assignment {
-		assignment[i] = i % partitions
+// TestM0MaterializeByteBoundedMembershipReopensDisposableClone covers the
+// case where the retained source has a bound M3 shard-generation sidecar. M0
+// changes its realized overlap from the source's exact 20% form to zero, so it
+// must replace the sidecar rather than leave its old membership provenance
+// under the rewritten descriptor.
+func TestM0MaterializeByteBoundedMembershipReopensDisposableClone(t *testing.T) {
+	if !collections.VectorPartitionNamespacePersistenceSupportedV1() {
+		t.Skip("vector partition namespace persistence unsupported")
 	}
-	return assignment, nil
+	testM0MaterializeBuildIdentityV1(t)
+	root := t.TempDir()
+	fixture := fixtureManifest{SchemaVersion: 1, Fixture: "m0-byte-bounded-clone", Generator: fixtureGenerator, Arithmetic: fixtureArithmetic, Vectors: 40, Queries: 1, Dimensions: 4, Metric: "cosine", Seed: 17, Checksum: strings.Repeat("a", 64)}
+	sourceDB := filepath.Join(root, "source")
+	planConfig := vectorpartition.DefaultConfig()
+	plan, err := vectorpartition.PlanByteBoundedShardsV1(vectorpartition.ShardPlanInputV1{
+		Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, OverlapRatio: m0OverlapRatioV1, Imbalance: planConfig.Imbalance,
+		TargetHotBytes: uint64(vectorpartition.PackFixedOverheadBytesV1 + 3*(alignedRowBytesForTest(fixture.Dimensions)+vectorpartition.GraphIdentityOverheadPerRowV1)),
+	})
+	if err != nil || plan.Partitions != 16 {
+		t.Fatalf("byte-bounded plan=%+v err=%v", plan, err)
+	}
+	sourceDescriptor := testM8QualificationRetainedDescriptorWithShardPlanV1(t, sourceDB, strings.Repeat("b", 40), fixture, "graph-overlap-020-v1", partitionAssignmentGraphV1, m0OverlapRatioV1, plan)
+	vectors := fixtureVectors(fixture)
+	input := make([]vectorpartition.Vector, len(vectors))
+	for i := range vectors {
+		input[i] = vectorpartition.Vector{ID: fmt.Sprintf("doc-%06d", i), Values: vectors[i]}
+	}
+	config := vectorpartition.DefaultConfig()
+	config.Partitions, config.Seed, config.MaxDistanceWork = 16, fixture.Seed, 20_000_000_000
+	artifact, err := vectorpartition.BuildWithPartitioner(input, config, vectorpartition.Source{SourceID: "qualification-test:" + fixture.Checksum}, vectorpartition.ReferencePartitioner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact.Backend = fmt.Sprintf("kahip_python_3.25_eco_symmetrized_v1_seed_%d", fixture.Seed)
+	raw, err := vectorpartition.CanonicalJSON(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity, err := m3OverlapCapacityV1(artifact, m0OverlapRatioV1)
+	if err != nil || plan.OverlapCapacity != capacity || sourceDescriptor.ShardPlan != plan {
+		t.Fatalf("byte-bounded source plan=%+v descriptor=%+v capacity=%d err=%v", plan, sourceDescriptor, capacity, err)
+	}
+	if err = m3VerifyRetainedShardGenerationV1(sourceDB, sourceDescriptor); err != nil {
+		t.Fatalf("source shard generation: %v", err)
+	}
+
+	artifactPath := filepath.Join(root, "assignment.json")
+	if err = os.WriteFile(artifactPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	graphPath := filepath.Join(root, "graph.json")
+	if err = os.WriteFile(graphPath, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := vectorpartition.Digest(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero, err := vectorpartition.BuildOverlap(artifact, vectorpartition.OverlapConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroSHA, err := m0MembershipDigestV1(zero.Memberships)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", GraphArtifactSHA256: m0SHA256V1(raw), AssignmentArtifactSHA256: m0SHA256V1(raw), RepartitionedArtifactSHA256: digest, Partitions: config.Partitions, Modes: []m0MembershipModeV1{{Name: "zero", Materialize: true, MembershipSHA256: zeroSHA}, {Name: "useful_only_20", EquivalentTo: "zero"}, {Name: "exact_20", Rejected: "exact-20 contains filler"}}}
+	accountRaw, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountPath := filepath.Join(root, "account.json")
+	if err = os.WriteFile(accountPath, accountRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(root, "out.json")
+	if err = runM0MaterializeMembershipV1([]string{"-source-db", sourceDB, "-artifact", artifactPath, "-graph-artifact", graphPath, "-membership-report", accountPath, "-root", filepath.Join(root, "clones"), "-out", out}, bytes.NewBuffer(nil)); err != nil {
+		t.Fatal(err)
+	}
+	var report m0MaterializeReportV1
+	reportRaw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(reportRaw, &report); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := m3ReadVariantDescriptorV1(report.CloneDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ShardPlan != plan || updated.ShardGenerationDigest == sourceDescriptor.ShardGenerationDigest || updated.ShardGenerationBytes == 0 {
+		t.Fatalf("updated descriptor did not replace source shard generation: source=%q updated=%+v", sourceDescriptor.ShardGenerationDigest, updated)
+	}
+	if err = m3VerifyRetainedShardGenerationV1(report.CloneDB, updated); err != nil {
+		t.Fatalf("updated shard generation: %v", err)
+	}
+	retained, err := m3ReadShardGenerationDescriptorV1(report.CloneDB, updated.ShardGenerationDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zeroOrdinals := make([][]int, config.Partitions)
+	for _, membership := range zero.Memberships {
+		zeroOrdinals[membership.Partition] = append(zeroOrdinals[membership.Partition], membership.VectorOrdinal)
+	}
+	if err = m3VerifyShardGenerationMembershipsV1(retained, zeroOrdinals, artifact.Assignment); err != nil {
+		t.Fatalf("updated shard generation membership binding: %v", err)
+	}
+	h, err := openM8ProductionExistingAssetSetModeV1(report.CloneDB, true)
+	if err != nil {
+		t.Fatalf("strict byte-bounded reopen: %v", err)
+	}
+	if err = h.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

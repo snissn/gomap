@@ -209,7 +209,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		t.Fatal(err)
 	}
 	defer nr.Release()
-	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 983, in)
+	auxiliary, ar, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 983, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	auxiliaryAgain, ar2, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 984, in)
+	auxiliaryAgain, ar2, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 984, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +409,7 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 		t.Fatal(err)
 	}
 	defer or.Release()
-	repaired, rr, err := col.MaterializeVectorPartitionLocalSearchAssetsV1(def.Name, m, 985, in)
+	repaired, rr, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, 985, in, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,6 +467,28 @@ func TestVectorPartitionLocalGraphOverlayMutationChangesTraversalAndTopK(t *test
 	}
 }
 
+func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
+	if got, want := vectorPartitionLocalDefaultGraphVariantV1, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1; got != want {
+		t.Fatalf("default materialization variant=%q want %q", got, want)
+	}
+	def := VectorIndexDefinition{M: 16, EfConstruction: 128}
+	buildDef, hasAuxiliaryNavigation, err := vectorPartitionLocalGraphVariantDefinitionV1(def, vectorPartitionLocalDefaultGraphVariantV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buildDef.M != def.M || buildDef.EfConstruction != def.EfConstruction || !hasAuxiliaryNavigation {
+		t.Fatalf("default materialization definition=%+v auxiliary=%t", buildDef, hasAuxiliaryNavigation)
+	}
+	var membership [sha256.Size]byte
+	membership[0] = 1
+	if got, want := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); got != want {
+		t.Fatalf("default materialization membership identity=%x want authoritative variant=%x", got, want)
+	}
+	if got, m18 := vectorPartitionLocalGraphVariantMembershipDigestV1(membership, vectorPartitionLocalDefaultGraphVariantV1), vectorPartitionLocalGraphVariantMembershipDigestV1(membership, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); got == m18 {
+		t.Fatal("default materialization retained the M18/eFC256 membership identity")
+	}
+}
+
 func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	rows := make([]columnGraphRebuildInputRowV2A, 8)
@@ -497,6 +519,37 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer canonicalResources.Release()
+	sourceReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sourceReader.Close()
+	members, err := vectorPartitionMembershipsForPartitionWithContextV1(t.Context(), m, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	membershipDigest, err := vectorPartitionMembershipDigestV1(sourceReader, m.Generation, 0, members)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalDigest, err := decodeVectorPartitionMembershipDigestV1(canonical[0].MembershipDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalDigest, vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationV1); got != want {
+		t.Fatalf("default materializer membership digest=%x want authoritative variant=%x", got, want)
+	}
+	if canonicalDigest == vectorPartitionLocalGraphVariantMembershipDigestV1(membershipDigest, VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) {
+		t.Fatal("default materializer retained the M18/eFC256 membership identity")
+	}
+	canonicalRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), canonical[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalPack, err := decodeColumnHNSWSearchPack(canonicalRaw, columnHNSWSearchPackDecodeOptions{ExpectedBaseIdentity: columnHNSWSearchPackBaseIdentity{ManifestGeneration: m.SourceGeneration, ManifestChecksum: m.SourceChecksum, SchemaHash: m.SourceSchemaHash}, ExpectedMembershipDigest: canonicalDigest})
+	if err != nil || canonicalPack.Header.M != def.M || canonicalPack.Header.EfConstruction != def.EfConstruction || !canonicalPack.Header.HasAuxiliaryNavigation {
+		t.Fatalf("default materializer pack=%+v err=%v", canonicalPack.Header, err)
+	}
 	if got := col.Meta().VectorIndexes[0]; got.M != def.M || got.EfConstruction != 128 || VectorIndexDefinitionDigestV1(got) != m.IndexDefinitionDigest {
 		t.Fatalf("authoritative definition drifted: %+v", got)
 	}
@@ -506,6 +559,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		ef      int
 		fileID  uint32
 	}{
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationV1, def.M, 128, 994},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1, def.M, 256, 987},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1, def.M, 512, 988},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 18, 256, 989},
@@ -519,8 +573,12 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer resources.Release()
-		if assets[0].MembershipDigest == canonical[0].MembershipDigest {
-			t.Fatalf("variant=%s retained canonical membership digest", test.variant)
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 {
+			if assets[0].MembershipDigest != canonical[0].MembershipDigest {
+				t.Fatalf("variant=%s did not retain default authoritative membership digest", test.variant)
+			}
+		} else if assets[0].MembershipDigest == canonical[0].MembershipDigest {
+			t.Fatalf("variant=%s retained default authoritative membership digest", test.variant)
 		}
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), assets[0].Ref)
 		if err != nil {
@@ -548,7 +606,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		production, productionErr := col.openVectorPartitionLocalSearcherForPreparedPartitionWithContextV1(t.Context(), def.Name, m.Generation, 0, m.IndexDefinitionDigest, m.SourceGeneration, m.SourceChecksum, m.SourceSchemaHash, &assets[0], members, len(members), 0, false)
-		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationV1 || test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
 			if productionErr != nil {
 				t.Fatalf("variant=%s production open err=%v", test.variant, productionErr)
 			}

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,10 +12,36 @@ import (
 	"github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
+func TestM0FrontierAccountSeparatesAssignmentAndBuildIdentityV1(t *testing.T) {
+	assignment := strings.Repeat("a", 64)
+	buildIdentity := strings.Repeat("b", 64)
+	policy, err := collections.FormatVectorPartitionOverlapPolicyV1(collections.VectorPartitionOverlapPolicyV1{Capacity: 1, BuildIdentityDigest: buildIdentity})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := m0MembershipAccountV1{Schema: "treedb_vector_partition_m0_membership_account_v1", Partitions: 4, AssignmentArtifactSHA256: assignment, GraphArtifactSHA256: strings.Repeat("c", 64), Modes: []m0MembershipModeV1{
+		{Name: "zero", Materialize: true, MembershipSHA256: strings.Repeat("d", 64)},
+		{Name: "useful_only_20", Materialize: true, MembershipSHA256: strings.Repeat("e", 64), Used: 1, Useful: 1},
+		{Name: "exact_20", Materialize: true, MembershipSHA256: strings.Repeat("e", 64), Used: 1, Useful: 1},
+	}}
+	raw, err := json.Marshal(account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "membership.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := m3VariantDescriptorV1{ArtifactSHA256: assignment, BuildIdentityDigest: buildIdentity}
+	if _, _, _, err := m0FrontierAccountV1(path, collections.VectorPartitionManifestV1{PartitionCount: 4, BalancePolicy: policy}, descriptor, "zero"); err != nil {
+		t.Fatalf("frontier account rejected separately bound identities: %v", err)
+	}
+}
+
 func TestM0FrontierRequiresPinnedCoordinates(t *testing.T) {
 	base := []string{"-db", "db", "-dataset", "dataset", "-calibration", "calibration", "-truth-cache", "truth", "-membership-report", "membership", "-assignment-artifact", "assignment", "-graph-artifact", "graph", "-out", t.TempDir() + "/report.json"}
 	for _, override := range [][]string{{"-probes", "2,3,4"}, {"-ef", "64,80,128,256"}} {
-		if err := runM0CalibrationFrontierV1(append(base, override...), io.Discard); err == nil || !strings.Contains(err.Error(), "requires probes 1,2,4 and EFs 64,80,96,128") {
+		if err := runM0CalibrationFrontierV1(append(base, override...), io.Discard); err == nil || !strings.Contains(err.Error(), "requires probes 1,2,4 and EFs 80,81,88,96") {
 			t.Fatalf("override %v error = %v", override, err)
 		}
 	}
@@ -35,7 +64,7 @@ func TestM0CleanBuildIdentityValidV1(t *testing.T) {
 }
 
 func TestM0FrontierCellsCompleteV1RejectsDuplicateMissingAndMixed(t *testing.T) {
-	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}
+	probes, efs := []int{1, 2, 4}, []int{80, 81, 88, 96}
 	cells := make([]m0FrontierCellV1, 0, 12)
 	for _, p := range probes {
 		for _, ef := range efs {
@@ -81,7 +110,7 @@ func TestM0FrontierExecutionOrderV1Counterbalances(t *testing.T) {
 }
 
 func TestValidateM0FrontierReportV1RejectsMixedIdentity(t *testing.T) {
-	probes, efs := []int{1, 2, 4}, []int{64, 80, 96, 128}
+	probes, efs := []int{1, 2, 4}, []int{80, 81, 88, 96}
 	sha := strings.Repeat("a", 64)
 	canonical := make([]m0FrontierCellV1, 0, 12)
 	measurements := make([]m0FrontierCellV1, 0, 36)
@@ -159,8 +188,8 @@ func TestM0FrontierLineageV1RejectsDifferentFixtureSource(t *testing.T) {
 	fixture := fixtureManifest{Checksum: hash, Vectors: 8, Dimensions: 2, Metric: "cosine"}
 	source := vectorpartition.Source{SourceID: "m0_fixture:" + hash, Checksum: strings.Repeat("b", 64), Vectors: fixture.Vectors, Dimensions: fixture.Dimensions, Metric: fixture.Metric}
 	artifact := vectorpartition.Artifact{Source: source}
-	descriptor := m3VariantDescriptorV1{FixtureChecksum: hash, GraphArtifactSHA256: hash, Source: source}
-	account := m0MembershipAccountV1{GraphArtifactSHA256: hash}
+	descriptor := m3VariantDescriptorV1{AssignmentBasis: partitionAssignmentGraphRepartitionedV1, FixtureChecksum: hash, ArtifactSHA256: hash, GraphArtifactSHA256: hash, Source: source}
+	account := m0MembershipAccountV1{AssignmentArtifactSHA256: hash, GraphArtifactSHA256: hash}
 	if !m0FrontierLineageV1(descriptor, artifact, account, fixture, uint64(fixture.Vectors)) {
 		t.Fatal("valid frontier lineage rejected")
 	}
@@ -171,7 +200,7 @@ func TestM0FrontierLineageV1RejectsDifferentFixtureSource(t *testing.T) {
 }
 
 func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
-	plan := m0FrontierPlanV1([]int{1, 2, 4}, []int{64, 80, 96, 128})
+	plan := m0FrontierPlanV1([]int{1, 2, 4}, []int{80, 81, 88, 96})
 	sha := strings.Repeat("a", 64)
 	measurements := make([]m0FrontierCellV1, 0, 36)
 	for repetition := 0; repetition < 3; repetition++ {
@@ -180,7 +209,7 @@ func TestM0FrontierAggregateThreeCounterbalancedRepetitions(t *testing.T) {
 		}
 	}
 	aggregates, err := m0FrontierAggregateV1(measurements, plan, 806)
-	if err != nil || len(aggregates) != 12 || !m0FrontierCellsCompleteV1(aggregates, []int{1, 2, 4}, []int{64, 80, 96, 128}, 806) {
+	if err != nil || len(aggregates) != 12 || !m0FrontierCellsCompleteV1(aggregates, []int{1, 2, 4}, []int{80, 81, 88, 96}, 806) {
 		t.Fatalf("counterbalanced aggregate err=%v rows=%d", err, len(aggregates))
 	}
 	for _, cell := range aggregates {

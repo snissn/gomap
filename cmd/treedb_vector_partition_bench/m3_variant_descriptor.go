@@ -178,6 +178,15 @@ func m3VariantIDV1(assignment string, ratio float64) (string, error) {
 		}
 		encoded := strings.NewReplacer(".", "p", "-", "m").Replace(strconv.FormatFloat(ratio, 'g', -1, 64))
 		return "graph-overlap-" + encoded + "-v1", nil
+	case partitionAssignmentGraphRepartitionedV1:
+		if ratio == 0 {
+			return "graph-repartitioned-disjoint-v1", nil
+		}
+		if ratio == .2 {
+			return "graph-repartitioned-overlap-020-v1", nil
+		}
+		encoded := strings.NewReplacer(".", "p", "-", "m").Replace(strconv.FormatFloat(ratio, 'g', -1, 64))
+		return "graph-repartitioned-overlap-" + encoded + "-v1", nil
 	default:
 		return "", fmt.Errorf("unknown M3 assignment basis %q", assignment)
 	}
@@ -201,6 +210,38 @@ func m3WriteVariantDescriptorV1(dir string, descriptor m3VariantDescriptorV1) er
 		writeErr = file.Sync()
 	}
 	return errors.Join(writeErr, file.Close())
+}
+
+// m3ReplaceVariantDescriptorAtomicallyV1 is reserved for a disposable clone
+// whose manifest/router have just been rebuilt. Retained source descriptors
+// remain immutable through m3WriteVariantDescriptorV1.
+func m3ReplaceVariantDescriptorAtomicallyV1(dir string, descriptor m3VariantDescriptorV1) error {
+	if err := validateM3VariantDescriptorV1(descriptor); err != nil {
+		return err
+	}
+	raw, err := m3VariantDescriptorJSONV1(descriptor)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".vector_partition_variant_v1-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err = tmp.Chmod(0o644); err == nil {
+		_, err = tmp.Write(raw)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filepath.Join(dir, m3VariantDescriptorFileV1))
 }
 
 func m3VariantDescriptorJSONV1(descriptor m3VariantDescriptorV1) ([]byte, error) {
@@ -328,6 +369,9 @@ func m3ValidateDescriptorShardPlanV1(d m3VariantDescriptorV1) error {
 			return errors.New("M3 variant descriptor binds a shard generation record without a plan")
 		}
 		return nil
+	}
+	if m8SHA256V1(d.ShardGenerationDigest) && d.ShardGenerationBytes == 0 {
+		return errors.New("M3 legacy byte-bounded descriptor omits shard generation byte size")
 	}
 	if !m8SHA256V1(d.ShardGenerationDigest) || d.ShardGenerationBytes == 0 {
 		return errors.New("M3 variant descriptor lacks a shard generation record digest or size")
