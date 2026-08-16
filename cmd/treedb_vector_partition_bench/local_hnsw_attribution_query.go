@@ -309,7 +309,7 @@ func localHNSWAttributionTruthRecoveryRecordsV1(recoveries map[string]string) []
 // records before de-duplicating overlap recoveries. JSONL is the sole source
 // of truth; no transient map is retained across serialization.
 func localHNSWAttributionQueryRecordValidateV1(record localHNSWAttributionQuerySearchV1, truth map[string]struct{}) (map[string]string, error) {
-	if len(truth) == 0 || !localHNSWAttributionQueryUtilityConservedV1(record.Utility, record.Edges) || math.MaxUint64-record.Utility.NewlyVisited < record.SeedCandidates || math.MaxUint64-record.Utility.FrontierAdmissions < record.SeedAdmissions || record.Candidates != uint64(len(record.VisitedOrdinals)) || record.Candidates != record.Utility.NewlyVisited+record.SeedCandidates || record.FrontierAdmissions != record.Utility.FrontierAdmissions+record.SeedAdmissions || !localHNSWAttributionTimingTerminationV1(record.TerminationReason) || record.VisitedOrdinalsSHA256 != localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals) {
+	if len(truth) == 0 || !localHNSWAttributionQueryUtilityConservedV1(record.Utility, record.Edges) || record.SeedAdmissions > record.SeedCandidates || math.MaxUint64-record.Utility.NewlyVisited < record.SeedCandidates || math.MaxUint64-record.Utility.FrontierAdmissions < record.SeedAdmissions || record.Candidates != uint64(len(record.VisitedOrdinals)) || record.Candidates != record.Utility.NewlyVisited+record.SeedCandidates || record.FrontierAdmissions != record.Utility.FrontierAdmissions+record.SeedAdmissions || !localHNSWAttributionTimingTerminationV1(record.TerminationReason) || record.VisitedOrdinalsSHA256 != localHNSWAttributionVisitedOrdinalsSHA256V1(record.VisitedOrdinals) {
 		return nil, errors.New("invalid local HNSW persisted query record")
 	}
 	if _, err := localHNSWAttributionCanonicalQueryResultBitsV1(record.Results, false); err != nil {
@@ -462,7 +462,6 @@ func localHNSWAttributionVisitedOrdinalsSHA256V1(ordinals []uint32) string {
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
 	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.Auxiliary, value.Unattributed}
-	var examined, newlyVisited, scored, topAdmissions, frontierAdmissions, stateImprovements, truthRecovered uint64
 	for i, origin := range origins {
 		if origin.Scored > origin.Examined || origin.NewlyVisited > origin.Scored || origin.TopAdmissions != origin.FrontierAdmissions || origin.TopAdmissions > origin.Scored || origin.StateImprovements > origin.Scored {
 			return false
@@ -472,16 +471,31 @@ func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQuery
 		if i != len(origins)-1 && origin.TruthRecovered > origin.Scored {
 			return false
 		}
-		examined += origin.Examined
-		newlyVisited += origin.NewlyVisited
-		scored += origin.Scored
-		topAdmissions += origin.TopAdmissions
-		frontierAdmissions += origin.FrontierAdmissions
-		stateImprovements += origin.StateImprovements
-		truthRecovered += origin.TruthRecovered
 	}
-	nativeExamined := value.Diversity.Examined + value.Backfill.Examined + value.Reciprocal.Examined + value.Repair.Examined + value.Overlay.Examined
-	return value.ExaminedNative+value.ExaminedAuxiliary == edges && value.ExaminedAuxiliary == value.Auxiliary.Examined && value.ExaminedNative == nativeExamined && value.Unattributed.Examined == 0 && value.Unattributed.NewlyVisited == 0 && value.Unattributed.Scored == 0 && value.Unattributed.TopAdmissions == 0 && value.Unattributed.FrontierAdmissions == 0 && value.Unattributed.StateImprovements == 0 && examined == edges && newlyVisited == value.NewlyVisited && scored == value.Scored && topAdmissions == value.TopAdmissions && frontierAdmissions == value.FrontierAdmissions && stateImprovements == value.StateImprovements && truthRecovered == value.TruthRecovered && value.NewlyVisited <= value.Scored && value.TopAdmissions == value.FrontierAdmissions && value.TopAdmissions <= value.Scored && value.StateImprovements <= value.Scored
+	sum := func(values []localHNSWAttributionQueryOriginUtilityV1, field func(localHNSWAttributionQueryOriginUtilityV1) uint64) (uint64, bool) {
+		var total uint64
+		for _, origin := range values {
+			item := field(origin)
+			if math.MaxUint64-total < item {
+				return 0, false
+			}
+			total += item
+		}
+		return total, true
+	}
+	examined, examinedOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
+	newlyVisited, newlyVisitedOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.NewlyVisited })
+	scored, scoredOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Scored })
+	topAdmissions, topAdmissionsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.TopAdmissions })
+	frontierAdmissions, frontierAdmissionsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.FrontierAdmissions })
+	stateImprovements, stateImprovementsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.StateImprovements })
+	truthRecovered, truthRecoveredOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.TruthRecovered })
+	nativeExamined, nativeExaminedOK := sum(origins[:5], func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
+	if math.MaxUint64-value.ExaminedNative < value.ExaminedAuxiliary {
+		return false
+	}
+	examinedTotal := value.ExaminedNative + value.ExaminedAuxiliary
+	return examinedOK && newlyVisitedOK && scoredOK && topAdmissionsOK && frontierAdmissionsOK && stateImprovementsOK && truthRecoveredOK && nativeExaminedOK && examinedTotal == edges && value.ExaminedAuxiliary == value.Auxiliary.Examined && value.ExaminedNative == nativeExamined && value.Unattributed.Examined == 0 && value.Unattributed.NewlyVisited == 0 && value.Unattributed.Scored == 0 && value.Unattributed.TopAdmissions == 0 && value.Unattributed.FrontierAdmissions == 0 && value.Unattributed.StateImprovements == 0 && examined == edges && newlyVisited == value.NewlyVisited && scored == value.Scored && topAdmissions == value.TopAdmissions && frontierAdmissions == value.FrontierAdmissions && stateImprovements == value.StateImprovements && truthRecovered == value.TruthRecovered && value.NewlyVisited <= value.Scored && value.TopAdmissions == value.FrontierAdmissions && value.TopAdmissions <= value.Scored && value.StateImprovements <= value.Scored
 }
 
 func localHNSWAttributionCanonicalResultsV1(results []m8CanonicalResultV1, requireTen bool) ([]m8CanonicalResultV1, error) {

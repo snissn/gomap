@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -222,6 +223,13 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 		t.Fatal("tampered seed admissions accepted")
 	}
 	record.SeedAdmissions--
+	record.SeedAdmissions = record.SeedCandidates + 1
+	record.FrontierAdmissions = record.Utility.FrontierAdmissions + record.SeedAdmissions
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("seed admissions beyond seed candidates accepted")
+	}
+	record.SeedAdmissions = 0
+	record.FrontierAdmissions = record.Utility.FrontierAdmissions
 	record.SeedCandidates++
 	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("tampered seed candidates accepted")
@@ -235,6 +243,18 @@ func TestLocalHNSWAttributionQueryRecordBindsSeedsAndTerminationV1(t *testing.T)
 	record.TerminationReason = "invalid"
 	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
 		t.Fatal("invalid termination accepted")
+	}
+}
+
+func TestLocalHNSWAttributionQueryUtilityConservationRejectsOriginOverflowV1(t *testing.T) {
+	record := localHNSWAttributionTestQueryRecordV1(localHNSWAttributionQuerySearchV1{
+		Utility: localHNSWAttributionQueryUtilityV1{
+			Diversity: localHNSWAttributionQueryOriginUtilityV1{Examined: math.MaxUint64},
+			Backfill:  localHNSWAttributionQueryOriginUtilityV1{Examined: 1},
+		},
+	})
+	if _, err := localHNSWAttributionQueryRecordValidateV1(record, map[string]struct{}{"truth": {}}); err == nil {
+		t.Fatal("overflowing origin conservation accepted")
 	}
 }
 
