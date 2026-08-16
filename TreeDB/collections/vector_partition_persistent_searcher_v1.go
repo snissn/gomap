@@ -70,7 +70,17 @@ type VectorPartitionConstructionCompactLifecycleV1 struct {
 }
 
 func vectorPartitionConstructionDetailedTraceV1(variant VectorPartitionLocalGraphVariantV1, partition uint32) bool {
-	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+	switch variant {
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1:
+		// #4172 policy-coordinate screening retains only compact, exact final
+		// origins. Full per-edge history is unnecessary for every treatment
+		// pack and must not make exploratory materialization unbounded.
+		return false
+	case VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1:
+	default:
 		return true
 	}
 	switch partition {
