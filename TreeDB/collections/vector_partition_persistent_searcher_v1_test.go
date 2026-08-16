@@ -344,7 +344,11 @@ func TestCompareVectorPartitionLocalGraphPacksV1RejectsNonOverlayNativePack(t *t
 		}},
 		{"origin_mismatch", func(e *VectorPartitionConstructionEvidenceV1) {
 			i := finalEvent(e)
-			e.Partitions[0].Events[i].Origin = "reciprocal_add"
+			if e.Partitions[0].Events[i].Origin == "reciprocal_add" {
+				e.Partitions[0].Events[i].Origin = "diversity_selected"
+			} else {
+				e.Partitions[0].Events[i].Origin = "reciprocal_add"
+			}
 		}},
 		{"after_final", func(e *VectorPartitionConstructionEvidenceV1) {
 			i := finalEvent(e)

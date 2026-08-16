@@ -624,6 +624,9 @@ func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal [
 			}
 			t.selections[i].CandidateNodes[j] = mapped
 		}
+		// The evidence contract stores sampled candidates in canonical packed
+		// ordinal order, independent of the transient HNSW score ordering.
+		sort.Ints(t.selections[i].CandidateNodes)
 	}
 	for i := range t.events {
 		from, err := remap(t.events[i].From)
