@@ -117,6 +117,21 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(badCandidateRecovery); err == nil {
 		t.Fatal("impossible per-pack candidate recovery accepted")
 	}
+	badCandidateBound := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badCandidateBound.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateTruthNeighbors = uint64(localHNSWAttributionNeighborhoodExactKV1 + 1)
+	if err := localHNSWFixedBudgetScreenContractV1(badCandidateBound); err == nil {
+		t.Fatal("per-pack candidate truth beyond exact-k sample bound accepted")
+	}
+	badFinalBound := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badFinalBound.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalSampleTruthNeighbors = uint64(localHNSWAttributionNeighborhoodExactKV1 + 1)
+	if err := localHNSWFixedBudgetScreenContractV1(badFinalBound); err == nil {
+		t.Fatal("per-pack final truth beyond exact-k sample bound accepted")
+	}
+	badTruthBoundOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badTruthBoundOverflow.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateSamples = ^uint64(0)
+	if err := localHNSWFixedBudgetScreenContractV1(badTruthBoundOverflow); err == nil {
+		t.Fatal("overflowing per-pack exact-k truth bound accepted")
+	}
 	badOriginRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badOriginRecovery.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalTruthByOrigin[0]++
 	if err := localHNSWFixedBudgetScreenContractV1(badOriginRecovery); err == nil {

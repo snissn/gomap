@@ -1036,28 +1036,26 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			if len(evidence.Partitions) != 1 || evidence.Partitions[0].TraceMode != "compact" || len(evidence.Partitions[0].Events) != 0 || len(evidence.Partitions[0].FinalOrigins) == 0 {
 				t.Fatalf("variant=%s bounded evidence=%+v", test.variant, evidence.Partitions)
 			}
-			if vectorPartitionConstructionVariantRequiresRefinementReplayV1(test.variant) {
+			if vectorPartitionConstructionVariantRequiresFixedBudgetReplayV1(test.variant) {
 				// Exchange two surviving labels without changing any compact count.
 				// Only the source-bound final-origin replay can detect this attack.
 				tampered := evidence
 				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
 				part := &tampered.Partitions[0]
 				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
-				native, refinement := -1, -1
+				first, different := -1, -1
 				for j, final := range part.FinalOrigins {
-					switch {
-					case final.Origin == "diversity_selected" || final.Origin == "nearest_backfill" || final.Origin == "reciprocal_add":
-						native = j
-					case test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && final.Origin == "quality_postfill":
-						refinement = j
-					case test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 && (final.Origin == "robust_prune_refinement" || final.Origin == "robust_prune_residual_fill"):
-						refinement = j
+					if first < 0 {
+						first = j
+					} else if final.Origin != part.FinalOrigins[first].Origin {
+						different = j
+						break
 					}
 				}
-				if native < 0 || refinement < 0 {
+				if first < 0 || different < 0 {
 					t.Fatalf("variant=%s fixture lacks swappable compact final origins", test.variant)
 				}
-				part.FinalOrigins[native].Origin, part.FinalOrigins[refinement].Origin = part.FinalOrigins[refinement].Origin, part.FinalOrigins[native].Origin
+				part.FinalOrigins[first].Origin, part.FinalOrigins[different].Origin = part.FinalOrigins[different].Origin, part.FinalOrigins[first].Origin
 				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 					t.Fatalf("variant=%s accepted balanced final-origin label swap: %v", test.variant, err)
 				}

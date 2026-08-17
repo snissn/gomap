@@ -269,6 +269,9 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 	var totals localHNSWAttributionNeighborhoodOracleV1
 	for i, partition := range partitions {
 		one := perPack[i].Neighborhood
+		if err := localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one); err != nil {
+			return err
+		}
 		var finalTruthByOrigin uint64
 		for origin := range one.FinalEdgesByOrigin {
 			if one.FinalTruthByOrigin[origin] > one.FinalEdgesByOrigin[origin] || ^uint64(0)-finalTruthByOrigin < one.FinalTruthByOrigin[origin] {
@@ -285,6 +288,24 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 	}
 	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || !localHNSWFixedBudgetScreenAngularMeanEqualV1(totals.AngularCosineDistanceMean, aggregate.AngularCosineDistanceMean) || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
 		return errors.New("fixed-budget neighborhood aggregate decomposition")
+	}
+	return nil
+}
+
+// localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1 bounds each exact-kNN
+// recovery denominator independently of report aggregation. This prevents a
+// self-consistent per-pack report from claiming more exact neighbors than its
+// sampled rows can have, while checking multiplication before it can wrap.
+func localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one localHNSWAttributionNeighborhoodOracleV1) error {
+	if one.ExactK <= 0 {
+		return errors.New("invalid fixed-budget neighborhood exact k")
+	}
+	exactK := uint64(one.ExactK)
+	if one.CandidateSamples > ^uint64(0)/exactK || one.FinalSamples > ^uint64(0)/exactK {
+		return errors.New("fixed-budget neighborhood truth bound overflow")
+	}
+	if one.CandidateTruthNeighbors > one.CandidateSamples*exactK || one.FinalSampleTruthNeighbors > one.FinalSamples*exactK {
+		return errors.New("invalid fixed-budget neighborhood truth bound")
 	}
 	return nil
 }

@@ -1648,13 +1648,12 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		}
 		// Compact M18 evidence intentionally has no historical edge events. It
 		// is validated directly against the encoded pack and count-only
-		// lifecycle summary. Refinement variants are the exception: their
-		// final-stage mutations cannot be derived from the packed adjacency
-		// alone, so replay that construction path before accepting its causal
-		// attribution.
+		// lifecycle summary. Fixed-budget variants are the exception: their
+		// causal final-origin map cannot be derived from packed adjacency alone,
+		// so replay that construction path before accepting its attribution.
 		if part.TraceMode == "compact" {
 			err := vectorPartitionConstructionValidateCompactPartitionV1(part, pack, selectionCounts, variant)
-			if err == nil && vectorPartitionConstructionVariantRequiresRefinementReplayV1(variant) {
+			if err == nil && vectorPartitionConstructionVariantRequiresFixedBudgetReplayV1(variant) {
 				replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
 				if replayErr != nil {
 					err = fmt.Errorf("construction replay: %w", replayErr)
@@ -2063,12 +2062,12 @@ func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysic
 	return out, nil
 }
 
-// vectorPartitionConstructionVariantRequiresRefinementReplayV1 identifies the
-// offline policies whose compact provenance includes final-stage mutations.
-// Their counts and final-origin map therefore need a source-bound replay.
-func vectorPartitionConstructionVariantRequiresRefinementReplayV1(variant VectorPartitionLocalGraphVariantV1) bool {
-	return variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 ||
-		variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+// vectorPartitionConstructionVariantRequiresFixedBudgetReplayV1 identifies
+// every offline #4172 construction arm. Their compact FinalOrigins are causal
+// evidence, so count conservation alone cannot prevent an origin-label swap.
+func vectorPartitionConstructionVariantRequiresFixedBudgetReplayV1(variant VectorPartitionLocalGraphVariantV1) bool {
+	_, fixedBudget := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(variant)
+	return fixedBudget
 }
 
 func vectorPartitionConstructionFinalOriginsV1(origins map[vectorIndexConstructionEdgeKeyV1]string) []VectorPartitionConstructionFinalOriginV1 {
