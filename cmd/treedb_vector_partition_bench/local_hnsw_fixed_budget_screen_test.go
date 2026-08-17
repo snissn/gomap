@@ -37,6 +37,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
 		Manifest:     "manifest",
 		Source:       localHNSWAttributionSourceEvidenceV1{ManifestIntegrity: "manifest", Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1}},
+		Limitations:  []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, Vamana, router, probe, top-k, EF policy, or production-default changes"},
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		identity, err := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)

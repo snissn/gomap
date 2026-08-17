@@ -2618,12 +2618,15 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 }
 
 // applyRobustPruneRefinementLocked is the single #4172 causal follow-up. It
-// applies DiskANN RobustPrune with the predeclared alpha=1.2 to each completed
+// applies DiskANN RobustPrune with the predeclared Euclidean alpha=1.2 to each completed
 // L0 neighbourhood, using only its current edges and the bounded rejected
 // construction pool. Classic RobustPrune may underfill R; a separately
 // attributed nearest residual fill restores the fixed 2M encoded degree budget.
 func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
-	const alpha = float32(1.2)
+	// For normalized vectors this builder stores cosine distance, which is
+	// proportional to squared Euclidean distance. DiskANN's alpha*d(a,b)
+	// threshold therefore becomes alpha^2*cosineDistance(a,b), not alpha.
+	const alphaSquared = float32(1.44)
 	if degreeLimit <= 0 {
 		return nil
 	}
@@ -2675,7 +2678,7 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 				if err != nil {
 					return err
 				}
-				if alpha*separation <= other.distance {
+				if vectorIndexRobustPruneOccludesV1(alphaSquared, separation, other.distance) {
 					continue
 				}
 				next = append(next, other)
@@ -2741,6 +2744,10 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 		idx.nodes[from].neighbors[0] = neighbors
 	}
 	return nil
+}
+
+func vectorIndexRobustPruneOccludesV1(alphaSquared, chosenToCandidate, sourceToCandidate float32) bool {
+	return alphaSquared*chosenToCandidate <= sourceToCandidate
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {

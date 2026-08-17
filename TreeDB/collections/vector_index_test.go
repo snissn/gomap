@@ -711,6 +711,17 @@ func TestVectorIndexRobustPruneRetainsRejectedPoolWithoutTraceV1(t *testing.T) {
 	}
 }
 
+func TestVectorIndexRobustPruneCosineThresholdUsesEuclideanAlphaV1(t *testing.T) {
+	// For normalized vectors cosine distance is half squared Euclidean distance.
+	// The DiskANN alpha=1.2 boundary is therefore 1.2^2=1.44 here.
+	if vectorIndexRobustPruneOccludesV1(1.44, 1, 1.43) {
+		t.Fatal("cosine robust-prune threshold used an overly weak alpha")
+	}
+	if !vectorIndexRobustPruneOccludesV1(1.44, 1, 1.44) {
+		t.Fatal("cosine robust-prune threshold rejected Euclidean alpha boundary")
+	}
+}
+
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
