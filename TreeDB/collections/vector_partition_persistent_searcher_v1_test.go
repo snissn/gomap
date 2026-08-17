@@ -843,14 +843,16 @@ func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
 		variant       VectorPartitionLocalGraphVariantV1
 		initialFactor int
 		backfill      bool
+		postfill      bool
 	}{
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 1, false},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 1, true},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 2, false},
-		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 2, true},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 1, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 1, true, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 2, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 2, true, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, 2, false, true},
 	} {
 		policy, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(test.variant)
-		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill {
+		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill || policy.qualityPostfill != test.postfill {
 			t.Fatalf("variant=%q policy=%+v ok=%t", test.variant, policy, ok)
 		}
 		def, auxiliary, err := vectorPartitionLocalGraphVariantDefinitionV1(VectorIndexDefinition{M: 16, EfConstruction: 128}, test.variant)
@@ -872,6 +874,7 @@ func TestVectorPartitionLayer0ConstructionPolicyVariantsUseCompactBoundedEvidenc
 		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1,
 		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1,
 		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1,
 	}
 	for _, variant := range variants {
 		for _, partition := range []uint32{0, 1, 3, 16, 36, 39} {
@@ -974,6 +977,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 18, 256, 996, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 18, 256, 997, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 18, 256, 998, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, 18, 256, 999, true, columnHNSWSearchPackVersionV3},
 	} {
 		assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, test.fileID, in, test.variant)
 		if err != nil {

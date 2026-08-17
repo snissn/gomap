@@ -524,6 +524,11 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 			return fmt.Errorf("collections: build column vector graph row[%d]: %w", i, err)
 		}
 	}
+	if policy != nil && policy.qualityPostfill {
+		if err := index.applyQualityPostfillLocked(trace, def.M*2); err != nil {
+			return err
+		}
+	}
 
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {

@@ -312,6 +312,9 @@ type VectorIndex struct {
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
 	constructionTrace        *vectorIndexConstructionTraceV1
 	layer0ConstructionPolicy *vectorIndexLayer0ConstructionPolicyV1
+	// qualityPostfillCandidates belongs to the temporary builder, never to the
+	// evidence sink: graph construction must be identical with tracing off.
+	qualityPostfillCandidates map[int]map[int]struct{}
 }
 
 // vectorIndexLayer0ConstructionPolicyV1 is an offline-only experiment seam.
@@ -320,6 +323,7 @@ type VectorIndex struct {
 type vectorIndexLayer0ConstructionPolicyV1 struct {
 	initialSelectionFactor int
 	backfill               bool
+	qualityPostfill        bool
 }
 
 // vectorIndexConstructionTraceV1 is deliberately private: construction
@@ -337,6 +341,7 @@ type vectorIndexConstructionTraceV1 struct {
 	nativeInsertionOrdinals []int
 	pruneKeeps              uint64
 	compactLifecycle        VectorPartitionConstructionCompactLifecycleV1
+	postfillEdges           uint64
 }
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
@@ -384,6 +389,8 @@ func (t *vectorIndexConstructionTraceV1) countLifecycle(origin, action string) {
 		t.compactLifecycle.VariantAdd[originIndex]++
 	case "reciprocity_repair_drop", "overlay_rewrite_drop":
 		t.compactLifecycle.VariantDrop[originIndex]++
+	case "quality_postfill_add":
+		t.compactLifecycle.QualityPostfillAdd[originIndex]++
 	}
 }
 
@@ -2362,13 +2369,23 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	var diversitySelected int
 	var diversity map[int]bool
 	backfill := true
+	qualityPostfill := false
 	if layer == 0 && idx.layer0ConstructionPolicy != nil {
 		backfill = idx.layer0ConstructionPolicy.backfill
+		qualityPostfill = idx.layer0ConstructionPolicy.qualityPostfill
 	}
 	if trace == nil {
-		scored, diversitySelected, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill)
+		var postfillCandidates []vectorIndexCandidate
+		scored, diversitySelected, _, _, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill, qualityPostfill)
+		if qualityPostfill {
+			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
+		}
 	} else {
-		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill)
+		var postfillCandidates []vectorIndexCandidate
+		scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill, qualityPostfill)
+		if qualityPostfill {
+			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
+		}
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
@@ -2398,40 +2415,41 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
-	selected, diversitySelected, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false, true)
+	selected, diversitySelected, _, _, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false, true, false)
 	return selected, diversitySelected
 }
 
 // selectDiverseCandidatesWithOriginsLocked preserves the existing candidate
 // order while retaining the causal classification of each selected edge.
 func (idx *VectorIndex) selectDiverseCandidatesWithOriginsLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int, map[int]bool) {
-	return idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true, true)
+	selected, diversitySelected, _, origins, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true, true, false)
+	return selected, diversitySelected, origins
 }
 
-func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled bool) ([]vectorIndexCandidate, int, map[int]bool) {
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
 	if limit <= 0 || len(candidates) == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
 	if len(candidates) <= limit {
 		if !includeOrigins {
-			return candidates, len(candidates), nil
+			return candidates, len(candidates), 0, nil, nil
 		}
 		diversity := make(map[int]bool, len(candidates))
 		for _, candidate := range candidates {
 			diversity[candidate.nodeID] = true
 		}
-		return candidates, len(candidates), diversity
+		return candidates, len(candidates), 0, diversity, nil
 	}
 	if idx.metric == VectorMetricInnerProduct {
 		if !includeOrigins {
-			return candidates[:limit], limit, nil
+			return candidates[:limit], limit, 0, nil, nil
 		}
 		diversity := make(map[int]bool, limit)
 		for _, candidate := range candidates[:limit] {
 			diversity[candidate.nodeID] = true
 		}
-		return candidates[:limit], limit, diversity
+		return candidates[:limit], limit, 0, diversity, nil
 	}
 	var selectedStack [128]vectorIndexCandidate
 	selected := selectedStack[:0]
@@ -2464,12 +2482,15 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 	}
 	if !backfillEnabled {
 		out = append(out, selected...)
-		return out, len(selected), diversity
+		if captureQualityPostfill {
+			return out, len(selected), 0, diversity, append([]vectorIndexCandidate(nil), rejected...)
+		}
+		return out, len(selected), 0, diversity, nil
 	}
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {
 		out = append(out, selected...)
-		return out, len(selected), diversity
+		return out, len(selected), 0, diversity, nil
 	}
 	selectedPos := 0
 	rejectedPos := 0
@@ -2484,7 +2505,99 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 	}
 	out = append(out, selected[selectedPos:]...)
 	out = append(out, rejected[rejectedPos:backfill]...)
-	return out, len(selected), diversity
+	return out, len(selected), 0, diversity, nil
+}
+
+func (idx *VectorIndex) captureQualityPostfillCandidatesLocked(from int, candidates []vectorIndexCandidate) {
+	if len(candidates) == 0 || from < 0 {
+		return
+	}
+	if idx.qualityPostfillCandidates == nil {
+		idx.qualityPostfillCandidates = make(map[int]map[int]struct{})
+	}
+	seen := idx.qualityPostfillCandidates[from]
+	if seen == nil {
+		seen = make(map[int]struct{}, len(candidates))
+		idx.qualityPostfillCandidates[from] = seen
+	}
+	for _, candidate := range candidates {
+		if candidate.nodeID >= 0 && candidate.nodeID != from {
+			seen[candidate.nodeID] = struct{}{}
+		}
+	}
+}
+
+// applyQualityPostfillLocked is the offline experiment's explicit final L0
+// stage. It runs only after all insertion-side reciprocal pruning and before
+// BFS locality remapping. Candidates are the union of rejected diverse
+// candidates observed during construction; each row fills only its unused 2M
+// outgoing capacity, ordered by maximum nearest-neighbour separation, then
+// source distance and native ordinal.
+func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
+	if degreeLimit <= 0 {
+		return nil
+	}
+	for from := range idx.nodes {
+		if len(idx.nodes[from].neighbors) == 0 {
+			continue
+		}
+		neighbors := idx.nodes[from].neighbors[0]
+		if len(neighbors) > degreeLimit {
+			return fmt.Errorf("collections: quality postfill degree from=%d degree=%d limit=%d", from, len(neighbors), degreeLimit)
+		}
+		pool := idx.qualityPostfillCandidates[from]
+		for len(neighbors) < degreeLimit {
+			present := make(map[int]struct{}, len(neighbors))
+			for _, neighbor := range neighbors {
+				present[neighbor.nodeID] = struct{}{}
+			}
+			best, bestMargin, bestDistance := -1, float32(math.Inf(-1)), float32(math.Inf(1))
+			for to := range pool {
+				if to < 0 || to >= len(idx.nodes) || to == from {
+					continue
+				}
+				if _, exists := present[to]; exists {
+					continue
+				}
+				distance, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[from], &idx.nodes[to])
+				if err != nil {
+					return err
+				}
+				margin := float32(math.Inf(1))
+				for _, neighbor := range neighbors {
+					separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[to], &idx.nodes[neighbor.nodeID])
+					if err != nil {
+						return err
+					}
+					if separation < margin {
+						margin = separation
+					}
+				}
+				if margin > bestMargin || (margin == bestMargin && (distance < bestDistance || (distance == bestDistance && to < best))) {
+					best, bestMargin, bestDistance = to, margin, distance
+				}
+			}
+			if best < 0 {
+				break
+			}
+			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: best, distance: bestDistance})
+			if trace != nil {
+				trace.init()
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: best, Layer: 0}
+				if _, exists := trace.origins[key]; exists {
+					return fmt.Errorf("collections: quality postfill duplicate edge from=%d to=%d", from, best)
+				}
+				trace.origins[key] = "nearest_backfill"
+				trace.record(from, best, 0, "nearest_backfill", "quality_postfill_add")
+				if trace.postfillEdges == ^uint64(0) {
+					return fmt.Errorf("collections: quality postfill overflow")
+				}
+				trace.postfillEdges++
+			}
+		}
+		idx.nodes[from].neighbors[0] = neighbors
+	}
+	return nil
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {

@@ -617,6 +617,54 @@ func TestColumnVectorGraphLayer0ConstructionPolicyReservesReciprocalCapacityV1(t
 	}
 }
 
+func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 64)
+	for i := range rows {
+		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("postfill-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+		t.Helper()
+		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx.constructionTrace = trace
+		idx.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, qualityPostfill: true}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		for _, row := range rows {
+			if err := idx.insertVectorLocked(row.ID, row.Vector); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := idx.applyQualityPostfillLocked(trace, 2*def.M); err != nil {
+			t.Fatal(err)
+		}
+		return idx
+	}
+	traced := &vectorIndexConstructionTraceV1{detailed: true}
+	withTrace, withoutTrace := build(traced), build(nil)
+	if traced.postfillEdges == 0 || traced.compactLifecycle.QualityPostfillAdd[1] != traced.postfillEdges {
+		t.Fatalf("quality postfill provenance=%d lifecycle=%+v", traced.postfillEdges, traced.compactLifecycle)
+	}
+	for node := range withTrace.nodes {
+		left, right := withTrace.nodes[node].neighbors[0], withoutTrace.nodes[node].neighbors[0]
+		if len(left) != len(right) {
+			t.Fatalf("trace changed degree node=%d got=%d want=%d", node, len(left), len(right))
+		}
+		if len(left) > 2*def.M {
+			t.Fatalf("postfill exceeded cap node=%d degree=%d", node, len(left))
+		}
+		for i := range left {
+			if left[i].nodeID != right[i].nodeID {
+				t.Fatalf("trace changed postfill node=%d edge=%d", node, i)
+			}
+		}
+	}
+}
+
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
