@@ -2400,7 +2400,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		// this allocation.
 		constructionCandidates = append([]vectorIndexCandidate(nil), scored...)
 	}
-	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, capturePostfill)
+	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, false)
 	if capturePostfill {
 		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
 	}

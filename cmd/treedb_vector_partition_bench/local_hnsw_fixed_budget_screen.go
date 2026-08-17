@@ -23,10 +23,15 @@ import (
 )
 
 const (
-	localHNSWFixedBudgetScreenSchemaV1             = "treedb_local_hnsw_fixed_budget_screen_v3"
-	localHNSWFixedBudgetRetainedRowsV1      uint64 = 7500
-	localHNSWFixedBudgetLayer0SlotsV1       uint64 = 36
-	localHNSWFixedBudgetTargetLayer0EdgesV1        = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
+	localHNSWFixedBudgetScreenSchemaV1                       = "treedb_local_hnsw_fixed_budget_screen_v3"
+	localHNSWFixedBudgetScreenBaseSHAV1                      = "2a7d01443d3c842990c259b08bd442a4d0109511"
+	localHNSWFixedBudgetScreenSourcePartitionsV1             = 40
+	localHNSWFixedBudgetScreenSourceRowsV1            uint64 = 250000
+	localHNSWFixedBudgetScreenCalibrationLimitationV1        = "offline calibration-only selected-pack screen; no holdout outcomes opened"
+	localHNSWFixedBudgetScreenTreatmentLimitationV1          = "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"
+	localHNSWFixedBudgetRetainedRowsV1                uint64 = 7500
+	localHNSWFixedBudgetLayer0SlotsV1                 uint64 = 36
+	localHNSWFixedBudgetTargetLayer0EdgesV1                  = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
 )
 
 func localHNSWFixedBudgetConstructionVariantV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
@@ -135,7 +140,7 @@ type localHNSWFixedBudgetScreenReportV1 struct {
 }
 
 func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenReportV1) error {
-	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) || !slices.Equal(report.Limitations, []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"}) || report.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || report.Provenance.BaseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || report.Provenance.SourceDirty || !m8QualificationGitSHAV1(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || report.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || report.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
+	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) || !slices.Equal(report.Limitations, []string{localHNSWFixedBudgetScreenCalibrationLimitationV1, localHNSWFixedBudgetScreenTreatmentLimitationV1}) || report.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || report.Provenance.BaseSHA != localHNSWFixedBudgetScreenBaseSHAV1 || report.Provenance.SourceDirty || !m8QualificationGitSHAV1(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || report.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || report.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
 		return errors.New("invalid fixed-budget screen contract")
 	}
 	if err := localHNSWFixedBudgetScreenSourceV1(report.Source, report.Manifest); err != nil {
@@ -146,7 +151,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 	haveExpectedOpportunities := false
 	for i, arm := range report.Arms {
 		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Arm.Variant)
-		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.SelectedNeighborhood) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
+		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Schema != localHNSWAttributionBuildSchemaV1 || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.SelectedNeighborhood) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
 			return errors.New("invalid fixed-budget screen arm")
 		}
 		if err := localHNSWFixedBudgetScreenNeighborhoodV1(arm.Neighborhood, arm.SelectedNeighborhood, arm.SelectedDiagnostics, report.VariantPacks); err != nil {
@@ -222,7 +227,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 // localHNSWFixedBudgetScreenSourceV1 keeps the accepted screen tied to the
 // retained M18 source rather than merely to three descriptor artifact hashes.
 func localHNSWFixedBudgetScreenSourceV1(source localHNSWAttributionSourceEvidenceV1, manifest string) error {
-	if source.IndexName == "" || source.PartitionGeneration == 0 || source.Partitions != 40 || source.ManifestIntegrity != manifest || !localHNSWAttributionSHA256V1(source.ManifestIntegrity) || !localHNSWAttributionSHA256V1(source.ReadySetDigest) || source.SourceGeneration == 0 || source.SourceChecksum == 0 || source.SourceSchemaHash == 0 || source.SourceRows != 250000 || source.RouterGeneration != source.PartitionGeneration || !localHNSWAttributionSHA256V1(source.RouterModelDigest) || source.RouterRepresentatives == 0 || source.RouterRepresentatives > source.SourceRows || len(source.PartitionLoads) != int(source.Partitions) {
+	if source.IndexName == "" || source.PartitionGeneration == 0 || source.Partitions != localHNSWFixedBudgetScreenSourcePartitionsV1 || source.ManifestIntegrity != manifest || !localHNSWAttributionSHA256V1(source.ManifestIntegrity) || !localHNSWAttributionSHA256V1(source.ReadySetDigest) || source.SourceGeneration == 0 || source.SourceChecksum == 0 || source.SourceSchemaHash == 0 || source.SourceRows != localHNSWFixedBudgetScreenSourceRowsV1 || source.RouterGeneration != source.PartitionGeneration || !localHNSWAttributionSHA256V1(source.RouterModelDigest) || source.RouterRepresentatives == 0 || source.RouterRepresentatives > source.SourceRows || len(source.PartitionLoads) != int(source.Partitions) {
 		return errors.New("invalid fixed-budget screen source")
 	}
 	descriptor := source.Descriptor
@@ -272,12 +277,23 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 		if err := localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one); err != nil {
 			return err
 		}
-		var finalTruthByOrigin uint64
+		if one.CandidateSamples != one.FinalSamples {
+			return errors.New("invalid fixed-budget per-pack sample binding")
+		}
+		if !localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(one.AngularCosineDistanceMean) {
+			return errors.New("invalid fixed-budget per-pack angular cosine distance")
+		}
+		var finalEdgesByOrigin, finalTruthByOrigin uint64
 		for origin := range one.FinalEdgesByOrigin {
-			if one.FinalTruthByOrigin[origin] > one.FinalEdgesByOrigin[origin] || ^uint64(0)-finalTruthByOrigin < one.FinalTruthByOrigin[origin] {
+			if one.FinalTruthByOrigin[origin] > one.FinalEdgesByOrigin[origin] || ^uint64(0)-finalEdgesByOrigin < one.FinalEdgesByOrigin[origin] || ^uint64(0)-finalTruthByOrigin < one.FinalTruthByOrigin[origin] {
 				return errors.New("invalid fixed-budget per-pack neighborhood origins")
 			}
+			finalEdgesByOrigin += one.FinalEdgesByOrigin[origin]
 			finalTruthByOrigin += one.FinalTruthByOrigin[origin]
+		}
+		degreeLimit := diagnostics[i].Diagnostics.Layer0DegreeLimit
+		if degreeLimit != localHNSWFixedBudgetLayer0SlotsV1 || one.FinalSamples > ^uint64(0)/degreeLimit || finalEdgesByOrigin > one.FinalSamples*degreeLimit {
+			return errors.New("invalid fixed-budget per-pack final edge capacity")
 		}
 		if perPack[i].Partition != partition || one.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || one.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || one.ExactK != localHNSWAttributionNeighborhoodExactKV1 || one.CandidateSamples == 0 || one.CandidateTruthRecovered > one.CandidateTruthNeighbors || one.FinalSamples == 0 || one.FinalSampleTruthRecovered > one.FinalSampleTruthNeighbors || finalTruthByOrigin != one.FinalSampleTruthRecovered || len(one.PackDiagnostics) != 1 || !reflect.DeepEqual(one.PackDiagnostics[0], diagnostics[i].Diagnostics) || !reflect.DeepEqual(aggregate.PackDiagnostics[i], diagnostics[i].Diagnostics) {
 			return errors.New("invalid fixed-budget selected neighborhood binding")
@@ -325,11 +341,22 @@ func localHNSWFixedBudgetScreenAngularMeanEqualV1(a, b float64) bool {
 	return math.Abs(a-b) <= 64*epsilon*scale
 }
 
+// localHNSWFixedBudgetScreenAngularCosineDistanceValidV1 bounds a cosine
+// distance mean independently for every selected pack. A later aggregate
+// comparison cannot cancel an invalid negative or greater-than-two mean.
+func localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(mean float64) bool {
+	if math.IsNaN(mean) || math.IsInf(mean, 0) {
+		return false
+	}
+	epsilon := math.Nextafter(1, 2) - 1
+	return mean >= -64*epsilon && mean <= 2+64*epsilon
+}
+
 func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighborhoodOracleV1, src localHNSWAttributionNeighborhoodOracleV1) error {
 	if dst == nil {
 		return errors.New("invalid fixed-budget neighborhood total")
 	}
-	if math.IsNaN(src.AngularCosineDistanceMean) || math.IsInf(src.AngularCosineDistanceMean, 0) || (src.AngularPairs == 0 && src.AngularCosineDistanceMean != 0) || math.IsNaN(dst.AngularCosineDistanceMean) || math.IsInf(dst.AngularCosineDistanceMean, 0) || (dst.AngularPairs == 0 && dst.AngularCosineDistanceMean != 0) {
+	if !localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(src.AngularCosineDistanceMean) || (src.AngularPairs == 0 && src.AngularCosineDistanceMean != 0) || !localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(dst.AngularCosineDistanceMean) || (dst.AngularPairs == 0 && dst.AngularCosineDistanceMean != 0) {
 		return errors.New("invalid fixed-budget angular cosine distance")
 	}
 	fields := [][2]uint64{{dst.CandidateSamples, src.CandidateSamples}, {dst.CandidateTruthNeighbors, src.CandidateTruthNeighbors}, {dst.CandidateTruthRecovered, src.CandidateTruthRecovered}, {dst.FinalSamples, src.FinalSamples}, {dst.FinalSampleTruthNeighbors, src.FinalSampleTruthNeighbors}, {dst.FinalSampleTruthRecovered, src.FinalSampleTruthRecovered}, {dst.AngularPairs, src.AngularPairs}}
@@ -355,7 +382,7 @@ func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighb
 		dst.AngularCosineDistanceMean = 0
 	} else {
 		dst.AngularCosineDistanceMean = angularDistanceSum / float64(dst.AngularPairs)
-		if math.IsNaN(dst.AngularCosineDistanceMean) || math.IsInf(dst.AngularCosineDistanceMean, 0) {
+		if !localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(dst.AngularCosineDistanceMean) {
 			return errors.New("invalid fixed-budget angular cosine distance total")
 		}
 	}
@@ -605,7 +632,7 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 		}
 	}
 	baseSHA, headSHA, err = provenanceWithExplicitV1(baseSHA, headSHA)
-	if err != nil || baseSHA != "2a7d01443d3c842990c259b08bd442a4d0109511" || m8GitDirtyInV1(sourceCheckout) {
+	if err != nil || baseSHA != localHNSWFixedBudgetScreenBaseSHAV1 || m8GitDirtyInV1(sourceCheckout) {
 		return errors.New("fixed-budget screen source provenance")
 	}
 	if _, err := localHNSWAttributionSourceCheckoutV1(sourceCheckout, baseSHA, headSHA); err != nil {
@@ -669,7 +696,7 @@ func runLocalHNSWFixedBudgetScreenV1(args []string, stdout io.Writer) (runErr er
 	if err != nil {
 		return err
 	}
-	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-fixed-budget-screen", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Limitations: []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"}}
+	report := localHNSWFixedBudgetScreenReportV1{Schema: localHNSWFixedBudgetScreenSchemaV1, ResultKind: "local_hnsw_fixed_budget_screen_v1", Status: "valid", VariantPacks: append([]uint32(nil), localHNSWM18EdgeDiagnosisPacksV1...), Probes: 2, EFSearch: append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...), Queries: 806, Arms: arms, Provenance: localHNSWAttributionProvenanceV1{Command: commandWithProvenanceAndSourceCheckoutV1("local-hnsw-fixed-budget-screen", args, baseSHA, headSHA, sourceCheckout), BaseSHA: baseSHA, HeadSHA: headSHA, SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: executableSHA}, Calibration: localHNSWAttributionFileInputV1{Path: calibrationPath, SHA256: calibrationSHA}, Truth: localHNSWAttributionFileInputV1{Path: truthPath, SHA256: truthSHA}, Descriptor: localHNSWAttributionFileInputV1{Path: descriptorPath, SHA256: descriptorSHA}, Manifest: source.manifest.IntegrityDigest, Source: localHNSWAttributionSourceEvidenceV1{IndexName: source.manifest.IndexName, PartitionGeneration: source.manifest.Generation, Partitions: source.manifest.PartitionCount, ManifestIntegrity: source.manifest.IntegrityDigest, ReadySetDigest: source.manifest.ReadySetDigest, SourceGeneration: source.manifest.SourceGeneration, SourceChecksum: source.manifest.SourceChecksum, SourceSchemaHash: source.manifest.SourceSchemaHash, SourceRows: source.manifest.SourceRowCount, RouterGeneration: source.manifest.RouterGeneration, RouterModelDigest: source.status.ModelDigest, RouterRepresentatives: source.status.Representatives, PartitionLoads: loads, Descriptor: *source.descriptor}, Limitations: []string{localHNSWFixedBudgetScreenCalibrationLimitationV1, localHNSWFixedBudgetScreenTreatmentLimitationV1}}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		return err
 	}

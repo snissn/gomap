@@ -31,13 +31,13 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		EFSearch:     append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...),
 		Queries:      806,
 		Arms:         make([]localHNSWFixedBudgetScreenArmResultV1, len(localHNSWFixedBudgetScreenArmsV1)),
-		Provenance:   localHNSWAttributionProvenanceV1{BaseSHA: "2a7d01443d3c842990c259b08bd442a4d0109511", HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ExecutableSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		Provenance:   localHNSWAttributionProvenanceV1{BaseSHA: localHNSWFixedBudgetScreenBaseSHAV1, HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ExecutableSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		Calibration:  localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionCalibrationSHA256V1},
 		Truth:        localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionTruthSHA256V1},
 		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
 		Manifest:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Source:       localHNSWAttributionSourceEvidenceV1{IndexName: "embedding", PartitionGeneration: 1, Partitions: 40, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, RouterGeneration: 1, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]uint64, 40), Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 1, RouterGeneration: 1, Partitions: 40, PartitionHNSWM: 18, PartitionHNSWEfC: 256, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]int, 40)}},
-		Limitations:  []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"},
+		Source:       localHNSWAttributionSourceEvidenceV1{IndexName: "embedding", PartitionGeneration: 1, Partitions: localHNSWFixedBudgetScreenSourcePartitionsV1, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: localHNSWFixedBudgetScreenSourceRowsV1, RouterGeneration: 1, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]uint64, localHNSWFixedBudgetScreenSourcePartitionsV1), Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: localHNSWFixedBudgetScreenSourceRowsV1, PartitionGeneration: 1, RouterGeneration: 1, Partitions: localHNSWFixedBudgetScreenSourcePartitionsV1, PartitionHNSWM: 18, PartitionHNSWEfC: 256, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]int, localHNSWFixedBudgetScreenSourcePartitionsV1)}},
+		Limitations:  []string{localHNSWFixedBudgetScreenCalibrationLimitationV1, localHNSWFixedBudgetScreenTreatmentLimitationV1},
 	}
 	for i := range report.Source.PartitionLoads {
 		report.Source.PartitionLoads[i] = 6250
@@ -49,10 +49,10 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		report.Arms[i].Arm = arm
-		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(report.VariantPacks), PackBytes: 1}
+		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Schema: localHNSWAttributionBuildSchemaV1, Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(report.VariantPacks), PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]localHNSWFixedBudgetDiagnosticV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
-			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 7500, EdgesByLayer: []uint64{270000}}}
+			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 7500, EdgesByLayer: []uint64{270000}, Layer0DegreeLimit: localHNSWFixedBudgetLayer0SlotsV1}}
 		}
 		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
@@ -119,18 +119,47 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 	badCandidateBound := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badCandidateBound.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateTruthNeighbors = uint64(localHNSWAttributionNeighborhoodExactKV1 + 1)
-	if err := localHNSWFixedBudgetScreenContractV1(badCandidateBound); err == nil {
-		t.Fatal("per-pack candidate truth beyond exact-k sample bound accepted")
+	if err := localHNSWFixedBudgetScreenContractV1(badCandidateBound); err == nil || err.Error() != "invalid fixed-budget neighborhood truth bound" {
+		t.Fatalf("per-pack candidate truth beyond exact-k sample bound err=%v", err)
 	}
 	badFinalBound := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badFinalBound.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalSampleTruthNeighbors = uint64(localHNSWAttributionNeighborhoodExactKV1 + 1)
-	if err := localHNSWFixedBudgetScreenContractV1(badFinalBound); err == nil {
-		t.Fatal("per-pack final truth beyond exact-k sample bound accepted")
+	if err := localHNSWFixedBudgetScreenContractV1(badFinalBound); err == nil || err.Error() != "invalid fixed-budget neighborhood truth bound" {
+		t.Fatalf("per-pack final truth beyond exact-k sample bound err=%v", err)
 	}
 	badTruthBoundOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badTruthBoundOverflow.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateSamples = ^uint64(0)
-	if err := localHNSWFixedBudgetScreenContractV1(badTruthBoundOverflow); err == nil {
-		t.Fatal("overflowing per-pack exact-k truth bound accepted")
+	if err := localHNSWFixedBudgetScreenContractV1(badTruthBoundOverflow); err == nil || err.Error() != "fixed-budget neighborhood truth bound overflow" {
+		t.Fatalf("overflowing per-pack exact-k truth bound err=%v", err)
+	}
+	badSampleBinding := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badSampleBinding.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateSamples++
+	if err := localHNSWFixedBudgetScreenContractV1(badSampleBinding); err == nil {
+		t.Fatal("mismatched per-pack candidate and final sample counts accepted")
+	}
+	badPerPackAngularMean := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badPerPackAngularMean.Arms[0].SelectedNeighborhood[0].Neighborhood.AngularCosineDistanceMean = -1
+	if err := localHNSWFixedBudgetScreenContractV1(badPerPackAngularMean); err == nil {
+		t.Fatal("out-of-range per-pack angular cosine distance accepted")
+	}
+	badFinalCapacity := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badFinalCapacity.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[0] = localHNSWFixedBudgetLayer0SlotsV1 + 1
+	if err := localHNSWFixedBudgetScreenContractV1(badFinalCapacity); err == nil {
+		t.Fatal("per-pack final edge capacity overflow accepted")
+	}
+	badDegreeLimit := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badDegreeLimit.Arms[0].SelectedDiagnostics[0].Diagnostics.Layer0DegreeLimit++
+	badDegreeLimit.Arms[0].SelectedNeighborhood[0].Neighborhood.PackDiagnostics[0].Layer0DegreeLimit++
+	badDegreeLimit.Arms[0].Neighborhood.PackDiagnostics[0].Layer0DegreeLimit++
+	badDegreeLimit.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[0] = localHNSWFixedBudgetLayer0SlotsV1 + 1
+	badDegreeLimit.Arms[0].Neighborhood.FinalEdgesByOrigin[0] += localHNSWFixedBudgetLayer0SlotsV1
+	if err := localHNSWFixedBudgetScreenContractV1(badDegreeLimit); err == nil {
+		t.Fatal("non-fixed per-pack final edge capacity accepted")
+	}
+	badBuildSchema := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badBuildSchema.Arms[0].Build.Schema = ""
+	if err := localHNSWFixedBudgetScreenContractV1(badBuildSchema); err == nil {
+		t.Fatal("arm build without attribution schema accepted")
 	}
 	badOriginRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badOriginRecovery.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalTruthByOrigin[0]++

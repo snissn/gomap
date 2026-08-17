@@ -1132,6 +1132,10 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 				tampered := evidence
 				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
 				part := &tampered.Partitions[0]
+				postfillOrigin, ok := vectorIndexConstructionOriginIndexV1("quality_postfill")
+				if !ok {
+					t.Fatal("missing quality-postfill construction origin")
+				}
 				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
 				relabelled := false
 				for j := range part.FinalOrigins {
@@ -1141,7 +1145,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 					}
 					part.FinalOrigins[j].Origin = "quality_postfill"
 					part.CompactLifecycle.VariantDrop[origin]++
-					part.CompactLifecycle.QualityPostfillAdd[5]++
+					part.CompactLifecycle.QualityPostfillAdd[postfillOrigin]++
 					part.PostfillEdges++
 					relabelled = true
 					break

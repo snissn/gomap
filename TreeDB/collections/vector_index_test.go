@@ -472,20 +472,27 @@ func TestVectorIndexNormalSelectionDoesNotSnapshotPostfillCandidatesV1(t *testin
 		index.nodes[i].cacheVectorNorms()
 	}
 	base := []vectorIndexCandidate{{nodeID: 1, distance: 1}}
-	if got := testing.AllocsPerRun(100, func() {
-		candidates := base[:len(base):len(base)]
-		neighbors := index.selectLayerNeighborsLocked(index.nodes[0].vector, 1, nil, candidates, 0, 2, 0)
-		if len(neighbors) != 1 || neighbors[0] != 1 {
-			t.Fatalf("neighbors=%v", neighbors)
+	assertNormal := func(name string, policy *vectorIndexLayer0ConstructionPolicyV1) {
+		t.Helper()
+		index.layer0ConstructionPolicy = policy
+		index.qualityPostfillCandidates = nil
+		if got := testing.AllocsPerRun(100, func() {
+			candidates := base[:len(base):len(base)]
+			neighbors := index.selectLayerNeighborsLocked(index.nodes[0].vector, 1, nil, candidates, 0, 2, 0)
+			if len(neighbors) != 1 || neighbors[0] != 1 {
+				t.Errorf("%s neighbors=%v", name, neighbors)
+			}
+		}); got != 1 {
+			// The returned []int is the one ordinary allocation. A second allocation
+			// here would be the offline postfill candidate snapshot.
+			t.Fatalf("%s normal selection allocations=%.1f want 1 (returned neighbors only)", name, got)
 		}
-	}); got != 1 {
-		// The returned []int is the one ordinary allocation. A second allocation
-		// here would be the offline postfill candidate snapshot.
-		t.Fatalf("normal selection allocations=%.1f want 1 (returned neighbors only)", got)
+		if index.qualityPostfillCandidates != nil {
+			t.Fatalf("%s normal selection retained offline postfill candidates", name)
+		}
 	}
-	if index.qualityPostfillCandidates != nil {
-		t.Fatal("normal selection retained offline postfill candidates")
-	}
+	assertNormal("ordinary", nil)
+	assertNormal("non-refinement policy", &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: true})
 }
 
 func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
