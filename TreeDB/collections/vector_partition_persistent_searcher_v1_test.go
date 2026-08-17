@@ -1059,9 +1059,11 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
 					t.Fatalf("variant=%s accepted balanced final-origin label swap: %v", test.variant, err)
 				}
-				// Recompute the candidate digest after replacing one valid earlier
-				// ordinal. Local compact checks accept the self-consistent sample;
-				// the independent construction replay must bind it to the real pool.
+				// When this compact smoke fixture has a non-exhaustive candidate pool,
+				// recompute the digest after replacing one valid earlier ordinal. Local
+				// compact checks accept the self-consistent sample; the independent
+				// construction replay must bind it to the real pool. Small fixtures can
+				// legitimately have every earlier ordinal in every sampled pool.
 				tampered = evidence
 				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
 				part = &tampered.Partitions[0]
@@ -1089,15 +1091,14 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 						break
 					}
 				}
-				if selectionIndex < 0 || replacement < 0 {
-					t.Fatalf("variant=%s fixture lacks a valid non-pool candidate", test.variant)
-				}
-				s := &part.Selections[selectionIndex]
-				s.CandidateOrdinals[0] = replacement
-				sort.Ints(s.CandidateOrdinals)
-				s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
-				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
-					t.Fatalf("variant=%s accepted replay-substituted candidate sample: %v", test.variant, err)
+				if selectionIndex >= 0 && replacement >= 0 {
+					s := &part.Selections[selectionIndex]
+					s.CandidateOrdinals[0] = replacement
+					sort.Ints(s.CandidateOrdinals)
+					s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+					if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+						t.Fatalf("variant=%s accepted replay-substituted candidate sample: %v", test.variant, err)
+					}
 				}
 			}
 			if test.variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
