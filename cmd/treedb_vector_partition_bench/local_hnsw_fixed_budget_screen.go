@@ -183,7 +183,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			return err
 		}
 		for j, cell := range arm.Cells {
-			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities != localHNSWFixedBudgetScreenExpectedOpportunitiesV1 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
+			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities != localHNSWFixedBudgetScreenExpectedOpportunitiesV1 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || cell.LocalTruthHitSlots > cell.Work.Utility.TruthRecovered || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
 				return fmt.Errorf("invalid fixed-budget screen cell arm=%s ef=%d expected_ef=%d opportunities=%d hits=%d per_pack=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, report.EFSearch[j], cell.QueryPackOpportunities, cell.LocalTruthHitSlots, len(cell.PerPack), cell.Work.Candidates, cell.Work.Edges, cell.Work.FrontierAdmissions, cell.Work.Utility)
 			}
 			if err := localHNSWFixedBudgetScreenQueryUtilityV1(arm.Arm.Variant, cell.Work.Utility, cell.QueryPackOpportunities); err != nil {
@@ -192,7 +192,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			var opportunities, hits uint64
 			var work localHNSWAttributionQueryWorkV1
 			for k, p := range cell.PerPack {
-				if p.Partition != report.VariantPacks[k] || p.Opportunities != localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k] || p.TruthHitSlots > p.Opportunities*10 || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
+				if p.Partition != report.VariantPacks[k] || p.Opportunities != localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k] || p.TruthHitSlots > p.Opportunities*10 || p.TruthHitSlots > p.Work.Utility.TruthRecovered || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
 					return fmt.Errorf("invalid fixed-budget per-pack decomposition arm=%s ef=%d slot=%d partition=%d expected_partition=%d opportunities=%d hits=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, k, p.Partition, report.VariantPacks[k], p.Opportunities, p.TruthHitSlots, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility)
 				}
 				if err := localHNSWFixedBudgetScreenQueryUtilityV1(arm.Arm.Variant, p.Work.Utility, p.Opportunities); err != nil {

@@ -364,6 +364,23 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(perPackHitOverflow); err == nil {
 		t.Fatal("per-pack truth-hit capacity overflow accepted")
 	}
+	truthHitsBeyondAggregateRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
+	truthHitsBeyondAggregateRecovery.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots = 1
+	truthHitsBeyondAggregateRecovery.Arms[qualityArm].Cells[0].LocalTruthHitSlots = 1
+	if err := localHNSWFixedBudgetScreenContractV1(truthHitsBeyondAggregateRecovery); err == nil {
+		t.Fatal("returned truth hits beyond aggregate recovered truth accepted")
+	}
+	truthHitsBeyondPerPackRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
+	truthCell = &truthHitsBeyondPerPackRecovery.Arms[qualityArm].Cells[0]
+	truthCell.PerPack[0].TruthHitSlots = 1
+	recovered := &truthCell.PerPack[1].Work.Utility
+	recovered.QualityPostfill.TruthRecovered = 1
+	recovered.TruthRecovered = 1
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, truthCell)
+	truthCell.LocalTruthHitSlots = 1
+	if err := localHNSWFixedBudgetScreenContractV1(truthHitsBeyondPerPackRecovery); err == nil {
+		t.Fatal("returned truth hits beyond per-pack recovered truth accepted")
+	}
 	perPackUtility := localHNSWFixedBudgetScreenCloneV1(t, report)
 	first := &perPackUtility.Arms[qualityArm].Cells[0].PerPack[0].Work.Utility
 	second := &perPackUtility.Arms[qualityArm].Cells[0].PerPack[1].Work.Utility
