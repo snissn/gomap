@@ -1039,6 +1039,18 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 					t.Fatalf("variant=%s accepted robust-prune origin relabel: %v", test.variant, err)
 				}
 			}
+			if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+				// A connectivity repair may drop a quality-postfill edge after it
+				// was added. Compact evidence records that causal drop without
+				// retaining a historical event.
+				repaired := evidence
+				repaired.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				repaired.Partitions[0].CompactLifecycle.QualityPostfillAdd[5]++
+				repaired.Partitions[0].CompactLifecycle.VariantDrop[5]++
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, repaired); err != nil {
+					t.Fatalf("quality-postfill repair drop rejected: %v", err)
+				}
+			}
 			tracedRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), traced[0].Ref)
 			if err != nil {
 				t.Fatal(err)

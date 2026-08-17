@@ -1853,8 +1853,14 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	if part.CompactLifecycle.VariantAdd[0] != 0 || part.CompactLifecycle.VariantAdd[1] != 0 || part.CompactLifecycle.VariantAdd[2] != 0 {
 		return fmt.Errorf("%w: compact variant adds have native origins %v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd)
 	}
-	if part.CompactLifecycle.PruneKeep[3] != 0 || part.CompactLifecycle.PruneKeep[4] != 0 || part.CompactLifecycle.PruneKeep[5] != 0 || part.CompactLifecycle.PruneKeep[6] != 0 || part.CompactLifecycle.PruneKeep[7] != 0 || part.CompactLifecycle.PruneDrop[3] != 0 || part.CompactLifecycle.PruneDrop[4] != 0 || part.CompactLifecycle.PruneDrop[5] != 0 || part.CompactLifecycle.PruneDrop[6] != 0 || part.CompactLifecycle.PruneDrop[7] != 0 || part.CompactLifecycle.VariantAdd[5] != 0 || part.CompactLifecycle.VariantDrop[5] != 0 {
+	if part.CompactLifecycle.PruneKeep[3] != 0 || part.CompactLifecycle.PruneKeep[4] != 0 || part.CompactLifecycle.PruneKeep[5] != 0 || part.CompactLifecycle.PruneKeep[6] != 0 || part.CompactLifecycle.PruneKeep[7] != 0 || part.CompactLifecycle.PruneDrop[3] != 0 || part.CompactLifecycle.PruneDrop[4] != 0 || part.CompactLifecycle.PruneDrop[5] != 0 || part.CompactLifecycle.PruneDrop[6] != 0 || part.CompactLifecycle.PruneDrop[7] != 0 || part.CompactLifecycle.VariantAdd[5] != 0 {
 		return fmt.Errorf("%w: compact lifecycle invalid quality origin prune_keep=%v prune_drop=%v variant_add=%v variant_drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.PruneKeep, part.CompactLifecycle.PruneDrop, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
+	}
+	// Connectivity repair can remove a final-stage quality-postfill edge. The
+	// removed edge retains its causal origin, so this is the only non-robust
+	// variant allowed to record VariantDrop[quality_postfill].
+	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && part.CompactLifecycle.VariantDrop[5] != 0 {
+		return fmt.Errorf("%w: compact non-quality lifecycle add=%v drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 	}
 	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 && (part.CompactLifecycle.VariantAdd[6] != 0 || part.CompactLifecycle.VariantAdd[7] != 0 || part.CompactLifecycle.VariantDrop[6] != 0 || part.CompactLifecycle.VariantDrop[7] != 0) {
 		return fmt.Errorf("%w: compact non-robust lifecycle add=%v drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)

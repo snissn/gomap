@@ -53,7 +53,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 		for j, partition := range report.VariantPacks {
-			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, AngularPairs: 1, AngularCosineDistanceMean: 0.25, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
 			switch arm.Variant {
 			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1:
 				one.FinalEdgesByOrigin[5] = 1
@@ -67,11 +67,13 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			report.Arms[i].Neighborhood.FinalSamples++
 			report.Arms[i].Neighborhood.FinalSampleTruthNeighbors++
 			report.Arms[i].Neighborhood.FinalSampleTruthRecovered++
+			report.Arms[i].Neighborhood.AngularPairs++
 			for origin := range one.FinalEdgesByOrigin {
 				report.Arms[i].Neighborhood.FinalEdgesByOrigin[origin] += one.FinalEdgesByOrigin[origin]
 			}
 			report.Arms[i].Neighborhood.PackDiagnostics = append(report.Arms[i].Neighborhood.PackDiagnostics, report.Arms[i].SelectedDiagnostics[j].Diagnostics)
 		}
+		report.Arms[i].Neighborhood.AngularCosineDistanceMean = 0.25
 		report.Arms[i].Cells = make([]localHNSWFixedBudgetScreenCellV1, len(report.EFSearch))
 		for j, ef := range report.EFSearch {
 			packs := make([]localHNSWFixedBudgetPackWorkV1, len(report.VariantPacks))
@@ -249,6 +251,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	badNeighborhoodAggregate.Arms[0].Neighborhood.CandidateSamples++
 	if err := localHNSWFixedBudgetScreenContractV1(badNeighborhoodAggregate); err == nil {
 		t.Fatal("tampered neighborhood aggregate accepted")
+	}
+
+	badAngularMean := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badAngularMean.Arms[0].Neighborhood.AngularCosineDistanceMean = 0.5
+	if err := localHNSWFixedBudgetScreenContractV1(badAngularMean); err == nil {
+		t.Fatal("tampered neighborhood angular mean accepted")
 	}
 
 	varyingOpportunities := localHNSWFixedBudgetScreenCloneV1(t, report)

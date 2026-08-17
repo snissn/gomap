@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -249,7 +250,7 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 			return err
 		}
 	}
-	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
+	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || totals.AngularCosineDistanceMean != aggregate.AngularCosineDistanceMean || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
 		return errors.New("fixed-budget neighborhood aggregate decomposition")
 	}
 	return nil
@@ -258,6 +259,9 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighborhoodOracleV1, src localHNSWAttributionNeighborhoodOracleV1) error {
 	if dst == nil {
 		return errors.New("invalid fixed-budget neighborhood total")
+	}
+	if math.IsNaN(src.AngularCosineDistanceMean) || math.IsInf(src.AngularCosineDistanceMean, 0) || (src.AngularPairs == 0 && src.AngularCosineDistanceMean != 0) || math.IsNaN(dst.AngularCosineDistanceMean) || math.IsInf(dst.AngularCosineDistanceMean, 0) || (dst.AngularPairs == 0 && dst.AngularCosineDistanceMean != 0) {
+		return errors.New("invalid fixed-budget angular cosine distance")
 	}
 	fields := [][2]uint64{{dst.CandidateSamples, src.CandidateSamples}, {dst.CandidateTruthNeighbors, src.CandidateTruthNeighbors}, {dst.CandidateTruthRecovered, src.CandidateTruthRecovered}, {dst.FinalSamples, src.FinalSamples}, {dst.FinalSampleTruthNeighbors, src.FinalSampleTruthNeighbors}, {dst.FinalSampleTruthRecovered, src.FinalSampleTruthRecovered}, {dst.AngularPairs, src.AngularPairs}}
 	for _, field := range fields {
@@ -276,7 +280,16 @@ func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighb
 	dst.FinalSamples += src.FinalSamples
 	dst.FinalSampleTruthNeighbors += src.FinalSampleTruthNeighbors
 	dst.FinalSampleTruthRecovered += src.FinalSampleTruthRecovered
+	angularDistanceSum := dst.AngularCosineDistanceMean*float64(dst.AngularPairs) + src.AngularCosineDistanceMean*float64(src.AngularPairs)
 	dst.AngularPairs += src.AngularPairs
+	if dst.AngularPairs == 0 {
+		dst.AngularCosineDistanceMean = 0
+	} else {
+		dst.AngularCosineDistanceMean = angularDistanceSum / float64(dst.AngularPairs)
+		if math.IsNaN(dst.AngularCosineDistanceMean) || math.IsInf(dst.AngularCosineDistanceMean, 0) {
+			return errors.New("invalid fixed-budget angular cosine distance total")
+		}
+	}
 	for i := range dst.FinalEdgesByOrigin {
 		dst.FinalEdgesByOrigin[i] += src.FinalEdgesByOrigin[i]
 		dst.FinalTruthByOrigin[i] += src.FinalTruthByOrigin[i]
