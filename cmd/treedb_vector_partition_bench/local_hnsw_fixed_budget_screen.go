@@ -220,7 +220,11 @@ func localHNSWFixedBudgetScreenTreatmentOriginsV1(arm localHNSWFixedBudgetScreen
 		}
 	}
 	counts := arm.Neighborhood.FinalEdgesByOrigin
-	if (wantQuality && counts[5] == 0) || (!wantQuality && counts[5] != 0) || (wantRobust && (counts[6] == 0 || counts[7] == 0)) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
+	// RobustPrune can fill the complete fixed degree budget by itself. The
+	// closest-candidate residual is therefore observable when used, but is not
+	// required for a treatment to be real; the independently checked degree and
+	// byte budget prove capacity in either case.
+	if (wantQuality && counts[5] == 0) || (!wantQuality && counts[5] != 0) || (wantRobust && counts[6] == 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
 		return fmt.Errorf("invalid fixed-budget treatment aggregate arm=%s counts=%v", arm.Arm.Name, counts)
 	}
 	return nil

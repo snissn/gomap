@@ -118,19 +118,33 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		t.Fatal("quality-postfill no-op treatment accepted")
 	}
 	robustArm := len(report.Arms) - 1
-	missingRobust := localHNSWFixedBudgetScreenCloneV1(t, report)
-	for i := range missingRobust.Arms[robustArm].SelectedNeighborhood {
-		missingRobust.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[7] = 0
+	zeroResidual := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range zeroResidual.Arms[robustArm].SelectedNeighborhood {
+		zeroResidual.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[7] = 0
 	}
-	missingRobust.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[7] = 0
-	if err := localHNSWFixedBudgetScreenContractV1(missingRobust); err == nil {
-		t.Fatal("robust residual-fill no-op treatment accepted")
+	zeroResidual.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[7] = 0
+	if err := localHNSWFixedBudgetScreenContractV1(zeroResidual); err != nil {
+		t.Fatalf("robust treatment with no residual fill rejected: %v", err)
+	}
+	noOpRobust := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range noOpRobust.Arms[robustArm].SelectedNeighborhood {
+		noOpRobust.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[6] = 0
+	}
+	noOpRobust.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[6] = 0
+	if err := localHNSWFixedBudgetScreenContractV1(noOpRobust); err == nil {
+		t.Fatal("robust-prune no-op treatment accepted")
 	}
 	wrongArmOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
 	wrongArmOrigin.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[6] = 1
 	wrongArmOrigin.Arms[0].Neighborhood.FinalEdgesByOrigin[6]++
 	if err := localHNSWFixedBudgetScreenContractV1(wrongArmOrigin); err == nil {
 		t.Fatal("non-robust arm carrying robust-prune origin accepted")
+	}
+	wrongResidualOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	wrongResidualOrigin.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[7] = 1
+	wrongResidualOrigin.Arms[0].Neighborhood.FinalEdgesByOrigin[7]++
+	if err := localHNSWFixedBudgetScreenContractV1(wrongResidualOrigin); err == nil {
+		t.Fatal("non-robust arm carrying robust residual origin accepted")
 	}
 
 	// The fifth arm's final origins are query-visible native edges. Exercise a
