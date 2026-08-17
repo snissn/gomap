@@ -395,7 +395,7 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 }
 
 func TestColumnVectorGraphLayer0NoRefillIsDeterministicAndBoundedV1(t *testing.T) {
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32, EfSearch: 80}
 	rows := make([]columnVectorGraphAssetRow, 64)
 	for i := range rows {
 		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
@@ -423,7 +423,7 @@ func TestColumnVectorGraphLayer0NoRefillIsDeterministicAndBoundedV1(t *testing.T
 						t.Fatalf("historical 2M/off recorded backfill=%d", selection.BackfillSelected)
 					}
 				}
-				graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 1, RowCount: len(got)}
+				graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 1, BaseManifestChecksum: 1, BaseSchemaHash: 1, RowCount: len(got)}
 				input, err := buildColumnHNSWSearchPackInput(def, graph, got)
 				if err != nil {
 					t.Fatal(err)
