@@ -21,6 +21,26 @@ func localHNSWFixedBudgetScreenCloneV1(t *testing.T, report localHNSWFixedBudget
 	return clone
 }
 
+func localHNSWFixedBudgetScreenTestDiagnosticV1() collections.VectorPartitionPackDiagnosticsV1 {
+	return collections.VectorPartitionPackDiagnosticsV1{
+		Rows:                    localHNSWFixedBudgetRetainedRowsV1,
+		ReachableRows:           localHNSWFixedBudgetRetainedRowsV1,
+		TraversalRoots:          1,
+		RowsByLayer:             []uint64{localHNSWFixedBudgetRetainedRowsV1},
+		EdgesByLayer:            []uint64{localHNSWFixedBudgetTargetLayer0EdgesV1},
+		Layer0DegreeLimit:       localHNSWFixedBudgetLayer0SlotsV1,
+		Layer0SaturatedRows:     localHNSWFixedBudgetRetainedRowsV1,
+		Layer0ReciprocalEdges:   localHNSWFixedBudgetTargetLayer0EdgesV1,
+		Layer0ReciprocalRatio:   1,
+		Layer0DegreeHistogram:   map[uint64]uint64{localHNSWFixedBudgetLayer0SlotsV1: localHNSWFixedBudgetRetainedRowsV1},
+		Layer0IndegreeHistogram: map[uint64]uint64{localHNSWFixedBudgetLayer0SlotsV1: localHNSWFixedBudgetRetainedRowsV1},
+		Layer0StrongComponents:  1,
+		Layer0LargestComponent:  localHNSWFixedBudgetRetainedRowsV1,
+		Layer0Distances:         collections.VectorPartitionLocalGraphDistanceDistributionV1{Count: localHNSWFixedBudgetTargetLayer0EdgesV1},
+		CombinedReachableRows:   localHNSWFixedBudgetRetainedRowsV1,
+	}
+}
+
 func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	report := localHNSWFixedBudgetScreenReportV1{
 		Schema:       localHNSWFixedBudgetScreenSchemaV1,
@@ -52,7 +72,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Schema: localHNSWAttributionBuildSchemaV1, Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(report.VariantPacks), PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]localHNSWFixedBudgetDiagnosticV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
-			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 7500, EdgesByLayer: []uint64{270000}, Layer0DegreeLimit: localHNSWFixedBudgetLayer0SlotsV1}}
+			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: localHNSWFixedBudgetScreenTestDiagnosticV1()}
 		}
 		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
@@ -83,13 +103,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Cells = make([]localHNSWFixedBudgetScreenCellV1, len(report.EFSearch))
 		for j, ef := range report.EFSearch {
 			packs := make([]localHNSWFixedBudgetPackWorkV1, len(report.VariantPacks))
-			packs[0] = localHNSWFixedBudgetPackWorkV1{Partition: report.VariantPacks[0], Opportunities: 1, Work: localHNSWAttributionQueryWorkV1{Candidates: 1}}
-			for k := 1; k < len(packs); k++ {
+			for k := range packs {
 				packs[k].Partition = report.VariantPacks[k]
-				packs[k].Opportunities = 1
-				packs[k].Work.Candidates = 1
+				packs[k].Opportunities = localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k]
+				packs[k].Work.Candidates = localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k]
 			}
-			report.Arms[i].Cells[j] = localHNSWFixedBudgetScreenCellV1{EFSearch: ef, QueryPackOpportunities: uint64(len(packs)), Work: localHNSWAttributionQueryWorkV1{Candidates: uint64(len(packs))}, PerPack: packs}
+			report.Arms[i].Cells[j] = localHNSWFixedBudgetScreenCellV1{EFSearch: ef, QueryPackOpportunities: localHNSWFixedBudgetScreenExpectedOpportunitiesV1, Work: localHNSWAttributionQueryWorkV1{Candidates: localHNSWFixedBudgetScreenExpectedOpportunitiesV1}, PerPack: packs}
 		}
 		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
 			report.Arms[i].Control = make([]localHNSWFixedBudgetControlPackV1, len(report.VariantPacks))
@@ -155,6 +174,18 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	badDegreeLimit.Arms[0].Neighborhood.FinalEdgesByOrigin[0] += localHNSWFixedBudgetLayer0SlotsV1
 	if err := localHNSWFixedBudgetScreenContractV1(badDegreeLimit); err == nil {
 		t.Fatal("non-fixed per-pack final edge capacity accepted")
+	}
+	badDiagnostic := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badDiagnostic.Arms[0].SelectedDiagnostics[0].Diagnostics.Layer0StrongComponents = 0
+	if err := localHNSWFixedBudgetScreenContractV1(badDiagnostic); err == nil {
+		t.Fatal("structurally impossible selected diagnostic accepted")
+	}
+	badAngularPairs := localHNSWFixedBudgetScreenCloneV1(t, report)
+	maxPairs := localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
+	badAngularPairs.Arms[0].SelectedNeighborhood[0].Neighborhood.AngularPairs = maxPairs + 1
+	badAngularPairs.Arms[0].Neighborhood.AngularPairs += maxPairs
+	if err := localHNSWFixedBudgetScreenContractV1(badAngularPairs); err == nil {
+		t.Fatal("angular-pair total above sample capacity accepted")
 	}
 	badBuildSchema := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badBuildSchema.Arms[0].Build.Schema = ""
@@ -246,8 +277,8 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		t.Fatalf("quality-postfill cell rejected: %v", err)
 	}
 	perPackHitOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
-	perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots = 11
-	perPackHitOverflow.Arms[qualityArm].Cells[0].LocalTruthHitSlots = 11
+	perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots = 10*perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].Opportunities + 1
+	perPackHitOverflow.Arms[qualityArm].Cells[0].LocalTruthHitSlots = perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots
 	if err := localHNSWFixedBudgetScreenContractV1(perPackHitOverflow); err == nil {
 		t.Fatal("per-pack truth-hit capacity overflow accepted")
 	}
@@ -351,6 +382,18 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	varyingOpportunities.Arms[1].Cells[0].QueryPackOpportunities++
 	if err := localHNSWFixedBudgetScreenContractV1(varyingOpportunities); err == nil {
 		t.Fatal("EF or arm-dependent query opportunities accepted")
+	}
+
+	uniformlyReducedOpportunities := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range uniformlyReducedOpportunities.Arms {
+		for j := range uniformlyReducedOpportunities.Arms[i].Cells {
+			cell := &uniformlyReducedOpportunities.Arms[i].Cells[j]
+			cell.QueryPackOpportunities--
+			cell.PerPack[0].Opportunities--
+		}
+	}
+	if err := localHNSWFixedBudgetScreenContractV1(uniformlyReducedOpportunities); err == nil {
+		t.Fatal("uniformly reduced frozen-route opportunities accepted")
 	}
 }
 

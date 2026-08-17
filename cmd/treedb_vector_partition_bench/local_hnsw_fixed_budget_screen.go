@@ -32,7 +32,13 @@ const (
 	localHNSWFixedBudgetRetainedRowsV1                uint64 = 7500
 	localHNSWFixedBudgetLayer0SlotsV1                 uint64 = 36
 	localHNSWFixedBudgetTargetLayer0EdgesV1                  = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
+	// The frozen 806-query, two-probe calibration route tally that intersects
+	// the five retained packs. This is deliberately a source-bound contract
+	// value rather than a value taken from an arbitrary report cell.
+	localHNSWFixedBudgetScreenExpectedOpportunitiesV1 uint64 = 277
 )
+
+var localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1 = [...]uint64{26, 56, 30, 85, 80}
 
 func localHNSWFixedBudgetConstructionVariantV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
 	for _, arm := range localHNSWFixedBudgetScreenArmsV1 {
@@ -146,13 +152,21 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 	if err := localHNSWFixedBudgetScreenSourceV1(report.Source, report.Manifest); err != nil {
 		return err
 	}
-	var expectedOpportunities uint64
-	expectedPerPackOpportunities := make([]uint64, len(report.VariantPacks))
-	haveExpectedOpportunities := false
+	if len(localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1) != len(report.VariantPacks) {
+		return errors.New("invalid fixed-budget expected opportunity binding")
+	}
 	for i, arm := range report.Arms {
 		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Arm.Variant)
 		if identityErr != nil || arm.Arm != localHNSWFixedBudgetScreenArmsV1[i] || arm.Build.Schema != localHNSWAttributionBuildSchemaV1 || arm.Build.Variant != string(arm.Arm.Variant) || arm.Build.VariantIdentity != identity || arm.Build.FileID != 4172000+uint32(i) || arm.Build.Partitions != len(report.VariantPacks) || arm.Build.PackBytes == 0 || len(arm.SelectedDiagnostics) != len(report.VariantPacks) || len(arm.SelectedNeighborhood) != len(report.VariantPacks) || len(arm.Cells) != len(report.EFSearch) {
 			return errors.New("invalid fixed-budget screen arm")
+		}
+		for j, d := range arm.SelectedDiagnostics {
+			if d.Partition != report.VariantPacks[j] {
+				return errors.New("invalid fixed-budget selected diagnostic binding")
+			}
+			if err := localHNSWFixedBudgetScreenDiagnosticV1(d.Diagnostics); err != nil {
+				return fmt.Errorf("invalid fixed-budget selected diagnostic partition=%d: %w", d.Partition, err)
+			}
 		}
 		if err := localHNSWFixedBudgetScreenNeighborhoodV1(arm.Neighborhood, arm.SelectedNeighborhood, arm.SelectedDiagnostics, report.VariantPacks); err != nil {
 			return err
@@ -160,19 +174,14 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		if err := localHNSWFixedBudgetScreenTreatmentOriginsV1(arm); err != nil {
 			return err
 		}
-		for j, d := range arm.SelectedDiagnostics {
-			if d.Partition != report.VariantPacks[j] || d.Diagnostics.Rows == 0 {
-				return errors.New("invalid fixed-budget selected diagnostic binding")
-			}
-		}
 		for j, cell := range arm.Cells {
-			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities == 0 || cell.QueryPackOpportunities > ^uint64(0)/10 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
+			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities != localHNSWFixedBudgetScreenExpectedOpportunitiesV1 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
 				return fmt.Errorf("invalid fixed-budget screen cell arm=%s ef=%d expected_ef=%d opportunities=%d hits=%d per_pack=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, report.EFSearch[j], cell.QueryPackOpportunities, cell.LocalTruthHitSlots, len(cell.PerPack), cell.Work.Candidates, cell.Work.Edges, cell.Work.FrontierAdmissions, cell.Work.Utility)
 			}
 			var opportunities, hits uint64
 			var work localHNSWAttributionQueryWorkV1
 			for k, p := range cell.PerPack {
-				if p.Partition != report.VariantPacks[k] || p.Opportunities == 0 || p.Opportunities > ^uint64(0)/10 || p.TruthHitSlots > p.Opportunities*10 || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
+				if p.Partition != report.VariantPacks[k] || p.Opportunities != localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k] || p.TruthHitSlots > p.Opportunities*10 || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
 					return fmt.Errorf("invalid fixed-budget per-pack decomposition arm=%s ef=%d slot=%d partition=%d expected_partition=%d opportunities=%d hits=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, k, p.Partition, report.VariantPacks[k], p.Opportunities, p.TruthHitSlots, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility)
 				}
 				opportunities += p.Opportunities
@@ -180,21 +189,6 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			}
 			if opportunities != cell.QueryPackOpportunities || hits != cell.LocalTruthHitSlots || work != cell.Work {
 				return errors.New("fixed-budget aggregate decomposition")
-			}
-			if !haveExpectedOpportunities {
-				expectedOpportunities = cell.QueryPackOpportunities
-				for k := range cell.PerPack {
-					expectedPerPackOpportunities[k] = cell.PerPack[k].Opportunities
-				}
-				haveExpectedOpportunities = true
-			} else if cell.QueryPackOpportunities != expectedOpportunities {
-				return errors.New("fixed-budget query opportunities vary by arm or EF")
-			} else {
-				for k := range cell.PerPack {
-					if cell.PerPack[k].Opportunities != expectedPerPackOpportunities[k] {
-						return errors.New("fixed-budget per-pack opportunities vary by arm or EF")
-					}
-				}
 			}
 		}
 		isControl := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1
@@ -247,6 +241,73 @@ func localHNSWFixedBudgetScreenSourceV1(source localHNSWAttributionSourceEvidenc
 	return nil
 }
 
+// localHNSWFixedBudgetScreenDiagnosticV1 validates the topology and summary
+// relationships emitted by PackDiagnosticsV1 for one retained M18 pack. The
+// report is offline evidence, so its nested diagnostics must remain
+// structurally possible instead of merely being nonzero and self-consistent
+// with the neighborhood summary that copied them.
+func localHNSWFixedBudgetScreenDiagnosticV1(d collections.VectorPartitionPackDiagnosticsV1) error {
+	if d.Rows != localHNSWFixedBudgetRetainedRowsV1 || d.ReachableRows != d.Rows || d.TraversalRoots != 1 || d.CombinedReachableRows != d.Rows || d.MaxLayer < 0 || len(d.RowsByLayer) != d.MaxLayer+1 || len(d.EdgesByLayer) != len(d.RowsByLayer) || d.RowsByLayer[0] != d.Rows || d.Layer0DegreeLimit != localHNSWFixedBudgetLayer0SlotsV1 || d.Layer0SaturatedRows > d.Rows || d.Layer0ZeroIndegreeRows > d.Rows || d.Layer0DuplicateEdges > d.EdgesByLayer[0] || d.Layer0ReciprocalEdges > d.EdgesByLayer[0] || d.Layer0StrongComponents == 0 || d.Layer0StrongComponents > d.Rows || d.Layer0LargestComponent == 0 || d.Layer0LargestComponent > d.Rows || d.Layer0StrongComponents == 1 && d.Layer0LargestComponent != d.Rows || d.Layer0Distances.Count != d.EdgesByLayer[0] || !validM8GraphDistanceDistributionV1(d.Layer0Distances) || !validM8ReciprocalRatioV1(d.Layer0ReciprocalEdges, d.EdgesByLayer[0], d.Layer0ReciprocalRatio) || d.AuxiliaryDistances.Count != d.AuxiliaryEdges || !validM8GraphDistanceDistributionV1(d.AuxiliaryDistances) {
+		return errors.New("invalid fixed-budget pack diagnostics")
+	}
+
+	maxUint64 := ^uint64(0)
+	for layer, rows := range d.RowsByLayer {
+		if rows == 0 || layer > 0 && rows > d.RowsByLayer[layer-1] {
+			return errors.New("invalid fixed-budget diagnostic layers")
+		}
+		degreeLimit := d.Layer0DegreeLimit
+		if layer > 0 {
+			degreeLimit /= 2
+		}
+		if degreeLimit == 0 || rows > maxUint64/degreeLimit || d.EdgesByLayer[layer] > rows*degreeLimit {
+			return errors.New("invalid fixed-budget diagnostic edge capacity")
+		}
+	}
+
+	var degreeRows, degreeEdges, saturatedRows uint64
+	for degree, rows := range d.Layer0DegreeHistogram {
+		if rows == 0 || degree > d.Layer0DegreeLimit || maxUint64-degreeRows < rows || degree != 0 && rows > maxUint64/degree || maxUint64-degreeEdges < degree*rows {
+			return errors.New("invalid fixed-budget layer0 degree histogram")
+		}
+		degreeRows += rows
+		degreeEdges += degree * rows
+		if degree >= d.Layer0DegreeLimit {
+			if maxUint64-saturatedRows < rows {
+				return errors.New("fixed-budget layer0 saturation overflow")
+			}
+			saturatedRows += rows
+		}
+	}
+	if degreeRows != d.Rows || degreeEdges != d.EdgesByLayer[0] || saturatedRows != d.Layer0SaturatedRows {
+		return errors.New("invalid fixed-budget layer0 degree totals")
+	}
+
+	var indegreeRows, indegreeEdges uint64
+	for degree, rows := range d.Layer0IndegreeHistogram {
+		if rows == 0 || maxUint64-indegreeRows < rows || degree != 0 && rows > maxUint64/degree || maxUint64-indegreeEdges < degree*rows {
+			return errors.New("invalid fixed-budget layer0 indegree histogram")
+		}
+		indegreeRows += rows
+		indegreeEdges += degree * rows
+	}
+	if indegreeRows != d.Rows || indegreeEdges != d.EdgesByLayer[0] || d.Layer0IndegreeHistogram[0] != d.Layer0ZeroIndegreeRows {
+		return errors.New("invalid fixed-budget layer0 indegree totals")
+	}
+
+	auxiliaryPresent := d.AuxiliaryEdges != 0 || d.AuxiliaryCSRBytes != 0 || d.AuxiliaryMaxDegree != 0
+	if auxiliaryPresent {
+		if d.Rows == maxUint64 || d.Rows+1 > maxUint64/8 || d.AuxiliaryEdges > maxUint64/4 || d.AuxiliaryMaxDegree == 0 || d.Rows > maxUint64/d.AuxiliaryMaxDegree || d.AuxiliaryEdges > d.Rows*d.AuxiliaryMaxDegree || (d.AuxiliaryEdges == 0) != (d.AuxiliaryMaxDegree == 0) {
+			return errors.New("invalid fixed-budget auxiliary diagnostics")
+		}
+		offsetBytes, edgeBytes := (d.Rows+1)*8, d.AuxiliaryEdges*4
+		if edgeBytes > maxUint64-offsetBytes || d.AuxiliaryCSRBytes != offsetBytes+edgeBytes {
+			return errors.New("invalid fixed-budget auxiliary diagnostic bytes")
+		}
+	}
+	return nil
+}
+
 func localHNSWFixedBudgetScreenTreatmentOriginsV1(arm localHNSWFixedBudgetScreenArmResultV1) error {
 	wantQuality := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
 	wantRobust := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
@@ -294,6 +355,10 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 		degreeLimit := diagnostics[i].Diagnostics.Layer0DegreeLimit
 		if degreeLimit != localHNSWFixedBudgetLayer0SlotsV1 || one.FinalSamples > ^uint64(0)/degreeLimit || finalEdgesByOrigin > one.FinalSamples*degreeLimit {
 			return errors.New("invalid fixed-budget per-pack final edge capacity")
+		}
+		maxAngularPairs := degreeLimit * (degreeLimit - 1) / 2
+		if one.FinalSamples > ^uint64(0)/maxAngularPairs || one.AngularPairs > one.FinalSamples*maxAngularPairs {
+			return errors.New("invalid fixed-budget per-pack angular pair capacity")
 		}
 		if perPack[i].Partition != partition || one.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || one.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || one.ExactK != localHNSWAttributionNeighborhoodExactKV1 || one.CandidateSamples == 0 || one.CandidateTruthRecovered > one.CandidateTruthNeighbors || one.FinalSamples == 0 || one.FinalSampleTruthRecovered > one.FinalSampleTruthNeighbors || finalTruthByOrigin != one.FinalSampleTruthRecovered || len(one.PackDiagnostics) != 1 || !reflect.DeepEqual(one.PackDiagnostics[0], diagnostics[i].Diagnostics) || !reflect.DeepEqual(aggregate.PackDiagnostics[i], diagnostics[i].Diagnostics) {
 			return errors.New("invalid fixed-budget selected neighborhood binding")
