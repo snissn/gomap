@@ -31,7 +31,11 @@ const (
 	localHNSWFixedBudgetScreenTreatmentLimitationV1          = "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"
 	localHNSWFixedBudgetRetainedRowsV1                uint64 = 7500
 	localHNSWFixedBudgetLayer0SlotsV1                 uint64 = 36
-	localHNSWFixedBudgetTargetLayer0EdgesV1                  = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
+	// Every retained 7,500-row pack has 7,499 eligible L0 construction
+	// selections. The construction evidence validates that its canonical
+	// stable-ID sample retains exactly the first 32 of those selections.
+	localHNSWFixedBudgetScreenCanonicalSampleCountV1 uint64 = 32
+	localHNSWFixedBudgetTargetLayer0EdgesV1                 = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
 	// The frozen 806-query, two-probe calibration route tally that intersects
 	// the five retained packs. This is deliberately a source-bound contract
 	// value rather than a value taken from an arbitrary report cell.
@@ -399,8 +403,8 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 		if err := localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one); err != nil {
 			return err
 		}
-		if one.CandidateSamples != one.FinalSamples {
-			return errors.New("invalid fixed-budget per-pack sample binding")
+		if one.CandidateSamples != localHNSWFixedBudgetScreenCanonicalSampleCountV1 || one.FinalSamples != localHNSWFixedBudgetScreenCanonicalSampleCountV1 {
+			return errors.New("invalid fixed-budget per-pack canonical sample count")
 		}
 		if !localHNSWFixedBudgetScreenAngularCosineDistanceValidV1(one.AngularCosineDistanceMean) {
 			return errors.New("invalid fixed-budget per-pack angular cosine distance")
@@ -417,8 +421,12 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 		if degreeLimit != localHNSWFixedBudgetLayer0SlotsV1 || one.FinalSamples > ^uint64(0)/degreeLimit || finalEdgesByOrigin > one.FinalSamples*degreeLimit {
 			return errors.New("invalid fixed-budget per-pack final edge capacity")
 		}
-		maxAngularPairs := degreeLimit * (degreeLimit - 1) / 2
-		if one.FinalSamples > ^uint64(0)/maxAngularPairs || one.AngularPairs > one.FinalSamples*maxAngularPairs {
+		// Angular pairs are emitted only between two final L0 edges of the
+		// same sampled row. Given the persisted final-edge total and the fixed
+		// degree cap, concentrating complete rows first maximizes C(degree, 2)
+		// pairs. This is stricter than merely bounding every canonical sample
+		// by the degree cap, which would accept a pair with only one final edge.
+		if one.AngularPairs > localHNSWFixedBudgetScreenAngularPairCapacityV1(finalEdgesByOrigin, degreeLimit) {
 			return errors.New("invalid fixed-budget per-pack angular pair capacity")
 		}
 		if perPack[i].Partition != partition || one.Schema != localHNSWAttributionNeighborhoodOracleSchemaV1 || one.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || one.ExactK != localHNSWAttributionNeighborhoodExactKV1 || one.CandidateSamples == 0 || one.CandidateTruthRecovered > one.CandidateTruthNeighbors || one.FinalSamples == 0 || one.FinalSampleTruthRecovered > one.FinalSampleTruthNeighbors || finalTruthByOrigin != one.FinalSampleTruthRecovered || len(one.PackDiagnostics) != 1 || !reflect.DeepEqual(one.PackDiagnostics[0], diagnostics[i].Diagnostics) || !reflect.DeepEqual(aggregate.PackDiagnostics[i], diagnostics[i].Diagnostics) {
@@ -432,6 +440,12 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 		return errors.New("fixed-budget neighborhood aggregate decomposition")
 	}
 	return nil
+}
+
+func localHNSWFixedBudgetScreenAngularPairCapacityV1(finalEdges, degreeLimit uint64) uint64 {
+	completeRows, remainder := finalEdges/degreeLimit, finalEdges%degreeLimit
+	pairsPerCompleteRow := degreeLimit * (degreeLimit - 1) / 2
+	return completeRows*pairsPerCompleteRow + remainder*(remainder-1)/2
 }
 
 // localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1 bounds each exact-kNN
