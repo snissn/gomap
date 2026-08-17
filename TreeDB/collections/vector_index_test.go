@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"math"
 	"reflect"
@@ -390,6 +391,58 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 		if string(plain[i].ID) != string(traced[i].ID) || !reflect.DeepEqual(plain[i].Adjacency, traced[i].Adjacency) {
 			t.Fatalf("trace changed graph row=%d", i)
 		}
+	}
+}
+
+func TestColumnVectorGraphLayer0NoRefillIsDeterministicAndBoundedV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 64)
+	for i := range rows {
+		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("policy-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}, BaseRowRef: DocumentRowRef{Generation: 1, PartID: 1, RowIndex: i, AppliedCommandLSN: 1}}
+	}
+	for _, test := range []struct {
+		name   string
+		policy *vectorIndexLayer0ConstructionPolicyV1
+	}{
+		{name: "canonical", policy: nil},
+		{name: "historical_2m_off", policy: &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: false}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			build := func() ([]columnVectorGraphAssetRow, *vectorIndexConstructionTraceV1, []byte) {
+				got := append([]columnVectorGraphAssetRow(nil), rows...)
+				trace := &vectorIndexConstructionTraceV1{detailed: true}
+				if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(got, def, trace, true, test.policy); err != nil {
+					t.Fatal(err)
+				}
+				for _, selection := range trace.selections {
+					if selection.Layer == 0 && selection.Selected > 2*def.M {
+						t.Fatalf("layer-0 selection=%d exceeds reciprocal capacity=%d", selection.Selected, 2*def.M)
+					}
+					if test.policy != nil && selection.Layer == 0 && selection.BackfillSelected != 0 {
+						t.Fatalf("historical 2M/off recorded backfill=%d", selection.BackfillSelected)
+					}
+				}
+				graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 1, RowCount: len(got)}
+				input, err := buildColumnHNSWSearchPackInput(def, graph, got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := encodeColumnHNSWSearchPack(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return got, trace, raw
+			}
+			firstRows, firstTrace, firstRaw := build()
+			secondRows, secondTrace, secondRaw := build()
+			if !reflect.DeepEqual(firstRows, secondRows) || !reflect.DeepEqual(firstTrace.selections, secondTrace.selections) || !reflect.DeepEqual(firstTrace.events, secondTrace.events) || !bytes.Equal(firstRaw, secondRaw) {
+				t.Fatal("construction or graph bytes are not deterministic")
+			}
+			if sum := sha256.Sum256(firstRaw); sum == ([32]byte{}) {
+				t.Fatal("empty graph identity")
+			}
+		})
 	}
 }
 

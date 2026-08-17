@@ -764,7 +764,11 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 	if _, err := VectorPartitionLocalGraphVariantIdentityV1(variant); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
-	if err := buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows, def, trace, false); err != nil {
+	var policy *vectorIndexLayer0ConstructionPolicyV1
+	if variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+		policy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: false}
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows, def, trace, false, policy); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
 	switch variant {
