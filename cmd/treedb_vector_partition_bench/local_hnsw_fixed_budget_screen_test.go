@@ -404,6 +404,50 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("quality-postfill cell rejected: %v", err)
 	}
+	// Work.Candidates and Work.FrontierAdmissions are persisted separately from
+	// utility. Exercise a nontrivial per-pack residual so the screen cannot
+	// claim fewer candidates or admissions than that utility consumed.
+	counterUtility := qualityUtility
+	counterUtility.ExaminedNative = 2
+	counterUtility.NewlyVisited = 2
+	counterUtility.Scored = 2
+	counterUtility.TopAdmissions = 2
+	counterUtility.FrontierAdmissions = 2
+	counterUtility.QualityPostfill = localHNSWAttributionQueryOriginUtilityV1{
+		Examined:           2,
+		NewlyVisited:       2,
+		Scored:             2,
+		TopAdmissions:      2,
+		FrontierAdmissions: 2,
+	}
+	counterConsistent := localHNSWFixedBudgetScreenCloneV1(t, report)
+	counterCell := &counterConsistent.Arms[qualityArm].Cells[0]
+	counterCell.PerPack[0].Work = localHNSWAttributionQueryWorkV1{Candidates: 2, Edges: 2, FrontierAdmissions: 2, Utility: counterUtility}
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, counterCell)
+	if err := localHNSWFixedBudgetScreenContractV1(counterConsistent); err != nil {
+		t.Fatalf("counter-consistent fixed-budget work rejected: %v", err)
+	}
+	underreportedCandidates := localHNSWFixedBudgetScreenCloneV1(t, counterConsistent)
+	underreportedCandidatesCell := &underreportedCandidates.Arms[qualityArm].Cells[0]
+	underreportedCandidatesCell.PerPack[0].Work.Candidates = 1
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, underreportedCandidatesCell)
+	if err := localHNSWFixedBudgetScreenContractV1(underreportedCandidates); err == nil {
+		t.Fatal("work candidates below newly visited utility accepted")
+	}
+	underreportedAdmissions := localHNSWFixedBudgetScreenCloneV1(t, counterConsistent)
+	underreportedAdmissionsCell := &underreportedAdmissions.Arms[qualityArm].Cells[0]
+	underreportedAdmissionsCell.PerPack[0].Work.FrontierAdmissions = 1
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, underreportedAdmissionsCell)
+	if err := localHNSWFixedBudgetScreenContractV1(underreportedAdmissions); err == nil {
+		t.Fatal("work frontier admissions below attributed utility accepted")
+	}
+	impossibleSeedResidual := localHNSWFixedBudgetScreenCloneV1(t, counterConsistent)
+	impossibleSeedResidualCell := &impossibleSeedResidual.Arms[qualityArm].Cells[0]
+	impossibleSeedResidualCell.PerPack[0].Work.FrontierAdmissions = 3
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, impossibleSeedResidualCell)
+	if err := localHNSWFixedBudgetScreenContractV1(impossibleSeedResidual); err == nil {
+		t.Fatal("seed admissions exceeding seed candidates accepted")
+	}
 	utilityTruthOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
 	truthCell := &utilityTruthOverflow.Arms[0].Cells[0]
 	truthUtility := &truthCell.PerPack[0].Work.Utility
