@@ -2387,11 +2387,16 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		qualityPostfill = idx.layer0ConstructionPolicy.qualityPostfill
 		robustPruneRefinement = idx.layer0ConstructionPolicy.robustPruneRefinement
 	}
+	// Keep every finite construction comparison, not only diversity rejects.
+	// An initial directed selection is an equally valid observed pair for the
+	// reverse endpoint; retaining the symmetric relation lets the explicit
+	// post-construction pass fill early nodes without inventing an unobserved
+	// nearest-neighbor fallback.
+	constructionCandidates := append([]vectorIndexCandidate(nil), scored...)
 	capturePostfill := qualityPostfill || robustPruneRefinement
-	var postfillCandidates []vectorIndexCandidate
-	scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, capturePostfill)
+	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, capturePostfill)
 	if capturePostfill {
-		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
+		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
@@ -2532,16 +2537,27 @@ func (idx *VectorIndex) captureQualityPostfillCandidatesLocked(from int, candida
 		idx.qualityPostfillCandidates[from] = seen
 	}
 	for _, candidate := range candidates {
-		if candidate.nodeID >= 0 && candidate.nodeID != from {
-			seen[candidate.nodeID] = struct{}{}
+		to := candidate.nodeID
+		if to < 0 || to >= len(idx.nodes) || to == from {
+			continue
 		}
+		seen[to] = struct{}{}
+		// Distance is symmetric for the cosine-only offline policies.  Retain
+		// the reverse endpoint too: this exact pair was scored during HNSW
+		// construction, even if only `from` selected it at that time.
+		reverse := idx.qualityPostfillCandidates[to]
+		if reverse == nil {
+			reverse = make(map[int]struct{})
+			idx.qualityPostfillCandidates[to] = reverse
+		}
+		reverse[from] = struct{}{}
 	}
 }
 
 // applyQualityPostfillLocked is the offline experiment's explicit final L0
 // stage. It runs only after all insertion-side reciprocal pruning and before
-// BFS locality remapping. Candidates are the union of rejected diverse
-// candidates observed during construction; each row fills only its unused 2M
+// BFS locality remapping. Candidates are the union of finite construction
+// comparisons observed in either direction; each row fills only its unused 2M
 // outgoing capacity, ordered by maximum nearest-neighbour separation, then
 // source distance and native ordinal.
 func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
@@ -2609,7 +2625,7 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 		}
 		idx.nodes[from].neighbors[0] = neighbors
 		if len(neighbors) != target {
-			return fmt.Errorf("collections: least-redundant separation postfill insufficient candidates from=%d degree=%d target=%d", from, len(neighbors), target)
+			return fmt.Errorf("collections: least-redundant separation postfill insufficient observed candidates from=%d degree=%d target=%d pool=%d", from, len(neighbors), target, len(pool))
 		}
 	}
 	return nil
@@ -2617,8 +2633,8 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 
 // applyRobustPruneRefinementLocked is the single #4172 causal follow-up. It
 // applies DiskANN RobustPrune with the predeclared Euclidean alpha=1.2 to each completed
-// L0 neighbourhood, using only its current edges and the bounded rejected
-// construction pool. Classic RobustPrune may underfill R; a separately
+// L0 neighbourhood, using only its current edges and the bounded observed
+// construction-pair pool. Classic RobustPrune may underfill R; a separately
 // attributed nearest residual fill restores the fixed 2M encoded degree budget.
 func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
 	// For normalized vectors this builder stores cosine distance, which is
