@@ -178,11 +178,17 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			if cell.EFSearch != report.EFSearch[j] || cell.QueryPackOpportunities != localHNSWFixedBudgetScreenExpectedOpportunitiesV1 || cell.LocalTruthHitSlots > cell.QueryPackOpportunities*10 || len(cell.PerPack) != len(report.VariantPacks) || cell.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(cell.Work.Utility, cell.Work.Edges) {
 				return fmt.Errorf("invalid fixed-budget screen cell arm=%s ef=%d expected_ef=%d opportunities=%d hits=%d per_pack=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, report.EFSearch[j], cell.QueryPackOpportunities, cell.LocalTruthHitSlots, len(cell.PerPack), cell.Work.Candidates, cell.Work.Edges, cell.Work.FrontierAdmissions, cell.Work.Utility)
 			}
+			if err := localHNSWFixedBudgetScreenQueryUtilityV1(arm.Arm.Variant, cell.Work.Utility, cell.QueryPackOpportunities); err != nil {
+				return fmt.Errorf("invalid fixed-budget screen cell utility arm=%s ef=%d: %w", arm.Arm.Name, cell.EFSearch, err)
+			}
 			var opportunities, hits uint64
 			var work localHNSWAttributionQueryWorkV1
 			for k, p := range cell.PerPack {
 				if p.Partition != report.VariantPacks[k] || p.Opportunities != localHNSWFixedBudgetScreenExpectedPerPackOpportunitiesV1[k] || p.TruthHitSlots > p.Opportunities*10 || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
 					return fmt.Errorf("invalid fixed-budget per-pack decomposition arm=%s ef=%d slot=%d partition=%d expected_partition=%d opportunities=%d hits=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, k, p.Partition, report.VariantPacks[k], p.Opportunities, p.TruthHitSlots, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility)
+				}
+				if err := localHNSWFixedBudgetScreenQueryUtilityV1(arm.Arm.Variant, p.Work.Utility, p.Opportunities); err != nil {
+					return fmt.Errorf("invalid fixed-budget per-pack utility arm=%s ef=%d partition=%d: %w", arm.Arm.Name, cell.EFSearch, p.Partition, err)
 				}
 				opportunities += p.Opportunities
 				hits += p.TruthHitSlots
@@ -324,6 +330,27 @@ func localHNSWFixedBudgetScreenTreatmentOriginsV1(arm localHNSWFixedBudgetScreen
 	// byte budget prove capacity in either case.
 	if (wantQuality && counts[5] == 0) || (!wantQuality && counts[5] != 0) || (wantRobust && counts[6] == 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
 		return fmt.Errorf("invalid fixed-budget treatment aggregate arm=%s counts=%v", arm.Arm.Name, counts)
+	}
+	return nil
+}
+
+// localHNSWFixedBudgetScreenQueryUtilityV1 applies the fixed screen's
+// per-query exact-k capacity and construction-treatment namespace to every
+// persisted utility, before per-pack values are folded into a cell aggregate.
+// The generic utility conservation helper intentionally permits unattributed
+// seed truth, so this contract supplies the screen-specific ten-result bound.
+func localHNSWFixedBudgetScreenQueryUtilityV1(variant collections.VectorPartitionLocalGraphVariantV1, utility localHNSWAttributionQueryUtilityV1, opportunities uint64) error {
+	const exactK uint64 = 10
+	if opportunities > ^uint64(0)/exactK || utility.TruthRecovered > opportunities*exactK {
+		return errors.New("invalid fixed-budget query utility truth capacity")
+	}
+	wantQuality := variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
+	wantRobust := variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+	if !wantQuality && utility.QualityPostfill != (localHNSWAttributionQueryOriginUtilityV1{}) {
+		return errors.New("invalid fixed-budget quality-postfill query utility origin")
+	}
+	if !wantRobust && (utility.RobustPrune != (localHNSWAttributionQueryOriginUtilityV1{}) || utility.RobustPruneResidual != (localHNSWAttributionQueryOriginUtilityV1{})) {
+		return errors.New("invalid fixed-budget robust-prune query utility origin")
 	}
 	return nil
 }

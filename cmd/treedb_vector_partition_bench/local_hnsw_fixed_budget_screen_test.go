@@ -276,6 +276,48 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("quality-postfill cell rejected: %v", err)
 	}
+	utilityTruthOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
+	truthCell := &utilityTruthOverflow.Arms[0].Cells[0]
+	truthUtility := &truthCell.PerPack[0].Work.Utility
+	truthUtility.Unattributed.TruthRecovered = truthCell.PerPack[0].Opportunities*10 + 1
+	truthUtility.TruthRecovered = truthUtility.Unattributed.TruthRecovered
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, truthCell)
+	if err := localHNSWFixedBudgetScreenContractV1(utilityTruthOverflow); err == nil {
+		t.Fatal("query utility truth recovery beyond exact-k opportunity capacity accepted")
+	}
+	wrongQualityUtilityOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	qualityOriginCell := &wrongQualityUtilityOrigin.Arms[0].Cells[0]
+	qualityOriginCell.PerPack[0].Work.Edges = 1
+	qualityOriginCell.PerPack[0].Work.FrontierAdmissions = 1
+	qualityOriginCell.PerPack[0].Work.Utility = qualityUtility
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, qualityOriginCell)
+	if err := localHNSWFixedBudgetScreenContractV1(wrongQualityUtilityOrigin); err == nil {
+		t.Fatal("non-postfill arm carrying quality-postfill query utility accepted")
+	}
+	robustUtility := qualityUtility
+	robustUtility.QualityPostfill = localHNSWAttributionQueryOriginUtilityV1{}
+	robustUtility.RobustPrune = localHNSWAttributionQueryOriginUtilityV1{Examined: 1, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1}
+	wrongRobustUtilityOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	robustOriginCell := &wrongRobustUtilityOrigin.Arms[0].Cells[0]
+	robustOriginCell.PerPack[0].Work.Edges = 1
+	robustOriginCell.PerPack[0].Work.FrontierAdmissions = 1
+	robustOriginCell.PerPack[0].Work.Utility = robustUtility
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, robustOriginCell)
+	if err := localHNSWFixedBudgetScreenContractV1(wrongRobustUtilityOrigin); err == nil {
+		t.Fatal("non-robust arm carrying robust-prune query utility accepted")
+	}
+	robustResidualUtility := robustUtility
+	robustResidualUtility.RobustPrune = localHNSWAttributionQueryOriginUtilityV1{}
+	robustResidualUtility.RobustPruneResidual = localHNSWAttributionQueryOriginUtilityV1{Examined: 1, NewlyVisited: 1, Scored: 1, TopAdmissions: 1, FrontierAdmissions: 1}
+	wrongRobustResidualUtilityOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	robustResidualOriginCell := &wrongRobustResidualUtilityOrigin.Arms[0].Cells[0]
+	robustResidualOriginCell.PerPack[0].Work.Edges = 1
+	robustResidualOriginCell.PerPack[0].Work.FrontierAdmissions = 1
+	robustResidualOriginCell.PerPack[0].Work.Utility = robustResidualUtility
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, robustResidualOriginCell)
+	if err := localHNSWFixedBudgetScreenContractV1(wrongRobustResidualUtilityOrigin); err == nil {
+		t.Fatal("non-robust arm carrying robust residual query utility accepted")
+	}
 	perPackHitOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
 	perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots = 10*perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].Opportunities + 1
 	perPackHitOverflow.Arms[qualityArm].Cells[0].LocalTruthHitSlots = perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots
@@ -412,4 +454,15 @@ func localHNSWFixedBudgetScreenArmIndexV1(t *testing.T, report localHNSWFixedBud
 	}
 	t.Fatalf("missing fixed-budget screen arm variant=%q", variant)
 	return -1
+}
+
+func localHNSWFixedBudgetScreenTestRecomposeCellV1(t *testing.T, cell *localHNSWFixedBudgetScreenCellV1) {
+	t.Helper()
+	var aggregate localHNSWAttributionQueryWorkV1
+	for _, pack := range cell.PerPack {
+		if err := localHNSWM18EdgeDiagnosisWorkAddV1(&aggregate, pack.Work.Candidates, pack.Work.Edges, pack.Work.FrontierAdmissions, pack.Work.Utility); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cell.Work = aggregate
 }
