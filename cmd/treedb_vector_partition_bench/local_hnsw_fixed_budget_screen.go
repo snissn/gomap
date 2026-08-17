@@ -171,6 +171,14 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		if err := localHNSWFixedBudgetScreenNeighborhoodV1(arm.Neighborhood, arm.SelectedNeighborhood, arm.SelectedDiagnostics, report.VariantPacks); err != nil {
 			return err
 		}
+		if i > 0 {
+			for j, pack := range arm.SelectedNeighborhood {
+				baseline := report.Arms[0].SelectedNeighborhood[j].Neighborhood
+				if pack.Neighborhood.CandidateSamples != baseline.CandidateSamples || pack.Neighborhood.CandidateTruthNeighbors != baseline.CandidateTruthNeighbors || pack.Neighborhood.FinalSamples != baseline.FinalSamples || pack.Neighborhood.FinalSampleTruthNeighbors != baseline.FinalSampleTruthNeighbors {
+					return fmt.Errorf("invalid fixed-budget cross-arm sample binding arm=%s partition=%d", arm.Arm.Name, pack.Partition)
+				}
+			}
+		}
 		if err := localHNSWFixedBudgetScreenTreatmentOriginsV1(arm); err != nil {
 			return err
 		}

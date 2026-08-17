@@ -156,6 +156,20 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(badSampleBinding); err == nil {
 		t.Fatal("mismatched per-pack candidate and final sample counts accepted")
 	}
+	crossArmDenominator := localHNSWFixedBudgetScreenCloneV1(t, report)
+	crossArmPack := &crossArmDenominator.Arms[1].SelectedNeighborhood[0].Neighborhood
+	crossArmPack.CandidateSamples++
+	crossArmPack.CandidateTruthNeighbors++
+	crossArmPack.FinalSamples++
+	crossArmPack.FinalSampleTruthNeighbors++
+	crossArmAggregate := &crossArmDenominator.Arms[1].Neighborhood
+	crossArmAggregate.CandidateSamples++
+	crossArmAggregate.CandidateTruthNeighbors++
+	crossArmAggregate.FinalSamples++
+	crossArmAggregate.FinalSampleTruthNeighbors++
+	if err := localHNSWFixedBudgetScreenContractV1(crossArmDenominator); err == nil {
+		t.Fatal("cross-arm sample denominators accepted")
+	}
 	badPerPackAngularMean := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badPerPackAngularMean.Arms[0].SelectedNeighborhood[0].Neighborhood.AngularCosineDistanceMean = -1
 	if err := localHNSWFixedBudgetScreenContractV1(badPerPackAngularMean); err == nil {
