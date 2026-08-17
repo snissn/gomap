@@ -1565,6 +1565,10 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				searcher.Close()
 				return fmt.Errorf("%w: construction selection invalid %+v", ErrVectorPartitionSearchUnavailable, selection)
 			}
+			if err := vectorPartitionConstructionValidateSelectionPolicyV1(selection, pack.Header.M, variant); err != nil {
+				searcher.Close()
+				return err
+			}
 			if selection.CandidateSampled {
 				if selection.Layer != 0 || len(selection.CandidateOrdinals) != selection.Candidates || selection.CandidateDigest != vectorPartitionConstructionCandidateDigestV1(selection.CandidateOrdinals) {
 					searcher.Close()
@@ -1825,6 +1829,24 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				return fmt.Errorf("%w: construction final edge from=%d to=%d layer=%d", ErrVectorPartitionSearchUnavailable, key.From, key.To, key.Layer)
 			}
 		}
+	}
+	return nil
+}
+
+// vectorPartitionConstructionValidateSelectionPolicyV1 binds persisted L0
+// selections to the variant's predeclared construction policy. This prevents
+// self-consistent compact lifecycle accounting from being relabelled as a
+// different initial-factor/backfill experiment.
+func vectorPartitionConstructionValidateSelectionPolicyV1(selection VectorPartitionConstructionSelectionV1, m int, variant VectorPartitionLocalGraphVariantV1) error {
+	if selection.Layer != 0 {
+		return nil
+	}
+	policy, experimental := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(variant)
+	if !experimental {
+		return nil
+	}
+	if policy.initialSelectionFactor < 1 || m <= 0 || selection.Selected > m*policy.initialSelectionFactor || !policy.backfill && selection.BackfillSelected != 0 {
+		return fmt.Errorf("%w: construction selection policy variant=%q node=%d selected=%d diversity=%d backfill=%d cap=%d", ErrVectorPartitionSearchUnavailable, variant, selection.Node, selection.Selected, selection.DiversitySelected, selection.BackfillSelected, m*policy.initialSelectionFactor)
 	}
 	return nil
 }

@@ -259,6 +259,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		t.Fatal("tampered neighborhood angular mean accepted")
 	}
 
+	nearAngularMean := localHNSWFixedBudgetScreenCloneV1(t, report)
+	nearAngularMean.Arms[0].Neighborhood.AngularCosineDistanceMean += 1e-14
+	if err := localHNSWFixedBudgetScreenContractV1(nearAngularMean); err != nil {
+		t.Fatalf("honest angular recomposition roundoff rejected: %v", err)
+	}
+
 	varyingOpportunities := localHNSWFixedBudgetScreenCloneV1(t, report)
 	varyingOpportunities.Arms[1].Cells[0].PerPack[0].Opportunities++
 	varyingOpportunities.Arms[1].Cells[0].QueryPackOpportunities++

@@ -250,10 +250,25 @@ func localHNSWFixedBudgetScreenNeighborhoodV1(aggregate localHNSWAttributionNeig
 			return err
 		}
 	}
-	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || totals.AngularCosineDistanceMean != aggregate.AngularCosineDistanceMean || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
+	if totals.CandidateSamples != aggregate.CandidateSamples || totals.CandidateTruthNeighbors != aggregate.CandidateTruthNeighbors || totals.CandidateTruthRecovered != aggregate.CandidateTruthRecovered || totals.FinalSamples != aggregate.FinalSamples || totals.FinalSampleTruthNeighbors != aggregate.FinalSampleTruthNeighbors || totals.FinalSampleTruthRecovered != aggregate.FinalSampleTruthRecovered || totals.AngularPairs != aggregate.AngularPairs || !localHNSWFixedBudgetScreenAngularMeanEqualV1(totals.AngularCosineDistanceMean, aggregate.AngularCosineDistanceMean) || totals.FinalEdgesByOrigin != aggregate.FinalEdgesByOrigin || totals.FinalTruthByOrigin != aggregate.FinalTruthByOrigin {
 		return errors.New("fixed-budget neighborhood aggregate decomposition")
 	}
 	return nil
+}
+
+// localHNSWFixedBudgetScreenAngularMeanEqualV1 tolerates only the bounded
+// roundoff introduced by reducing five per-pack means instead of replaying
+// every pair in one floating-point accumulation. Five per-pack reductions
+// need at most a small epsilon-scale allowance; 64 epsilons at max(1, |x|)
+// accepts the retained artifact's sub-1e-15 recomposition delta while still
+// rejecting material report tampering.
+func localHNSWFixedBudgetScreenAngularMeanEqualV1(a, b float64) bool {
+	if math.IsNaN(a) || math.IsNaN(b) || math.IsInf(a, 0) || math.IsInf(b, 0) {
+		return false
+	}
+	scale := math.Max(1, math.Max(math.Abs(a), math.Abs(b)))
+	epsilon := math.Nextafter(1, 2) - 1
+	return math.Abs(a-b) <= 64*epsilon*scale
 }
 
 func localHNSWFixedBudgetScreenNeighborhoodAddV1(dst *localHNSWAttributionNeighborhoodOracleV1, src localHNSWAttributionNeighborhoodOracleV1) error {

@@ -870,6 +870,27 @@ func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionConstructionSelectionPolicyV1(t *testing.T) {
+	selection := VectorPartitionConstructionSelectionV1{Node: 1, Layer: 0, Candidates: 36, Selected: 36, DiversitySelected: 36}
+	variant := VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(selection, 18, variant); err != nil {
+		t.Fatalf("valid 2M/backfill-off selection rejected: %v", err)
+	}
+	crossArm := selection
+	crossArm.DiversitySelected--
+	crossArm.BackfillSelected++
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(crossArm, 18, variant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("backfill-off relabel accepted: %v", err)
+	}
+	overCap := selection
+	overCap.Selected++
+	overCap.DiversitySelected++
+	overCap.Candidates++
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(overCap, 18, variant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("2M selection over cap accepted: %v", err)
+	}
+}
+
 func TestVectorPartitionLayer0ConstructionPolicyVariantsUseCompactBoundedEvidenceV1(t *testing.T) {
 	variants := []VectorPartitionLocalGraphVariantV1{
 		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1,
