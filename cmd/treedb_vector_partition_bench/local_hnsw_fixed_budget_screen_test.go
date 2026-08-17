@@ -37,7 +37,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
 		Manifest:     "manifest",
 		Source:       localHNSWAttributionSourceEvidenceV1{ManifestIntegrity: "manifest", Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1}},
-		Limitations:  []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, Vamana, router, probe, top-k, EF policy, or production-default changes"},
+		Limitations:  []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"},
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		identity, err := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)
@@ -54,6 +54,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 		for j, partition := range report.VariantPacks {
 			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			switch arm.Variant {
+			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1:
+				one.FinalEdgesByOrigin[5] = 1
+			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1:
+				one.FinalEdgesByOrigin[6], one.FinalEdgesByOrigin[7] = 1, 1
+			}
 			report.Arms[i].SelectedNeighborhood[j] = localHNSWFixedBudgetPackNeighborhoodV1{Partition: partition, Neighborhood: one}
 			report.Arms[i].Neighborhood.CandidateSamples++
 			report.Arms[i].Neighborhood.CandidateTruthNeighbors++
@@ -61,6 +67,9 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			report.Arms[i].Neighborhood.FinalSamples++
 			report.Arms[i].Neighborhood.FinalSampleTruthNeighbors++
 			report.Arms[i].Neighborhood.FinalSampleTruthRecovered++
+			for origin := range one.FinalEdgesByOrigin {
+				report.Arms[i].Neighborhood.FinalEdgesByOrigin[origin] += one.FinalEdgesByOrigin[origin]
+			}
 			report.Arms[i].Neighborhood.PackDiagnostics = append(report.Arms[i].Neighborhood.PackDiagnostics, report.Arms[i].SelectedDiagnostics[j].Diagnostics)
 		}
 		report.Arms[i].Cells = make([]localHNSWFixedBudgetScreenCellV1, len(report.EFSearch))
@@ -90,6 +99,39 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("valid screen contract rejected: %v", err)
 	}
+	qualityArm := -1
+	for i, arm := range report.Arms {
+		if arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+			qualityArm = i
+			break
+		}
+	}
+	if qualityArm < 0 {
+		t.Fatal("missing quality-postfill arm")
+	}
+	noOpTreatment := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range noOpTreatment.Arms[qualityArm].SelectedNeighborhood {
+		noOpTreatment.Arms[qualityArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[5] = 0
+	}
+	noOpTreatment.Arms[qualityArm].Neighborhood.FinalEdgesByOrigin[5] = 0
+	if err := localHNSWFixedBudgetScreenContractV1(noOpTreatment); err == nil {
+		t.Fatal("quality-postfill no-op treatment accepted")
+	}
+	robustArm := len(report.Arms) - 1
+	missingRobust := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range missingRobust.Arms[robustArm].SelectedNeighborhood {
+		missingRobust.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[7] = 0
+	}
+	missingRobust.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[7] = 0
+	if err := localHNSWFixedBudgetScreenContractV1(missingRobust); err == nil {
+		t.Fatal("robust residual-fill no-op treatment accepted")
+	}
+	wrongArmOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	wrongArmOrigin.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[6] = 1
+	wrongArmOrigin.Arms[0].Neighborhood.FinalEdgesByOrigin[6]++
+	if err := localHNSWFixedBudgetScreenContractV1(wrongArmOrigin); err == nil {
+		t.Fatal("non-robust arm carrying robust-prune origin accepted")
+	}
 
 	// The fifth arm's final origins are query-visible native edges. Exercise a
 	// real nonzero quality_postfill bucket through the cell contract rather
@@ -107,16 +149,6 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			TopAdmissions:      1,
 			FrontierAdmissions: 1,
 		},
-	}
-	qualityArm := -1
-	for i, arm := range report.Arms {
-		if arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
-			qualityArm = i
-			break
-		}
-	}
-	if qualityArm < 0 {
-		t.Fatal("missing quality-postfill arm")
 	}
 	for i := range report.Arms[qualityArm].Cells {
 		cell := &report.Arms[qualityArm].Cells[i]
