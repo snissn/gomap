@@ -1015,6 +1015,30 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 			if len(evidence.Partitions) != 1 || evidence.Partitions[0].TraceMode != "compact" || len(evidence.Partitions[0].Events) != 0 || len(evidence.Partitions[0].FinalOrigins) == 0 {
 				t.Fatalf("variant=%s bounded evidence=%+v", test.variant, evidence.Partitions)
 			}
+			if test.variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
+				tampered := evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part := &tampered.Partitions[0]
+				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
+				relabelled := false
+				for j := range part.FinalOrigins {
+					origin, ok := vectorIndexConstructionOriginIndexV1(part.FinalOrigins[j].Origin)
+					if !ok || origin > 2 {
+						continue
+					}
+					part.FinalOrigins[j].Origin = "robust_prune_refinement"
+					part.CompactLifecycle.VariantDrop[origin]++
+					part.CompactLifecycle.VariantAdd[6]++
+					relabelled = true
+					break
+				}
+				if !relabelled {
+					t.Fatalf("variant=%s fixture lacks native final origin", test.variant)
+				}
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+					t.Fatalf("variant=%s accepted robust-prune origin relabel: %v", test.variant, err)
+				}
+			}
 			tracedRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), traced[0].Ref)
 			if err != nil {
 				t.Fatal(err)

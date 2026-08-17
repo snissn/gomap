@@ -21,7 +21,12 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-const localHNSWFixedBudgetScreenSchemaV1 = "treedb_local_hnsw_fixed_budget_screen_v3"
+const (
+	localHNSWFixedBudgetScreenSchemaV1             = "treedb_local_hnsw_fixed_budget_screen_v3"
+	localHNSWFixedBudgetRetainedRowsV1      uint64 = 7500
+	localHNSWFixedBudgetLayer0SlotsV1       uint64 = 36
+	localHNSWFixedBudgetTargetLayer0EdgesV1        = localHNSWFixedBudgetRetainedRowsV1 * localHNSWFixedBudgetLayer0SlotsV1
+)
 
 func localHNSWFixedBudgetConstructionVariantV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
 	for _, arm := range localHNSWFixedBudgetScreenArmsV1 {
@@ -201,7 +206,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		if isExactBudget {
 			for j, budget := range arm.PostfillBudget {
 				diagnostic := arm.SelectedDiagnostics[j].Diagnostics
-				if budget.Partition != report.VariantPacks[j] || budget.Rows != diagnostic.Rows || len(diagnostic.EdgesByLayer) == 0 || budget.Layer0Edges != diagnostic.EdgesByLayer[0] || budget.Rows != 7500 || budget.TargetLayer0Edges != 270000 || budget.Layer0Edges != budget.TargetLayer0Edges || budget.CandidateBytes == 0 || budget.CandidateBytes != budget.CanonicalBytes {
+				if budget.Partition != report.VariantPacks[j] || budget.Rows != diagnostic.Rows || len(diagnostic.EdgesByLayer) == 0 || budget.Layer0Edges != diagnostic.EdgesByLayer[0] || budget.Rows != localHNSWFixedBudgetRetainedRowsV1 || budget.TargetLayer0Edges != localHNSWFixedBudgetTargetLayer0EdgesV1 || budget.Layer0Edges != budget.TargetLayer0Edges || budget.CandidateBytes == 0 || budget.CandidateBytes != budget.CanonicalBytes {
 					return errors.New("fixed-budget exact refinement budget mismatch")
 				}
 			}
@@ -340,6 +345,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		out[i].Arm = arm
 		identity, identityErr := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)
 		if identityErr != nil {
+			_ = h.Close()
 			return nil, identityErr
 		}
 		out[i].Build = localHNSWAttributionBuildEvidenceV1{Schema: localHNSWAttributionBuildSchemaV1, Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(localHNSWM18EdgeDiagnosisPacksV1)}

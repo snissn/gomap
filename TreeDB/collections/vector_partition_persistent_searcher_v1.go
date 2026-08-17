@@ -594,7 +594,7 @@ const (
 	// is an explicitly supported production auxiliary-navigation construction
 	// variant.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256"
-	// The following four variants are offline-only layer-0 selection-policy
+	// The following six variants are offline-only layer-0 construction-policy
 	// coordinates. All retain M18/eFC256 and the canonical reciprocal 2M cap.
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1  VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256_l0_initial_m_backfill_off"
 	VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1   VectorPartitionLocalGraphVariantV1 = "auxiliary_navigation_m18_ef_construction_256_l0_initial_m_backfill_on"
@@ -1855,6 +1855,9 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	}
 	if part.CompactLifecycle.PruneKeep[3] != 0 || part.CompactLifecycle.PruneKeep[4] != 0 || part.CompactLifecycle.PruneKeep[5] != 0 || part.CompactLifecycle.PruneKeep[6] != 0 || part.CompactLifecycle.PruneKeep[7] != 0 || part.CompactLifecycle.PruneDrop[3] != 0 || part.CompactLifecycle.PruneDrop[4] != 0 || part.CompactLifecycle.PruneDrop[5] != 0 || part.CompactLifecycle.PruneDrop[6] != 0 || part.CompactLifecycle.PruneDrop[7] != 0 || part.CompactLifecycle.VariantAdd[5] != 0 || part.CompactLifecycle.VariantDrop[5] != 0 {
 		return fmt.Errorf("%w: compact lifecycle invalid quality origin prune_keep=%v prune_drop=%v variant_add=%v variant_drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.PruneKeep, part.CompactLifecycle.PruneDrop, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
+	}
+	if variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 && (part.CompactLifecycle.VariantAdd[6] != 0 || part.CompactLifecycle.VariantAdd[7] != 0 || part.CompactLifecycle.VariantDrop[6] != 0 || part.CompactLifecycle.VariantDrop[7] != 0) {
+		return fmt.Errorf("%w: compact non-robust lifecycle add=%v drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 	}
 	if variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
 		if part.CompactLifecycle.VariantAdd[4] != 0 || part.CompactLifecycle.VariantAdd[5] != 0 || part.CompactLifecycle.VariantDrop[3] != 0 || part.CompactLifecycle.VariantDrop[4] != 0 || part.CompactLifecycle.VariantDrop[5] != 0 {

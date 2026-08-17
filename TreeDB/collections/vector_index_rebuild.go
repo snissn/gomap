@@ -499,7 +499,7 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
-	if policy != nil && (def.Metric != VectorMetricCosine || (policy.initialSelectionFactor != 1 && policy.initialSelectionFactor != 2)) {
+	if policy != nil && (def.Metric != VectorMetricCosine || (policy.initialSelectionFactor != 1 && policy.initialSelectionFactor != 2) || policy.qualityPostfill && policy.robustPruneRefinement) {
 		return errors.New("collections: invalid offline layer-0 construction policy")
 	}
 	if trace != nil {
@@ -534,6 +534,9 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 			return err
 		}
 	}
+	// The final refinement stages have consumed this bounded offline pool.
+	// Release it before locality remapping allocates its working buffers.
+	index.qualityPostfillCandidates = nil
 
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {

@@ -2387,18 +2387,11 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		qualityPostfill = idx.layer0ConstructionPolicy.qualityPostfill
 		robustPruneRefinement = idx.layer0ConstructionPolicy.robustPruneRefinement
 	}
-	if trace == nil {
-		var postfillCandidates []vectorIndexCandidate
-		scored, diversitySelected, _, _, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill, qualityPostfill || robustPruneRefinement)
-		if qualityPostfill || robustPruneRefinement {
-			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
-		}
-	} else {
-		var postfillCandidates []vectorIndexCandidate
-		scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill, qualityPostfill || robustPruneRefinement)
-		if qualityPostfill || robustPruneRefinement {
-			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
-		}
+	capturePostfill := qualityPostfill || robustPruneRefinement
+	var postfillCandidates []vectorIndexCandidate
+	scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, capturePostfill)
+	if capturePostfill {
+		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
@@ -2685,6 +2678,8 @@ func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConst
 			}
 			remaining = next
 		}
+		// robust remains the pre-residual RobustPrune result; present grows with
+		// residual fill so the provenance of those additional edges stays distinct.
 		robust := make(map[int]struct{}, len(selected))
 		for _, item := range selected {
 			robust[item.nodeID] = struct{}{}

@@ -551,6 +551,9 @@ func TestColumnVectorGraphLayer0ConstructionPolicyReservesReciprocalCapacityV1(t
 	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), def, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 3}); err == nil {
 		t.Fatal("offline layer-0 policy accepted an unknown initial-selection factor")
 	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), def, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, qualityPostfill: true, robustPruneRefinement: true}); err == nil {
+		t.Fatal("offline layer-0 policy accepted unsupported combined final refinements")
+	}
 	build := func(policy *vectorIndexLayer0ConstructionPolicyV1) ([]columnVectorGraphAssetRow, *vectorIndexConstructionTraceV1) {
 		t.Helper()
 		got := append([]columnVectorGraphAssetRow(nil), rows...)

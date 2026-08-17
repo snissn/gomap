@@ -18,6 +18,11 @@ import (
 	"unsafe"
 )
 
+// Keep the domain-separated membership digest as the final header field.
+// Either array becomes invalid if a format edit introduces a gap or overlap.
+var _ [columnHNSWSearchPackHeaderSizeV2 - columnHNSWSearchPackHeaderMembershipDigestOffset - sha256.Size]struct{}
+var _ [columnHNSWSearchPackHeaderMembershipDigestOffset + sha256.Size - columnHNSWSearchPackHeaderSizeV2]struct{}
+
 var ErrVectorPartitionSearchUnavailable = errors.New("collections: vector partition search unavailable")
 
 // VectorPartitionCanonicalScoreContractV1 names the score bits published by

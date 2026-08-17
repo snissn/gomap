@@ -63,7 +63,11 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if m18Evidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || m18Evidence.VariantIdentity == "" || len(m18.constructionEvidence.Partitions) != 4 {
 		t.Fatalf("M18 construction evidence=%+v trace=%+v", m18Evidence, m18.constructionEvidence)
 	}
-	if m18.constructionEvidence.Partitions[0].TraceMode != "detailed" || m18.constructionEvidence.Partitions[2].TraceMode != "compact" || len(m18.constructionEvidence.Partitions[2].Events) != 0 || len(m18.constructionEvidence.Partitions[2].FinalOrigins) == 0 || m18.constructionEvidence.Partitions[2].PruneKeeps != m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[0]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[1]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[2]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[3]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[4]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[5] {
+	var compactPruneKeep uint64
+	for _, keep := range m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep {
+		compactPruneKeep += keep
+	}
+	if m18.constructionEvidence.Partitions[0].TraceMode != "detailed" || m18.constructionEvidence.Partitions[2].TraceMode != "compact" || len(m18.constructionEvidence.Partitions[2].Events) != 0 || len(m18.constructionEvidence.Partitions[2].FinalOrigins) == 0 || m18.constructionEvidence.Partitions[2].PruneKeeps != compactPruneKeep {
 		t.Fatalf("unexpected bounded M18 evidence: detailed=%+v compact=%+v", m18.constructionEvidence.Partitions[0], m18.constructionEvidence.Partitions[2])
 	}
 	m18Construction, err := localHNSWAttributionConstructionReduceV1(m18.constructionEvidence)

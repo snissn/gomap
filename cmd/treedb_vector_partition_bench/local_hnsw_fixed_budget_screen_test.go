@@ -45,7 +45,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			t.Fatal(err)
 		}
 		report.Arms[i].Arm = arm
-		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: 5, PackBytes: 1}
+		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: len(report.VariantPacks), PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]localHNSWFixedBudgetDiagnosticV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
 			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 7500, EdgesByLayer: []uint64{270000}}}
@@ -117,7 +117,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(noOpTreatment); err == nil {
 		t.Fatal("quality-postfill no-op treatment accepted")
 	}
-	robustArm := len(report.Arms) - 1
+	robustArm := localHNSWFixedBudgetScreenArmIndexV1(t, report, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1)
 	zeroResidual := localHNSWFixedBudgetScreenCloneV1(t, report)
 	for i := range zeroResidual.Arms[robustArm].SelectedNeighborhood {
 		zeroResidual.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[7] = 0
@@ -208,7 +208,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 
 	reorderedControl := localHNSWFixedBudgetScreenCloneV1(t, report)
-	control := 3
+	control := localHNSWFixedBudgetScreenArmIndexV1(t, report, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1)
 	reorderedControl.Arms[control].Control[0], reorderedControl.Arms[control].Control[1] = reorderedControl.Arms[control].Control[1], reorderedControl.Arms[control].Control[0]
 	if err := localHNSWFixedBudgetScreenContractV1(reorderedControl); err == nil {
 		t.Fatal("reordered M18 control accepted")
@@ -263,4 +263,15 @@ func TestLocalHNSWFixedBudgetScreenRejectsMissingInputsV1(t *testing.T) {
 	if err := runLocalHNSWFixedBudgetScreenV1(nil, io.Discard); err == nil {
 		t.Fatal("screen accepted missing frozen inputs")
 	}
+}
+
+func localHNSWFixedBudgetScreenArmIndexV1(t *testing.T, report localHNSWFixedBudgetScreenReportV1, variant collections.VectorPartitionLocalGraphVariantV1) int {
+	t.Helper()
+	for i, arm := range report.Arms {
+		if arm.Arm.Variant == variant {
+			return i
+		}
+	}
+	t.Fatalf("missing fixed-budget screen arm variant=%q", variant)
+	return -1
 }
