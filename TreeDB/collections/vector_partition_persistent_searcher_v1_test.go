@@ -1061,16 +1061,31 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 				}
 			}
 			if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
-				// A connectivity repair may drop a quality-postfill edge after it
-				// was added. Compact evidence records that causal drop without
-				// retaining a historical event.
-				repaired := evidence
-				repaired.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
-				repaired.Partitions[0].PostfillEdges++
-				repaired.Partitions[0].CompactLifecycle.QualityPostfillAdd[5]++
-				repaired.Partitions[0].CompactLifecycle.VariantDrop[5]++
-				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, repaired); err != nil {
-					t.Fatalf("quality-postfill repair drop rejected: %v", err)
+				// Compact counts alone cannot establish a postfill mutation. Relabel a
+				// surviving native edge and keep every count-only balance intact; the
+				// source-bound replay must still reject the fabricated treatment.
+				tampered := evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part := &tampered.Partitions[0]
+				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
+				relabelled := false
+				for j := range part.FinalOrigins {
+					origin, ok := vectorIndexConstructionOriginIndexV1(part.FinalOrigins[j].Origin)
+					if !ok || origin > 2 {
+						continue
+					}
+					part.FinalOrigins[j].Origin = "quality_postfill"
+					part.CompactLifecycle.VariantDrop[origin]++
+					part.CompactLifecycle.QualityPostfillAdd[5]++
+					part.PostfillEdges++
+					relabelled = true
+					break
+				}
+				if !relabelled {
+					t.Fatal("quality-postfill fixture lacks a native final origin")
+				}
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+					t.Fatalf("quality-postfill origin relabel accepted: %v", err)
 				}
 			}
 			tracedRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), traced[0].Ref)

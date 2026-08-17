@@ -35,9 +35,13 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		Calibration:  localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionCalibrationSHA256V1},
 		Truth:        localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionTruthSHA256V1},
 		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
-		Manifest:     "manifest",
-		Source:       localHNSWAttributionSourceEvidenceV1{ManifestIntegrity: "manifest", Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1}},
+		Manifest:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Source:       localHNSWAttributionSourceEvidenceV1{IndexName: "embedding", PartitionGeneration: 1, Partitions: 40, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, RouterGeneration: 1, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]uint64, 40), Descriptor: m3VariantDescriptorV1{ArtifactSHA256: localHNSWM18AssignmentSHA256V1, GraphArtifactSHA256: localHNSWM18GraphSHA256V1, ShardGenerationDigest: localHNSWM18ShardGenerationSHA256V1, ManifestIntegrity: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReadySetDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceGeneration: 1, SourceChecksum: 1, SourceSchemaHash: 1, SourceRows: 250000, PartitionGeneration: 1, RouterGeneration: 1, Partitions: 40, PartitionHNSWM: 18, PartitionHNSWEfC: 256, RouterModelDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RouterRepresentatives: 1, PartitionLoads: make([]int, 40)}},
 		Limitations:  []string{"offline calibration-only selected-pack screen; no holdout outcomes opened", "same-budget postfill and robust-prune treatments only; no candidate extension, insertion-order, full Vamana conversion, router, probe, top-k, EF policy, or production-default changes"},
+	}
+	for i := range report.Source.PartitionLoads {
+		report.Source.PartitionLoads[i] = 6250
+		report.Source.Descriptor.PartitionLoads[i] = 6250
 	}
 	for i, arm := range localHNSWFixedBudgetScreenArmsV1 {
 		identity, err := collections.VectorPartitionLocalGraphVariantIdentityV1(arm.Variant)
@@ -54,6 +58,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 		for j, partition := range report.VariantPacks {
 			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, AngularPairs: 1, AngularCosineDistanceMean: 0.25, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			one.FinalEdgesByOrigin[0], one.FinalTruthByOrigin[0] = 1, 1
 			switch arm.Variant {
 			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1:
 				one.FinalEdgesByOrigin[5] = 1
@@ -70,6 +75,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			report.Arms[i].Neighborhood.AngularPairs++
 			for origin := range one.FinalEdgesByOrigin {
 				report.Arms[i].Neighborhood.FinalEdgesByOrigin[origin] += one.FinalEdgesByOrigin[origin]
+				report.Arms[i].Neighborhood.FinalTruthByOrigin[origin] += one.FinalTruthByOrigin[origin]
 			}
 			report.Arms[i].Neighborhood.PackDiagnostics = append(report.Arms[i].Neighborhood.PackDiagnostics, report.Arms[i].SelectedDiagnostics[j].Diagnostics)
 		}
@@ -100,6 +106,21 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("valid screen contract rejected: %v", err)
+	}
+	badSourceBinding := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badSourceBinding.Source.Descriptor.SourceRows--
+	if err := localHNSWFixedBudgetScreenContractV1(badSourceBinding); err == nil {
+		t.Fatal("mismatched retained source descriptor accepted")
+	}
+	badCandidateRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badCandidateRecovery.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateTruthRecovered++
+	if err := localHNSWFixedBudgetScreenContractV1(badCandidateRecovery); err == nil {
+		t.Fatal("impossible per-pack candidate recovery accepted")
+	}
+	badOriginRecovery := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badOriginRecovery.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalTruthByOrigin[0]++
+	if err := localHNSWFixedBudgetScreenContractV1(badOriginRecovery); err == nil {
+		t.Fatal("impossible per-pack final-origin recovery accepted")
 	}
 	qualityArm := -1
 	for i, arm := range report.Arms {

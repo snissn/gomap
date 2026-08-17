@@ -1648,9 +1648,19 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		}
 		// Compact M18 evidence intentionally has no historical edge events. It
 		// is validated directly against the encoded pack and count-only
-		// lifecycle summary, so validation does not rebuild 35 full traces.
+		// lifecycle summary. Quality postfill is the exception: its final-stage
+		// mutation count cannot be derived from the packed adjacency alone, so
+		// replay that construction path before accepting its causal attribution.
 		if part.TraceMode == "compact" {
 			err := vectorPartitionConstructionValidateCompactPartitionV1(part, pack, selectionCounts, variant)
+			if err == nil && variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+				replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
+				if replayErr != nil {
+					err = fmt.Errorf("construction replay: %w", replayErr)
+				} else if part.PostfillEdges != replayed.PostfillEdges || part.CompactLifecycle != replayed.CompactLifecycle {
+					err = fmt.Errorf("construction replay quality postfill mismatch edges=%d replay=%d lifecycle=%+v replay_lifecycle=%+v", part.PostfillEdges, replayed.PostfillEdges, part.CompactLifecycle, replayed.CompactLifecycle)
+				}
+			}
 			closeErr := searcher.Close()
 			if err != nil || closeErr != nil {
 				if err != nil {
