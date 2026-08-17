@@ -1648,17 +1648,18 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 		}
 		// Compact M18 evidence intentionally has no historical edge events. It
 		// is validated directly against the encoded pack and count-only
-		// lifecycle summary. Quality postfill is the exception: its final-stage
-		// mutation count cannot be derived from the packed adjacency alone, so
-		// replay that construction path before accepting its causal attribution.
+		// lifecycle summary. Refinement variants are the exception: their
+		// final-stage mutations cannot be derived from the packed adjacency
+		// alone, so replay that construction path before accepting its causal
+		// attribution.
 		if part.TraceMode == "compact" {
 			err := vectorPartitionConstructionValidateCompactPartitionV1(part, pack, selectionCounts, variant)
-			if err == nil && variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+			if err == nil && vectorPartitionConstructionVariantRequiresRefinementReplayV1(variant) {
 				replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
 				if replayErr != nil {
 					err = fmt.Errorf("construction replay: %w", replayErr)
-				} else if part.PostfillEdges != replayed.PostfillEdges || part.CompactLifecycle != replayed.CompactLifecycle {
-					err = fmt.Errorf("construction replay quality postfill mismatch edges=%d replay=%d lifecycle=%+v replay_lifecycle=%+v", part.PostfillEdges, replayed.PostfillEdges, part.CompactLifecycle, replayed.CompactLifecycle)
+				} else if part.PostfillEdges != replayed.PostfillEdges || part.PruneKeeps != replayed.PruneKeeps || part.CompactLifecycle != replayed.CompactLifecycle || !slices.Equal(part.FinalOrigins, replayed.FinalOrigins) {
+					err = fmt.Errorf("construction replay refinement mismatch variant=%q edges=%d replay_edges=%d prune_keeps=%d replay_prune_keeps=%d lifecycle_equal=%t final_origins=%d replay_final_origins=%d", variant, part.PostfillEdges, replayed.PostfillEdges, part.PruneKeeps, replayed.PruneKeeps, part.CompactLifecycle == replayed.CompactLifecycle, len(part.FinalOrigins), len(replayed.FinalOrigins))
 				}
 			}
 			closeErr := searcher.Close()
@@ -2058,7 +2059,37 @@ func vectorPartitionConstructionReplayEvidenceV1(reader *columnVectorGraphPhysic
 	for _, event := range trace.events {
 		out.Events = append(out.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})
 	}
+	out.FinalOrigins = vectorPartitionConstructionFinalOriginsV1(trace.origins)
 	return out, nil
+}
+
+// vectorPartitionConstructionVariantRequiresRefinementReplayV1 identifies the
+// offline policies whose compact provenance includes final-stage mutations.
+// Their counts and final-origin map therefore need a source-bound replay.
+func vectorPartitionConstructionVariantRequiresRefinementReplayV1(variant VectorPartitionLocalGraphVariantV1) bool {
+	return variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 ||
+		variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+}
+
+func vectorPartitionConstructionFinalOriginsV1(origins map[vectorIndexConstructionEdgeKeyV1]string) []VectorPartitionConstructionFinalOriginV1 {
+	keys := make([]vectorIndexConstructionEdgeKeyV1, 0, len(origins))
+	for key := range origins {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(a, b int) bool {
+		if keys[a].Layer != keys[b].Layer {
+			return keys[a].Layer < keys[b].Layer
+		}
+		if keys[a].From != keys[b].From {
+			return keys[a].From < keys[b].From
+		}
+		return keys[a].To < keys[b].To
+	})
+	finals := make([]VectorPartitionConstructionFinalOriginV1, 0, len(keys))
+	for _, key := range keys {
+		finals = append(finals, VectorPartitionConstructionFinalOriginV1{From: key.From, To: key.To, Layer: key.Layer, Origin: origins[key]})
+	}
+	return finals
 }
 
 func vectorPartitionConstructionSelectionsEqualV1(actual, replayed []VectorPartitionConstructionSelectionV1) bool {
@@ -2288,22 +2319,7 @@ func (c *Collection) materializeVectorPartitionLocalSearchAssetsVariantV1(index 
 				partition.Events = append(partition.Events, VectorPartitionConstructionEdgeEventV1{From: event.From, To: event.To, Layer: event.Layer, InsertionOrdinal: event.InsertionOrdinal, Origin: event.Origin, Action: event.Action})
 			}
 			if !trace.detailed {
-				keys := make([]vectorIndexConstructionEdgeKeyV1, 0, len(trace.origins))
-				for key := range trace.origins {
-					keys = append(keys, key)
-				}
-				sort.Slice(keys, func(a, b int) bool {
-					if keys[a].Layer != keys[b].Layer {
-						return keys[a].Layer < keys[b].Layer
-					}
-					if keys[a].From != keys[b].From {
-						return keys[a].From < keys[b].From
-					}
-					return keys[a].To < keys[b].To
-				})
-				for _, key := range keys {
-					partition.FinalOrigins = append(partition.FinalOrigins, VectorPartitionConstructionFinalOriginV1{From: key.From, To: key.To, Layer: key.Layer, Origin: trace.origins[key]})
-				}
+				partition.FinalOrigins = vectorPartitionConstructionFinalOriginsV1(trace.origins)
 			}
 			partitions[i] = partition
 		}
