@@ -164,7 +164,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 			var opportunities, hits uint64
 			var work localHNSWAttributionQueryWorkV1
 			for k, p := range cell.PerPack {
-				if p.Partition != report.VariantPacks[k] || p.Opportunities == 0 || p.Work.Candidates == 0 || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
+				if p.Partition != report.VariantPacks[k] || p.Opportunities == 0 || p.Opportunities > ^uint64(0)/10 || p.TruthHitSlots > p.Opportunities*10 || p.Work.Candidates == 0 || !localHNSWAttributionQueryUtilityConservedV1(p.Work.Utility, p.Work.Edges) || ^uint64(0)-opportunities < p.Opportunities || ^uint64(0)-hits < p.TruthHitSlots || localHNSWM18EdgeDiagnosisWorkAddV1(&work, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility) != nil {
 					return fmt.Errorf("invalid fixed-budget per-pack decomposition arm=%s ef=%d slot=%d partition=%d expected_partition=%d opportunities=%d hits=%d candidates=%d edges=%d frontier=%d utility=%+v", arm.Arm.Name, cell.EFSearch, k, p.Partition, report.VariantPacks[k], p.Opportunities, p.TruthHitSlots, p.Work.Candidates, p.Work.Edges, p.Work.FrontierAdmissions, p.Work.Utility)
 				}
 				opportunities += p.Opportunities

@@ -180,6 +180,22 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("quality-postfill cell rejected: %v", err)
 	}
+	perPackHitOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
+	perPackHitOverflow.Arms[qualityArm].Cells[0].PerPack[0].TruthHitSlots = 11
+	perPackHitOverflow.Arms[qualityArm].Cells[0].LocalTruthHitSlots = 11
+	if err := localHNSWFixedBudgetScreenContractV1(perPackHitOverflow); err == nil {
+		t.Fatal("per-pack truth-hit capacity overflow accepted")
+	}
+	perPackUtility := localHNSWFixedBudgetScreenCloneV1(t, report)
+	first := &perPackUtility.Arms[qualityArm].Cells[0].PerPack[0].Work.Utility
+	second := &perPackUtility.Arms[qualityArm].Cells[0].PerPack[1].Work.Utility
+	first.Scored++
+	first.QualityPostfill.Scored++
+	second.Scored--
+	second.QualityPostfill.Scored--
+	if err := localHNSWFixedBudgetScreenContractV1(perPackUtility); err == nil {
+		t.Fatal("offsetting invalid per-pack query utility accepted")
+	}
 	badQualityUtility := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badQualityUtility.Arms[qualityArm].Cells[0].PerPack[0].Work.Utility.QualityPostfill.Examined--
 	if err := localHNSWFixedBudgetScreenContractV1(badQualityUtility); err == nil {

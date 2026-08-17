@@ -2437,7 +2437,12 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 		return nil, 0, 0, nil, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
-	if len(candidates) <= limit {
+	// Backfill-on preserves the historical degree-filling fast path.  The
+	// backfill-off construction policies instead need to run the diversity
+	// predicate even below their selection cap: a small candidate set can still
+	// contain mutually redundant neighbors, and those rejected candidates are
+	// the causal pool for the later offline refinements.
+	if len(candidates) <= limit && backfillEnabled {
 		if !includeOrigins {
 			return candidates, len(candidates), 0, nil, nil
 		}

@@ -363,6 +363,42 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 	}
 }
 
+func TestVectorIndexSelectDiverseCandidatesPrunesBelowCapWithoutBackfill(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("from"), vector: query, level: 0},
+		{documentID: []byte("closest"), vector: unitVectorAtDegrees(5), level: 0},
+		{documentID: []byte("redundant"), vector: unitVectorAtDegrees(6), level: 0},
+		{documentID: []byte("diverse"), vector: unitVectorAtDegrees(-7), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: mustExactVectorDistance(t, query, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, query, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, query, index.nodes[3].vector)},
+	}
+
+	withoutBackfill, diversity, backfill, origins, rejected := index.selectDiverseCandidatesWithDetailsLocked(append([]vectorIndexCandidate(nil), candidates...), 4, true, false, true)
+	if got, want := len(withoutBackfill), 2; got != want || diversity != want || backfill != 0 || len(rejected) != 1 || rejected[0].nodeID != 2 || !origins[1] || !origins[3] || origins[2] {
+		t.Fatalf("below-cap no-backfill selection=%v diversity=%d backfill=%d origins=%v rejected=%v, want diversity pruning", withoutBackfill, diversity, backfill, origins, rejected)
+	}
+	withBackfill, diversity, backfill, _, _ := index.selectDiverseCandidatesWithDetailsLocked(append([]vectorIndexCandidate(nil), candidates...), 4, false, true, false)
+	if got, want := len(withBackfill), 3; got != want || diversity != want || backfill != 0 {
+		t.Fatalf("below-cap backfill selection=%v diversity=%d backfill=%d, want historical all-candidate fast path", withBackfill, diversity, backfill)
+	}
+}
+
 func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *testing.T) {
 	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 4}
 	rows := []columnVectorGraphAssetRow{{ID: []byte("a"), Vector: []float32{1, 0}}, {ID: []byte("b"), Vector: []float32{.99, .01}}, {ID: []byte("c"), Vector: []float32{0, 1}}, {ID: []byte("d"), Vector: []float32{-1, 0}}}
