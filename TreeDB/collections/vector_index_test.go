@@ -657,6 +657,9 @@ func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.
 		if len(left) > 2*def.M {
 			t.Fatalf("postfill exceeded cap node=%d degree=%d", node, len(left))
 		}
+		if len(left) != 2*def.M {
+			t.Fatalf("postfill left unused capacity node=%d degree=%d want=%d", node, len(left), 2*def.M)
+		}
 		for i := range left {
 			if left[i].nodeID != right[i].nodeID {
 				t.Fatalf("trace changed postfill node=%d edge=%d", node, i)
