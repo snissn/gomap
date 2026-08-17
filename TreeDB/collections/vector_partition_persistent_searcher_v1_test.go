@@ -1045,6 +1045,7 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 				// retaining a historical event.
 				repaired := evidence
 				repaired.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				repaired.Partitions[0].PostfillEdges++
 				repaired.Partitions[0].CompactLifecycle.QualityPostfillAdd[5]++
 				repaired.Partitions[0].CompactLifecycle.VariantDrop[5]++
 				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, repaired); err != nil {
