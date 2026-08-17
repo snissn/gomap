@@ -153,6 +153,9 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 	if report.Schema != localHNSWFixedBudgetScreenSchemaV1 || report.ResultKind != "local_hnsw_fixed_budget_screen_v1" || report.Status != "valid" || !slices.Equal(report.VariantPacks, localHNSWM18EdgeDiagnosisPacksV1) || report.Probes != 2 || !slices.Equal(report.EFSearch, localHNSWM18EdgeDiagnosisEFV1) || report.Queries != 806 || len(report.Arms) != len(localHNSWFixedBudgetScreenArmsV1) || !slices.Equal(report.Limitations, []string{localHNSWFixedBudgetScreenCalibrationLimitationV1, localHNSWFixedBudgetScreenTreatmentLimitationV1}) || report.Calibration.SHA256 != localHNSWAttributionCalibrationSHA256V1 || report.Truth.SHA256 != localHNSWAttributionTruthSHA256V1 || report.Descriptor.SHA256 != localHNSWM18DescriptorSHA256V1 || report.Provenance.BaseSHA != localHNSWFixedBudgetScreenBaseSHAV1 || report.Provenance.SourceDirty || !m8QualificationGitSHAV1(report.Provenance.HeadSHA) || !localHNSWAttributionSHA256V1(report.Provenance.ExecutableSHA256) || report.Source.Descriptor.ArtifactSHA256 != localHNSWM18AssignmentSHA256V1 || report.Source.Descriptor.GraphArtifactSHA256 != localHNSWM18GraphSHA256V1 || report.Source.Descriptor.ShardGenerationDigest != localHNSWM18ShardGenerationSHA256V1 {
 		return errors.New("invalid fixed-budget screen contract")
 	}
+	if err := localHNSWFixedBudgetScreenProvenanceV1(report.Provenance); err != nil {
+		return err
+	}
 	if err := localHNSWFixedBudgetScreenSourceV1(report.Source, report.Manifest); err != nil {
 		return err
 	}
@@ -247,6 +250,13 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func localHNSWFixedBudgetScreenProvenanceV1(provenance localHNSWAttributionProvenanceV1) error {
+	if len(provenance.Command) == 0 || provenance.Command[0] != "local-hnsw-fixed-budget-screen" || !filepath.IsAbs(provenance.SourceCheckout) || !filepath.IsAbs(provenance.Executable) || !m8QualificationExactFlagV1(provenance.Command[1:], "-base-sha", provenance.BaseSHA) || !m8QualificationExactFlagV1(provenance.Command[1:], "-head-sha", provenance.HeadSHA) || !m8QualificationExactFlagV1(provenance.Command[1:], "-source-checkout", provenance.SourceCheckout) {
+		return errors.New("invalid fixed-budget screen provenance")
 	}
 	return nil
 }

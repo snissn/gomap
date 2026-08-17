@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -43,6 +44,8 @@ func localHNSWFixedBudgetScreenTestDiagnosticV1() collections.VectorPartitionPac
 }
 
 func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
+	sourceCheckout := t.TempDir()
+	executable := filepath.Join(t.TempDir(), "fixed-budget-screen")
 	report := localHNSWFixedBudgetScreenReportV1{
 		Schema:       localHNSWFixedBudgetScreenSchemaV1,
 		ResultKind:   "local_hnsw_fixed_budget_screen_v1",
@@ -52,7 +55,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		EFSearch:     append([]int(nil), localHNSWM18EdgeDiagnosisEFV1...),
 		Queries:      806,
 		Arms:         make([]localHNSWFixedBudgetScreenArmResultV1, len(localHNSWFixedBudgetScreenArmsV1)),
-		Provenance:   localHNSWAttributionProvenanceV1{BaseSHA: localHNSWFixedBudgetScreenBaseSHAV1, HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ExecutableSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		Provenance:   localHNSWAttributionProvenanceV1{Command: []string{"local-hnsw-fixed-budget-screen", "-base-sha", localHNSWFixedBudgetScreenBaseSHAV1, "-head-sha", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "-source-checkout", sourceCheckout}, BaseSHA: localHNSWFixedBudgetScreenBaseSHAV1, HeadSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SourceCheckout: sourceCheckout, Executable: executable, ExecutableSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		Calibration:  localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionCalibrationSHA256V1},
 		Truth:        localHNSWAttributionFileInputV1{SHA256: localHNSWAttributionTruthSHA256V1},
 		Descriptor:   localHNSWAttributionFileInputV1{SHA256: localHNSWM18DescriptorSHA256V1},
@@ -134,6 +137,24 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("valid screen contract rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*localHNSWAttributionProvenanceV1)
+	}{
+		{name: "missing command", mutate: func(provenance *localHNSWAttributionProvenanceV1) { provenance.Command = nil }},
+		{name: "wrong command", mutate: func(provenance *localHNSWAttributionProvenanceV1) { provenance.Command[0] = "other" }},
+		{name: "relative source checkout", mutate: func(provenance *localHNSWAttributionProvenanceV1) { provenance.SourceCheckout = "source" }},
+		{name: "unbound source checkout", mutate: func(provenance *localHNSWAttributionProvenanceV1) { provenance.Command[6] = t.TempDir() }},
+		{name: "relative executable", mutate: func(provenance *localHNSWAttributionProvenanceV1) { provenance.Executable = "fixed-budget-screen" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := localHNSWFixedBudgetScreenCloneV1(t, report)
+			test.mutate(&invalid.Provenance)
+			if err := localHNSWFixedBudgetScreenContractV1(invalid); err == nil || err.Error() != "invalid fixed-budget screen provenance" {
+				t.Fatalf("incomplete persisted provenance accepted: %v", err)
+			}
+		})
 	}
 	badSourceBinding := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badSourceBinding.Source.Descriptor.SourceRows--
