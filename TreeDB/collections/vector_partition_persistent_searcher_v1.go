@@ -662,6 +662,35 @@ func vectorPartitionLocalProductionGraphVariantV1(membership, expected [sha256.S
 	return "", false
 }
 
+// vectorPartitionLocalOfflineGraphVariantV1 recognizes the domain-separated
+// identities accepted only by the offline asset-open seam. Keep this list
+// alongside the variant identity registry so a generic offline open cannot
+// reject a newly admitted offline experiment before its explicit variant open
+// has a chance to bind it.
+func vectorPartitionLocalOfflineGraphVariantV1(membership, expected [sha256.Size]byte) (VectorPartitionLocalGraphVariantV1, bool) {
+	for _, variant := range [...]VectorPartitionLocalGraphVariantV1{
+		VectorPartitionLocalGraphVariantNativeV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationEfConstruction512V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM20EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1,
+	} {
+		if vectorPartitionLocalGraphVariantMembershipDigestV1(membership, variant) == expected {
+			return variant, true
+		}
+	}
+	return "", false
+}
+
 // vectorPartitionLocalGraphVariantDefinitionV1 keeps the authoritative source
 // definition unchanged while selecting the local offline builder parameters.
 func vectorPartitionLocalGraphVariantDefinitionV1(def VectorIndexDefinition, variant VectorPartitionLocalGraphVariantV1) (VectorIndexDefinition, bool, error) {
@@ -2679,6 +2708,14 @@ func (c *Collection) openVectorPartitionLocalSearcherForPreparedPartitionWithCon
 					return nil, fmt.Errorf("%w: offline graph variant definition: %v", ErrVectorPartitionSearchUnavailable, definitionErr)
 				}
 				offlineV3 = expectedGraphVariant != VectorPartitionLocalGraphVariantNativeV1
+			} else if variant, recognized := vectorPartitionLocalOfflineGraphVariantV1(recomputedMembershipDigest, expectedMembershipDigest); recognized {
+				graphVariant = variant
+				var definitionErr error
+				packDef, expectAuxiliaryNavigation, definitionErr = vectorPartitionLocalGraphVariantDefinitionV1(def, variant)
+				if definitionErr != nil {
+					return nil, fmt.Errorf("%w: offline graph variant definition: %v", ErrVectorPartitionSearchUnavailable, definitionErr)
+				}
+				offlineV3 = variant != VectorPartitionLocalGraphVariantNativeV1
 			} else {
 				switch {
 				case vectorPartitionLocalGraphVariantMembershipDigestV1(recomputedMembershipDigest, VectorPartitionLocalGraphVariantNativeV1) == expectedMembershipDigest:
