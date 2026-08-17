@@ -465,9 +465,10 @@ func localHNSWFixedBudgetScreenAngularPairCapacityV1(finalEdges, degreeLimit uin
 }
 
 // localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1 binds each exact-kNN
-// recovery denominator independently of report aggregation. Candidate truth
-// can be short when the construction-time predecessor set is small, while
-// final truth always searches the other rows in a retained pack and must have
+// recovery denominator independently of report aggregation. The generic
+// construction oracle permits short predecessor sets, but the retained
+// source-bound packs select 32 rows with at least ExactK predecessors, and
+// final truth searches every other row. Both denominators therefore require
 // exactly ExactK neighbors for every canonical sample.
 func localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one localHNSWAttributionNeighborhoodOracleV1) error {
 	if one.ExactK <= 0 {
@@ -477,7 +478,7 @@ func localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one localHNSWAttributio
 	if one.CandidateSamples > ^uint64(0)/exactK || one.FinalSamples > ^uint64(0)/exactK {
 		return errors.New("fixed-budget neighborhood truth bound overflow")
 	}
-	if one.CandidateTruthNeighbors > one.CandidateSamples*exactK || one.FinalSampleTruthNeighbors != one.FinalSamples*exactK {
+	if one.CandidateTruthNeighbors != one.CandidateSamples*exactK || one.FinalSampleTruthNeighbors != one.FinalSamples*exactK {
 		return errors.New("invalid fixed-budget neighborhood truth bound")
 	}
 	return nil
