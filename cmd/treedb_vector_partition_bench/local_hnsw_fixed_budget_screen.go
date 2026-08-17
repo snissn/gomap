@@ -338,11 +338,12 @@ func localHNSWFixedBudgetScreenDiagnosticV1(d collections.VectorPartitionPackDia
 }
 
 func localHNSWFixedBudgetScreenTreatmentOriginsV1(arm localHNSWFixedBudgetScreenArmResultV1) error {
+	wantBackfill := localHNSWFixedBudgetScreenBackfillAllowedV1(arm.Arm.Variant)
 	wantQuality := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
 	wantRobust := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
 	for _, one := range arm.SelectedNeighborhood {
 		counts := one.Neighborhood.FinalEdgesByOrigin
-		if (!wantQuality && counts[5] != 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
+		if (!wantBackfill && counts[1] != 0) || counts[4] != 0 || (!wantQuality && counts[5] != 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
 			return fmt.Errorf("invalid fixed-budget treatment origins arm=%s partition=%d counts=%v", arm.Arm.Name, one.Partition, counts)
 		}
 	}
@@ -351,15 +352,19 @@ func localHNSWFixedBudgetScreenTreatmentOriginsV1(arm localHNSWFixedBudgetScreen
 	// closest-candidate residual is therefore observable when used, but is not
 	// required for a treatment to be real; the independently checked degree and
 	// byte budget prove capacity in either case.
-	if (wantQuality && counts[5] == 0) || (!wantQuality && counts[5] != 0) || (wantRobust && counts[6] == 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
+	if (!wantBackfill && counts[1] != 0) || counts[4] != 0 || (wantQuality && counts[5] == 0) || (!wantQuality && counts[5] != 0) || (wantRobust && counts[6] == 0) || (!wantRobust && (counts[6] != 0 || counts[7] != 0)) {
 		return fmt.Errorf("invalid fixed-budget treatment aggregate arm=%s counts=%v", arm.Arm.Name, counts)
 	}
 	return nil
 }
 
+func localHNSWFixedBudgetScreenBackfillAllowedV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
+	return variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1 || variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1
+}
+
 // localHNSWFixedBudgetScreenQueryUtilityV1 applies the fixed screen's
-// per-query exact-k capacity and construction-treatment namespace to every
-// persisted utility, before per-pack values are folded into a cell aggregate.
+// per-query exact-k capacity and construction-origin policy to every persisted
+// utility, before per-pack values are folded into a cell aggregate.
 // The generic utility conservation helper intentionally permits unattributed
 // seed truth, so this contract supplies the screen-specific ten-result bound.
 func localHNSWFixedBudgetScreenQueryUtilityV1(variant collections.VectorPartitionLocalGraphVariantV1, utility localHNSWAttributionQueryUtilityV1, opportunities uint64) error {
@@ -369,6 +374,12 @@ func localHNSWFixedBudgetScreenQueryUtilityV1(variant collections.VectorPartitio
 	}
 	wantQuality := variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
 	wantRobust := variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+	if !localHNSWFixedBudgetScreenBackfillAllowedV1(variant) && utility.Backfill != (localHNSWAttributionQueryOriginUtilityV1{}) {
+		return errors.New("invalid fixed-budget backfill query utility origin")
+	}
+	if utility.Overlay != (localHNSWAttributionQueryOriginUtilityV1{}) {
+		return errors.New("invalid fixed-budget overlay query utility origin")
+	}
 	if !wantQuality && utility.QualityPostfill != (localHNSWAttributionQueryOriginUtilityV1{}) {
 		return errors.New("invalid fixed-budget quality-postfill query utility origin")
 	}

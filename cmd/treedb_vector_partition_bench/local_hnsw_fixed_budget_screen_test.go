@@ -284,6 +284,48 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(wrongResidualOrigin); err == nil {
 		t.Fatal("non-robust arm carrying robust residual origin accepted")
 	}
+	backfillUtility := localHNSWAttributionQueryUtilityV1{
+		ExaminedNative:     1,
+		NewlyVisited:       1,
+		Scored:             1,
+		TopAdmissions:      1,
+		FrontierAdmissions: 1,
+		TruthRecovered:     1,
+		Backfill: localHNSWAttributionQueryOriginUtilityV1{
+			Examined:           1,
+			NewlyVisited:       1,
+			Scored:             1,
+			TopAdmissions:      1,
+			FrontierAdmissions: 1,
+			TruthRecovered:     1,
+		},
+	}
+	backfillOffOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	localHNSWFixedBudgetScreenTestMoveOriginV1(t, &backfillOffOrigin.Arms[0], 1, backfillUtility)
+	if err := localHNSWFixedBudgetScreenContractV1(backfillOffOrigin); err == nil {
+		t.Fatal("backfill-off arm carrying backfill origin accepted")
+	}
+	if err := localHNSWFixedBudgetScreenQueryUtilityV1(backfillOffOrigin.Arms[0].Arm.Variant, backfillUtility, 1); err == nil {
+		t.Fatal("backfill-off query utility accepted backfill origin")
+	}
+	overlayUtility := backfillUtility
+	overlayUtility.Backfill = localHNSWAttributionQueryOriginUtilityV1{}
+	overlayUtility.Overlay = localHNSWAttributionQueryOriginUtilityV1{
+		Examined:           1,
+		NewlyVisited:       1,
+		Scored:             1,
+		TopAdmissions:      1,
+		FrontierAdmissions: 1,
+		TruthRecovered:     1,
+	}
+	overlayOrigin := localHNSWFixedBudgetScreenCloneV1(t, report)
+	localHNSWFixedBudgetScreenTestMoveOriginV1(t, &overlayOrigin.Arms[1], 4, overlayUtility)
+	if err := localHNSWFixedBudgetScreenContractV1(overlayOrigin); err == nil {
+		t.Fatal("auxiliary-navigation arm carrying overlay origin accepted")
+	}
+	if err := localHNSWFixedBudgetScreenQueryUtilityV1(overlayOrigin.Arms[1].Arm.Variant, overlayUtility, 1); err == nil {
+		t.Fatal("auxiliary-navigation query utility accepted overlay origin")
+	}
 
 	// The fifth arm's final origins are query-visible native edges. Exercise a
 	// real nonzero quality_postfill bucket through the cell contract rather
@@ -536,4 +578,25 @@ func localHNSWFixedBudgetScreenTestRecomposeCellV1(t *testing.T, cell *localHNSW
 		}
 	}
 	cell.Work = aggregate
+}
+
+func localHNSWFixedBudgetScreenTestMoveOriginV1(t *testing.T, arm *localHNSWFixedBudgetScreenArmResultV1, origin int, utility localHNSWAttributionQueryUtilityV1) {
+	t.Helper()
+	selected := &arm.SelectedNeighborhood[0].Neighborhood
+	selected.FinalEdgesByOrigin[0]--
+	selected.FinalEdgesByOrigin[origin]++
+	selected.FinalTruthByOrigin[0]--
+	selected.FinalTruthByOrigin[origin]++
+	arm.Neighborhood.FinalEdgesByOrigin[0]--
+	arm.Neighborhood.FinalEdgesByOrigin[origin]++
+	arm.Neighborhood.FinalTruthByOrigin[0]--
+	arm.Neighborhood.FinalTruthByOrigin[origin]++
+	cell := &arm.Cells[0]
+	pack := &cell.PerPack[0]
+	pack.Work.Edges = 1
+	pack.Work.FrontierAdmissions = 1
+	pack.Work.Utility = utility
+	pack.TruthHitSlots = 1
+	localHNSWFixedBudgetScreenTestRecomposeCellV1(t, cell)
+	cell.LocalTruthHitSlots = 1
 }
