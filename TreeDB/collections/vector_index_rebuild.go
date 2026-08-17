@@ -492,8 +492,15 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorG
 // partition variant defer final survivors until after its own adjacency rewrite.
 // Generic graph construction finalizes immediately.
 func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool) error {
+	return buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows, def, trace, recordFinal, nil)
+}
+
+func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
+	}
+	if policy != nil && (def.Metric != VectorMetricCosine || (policy.initialSelectionFactor != 1 && policy.initialSelectionFactor != 2) || policy.qualityPostfill && policy.robustPruneRefinement) {
+		return errors.New("collections: invalid offline layer-0 construction policy")
 	}
 	if trace != nil {
 		trace.sampleIDs = vectorPartitionConstructionSampleIDsV1(rows)
@@ -509,6 +516,7 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVe
 		return err
 	}
 	index.constructionTrace = trace
+	index.layer0ConstructionPolicy = policy
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	for i := range rows {
@@ -516,6 +524,19 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVe
 			return fmt.Errorf("collections: build column vector graph row[%d]: %w", i, err)
 		}
 	}
+	if policy != nil && policy.qualityPostfill {
+		if err := index.applyQualityPostfillLocked(trace, def.M*2); err != nil {
+			return err
+		}
+	}
+	if policy != nil && policy.robustPruneRefinement {
+		if err := index.applyRobustPruneRefinementLocked(trace, def.M*2); err != nil {
+			return err
+		}
+	}
+	// The final refinement stages have consumed this bounded offline pool.
+	// Release it before locality remapping allocates its working buffers.
+	index.qualityPostfillCandidates = nil
 
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {

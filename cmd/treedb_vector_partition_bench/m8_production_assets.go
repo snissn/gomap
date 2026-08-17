@@ -373,17 +373,17 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 	var assets []collections.VectorPartitionAssetV1
 	var resources interface{ Release() }
 	var constructionEvidence collections.VectorPartitionConstructionEvidenceV1
-	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 {
+	if variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1 || localHNSWFixedBudgetConstructionVariantV1(variant) {
 		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
 	} else {
 		assets, resources, constructionEvidence, err = owned.collection.MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(source.manifest.IndexName, source.manifest, fileID, inputs, variant)
 	}
 	if err != nil {
-		return nil, errors.Join(err, owned.Close())
+		return nil, errors.Join(fmt.Errorf("retained variant materialize assets: %w", err), owned.Close())
 	}
 	if err := owned.collection.ValidateVectorPartitionLocalConstructionEvidenceV1(context.Background(), source.manifest.IndexName, source.manifest, assets, constructionEvidence); err != nil {
 		resources.Release()
-		return nil, errors.Join(err, owned.Close())
+		return nil, errors.Join(fmt.Errorf("retained variant validate construction evidence: %w", err), owned.Close())
 	}
 	h := &localHNSWVariantHarnessV1{assets: owned, resources: resources, packAssets: append([]collections.VectorPartitionAssetV1(nil), assets...), constructionEvidence: constructionEvidence, searchers: make([]*collections.VectorPartitionLocalSearcherV1, len(assets)), documentIDs: make([][]string, len(assets))}
 	defer func() {
@@ -398,13 +398,16 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 		if asset.PartitionID != inputs[p].PartitionID {
 			return nil, errors.New("retained variant partition ordering mismatch")
 		}
-		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset)
+		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset, variant)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("retained variant open partition %d: %w", asset.PartitionID, err)
 		}
 		h.documentIDs[p], err = h.searchers[p].PackDocumentIDsForOfflineTraceV1()
-		if err != nil || len(h.documentIDs[p]) == 0 {
-			return nil, errors.New("retained variant document IDs")
+		if err != nil {
+			return nil, fmt.Errorf("retained variant partition %d document IDs: %w", asset.PartitionID, err)
+		}
+		if len(h.documentIDs[p]) == 0 {
+			return nil, fmt.Errorf("retained variant partition %d document IDs are empty", asset.PartitionID)
 		}
 	}
 	h.finalOrigins = make([]map[localHNSWAttributionFinalEdgeKeyV1]string, len(assets))
@@ -413,7 +416,7 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 		// materialization's (possibly singleton) asset-slice position.
 		h.finalOrigins[p], err = localHNSWAttributionFinalOriginsV1(h.constructionEvidence, int(h.packAssets[p].PartitionID))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("retained variant partition %d final origins: %w", h.packAssets[p].PartitionID, err)
 		}
 	}
 	return h, nil

@@ -363,6 +363,42 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 	}
 }
 
+func TestVectorIndexSelectDiverseCandidatesPrunesBelowCapWithoutBackfill(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("from"), vector: query, level: 0},
+		{documentID: []byte("closest"), vector: unitVectorAtDegrees(5), level: 0},
+		{documentID: []byte("redundant"), vector: unitVectorAtDegrees(6), level: 0},
+		{documentID: []byte("diverse"), vector: unitVectorAtDegrees(-7), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: mustExactVectorDistance(t, query, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, query, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, query, index.nodes[3].vector)},
+	}
+
+	withoutBackfill, diversity, backfill, origins, rejected := index.selectDiverseCandidatesWithDetailsLocked(append([]vectorIndexCandidate(nil), candidates...), 4, true, false, true)
+	if got, want := len(withoutBackfill), 2; got != want || diversity != want || backfill != 0 || len(rejected) != 1 || rejected[0].nodeID != 2 || !origins[1] || !origins[3] || origins[2] {
+		t.Fatalf("below-cap no-backfill selection=%v diversity=%d backfill=%d origins=%v rejected=%v, want diversity pruning", withoutBackfill, diversity, backfill, origins, rejected)
+	}
+	withBackfill, diversity, backfill, _, _ := index.selectDiverseCandidatesWithDetailsLocked(append([]vectorIndexCandidate(nil), candidates...), 4, false, true, false)
+	if got, want := len(withBackfill), 3; got != want || diversity != want || backfill != 0 {
+		t.Fatalf("below-cap backfill selection=%v diversity=%d backfill=%d, want historical all-candidate fast path", withBackfill, diversity, backfill)
+	}
+}
+
 func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *testing.T) {
 	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 4}
 	rows := []columnVectorGraphAssetRow{{ID: []byte("a"), Vector: []float32{1, 0}}, {ID: []byte("b"), Vector: []float32{.99, .01}}, {ID: []byte("c"), Vector: []float32{0, 1}}, {ID: []byte("d"), Vector: []float32{-1, 0}}}
@@ -421,6 +457,42 @@ func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.
 	if !selection.Sampled || selection.CandidateNodes == nil || len(selection.CandidateNodes) != 0 || selection.Candidates != 0 || selection.Selected != 0 {
 		t.Fatalf("zero-candidate sampled selection=%+v", selection)
 	}
+}
+
+func TestVectorIndexNormalSelectionDoesNotSnapshotPostfillCandidatesV1(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("source"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("candidate"), vector: []float32{0, 1}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	base := []vectorIndexCandidate{{nodeID: 1, distance: 1}}
+	assertNormal := func(name string, policy *vectorIndexLayer0ConstructionPolicyV1) {
+		t.Helper()
+		index.layer0ConstructionPolicy = policy
+		index.qualityPostfillCandidates = nil
+		if got := testing.AllocsPerRun(100, func() {
+			candidates := base[:len(base):len(base)]
+			neighbors := index.selectLayerNeighborsLocked(index.nodes[0].vector, 1, nil, candidates, 0, 2, 0)
+			if len(neighbors) != 1 || neighbors[0] != 1 {
+				t.Errorf("%s neighbors=%v", name, neighbors)
+			}
+		}); got != 1 {
+			// The returned []int is the one ordinary allocation. A second allocation
+			// here would be the offline postfill candidate snapshot.
+			t.Fatalf("%s normal selection allocations=%.1f want 1 (returned neighbors only)", name, got)
+		}
+		if index.qualityPostfillCandidates != nil {
+			t.Fatalf("%s normal selection retained offline postfill candidates", name)
+		}
+	}
+	assertNormal("ordinary", nil)
+	assertNormal("non-refinement policy", &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: true})
 }
 
 func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
@@ -531,6 +603,226 @@ func TestVectorIndexSelectDiverseCandidatesKeepsBackfillDistanceSorted(t *testin
 		if index.compareVectorIndexCandidatesByDistanceLocked(got[i-1], got[i]) > 0 {
 			t.Fatalf("selected candidates not distance sorted: %v", got)
 		}
+	}
+}
+
+func TestColumnVectorGraphLayer0ConstructionPolicyReservesReciprocalCapacityV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 64)
+	for i := range rows {
+		// Uneven angular spacing creates both redundant candidates and useful
+		// distant alternatives while retaining a deterministic insertion order.
+		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("policy-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	invalidDef := def
+	invalidDef.Metric = VectorMetricInnerProduct
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), invalidDef, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1}); err == nil {
+		t.Fatal("offline layer-0 policy accepted a non-cosine builder")
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), def, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 3}); err == nil {
+		t.Fatal("offline layer-0 policy accepted an unknown initial-selection factor")
+	}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(append([]columnVectorGraphAssetRow(nil), rows...), def, nil, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, qualityPostfill: true, robustPruneRefinement: true}); err == nil {
+		t.Fatal("offline layer-0 policy accepted unsupported combined final refinements")
+	}
+	build := func(policy *vectorIndexLayer0ConstructionPolicyV1) ([]columnVectorGraphAssetRow, *vectorIndexConstructionTraceV1) {
+		t.Helper()
+		got := append([]columnVectorGraphAssetRow(nil), rows...)
+		trace := &vectorIndexConstructionTraceV1{}
+		if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(got, def, trace, true, policy); err != nil {
+			t.Fatal(err)
+		}
+		return got, trace
+	}
+	control, controlTrace := build(nil)
+	explicitControl, explicitControlTrace := build(&vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: true})
+	if !reflect.DeepEqual(control, explicitControl) || !reflect.DeepEqual(controlTrace.selections, explicitControlTrace.selections) || !reflect.DeepEqual(controlTrace.events, explicitControlTrace.events) {
+		t.Fatal("explicit layer-0 2M/backfill-on policy changed the current construction")
+	}
+
+	for _, test := range []struct {
+		name         string
+		policy       vectorIndexLayer0ConstructionPolicyV1
+		wantBackfill bool
+		wantReserved bool
+	}{
+		{"m_off", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, backfill: false}, false, true},
+		{"m_on", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 1, backfill: true}, true, true},
+		{"2m_off", vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, backfill: false}, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, trace := build(&test.policy)
+			backfill := 0
+			underfilled := false
+			for _, selection := range trace.selections {
+				if selection.Layer != 0 {
+					continue
+				}
+				limit := def.M * test.policy.initialSelectionFactor
+				if selection.Selected > limit {
+					t.Fatalf("initial layer-0 selected=%d exceeds limit=%d: %+v", selection.Selected, limit, selection)
+				}
+				backfill += selection.BackfillSelected
+				if selection.Candidates >= limit && selection.Selected < limit {
+					underfilled = true
+				}
+			}
+			if test.wantBackfill != (backfill > 0) {
+				t.Fatalf("backfill=%d want enabled=%t", backfill, test.wantBackfill)
+			}
+			if !test.wantBackfill && !underfilled {
+				t.Fatal("backfill-off policy did not retain any diversity-underfilled selection")
+			}
+			maxDegree := 0
+			for _, row := range got {
+				neighbors, err := columnVectorGraphAdjacencyLayer(row.Adjacency, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(neighbors) > 2*def.M {
+					t.Fatalf("final degree=%d exceeds reciprocal capacity=%d", len(neighbors), 2*def.M)
+				}
+				maxDegree = max(maxDegree, len(neighbors))
+			}
+			if test.wantReserved && maxDegree <= def.M {
+				t.Fatalf("reciprocal insertion never consumed reserved capacity: max degree=%d", maxDegree)
+			}
+		})
+	}
+}
+
+func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 64)
+	for i := range rows {
+		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("postfill-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+		t.Helper()
+		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx.constructionTrace = trace
+		idx.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, qualityPostfill: true}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		for _, row := range rows {
+			if err := idx.insertVectorLocked(row.ID, row.Vector); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := idx.applyQualityPostfillLocked(trace, 2*def.M); err != nil {
+			t.Fatal(err)
+		}
+		return idx
+	}
+	traced := &vectorIndexConstructionTraceV1{detailed: true}
+	withTrace, withoutTrace := build(traced), build(nil)
+	if traced.postfillEdges == 0 || traced.compactLifecycle.QualityPostfillAdd[5] != traced.postfillEdges {
+		t.Fatalf("quality postfill provenance=%d lifecycle=%+v", traced.postfillEdges, traced.compactLifecycle)
+	}
+	for node := range withTrace.nodes {
+		left, right := withTrace.nodes[node].neighbors[0], withoutTrace.nodes[node].neighbors[0]
+		if len(left) != len(right) {
+			t.Fatalf("trace changed degree node=%d got=%d want=%d", node, len(left), len(right))
+		}
+		if len(left) > 2*def.M {
+			t.Fatalf("postfill exceeded cap node=%d degree=%d", node, len(left))
+		}
+		if len(left) != 2*def.M {
+			t.Fatalf("postfill left unused capacity node=%d degree=%d want=%d", node, len(left), 2*def.M)
+		}
+		for i := range left {
+			if left[i].nodeID != right[i].nodeID {
+				t.Fatalf("trace changed postfill node=%d edge=%d", node, i)
+			}
+		}
+	}
+}
+
+func TestVectorIndexQualityPostfillUsesObservedPairsBidirectionallyV1(t *testing.T) {
+	// This deliberately has fewer rows than the normal 2M degree target.  The
+	// post-construction pass must therefore use every observed construction
+	// pair in either direction, rather than silently falling back to nearest
+	// backfill when the earliest row has no one-sided rejected pool.
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 4, EfConstruction: 32}
+	rows := make([]columnVectorGraphAssetRow, 8)
+	for i := range rows {
+		angle := float64((i*i*17)%97) * 2 * math.Pi / 97
+		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("postfill-pair-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
+	}
+	trace := &vectorIndexConstructionTraceV1{detailed: true}
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows, def, trace, true, &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, qualityPostfill: true}); err != nil {
+		t.Fatal(err)
+	}
+	for from, row := range rows {
+		neighbors, err := columnVectorGraphAdjacencyLayer(row.Adjacency, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := len(neighbors), len(rows)-1; got != want {
+			t.Fatalf("postfill row=%d degree=%d want observed-pair capacity=%d", from, got, want)
+		}
+	}
+	if trace.postfillEdges == 0 {
+		t.Fatal("observed-pair postfill emitted no quality additions")
+	}
+}
+
+func TestVectorIndexRobustPruneRetainsRejectedPoolWithoutTraceV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+		t.Helper()
+		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx.constructionTrace = trace
+		idx.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, robustPruneRefinement: true}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		for i := 0; i < 32; i++ {
+			a := float64((i*i*31)%509) * 2 * math.Pi / 509
+			if err := idx.insertVectorLocked([]byte(fmt.Sprintf("robust-%03d", i)), []float32{float32(math.Cos(a)), float32(math.Sin(a))}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(idx.qualityPostfillCandidates) == 0 {
+			t.Fatal("robust-prune did not retain rejected candidates")
+		}
+		if err := idx.applyRobustPruneRefinementLocked(trace, 2*def.M); err != nil {
+			t.Fatal(err)
+		}
+		return idx
+	}
+	traced := &vectorIndexConstructionTraceV1{detailed: true}
+	withTrace, withoutTrace := build(traced), build(nil)
+	for node := range withTrace.nodes {
+		if len(withTrace.nodes[node].neighbors[0]) != 2*def.M || len(withoutTrace.nodes[node].neighbors[0]) != 2*def.M {
+			t.Fatalf("robust degree node=%d traced=%d untraced=%d", node, len(withTrace.nodes[node].neighbors[0]), len(withoutTrace.nodes[node].neighbors[0]))
+		}
+		for edge := range withTrace.nodes[node].neighbors[0] {
+			if withTrace.nodes[node].neighbors[0][edge].nodeID != withoutTrace.nodes[node].neighbors[0][edge].nodeID {
+				t.Fatalf("trace changed robust edge node=%d edge=%d", node, edge)
+			}
+		}
+	}
+	if traced.compactLifecycle.VariantAdd[6]+traced.compactLifecycle.VariantAdd[7] == 0 {
+		t.Fatal("robust refinement emitted no provenance")
+	}
+}
+
+func TestVectorIndexRobustPruneCosineThresholdUsesEuclideanAlphaV1(t *testing.T) {
+	// For normalized vectors cosine distance is half squared Euclidean distance.
+	// The DiskANN alpha=1.2 boundary is therefore 1.2^2=1.44 here.
+	if vectorIndexRobustPruneOccludesV1(1.44, 1, 1.43) {
+		t.Fatal("cosine robust-prune threshold used an overly weak alpha")
+	}
+	if !vectorIndexRobustPruneOccludesV1(1.44, 1, 1.44) {
+		t.Fatal("cosine robust-prune threshold rejected Euclidean alpha boundary")
 	}
 }
 

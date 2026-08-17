@@ -310,7 +310,21 @@ type VectorIndex struct {
 	insertQuantScratch     []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
-	constructionTrace *vectorIndexConstructionTraceV1
+	constructionTrace        *vectorIndexConstructionTraceV1
+	layer0ConstructionPolicy *vectorIndexLayer0ConstructionPolicyV1
+	// qualityPostfillCandidates belongs to the temporary builder, never to the
+	// evidence sink: graph construction must be identical with tracing off.
+	qualityPostfillCandidates map[int]map[int]struct{}
+}
+
+// vectorIndexLayer0ConstructionPolicyV1 is an offline-only experiment seam.
+// It changes the new node's layer-0 selection but leaves reciprocal capacity
+// and pruning at the canonical 2M limit.
+type vectorIndexLayer0ConstructionPolicyV1 struct {
+	initialSelectionFactor int
+	backfill               bool
+	qualityPostfill        bool
+	robustPruneRefinement  bool
 }
 
 // vectorIndexConstructionTraceV1 is deliberately private: construction
@@ -328,6 +342,7 @@ type vectorIndexConstructionTraceV1 struct {
 	nativeInsertionOrdinals []int
 	pruneKeeps              uint64
 	compactLifecycle        VectorPartitionConstructionCompactLifecycleV1
+	postfillEdges           uint64
 }
 type vectorIndexConstructionSelectionV1 struct {
 	Node, Layer, Candidates, Selected, DiversitySelected, BackfillSelected int
@@ -352,6 +367,12 @@ func vectorIndexConstructionOriginIndexV1(origin string) (int, bool) {
 		return 3, true
 	case "overlay_rewrite":
 		return 4, true
+	case "quality_postfill":
+		return 5, true
+	case "robust_prune_refinement":
+		return 6, true
+	case "robust_prune_residual_fill":
+		return 7, true
 	}
 	return 0, false
 }
@@ -375,6 +396,12 @@ func (t *vectorIndexConstructionTraceV1) countLifecycle(origin, action string) {
 		t.compactLifecycle.VariantAdd[originIndex]++
 	case "reciprocity_repair_drop", "overlay_rewrite_drop":
 		t.compactLifecycle.VariantDrop[originIndex]++
+	case "robust_prune_add", "robust_prune_residual_fill_add":
+		t.compactLifecycle.VariantAdd[originIndex]++
+	case "robust_prune_drop":
+		t.compactLifecycle.VariantDrop[originIndex]++
+	case "quality_postfill_add":
+		t.compactLifecycle.QualityPostfillAdd[originIndex]++
 	}
 }
 
@@ -1170,7 +1197,11 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
 		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
-		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
+		selectionLimit := idx.maxNeighborsForLayer(layer)
+		if layer == 0 && idx.layer0ConstructionPolicy != nil {
+			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
+		}
+		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, selectionLimit, nodeID)
 		for _, neighborID := range neighbors {
 			// selectLayerNeighborsLocked records the exact selection origin before
 			// this directed initial link is made.
@@ -2348,10 +2379,30 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	}
 	var diversitySelected int
 	var diversity map[int]bool
-	if trace == nil {
-		scored, diversitySelected = idx.selectDiverseCandidatesWithAccountingLocked(scored, limit)
-	} else {
-		scored, diversitySelected, diversity = idx.selectDiverseCandidatesWithOriginsLocked(scored, limit)
+	backfill := true
+	qualityPostfill := false
+	robustPruneRefinement := false
+	if layer == 0 && idx.layer0ConstructionPolicy != nil {
+		backfill = idx.layer0ConstructionPolicy.backfill
+		qualityPostfill = idx.layer0ConstructionPolicy.qualityPostfill
+		robustPruneRefinement = idx.layer0ConstructionPolicy.robustPruneRefinement
+	}
+	// Keep every finite construction comparison, not only diversity rejects.
+	// An initial directed selection is an equally valid observed pair for the
+	// reverse endpoint; retaining the symmetric relation lets the explicit
+	// post-construction pass fill early nodes without inventing an unobserved
+	// nearest-neighbor fallback.
+	capturePostfill := qualityPostfill || robustPruneRefinement
+	var constructionCandidates []vectorIndexCandidate
+	if capturePostfill {
+		// This candidate-pool snapshot is needed only by the two offline final
+		// refinements. Keep the ordinary and non-refinement policy paths free of
+		// this allocation.
+		constructionCandidates = append([]vectorIndexCandidate(nil), scored...)
+	}
+	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, false)
+	if capturePostfill {
+		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
 	}
 	if trace != nil {
 		selection := vectorIndexConstructionSelectionV1{Node: excludeNodeID, Layer: layer, Candidates: candidateCount, Selected: len(scored), DiversitySelected: diversitySelected, BackfillSelected: len(scored) - diversitySelected}
@@ -2381,40 +2432,46 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 }
 
 func (idx *VectorIndex) selectDiverseCandidatesWithAccountingLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int) {
-	selected, diversitySelected, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false)
+	selected, diversitySelected, _, _, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, false, true, false)
 	return selected, diversitySelected
 }
 
 // selectDiverseCandidatesWithOriginsLocked preserves the existing candidate
 // order while retaining the causal classification of each selected edge.
 func (idx *VectorIndex) selectDiverseCandidatesWithOriginsLocked(candidates []vectorIndexCandidate, limit int) ([]vectorIndexCandidate, int, map[int]bool) {
-	return idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true)
+	selected, diversitySelected, _, origins, _ := idx.selectDiverseCandidatesWithDetailsLocked(candidates, limit, true, true, false)
+	return selected, diversitySelected, origins
 }
 
-func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins bool) ([]vectorIndexCandidate, int, map[int]bool) {
+func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []vectorIndexCandidate, limit int, includeOrigins, backfillEnabled, captureQualityPostfill bool) ([]vectorIndexCandidate, int, int, map[int]bool, []vectorIndexCandidate) {
 	if limit <= 0 || len(candidates) == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil, nil
 	}
 	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
-	if len(candidates) <= limit {
+	// Backfill-on preserves the historical degree-filling fast path.  The
+	// backfill-off construction policies instead need to run the diversity
+	// predicate even below their selection cap: a small candidate set can still
+	// contain mutually redundant neighbors, and those rejected candidates are
+	// the causal pool for the later offline refinements.
+	if len(candidates) <= limit && backfillEnabled {
 		if !includeOrigins {
-			return candidates, len(candidates), nil
+			return candidates, len(candidates), 0, nil, nil
 		}
 		diversity := make(map[int]bool, len(candidates))
 		for _, candidate := range candidates {
 			diversity[candidate.nodeID] = true
 		}
-		return candidates, len(candidates), diversity
+		return candidates, len(candidates), 0, diversity, nil
 	}
 	if idx.metric == VectorMetricInnerProduct {
 		if !includeOrigins {
-			return candidates[:limit], limit, nil
+			return candidates[:limit], limit, 0, nil, nil
 		}
 		diversity := make(map[int]bool, limit)
 		for _, candidate := range candidates[:limit] {
 			diversity[candidate.nodeID] = true
 		}
-		return candidates[:limit], limit, diversity
+		return candidates[:limit], limit, 0, diversity, nil
 	}
 	var selectedStack [128]vectorIndexCandidate
 	selected := selectedStack[:0]
@@ -2445,10 +2502,17 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 			diversity[candidate.nodeID] = true
 		}
 	}
+	if !backfillEnabled {
+		out = append(out, selected...)
+		if captureQualityPostfill {
+			return out, len(selected), 0, diversity, append([]vectorIndexCandidate(nil), rejected...)
+		}
+		return out, len(selected), 0, diversity, nil
+	}
 	backfill := minInt(limit-len(selected), len(rejected))
 	if backfill == 0 {
 		out = append(out, selected...)
-		return out, len(selected), diversity
+		return out, len(selected), 0, diversity, nil
 	}
 	selectedPos := 0
 	rejectedPos := 0
@@ -2463,7 +2527,249 @@ func (idx *VectorIndex) selectDiverseCandidatesWithDetailsLocked(candidates []ve
 	}
 	out = append(out, selected[selectedPos:]...)
 	out = append(out, rejected[rejectedPos:backfill]...)
-	return out, len(selected), diversity
+	return out, len(selected), 0, diversity, nil
+}
+
+func (idx *VectorIndex) captureQualityPostfillCandidatesLocked(from int, candidates []vectorIndexCandidate) {
+	if len(candidates) == 0 || from < 0 {
+		return
+	}
+	if idx.qualityPostfillCandidates == nil {
+		idx.qualityPostfillCandidates = make(map[int]map[int]struct{})
+	}
+	seen := idx.qualityPostfillCandidates[from]
+	if seen == nil {
+		seen = make(map[int]struct{}, len(candidates))
+		idx.qualityPostfillCandidates[from] = seen
+	}
+	for _, candidate := range candidates {
+		to := candidate.nodeID
+		if to < 0 || to >= len(idx.nodes) || to == from {
+			continue
+		}
+		seen[to] = struct{}{}
+		// Distance is symmetric for the cosine-only offline policies.  Retain
+		// the reverse endpoint too: this exact pair was scored during HNSW
+		// construction, even if only `from` selected it at that time.
+		reverse := idx.qualityPostfillCandidates[to]
+		if reverse == nil {
+			reverse = make(map[int]struct{})
+			idx.qualityPostfillCandidates[to] = reverse
+		}
+		reverse[from] = struct{}{}
+	}
+}
+
+// applyQualityPostfillLocked is the offline experiment's explicit final L0
+// stage. It runs only after all insertion-side reciprocal pruning and before
+// BFS locality remapping. Candidates are the union of finite construction
+// comparisons observed in either direction; each row fills only its unused 2M
+// outgoing capacity, ordered by maximum nearest-neighbour separation, then
+// source distance and native ordinal.
+func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
+	if degreeLimit <= 0 {
+		return nil
+	}
+	for from := range idx.nodes {
+		if len(idx.nodes[from].neighbors) == 0 {
+			continue
+		}
+		neighbors := idx.nodes[from].neighbors[0]
+		target := minInt(degreeLimit, len(idx.nodes)-1)
+		if len(neighbors) > target {
+			return fmt.Errorf("collections: least-redundant separation postfill degree from=%d degree=%d limit=%d", from, len(neighbors), degreeLimit)
+		}
+		pool := idx.qualityPostfillCandidates[from]
+		for len(neighbors) < target {
+			present := make(map[int]struct{}, len(neighbors))
+			for _, neighbor := range neighbors {
+				present[neighbor.nodeID] = struct{}{}
+			}
+			best, bestMargin, bestDistance := -1, float32(math.Inf(-1)), float32(math.Inf(1))
+			for to := range pool {
+				if to < 0 || to >= len(idx.nodes) || to == from {
+					continue
+				}
+				if _, exists := present[to]; exists {
+					continue
+				}
+				distance, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[from], &idx.nodes[to])
+				if err != nil {
+					return err
+				}
+				margin := float32(math.Inf(1))
+				for _, neighbor := range neighbors {
+					separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[to], &idx.nodes[neighbor.nodeID])
+					if err != nil {
+						return err
+					}
+					if separation < margin {
+						margin = separation
+					}
+				}
+				if margin > bestMargin || (margin == bestMargin && (distance < bestDistance || (distance == bestDistance && to < best))) {
+					best, bestMargin, bestDistance = to, margin, distance
+				}
+			}
+			if best < 0 {
+				break
+			}
+			neighbors = append(neighbors, vectorIndexNeighbor{nodeID: best, distance: bestDistance})
+			if trace != nil {
+				trace.init()
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: best, Layer: 0}
+				if _, exists := trace.origins[key]; exists {
+					return fmt.Errorf("collections: least-redundant separation postfill duplicate edge from=%d to=%d", from, best)
+				}
+				trace.origins[key] = "quality_postfill"
+				trace.record(from, best, 0, "quality_postfill", "quality_postfill_add")
+				if trace.postfillEdges == ^uint64(0) {
+					return fmt.Errorf("collections: least-redundant separation postfill overflow")
+				}
+				trace.postfillEdges++
+			}
+		}
+		idx.nodes[from].neighbors[0] = neighbors
+		if len(neighbors) != target {
+			return fmt.Errorf("collections: least-redundant separation postfill insufficient observed candidates from=%d degree=%d target=%d pool=%d", from, len(neighbors), target, len(pool))
+		}
+	}
+	return nil
+}
+
+// applyRobustPruneRefinementLocked is the single #4172 causal follow-up. It
+// applies DiskANN RobustPrune with the predeclared Euclidean alpha=1.2 to each completed
+// L0 neighbourhood, using only its current edges and the bounded observed
+// construction-pair pool. Classic RobustPrune may underfill R; a separately
+// attributed nearest residual fill restores the fixed 2M encoded degree budget.
+func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
+	// For normalized vectors this builder stores cosine distance, which is
+	// proportional to squared Euclidean distance. DiskANN's alpha*d(a,b)
+	// threshold therefore becomes alpha^2*cosineDistance(a,b), not alpha.
+	const alphaSquared = float32(1.44)
+	if degreeLimit <= 0 {
+		return nil
+	}
+	type candidate struct {
+		nodeID   int
+		distance float32
+	}
+	for from := range idx.nodes {
+		if len(idx.nodes[from].neighbors) == 0 {
+			continue
+		}
+		target := minInt(degreeLimit, len(idx.nodes)-1)
+		old := append([]vectorIndexNeighbor(nil), idx.nodes[from].neighbors[0]...)
+		pool := make(map[int]struct{}, len(old)+len(idx.qualityPostfillCandidates[from]))
+		for _, neighbor := range old {
+			pool[neighbor.nodeID] = struct{}{}
+		}
+		for to := range idx.qualityPostfillCandidates[from] {
+			pool[to] = struct{}{}
+		}
+		candidates := make([]candidate, 0, len(pool))
+		for to := range pool {
+			if to < 0 || to >= len(idx.nodes) || to == from {
+				continue
+			}
+			distance, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[from], &idx.nodes[to])
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, candidate{nodeID: to, distance: distance})
+		}
+		slices.SortFunc(candidates, func(left, right candidate) int {
+			if left.distance < right.distance {
+				return -1
+			}
+			if left.distance > right.distance {
+				return 1
+			}
+			return left.nodeID - right.nodeID
+		})
+		selected := make([]candidate, 0, target)
+		remaining := append([]candidate(nil), candidates...)
+		for len(remaining) != 0 && len(selected) < target {
+			chosen := remaining[0]
+			selected = append(selected, chosen)
+			next := remaining[:0]
+			for _, other := range remaining[1:] {
+				separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[chosen.nodeID], &idx.nodes[other.nodeID])
+				if err != nil {
+					return err
+				}
+				if vectorIndexRobustPruneOccludesV1(alphaSquared, separation, other.distance) {
+					continue
+				}
+				next = append(next, other)
+			}
+			remaining = next
+		}
+		// robust remains the pre-residual RobustPrune result; present grows with
+		// residual fill so the provenance of those additional edges stays distinct.
+		robust := make(map[int]struct{}, len(selected))
+		for _, item := range selected {
+			robust[item.nodeID] = struct{}{}
+		}
+		present := make(map[int]struct{}, len(selected))
+		for _, item := range selected {
+			present[item.nodeID] = struct{}{}
+		}
+		for _, item := range candidates {
+			if len(selected) == target {
+				break
+			}
+			if _, exists := present[item.nodeID]; exists {
+				continue
+			}
+			selected = append(selected, item)
+			present[item.nodeID] = struct{}{}
+		}
+		if len(selected) != target {
+			return fmt.Errorf("collections: robust prune refinement insufficient candidates from=%d selected=%d target=%d", from, len(selected), target)
+		}
+		oldSet := make(map[int]struct{}, len(old))
+		for _, neighbor := range old {
+			oldSet[neighbor.nodeID] = struct{}{}
+		}
+		if trace != nil {
+			trace.init()
+			for _, neighbor := range old {
+				if _, keep := present[neighbor.nodeID]; keep {
+					continue
+				}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: neighbor.nodeID, Layer: 0}
+				origin, ok := trace.origins[key]
+				if !ok {
+					return fmt.Errorf("collections: robust prune refinement missing origin from=%d to=%d", from, neighbor.nodeID)
+				}
+				delete(trace.origins, key)
+				trace.record(from, neighbor.nodeID, 0, origin, "robust_prune_drop")
+			}
+			for _, item := range selected {
+				if _, existed := oldSet[item.nodeID]; existed {
+					continue
+				}
+				origin, action := "robust_prune_refinement", "robust_prune_add"
+				if _, selectedByRobust := robust[item.nodeID]; !selectedByRobust {
+					origin, action = "robust_prune_residual_fill", "robust_prune_residual_fill_add"
+				}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: item.nodeID, Layer: 0}
+				trace.origins[key] = origin
+				trace.record(from, item.nodeID, 0, origin, action)
+			}
+		}
+		neighbors := make([]vectorIndexNeighbor, len(selected))
+		for i, item := range selected {
+			neighbors[i] = vectorIndexNeighbor{nodeID: item.nodeID, distance: item.distance}
+		}
+		idx.nodes[from].neighbors[0] = neighbors
+	}
+	return nil
+}
+
+func vectorIndexRobustPruneOccludesV1(alphaSquared, chosenToCandidate, sourceToCandidate float32) bool {
+	return alphaSquared*chosenToCandidate <= sourceToCandidate
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {

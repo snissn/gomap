@@ -838,6 +838,79 @@ func TestVectorPartitionLocalDefaultMaterializationVariantV1(t *testing.T) {
 	}
 }
 
+func TestVectorPartitionLayer0ConstructionPolicyCoordinatesV1(t *testing.T) {
+	for _, test := range []struct {
+		variant       VectorPartitionLocalGraphVariantV1
+		initialFactor int
+		backfill      bool
+		postfill      bool
+		robust        bool
+	}{
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 1, false, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 1, true, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 2, false, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 2, true, false, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, 2, false, true, false},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, 2, false, false, true},
+	} {
+		policy, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(test.variant)
+		if !ok || policy.initialSelectionFactor != test.initialFactor || policy.backfill != test.backfill || policy.qualityPostfill != test.postfill || policy.robustPruneRefinement != test.robust {
+			t.Fatalf("variant=%q policy=%+v ok=%t", test.variant, policy, ok)
+		}
+		def, auxiliary, err := vectorPartitionLocalGraphVariantDefinitionV1(VectorIndexDefinition{M: 16, EfConstruction: 128}, test.variant)
+		if err != nil || !auxiliary || def.M != 18 || def.EfConstruction != 256 {
+			t.Fatalf("variant=%q definition=%+v auxiliary=%t err=%v", test.variant, def, auxiliary, err)
+		}
+		if _, err := VectorPartitionLocalGraphVariantIdentityV1(test.variant); err != nil {
+			t.Fatalf("variant=%q identity: %v", test.variant, err)
+		}
+	}
+	if _, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1); ok {
+		t.Fatal("production M18 control unexpectedly carries an experimental layer-0 construction policy")
+	}
+}
+
+func TestVectorPartitionConstructionSelectionPolicyV1(t *testing.T) {
+	selection := VectorPartitionConstructionSelectionV1{Node: 1, Layer: 0, Candidates: 36, Selected: 36, DiversitySelected: 36}
+	variant := VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(selection, 18, variant); err != nil {
+		t.Fatalf("valid 2M/backfill-off selection rejected: %v", err)
+	}
+	crossArm := selection
+	crossArm.DiversitySelected--
+	crossArm.BackfillSelected++
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(crossArm, 18, variant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("backfill-off relabel accepted: %v", err)
+	}
+	overCap := selection
+	overCap.Selected++
+	overCap.DiversitySelected++
+	overCap.Candidates++
+	if err := vectorPartitionConstructionValidateSelectionPolicyV1(overCap, 18, variant); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+		t.Fatalf("2M selection over cap accepted: %v", err)
+	}
+}
+
+func TestVectorPartitionLayer0ConstructionPolicyVariantsUseCompactBoundedEvidenceV1(t *testing.T) {
+	variants := []VectorPartitionLocalGraphVariantV1{
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1,
+		VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1,
+	}
+	for _, variant := range variants {
+		for _, partition := range []uint32{0, 1, 3, 16, 36, 39} {
+			if vectorPartitionConstructionDetailedTraceV1(variant, partition) {
+				t.Fatalf("experimental variant=%q partition=%d retained detailed construction history", variant, partition)
+			}
+		}
+	}
+	if !vectorPartitionConstructionDetailedTraceV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 36) || vectorPartitionConstructionDetailedTraceV1(VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1, 2) {
+		t.Fatal("retained M18 control detailed-pack selection drifted")
+	}
+}
 func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 	requireVectorPartitionPersistenceV1(t)
 	rows := make([]columnGraphRebuildInputRowV2A, 8)
@@ -924,6 +997,12 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM22EfConstruction256V1, 22, 256, 991, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM24EfConstruction256V1, 24, 256, 992, true, columnHNSWSearchPackVersionV3},
 		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM32EfConstruction256V1, 32, 256, 993, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOffV1, 18, 256, 995, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1, 18, 256, 996, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1, 18, 256, 997, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1, 18, 256, 998, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1, 18, 256, 999, true, columnHNSWSearchPackVersionV3},
+		{VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1, 18, 256, 1000, true, columnHNSWSearchPackVersionV3},
 	} {
 		assets, resources, err := col.MaterializeVectorPartitionLocalSearchAssetsVariantV1(def.Name, m, test.fileID, in, test.variant)
 		if err != nil {
@@ -945,6 +1024,147 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil || pack.Header.M != test.m || pack.Header.EfConstruction != test.ef || pack.Header.HasAuxiliaryNavigation != test.aux || hnswPackU16(raw, columnHNSWSearchPackHeaderVersionOffset) != test.version {
 			t.Fatalf("variant=%s pack=%+v err=%v", test.variant, pack.Header, err)
 		}
+		if _, experimental := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(test.variant); experimental {
+			traced, tracedResources, evidence, err := col.MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(def.Name, m, test.fileID+100, in, test.variant)
+			if err != nil {
+				t.Fatalf("variant=%s bounded construction evidence: %v", test.variant, err)
+			}
+			defer tracedResources.Release()
+			if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, evidence); err != nil {
+				t.Fatalf("variant=%s compact construction evidence: %v", test.variant, err)
+			}
+			if len(evidence.Partitions) != 1 || evidence.Partitions[0].TraceMode != "compact" || len(evidence.Partitions[0].Events) != 0 || len(evidence.Partitions[0].FinalOrigins) == 0 {
+				t.Fatalf("variant=%s bounded evidence=%+v", test.variant, evidence.Partitions)
+			}
+			if vectorPartitionConstructionVariantRequiresFixedBudgetReplayV1(test.variant) {
+				// Exchange two surviving labels without changing any compact count.
+				// Only the source-bound final-origin replay can detect this attack.
+				tampered := evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part := &tampered.Partitions[0]
+				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
+				first, different := -1, -1
+				for j, final := range part.FinalOrigins {
+					if first < 0 {
+						first = j
+					} else if final.Origin != part.FinalOrigins[first].Origin {
+						different = j
+						break
+					}
+				}
+				if first < 0 || different < 0 {
+					t.Fatalf("variant=%s fixture lacks swappable compact final origins", test.variant)
+				}
+				part.FinalOrigins[first].Origin, part.FinalOrigins[different].Origin = part.FinalOrigins[different].Origin, part.FinalOrigins[first].Origin
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+					t.Fatalf("variant=%s accepted balanced final-origin label swap: %v", test.variant, err)
+				}
+				// When this compact smoke fixture has a non-exhaustive candidate pool,
+				// recompute the digest after replacing one valid earlier ordinal. Local
+				// compact checks accept the self-consistent sample; the independent
+				// construction replay must bind it to the real pool. Small fixtures can
+				// legitimately have every earlier ordinal in every sampled pool.
+				tampered = evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part = &tampered.Partitions[0]
+				part.Selections = append([]VectorPartitionConstructionSelectionV1(nil), part.Selections...)
+				selectionIndex, replacement := -1, -1
+				for j := range part.Selections {
+					s := &part.Selections[j]
+					if !s.CandidateSampled || len(s.CandidateOrdinals) == 0 {
+						continue
+					}
+					s.CandidateOrdinals = append([]int(nil), s.CandidateOrdinals...)
+					present := make(map[int]struct{}, len(s.CandidateOrdinals))
+					for _, ordinal := range s.CandidateOrdinals {
+						present[ordinal] = struct{}{}
+					}
+					for ordinal, insertion := range part.NativeInsertionOrdinals {
+						if ordinal != s.Node && insertion < part.NativeInsertionOrdinals[s.Node] {
+							if _, exists := present[ordinal]; !exists {
+								selectionIndex, replacement = j, ordinal
+								break
+							}
+						}
+					}
+					if replacement >= 0 {
+						break
+					}
+				}
+				if selectionIndex >= 0 && replacement >= 0 {
+					s := &part.Selections[selectionIndex]
+					s.CandidateOrdinals[0] = replacement
+					sort.Ints(s.CandidateOrdinals)
+					s.CandidateDigest = vectorPartitionConstructionCandidateDigestV1(s.CandidateOrdinals)
+					if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+						t.Fatalf("variant=%s accepted replay-substituted candidate sample: %v", test.variant, err)
+					}
+				}
+			}
+			if test.variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
+				tampered := evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part := &tampered.Partitions[0]
+				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
+				relabelled := false
+				for j := range part.FinalOrigins {
+					origin, ok := vectorIndexConstructionOriginIndexV1(part.FinalOrigins[j].Origin)
+					if !ok || origin > 2 {
+						continue
+					}
+					part.FinalOrigins[j].Origin = "robust_prune_refinement"
+					part.CompactLifecycle.VariantDrop[origin]++
+					part.CompactLifecycle.VariantAdd[6]++
+					relabelled = true
+					break
+				}
+				if !relabelled {
+					t.Fatalf("variant=%s fixture lacks native final origin", test.variant)
+				}
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+					t.Fatalf("variant=%s accepted robust-prune origin relabel: %v", test.variant, err)
+				}
+			}
+			if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+				// Compact counts alone cannot establish a postfill mutation. Relabel a
+				// surviving native edge and keep every count-only balance intact; the
+				// source-bound replay must still reject the fabricated treatment.
+				tampered := evidence
+				tampered.Partitions = append([]VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+				part := &tampered.Partitions[0]
+				postfillOrigin, ok := vectorIndexConstructionOriginIndexV1("quality_postfill")
+				if !ok {
+					t.Fatal("missing quality-postfill construction origin")
+				}
+				part.FinalOrigins = append([]VectorPartitionConstructionFinalOriginV1(nil), part.FinalOrigins...)
+				relabelled := false
+				for j := range part.FinalOrigins {
+					origin, ok := vectorIndexConstructionOriginIndexV1(part.FinalOrigins[j].Origin)
+					if !ok || origin > 2 {
+						continue
+					}
+					part.FinalOrigins[j].Origin = "quality_postfill"
+					part.CompactLifecycle.VariantDrop[origin]++
+					part.CompactLifecycle.QualityPostfillAdd[postfillOrigin]++
+					part.PostfillEdges++
+					relabelled = true
+					break
+				}
+				if !relabelled {
+					t.Fatal("quality-postfill fixture lacks a native final origin")
+				}
+				if err := col.ValidateVectorPartitionLocalConstructionEvidenceV1(t.Context(), def.Name, m, traced, tampered); !errors.Is(err, ErrVectorPartitionSearchUnavailable) {
+					t.Fatalf("quality-postfill origin relabel accepted: %v", err)
+				}
+			}
+			tracedRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), traced[0].Ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(raw, tracedRaw) || assets[0].Checksum != traced[0].Checksum || assets[0].Bytes != traced[0].Bytes {
+				t.Fatalf("variant=%s construction evidence changed pack payload", test.variant)
+			}
+		}
 		searcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(t.Context(), def.Name, m, assets[0])
 		if err != nil {
 			t.Fatal(err)
@@ -957,6 +1177,18 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		exact, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, assets[0], test.variant)
 		if err != nil {
 			t.Fatalf("variant=%s exact open err=%v", test.variant, err)
+		}
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
+			canonicalSearcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, canonical[0], VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, gotErr := exact.PackIdentityNeutralSHA256ForOfflineV1()
+			want, wantErr := canonicalSearcher.PackIdentityNeutralSHA256ForOfflineV1()
+			closeErr := canonicalSearcher.Close()
+			if gotErr != nil || wantErr != nil || closeErr != nil || got != want || assets[0].Checksum == canonical[0].Checksum {
+				t.Fatalf("identity-neutral control got=%q want=%q errors=%v/%v/%v asset_checksums=%q/%q", got, want, gotErr, wantErr, closeErr, assets[0].Checksum, canonical[0].Checksum)
+			}
 		}
 		if err := exact.Close(); err != nil {
 			t.Fatal(err)
