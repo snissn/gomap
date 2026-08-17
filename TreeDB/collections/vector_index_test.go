@@ -459,6 +459,35 @@ func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.
 	}
 }
 
+func TestVectorIndexNormalSelectionDoesNotSnapshotPostfillCandidatesV1(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("source"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("candidate"), vector: []float32{0, 1}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	base := []vectorIndexCandidate{{nodeID: 1, distance: 1}}
+	if got := testing.AllocsPerRun(100, func() {
+		candidates := base[:len(base):len(base)]
+		neighbors := index.selectLayerNeighborsLocked(index.nodes[0].vector, 1, nil, candidates, 0, 2, 0)
+		if len(neighbors) != 1 || neighbors[0] != 1 {
+			t.Fatalf("neighbors=%v", neighbors)
+		}
+	}); got != 1 {
+		// The returned []int is the one ordinary allocation. A second allocation
+		// here would be the offline postfill candidate snapshot.
+		t.Fatalf("normal selection allocations=%.1f want 1 (returned neighbors only)", got)
+	}
+	if index.qualityPostfillCandidates != nil {
+		t.Fatal("normal selection retained offline postfill candidates")
+	}
+}
+
 func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *testing.T) {
 	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 1, EfConstruction: 10}
 	rows := make([]columnVectorGraphAssetRow, 10)

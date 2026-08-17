@@ -1657,8 +1657,8 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				replayed, replayErr := vectorPartitionConstructionReplayEvidenceV1(reader, members[part.PartitionID], buildDef, variant)
 				if replayErr != nil {
 					err = fmt.Errorf("construction replay: %w", replayErr)
-				} else if part.PostfillEdges != replayed.PostfillEdges || part.PruneKeeps != replayed.PruneKeeps || part.CompactLifecycle != replayed.CompactLifecycle || !slices.Equal(part.FinalOrigins, replayed.FinalOrigins) {
-					err = fmt.Errorf("construction replay refinement mismatch variant=%q edges=%d replay_edges=%d prune_keeps=%d replay_prune_keeps=%d lifecycle_equal=%t final_origins=%d replay_final_origins=%d", variant, part.PostfillEdges, replayed.PostfillEdges, part.PruneKeeps, replayed.PruneKeeps, part.CompactLifecycle == replayed.CompactLifecycle, len(part.FinalOrigins), len(replayed.FinalOrigins))
+				} else if !slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals) || !vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections) || part.PostfillEdges != replayed.PostfillEdges || part.PruneKeeps != replayed.PruneKeeps || part.CompactLifecycle != replayed.CompactLifecycle || !slices.Equal(part.FinalOrigins, replayed.FinalOrigins) {
+					err = fmt.Errorf("construction replay mismatch variant=%q insertion_ordinals_equal=%t selections_equal=%t edges=%d replay_edges=%d prune_keeps=%d replay_prune_keeps=%d lifecycle_equal=%t final_origins=%d replay_final_origins=%d", variant, slices.Equal(part.NativeInsertionOrdinals, replayed.NativeInsertionOrdinals), vectorPartitionConstructionSelectionsEqualV1(part.Selections, replayed.Selections), part.PostfillEdges, replayed.PostfillEdges, part.PruneKeeps, replayed.PruneKeeps, part.CompactLifecycle == replayed.CompactLifecycle, len(part.FinalOrigins), len(replayed.FinalOrigins))
 				}
 			}
 			closeErr := searcher.Close()

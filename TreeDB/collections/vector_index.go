@@ -2392,8 +2392,14 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	// reverse endpoint; retaining the symmetric relation lets the explicit
 	// post-construction pass fill early nodes without inventing an unobserved
 	// nearest-neighbor fallback.
-	constructionCandidates := append([]vectorIndexCandidate(nil), scored...)
 	capturePostfill := qualityPostfill || robustPruneRefinement
+	var constructionCandidates []vectorIndexCandidate
+	if capturePostfill {
+		// This candidate-pool snapshot is needed only by the two offline final
+		// refinements. Keep the ordinary and non-refinement policy paths free of
+		// this allocation.
+		constructionCandidates = append([]vectorIndexCandidate(nil), scored...)
+	}
 	scored, diversitySelected, _, diversity, _ = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, trace != nil, backfill, capturePostfill)
 	if capturePostfill {
 		idx.captureQualityPostfillCandidatesLocked(excludeNodeID, constructionCandidates)
