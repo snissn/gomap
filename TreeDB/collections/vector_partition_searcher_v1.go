@@ -83,6 +83,37 @@ type VectorPartitionLocalGraphComparisonV1 struct {
 	FinalReciprocalEdges  uint64                                          `json:"final_reciprocal_edges"`
 }
 
+// PackIdentityNeutralSHA256ForOfflineV1 hashes the complete prepared pack
+// while replacing only its domain-separated membership identity with zeros.
+// It is an offline A/B control for proving graph-pack byte equality when two
+// construction variants intentionally carry different identity metadata.
+func (s *VectorPartitionLocalSearcherV1) PackIdentityNeutralSHA256ForOfflineV1() (string, error) {
+	if s == nil {
+		return "", ErrVectorPartitionSearchUnavailable
+	}
+	if err := s.Acquire(); err != nil {
+		return "", err
+	}
+	defer s.Release()
+	s.mu.Lock()
+	pack := s.prepared
+	s.mu.Unlock()
+	if pack == nil || pack.validateLive() != nil || pack.handle == nil || pack.handle.Released() {
+		return "", ErrVectorPartitionSearchUnavailable
+	}
+	raw := pack.handle.Bytes()
+	if len(raw) < columnHNSWSearchPackHeaderSizeV2 {
+		return "", ErrVectorPartitionSearchUnavailable
+	}
+	h := sha256.New()
+	h.Write([]byte("treedb/vector-partition/local-pack/identity-neutral/v1"))
+	h.Write(raw[:columnHNSWSearchPackHeaderMembershipDigestOffset])
+	var zero [sha256.Size]byte
+	h.Write(zero[:])
+	h.Write(raw[columnHNSWSearchPackHeaderSizeV2:])
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // CompareVectorPartitionLocalGraphPacksV1 is an offline-only prepared-pack
 // comparison. It never decodes assets or participates in serving.
 func CompareVectorPartitionLocalGraphPacksV1(native, final *VectorPartitionLocalSearcherV1) (VectorPartitionLocalGraphComparisonV1, error) {

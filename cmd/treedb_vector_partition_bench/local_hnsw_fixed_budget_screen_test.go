@@ -76,7 +76,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		if i == len(report.Arms)-1 {
 			report.Arms[i].Control = make([]localHNSWFixedBudgetControlPackV1, len(report.VariantPacks))
 			for j := range report.Arms[i].Control {
-				report.Arms[i].Control[j] = localHNSWFixedBudgetControlPackV1{Partition: report.VariantPacks[j], CandidateChecksum: "x", CanonicalChecksum: "x", CandidateBytes: 1, CanonicalBytes: 1}
+				report.Arms[i].Control[j] = localHNSWFixedBudgetControlPackV1{Partition: report.VariantPacks[j], CandidateChecksum: localHNSWM18GraphSHA256V1, CanonicalChecksum: localHNSWM18GraphSHA256V1, CandidateGraphSHA256: localHNSWM18GraphSHA256V1, CanonicalGraphSHA256: localHNSWM18GraphSHA256V1, CandidateBytes: 1, CanonicalBytes: 1}
 			}
 		}
 	}
@@ -112,6 +112,11 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	reorderedControl.Arms[last].Control[0], reorderedControl.Arms[last].Control[1] = reorderedControl.Arms[last].Control[1], reorderedControl.Arms[last].Control[0]
 	if err := localHNSWFixedBudgetScreenContractV1(reorderedControl); err == nil {
 		t.Fatal("reordered M18 control accepted")
+	}
+	tamperedControl := localHNSWFixedBudgetScreenCloneV1(t, report)
+	tamperedControl.Arms[last].Control[0].CandidateGraphSHA256 = localHNSWM18AssignmentSHA256V1
+	if err := localHNSWFixedBudgetScreenContractV1(tamperedControl); err == nil {
+		t.Fatal("identity-neutral M18 control mismatch accepted")
 	}
 
 	reorderedNeighborhood := localHNSWFixedBudgetScreenCloneV1(t, report)

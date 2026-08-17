@@ -84,11 +84,13 @@ type localHNSWFixedBudgetPackWorkV1 struct {
 // exact retained-M18 checksum and structural comparison without treating that
 // comparison as a screen outcome.
 type localHNSWFixedBudgetControlPackV1 struct {
-	Partition         uint32 `json:"partition"`
-	CandidateChecksum string `json:"candidate_checksum"`
-	CanonicalChecksum string `json:"canonical_m18_checksum"`
-	CandidateBytes    uint64 `json:"candidate_bytes"`
-	CanonicalBytes    uint64 `json:"canonical_m18_bytes"`
+	Partition            uint32 `json:"partition"`
+	CandidateChecksum    string `json:"candidate_checksum"`
+	CanonicalChecksum    string `json:"canonical_m18_checksum"`
+	CandidateGraphSHA256 string `json:"candidate_identity_neutral_sha256"`
+	CanonicalGraphSHA256 string `json:"canonical_m18_identity_neutral_sha256"`
+	CandidateBytes       uint64 `json:"candidate_bytes"`
+	CanonicalBytes       uint64 `json:"canonical_m18_bytes"`
 }
 
 type localHNSWFixedBudgetScreenReportV1 struct {
@@ -166,7 +168,7 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 		}
 		if i == len(report.Arms)-1 {
 			for j, control := range arm.Control {
-				if control.Partition != report.VariantPacks[j] || control.CandidateChecksum == "" || control.CandidateBytes == 0 || control.CandidateChecksum != control.CanonicalChecksum || control.CandidateBytes != control.CanonicalBytes {
+				if control.Partition != report.VariantPacks[j] || !localHNSWAttributionSHA256V1(control.CandidateChecksum) || !localHNSWAttributionSHA256V1(control.CanonicalChecksum) || !localHNSWAttributionSHA256V1(control.CandidateGraphSHA256) || control.CandidateGraphSHA256 != control.CanonicalGraphSHA256 || control.CandidateBytes == 0 || control.CandidateBytes != control.CanonicalBytes {
 					return errors.New("fixed-budget 2M/on control mismatch")
 				}
 			}
@@ -395,7 +397,20 @@ func localHNSWFixedBudgetScreenControlV1(source *m8ProductionMultiGroupAssetsV1,
 		if !ok || control.Checksum == "" || control.Bytes == 0 {
 			return nil, errors.New("missing fixed-budget canonical control")
 		}
-		out[i] = localHNSWFixedBudgetControlPackV1{Partition: asset.PartitionID, CandidateChecksum: asset.Checksum, CanonicalChecksum: control.Checksum, CandidateBytes: asset.Bytes, CanonicalBytes: control.Bytes}
+		candidateGraphSHA, err := h.searchers[i].PackIdentityNeutralSHA256ForOfflineV1()
+		if err != nil {
+			return nil, fmt.Errorf("fixed-budget candidate control partition %d: %w", asset.PartitionID, err)
+		}
+		canonicalSearcher, err := source.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, control, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+		if err != nil {
+			return nil, fmt.Errorf("fixed-budget canonical control partition %d: %w", asset.PartitionID, err)
+		}
+		canonicalGraphSHA, digestErr := canonicalSearcher.PackIdentityNeutralSHA256ForOfflineV1()
+		closeErr := canonicalSearcher.Close()
+		if digestErr != nil || closeErr != nil {
+			return nil, fmt.Errorf("fixed-budget canonical control digest partition %d: %w", asset.PartitionID, errors.Join(digestErr, closeErr))
+		}
+		out[i] = localHNSWFixedBudgetControlPackV1{Partition: asset.PartitionID, CandidateChecksum: asset.Checksum, CanonicalChecksum: control.Checksum, CandidateGraphSHA256: candidateGraphSHA, CanonicalGraphSHA256: canonicalGraphSHA, CandidateBytes: asset.Bytes, CanonicalBytes: control.Bytes}
 	}
 	return out, nil
 }

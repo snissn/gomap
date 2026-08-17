@@ -1028,6 +1028,18 @@ func TestVectorPartitionOfflineAuxiliaryConstructionVariantsV1(t *testing.T) {
 		if err != nil {
 			t.Fatalf("variant=%s exact open err=%v", test.variant, err)
 		}
+		if test.variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
+			canonicalSearcher, err := col.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(t.Context(), def.Name, m, canonical[0], VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, gotErr := exact.PackIdentityNeutralSHA256ForOfflineV1()
+			want, wantErr := canonicalSearcher.PackIdentityNeutralSHA256ForOfflineV1()
+			closeErr := canonicalSearcher.Close()
+			if gotErr != nil || wantErr != nil || closeErr != nil || got != want || assets[0].Checksum == canonical[0].Checksum {
+				t.Fatalf("identity-neutral control got=%q want=%q errors=%v/%v/%v asset_checksums=%q/%q", got, want, gotErr, wantErr, closeErr, assets[0].Checksum, canonical[0].Checksum)
+			}
+		}
 		if err := exact.Close(); err != nil {
 			t.Fatal(err)
 		}
