@@ -19,9 +19,9 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	ordinals[2], ordinals[17] = ordinals[17], ordinals[2]
 	ordinals[3], ordinals[300] = ordinals[300], ordinals[3]
 	ordinals[4], ordinals[5000] = ordinals[5000], ordinals[4]
-	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{TraceMode: "detailed", NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, PruneKeeps: 1, CompactLifecycle: collections.VectorPartitionConstructionCompactLifecycleV1{PruneKeep: [5]uint64{0, 0, 1, 0, 0}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
+	evidence := collections.VectorPartitionConstructionEvidenceV1{Schema: collections.VectorPartitionConstructionEvidenceSchemaV1, Variant: "native", ManifestChecksum: digest, IndexDefinitionDigest: digest, Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{TraceMode: "detailed", NativeInsertionOrdinals: ordinals, Selections: []collections.VectorPartitionConstructionSelectionV1{{Selected: 2, DiversitySelected: 1, BackfillSelected: 1}}, PruneKeeps: 1, CompactLifecycle: collections.VectorPartitionConstructionCompactLifecycleV1{PruneKeep: [6]uint64{0, 0, 1, 0, 0, 0}}, Events: []collections.VectorPartitionConstructionEdgeEventV1{{From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "initial_add"}, {From: 2, To: 1, InsertionOrdinal: 17, Origin: "reciprocal_add", Action: "reciprocal_add"}, {From: 4, To: 3, InsertionOrdinal: 5000, Origin: "reciprocal_add", Action: "reciprocal_prune_drop"}, {From: 1, To: 0, InsertionOrdinal: 1, Origin: "diversity_selected", Action: "final_survivor"}}}}}
 	totals, err := localHNSWAttributionConstructionReduceV1(evidence)
-	if err != nil || totals.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [5]uint64{1, 0, 0, 0, 0} || totals.ReciprocalAddByOrigin != [5]uint64{0, 0, 1, 0, 0} || totals.InitialAddAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.InitialAddDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.ReciprocalAddAgeByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.ReciprocalAddDeltaByOrigin != [5][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}} || totals.PruneDropAgeByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.PruneDropDeltaByOrigin != [5][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}} || totals.FinalAgeByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} || totals.FinalDeltaByOrigin != [5][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}} {
+	if err != nil || totals.OriginOrder != localHNSWAttributionConstructionOriginOrderV1 || totals.DiversitySelected != 1 || totals.BackfillSelected != 1 || totals.InitialAdded != 1 || totals.ReciprocalAdded != 1 || totals.PruneKept != 1 || totals.PruneDropped != 1 || totals.FinalSurvivors != 1 || totals.InitialAddByOrigin != [6]uint64{1, 0, 0, 0, 0, 0} || totals.ReciprocalAddByOrigin != [6]uint64{0, 0, 1, 0, 0, 0} || totals.InitialAddAgeByOrigin != [6][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}, {}} || totals.InitialAddDeltaByOrigin != [6][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}, {}} || totals.ReciprocalAddAgeByOrigin != [6][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}, {}} || totals.ReciprocalAddDeltaByOrigin != [6][4]uint64{{}, {}, {0, 1, 0, 0}, {}, {}, {}} || totals.PruneDropAgeByOrigin != [6][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}, {}} || totals.PruneDropDeltaByOrigin != [6][4]uint64{{}, {}, {0, 0, 0, 1}, {}, {}, {}} || totals.FinalAgeByOrigin != [6][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}, {}} || totals.FinalDeltaByOrigin != [6][4]uint64{{1, 0, 0, 0}, {}, {}, {}, {}, {}} {
 		t.Fatalf("totals=%+v err=%v", totals, err)
 	}
 	evidence.Partitions[0].Events[0].Action = "wrong"
@@ -66,6 +66,37 @@ func TestLocalHNSWAttributionConstructionReducerAndHardMissSamplingV1(t *testing
 	tiedSecond := localHNSWAttributionHardMissesV1(append([]localHNSWAttributionHardMissV1(nil), tied...))
 	if !reflect.DeepEqual(tiedFirst, tiedSecond) || tiedFirst[0].Variant != "native" || tiedFirst[0].QueryOrdinal != 3 || tiedFirst[1].QueryOrdinal != 7 || tiedFirst[2].Variant != "overlay_current" {
 		t.Fatalf("rank ties do not have a total deterministic order: %+v", tiedFirst)
+	}
+}
+
+func TestLocalHNSWAttributionConstructionReducerQualityPostfillOriginV1(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	evidence := collections.VectorPartitionConstructionEvidenceV1{
+		Schema:                collections.VectorPartitionConstructionEvidenceSchemaV1,
+		Variant:               string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1),
+		ManifestChecksum:      digest,
+		IndexDefinitionDigest: digest,
+		Partitions: []collections.VectorPartitionConstructionPartitionEvidenceV1{{
+			TraceMode:               "detailed",
+			NativeInsertionOrdinals: []int{0, 1},
+			CompactLifecycle:        collections.VectorPartitionConstructionCompactLifecycleV1{QualityPostfillAdd: [6]uint64{0, 0, 0, 0, 0, 1}},
+			PostfillEdges:           1,
+			Events: []collections.VectorPartitionConstructionEdgeEventV1{
+				{From: 1, To: 0, InsertionOrdinal: 1, Origin: "quality_postfill", Action: "quality_postfill_add"},
+				{From: 1, To: 0, InsertionOrdinal: 1, Origin: "quality_postfill", Action: "final_survivor"},
+			},
+		}},
+	}
+	totals, err := localHNSWAttributionConstructionReduceV1(evidence)
+	if err != nil || totals.QualityPostfillAdded != 1 || totals.VariantRewriteAdded != 0 || totals.FinalQualityPostfill != 1 || totals.QualityPostfillAddByOrigin != [6]uint64{0, 0, 0, 0, 0, 1} {
+		t.Fatalf("quality postfill origin reduction totals=%+v err=%v", totals, err)
+	}
+	bad := evidence
+	bad.Partitions = append([]collections.VectorPartitionConstructionPartitionEvidenceV1(nil), evidence.Partitions...)
+	bad.Partitions[0].Events = append([]collections.VectorPartitionConstructionEdgeEventV1(nil), evidence.Partitions[0].Events...)
+	bad.Partitions[0].Events[0].Origin = "nearest_backfill"
+	if _, err := localHNSWAttributionConstructionReduceV1(bad); err == nil {
+		t.Fatal("postfill action with nearest-backfill origin accepted")
 	}
 }
 

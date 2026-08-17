@@ -1,7 +1,8 @@
 package main
 
 // local-hnsw-fixed-budget-screen is an offline-only, calibration-only screen
-// for the four #4172 layer-0 selection coordinates. It neither publishes an
+// for the four #4172 selection coordinates plus one exact-budget, final-stage
+// least-redundant separation postfill follow-up. It neither publishes an
 // asset nor changes a serving default. The caller must explicitly invoke it;
 // tests only exercise its contract and reducer helpers.
 
@@ -20,7 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-const localHNSWFixedBudgetScreenSchemaV1 = "treedb_local_hnsw_fixed_budget_screen_v1"
+const localHNSWFixedBudgetScreenSchemaV1 = "treedb_local_hnsw_fixed_budget_screen_v2"
 
 func localHNSWFixedBudgetConstructionVariantV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
 	for _, arm := range localHNSWFixedBudgetScreenArmsV1 {
@@ -41,6 +42,7 @@ var localHNSWFixedBudgetScreenArmsV1 = []localHNSWFixedBudgetScreenArmV1{
 	{"m_backfill_on", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0InitialMBackfillOnV1},
 	{"2m_backfill_off", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1},
 	{"2m_backfill_on", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1},
+	{"2m_least_redundant_separation_postfill", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1},
 }
 
 type localHNSWFixedBudgetScreenArmResultV1 struct {
@@ -51,6 +53,20 @@ type localHNSWFixedBudgetScreenArmResultV1 struct {
 	SelectedNeighborhood []localHNSWFixedBudgetPackNeighborhoodV1 `json:"selected_pack_neighborhood"`
 	Cells                []localHNSWFixedBudgetScreenCellV1       `json:"cells"`
 	Control              []localHNSWFixedBudgetControlPackV1      `json:"canonical_m18_control,omitempty"`
+	PostfillBudget       []localHNSWFixedBudgetPostfillBudgetV1   `json:"least_redundant_separation_postfill_budget,omitempty"`
+}
+
+// PostfillBudget records the exact L0 capacity and encoded-byte budget of the
+// one postfill follow-up arm. It is not a byte-identity claim: the candidate
+// graph deliberately differs from canonical M18, while its encoded capacity
+// must be identical.
+type localHNSWFixedBudgetPostfillBudgetV1 struct {
+	Partition         uint32 `json:"partition"`
+	Rows              uint64 `json:"rows"`
+	Layer0Edges       uint64 `json:"layer0_edges"`
+	TargetLayer0Edges uint64 `json:"target_layer0_edges"`
+	CandidateBytes    uint64 `json:"candidate_bytes"`
+	CanonicalBytes    uint64 `json:"canonical_m18_bytes"`
 }
 type localHNSWFixedBudgetDiagnosticV1 struct {
 	Partition   uint32                                       `json:"partition"`
@@ -163,13 +179,26 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				}
 			}
 		}
-		if i < len(report.Arms)-1 && len(arm.Control) != 0 || i == len(report.Arms)-1 && len(arm.Control) != len(report.VariantPacks) {
+		isControl := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1
+		if !isControl && len(arm.Control) != 0 || isControl && len(arm.Control) != len(report.VariantPacks) {
 			return errors.New("invalid fixed-budget screen control")
 		}
-		if i == len(report.Arms)-1 {
+		if isControl {
 			for j, control := range arm.Control {
 				if control.Partition != report.VariantPacks[j] || !localHNSWAttributionSHA256V1(control.CandidateChecksum) || !localHNSWAttributionSHA256V1(control.CanonicalChecksum) || !localHNSWAttributionSHA256V1(control.CandidateGraphSHA256) || control.CandidateGraphSHA256 != control.CanonicalGraphSHA256 || control.CandidateBytes == 0 || control.CandidateBytes != control.CanonicalBytes {
 					return errors.New("fixed-budget 2M/on control mismatch")
+				}
+			}
+		}
+		isPostfill := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
+		if !isPostfill && len(arm.PostfillBudget) != 0 || isPostfill && len(arm.PostfillBudget) != len(report.VariantPacks) {
+			return errors.New("invalid fixed-budget postfill budget")
+		}
+		if isPostfill {
+			for j, budget := range arm.PostfillBudget {
+				diagnostic := arm.SelectedDiagnostics[j].Diagnostics
+				if budget.Partition != report.VariantPacks[j] || budget.Rows != diagnostic.Rows || len(diagnostic.EdgesByLayer) == 0 || budget.Layer0Edges != diagnostic.EdgesByLayer[0] || budget.Rows != 7500 || budget.TargetLayer0Edges != 270000 || budget.Layer0Edges != budget.TargetLayer0Edges || budget.CandidateBytes == 0 || budget.CandidateBytes != budget.CanonicalBytes {
+					return errors.New("fixed-budget least-redundant separation postfill budget mismatch")
 				}
 			}
 		}
@@ -274,6 +303,9 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		if err == nil {
 			out[i].SelectedNeighborhood, err = localHNSWFixedBudgetScreenSelectedNeighborhoodV1(h, diagnostics, vectors)
 		}
+		if err == nil && arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+			out[i].PostfillBudget, err = localHNSWFixedBudgetScreenPostfillBudgetV1(source, h, diagnostics)
+		}
 		if err == nil {
 			out[i].Cells, err = localHNSWFixedBudgetScreenCellsV1(ctx, source, h, calibration)
 		}
@@ -290,7 +322,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		for _, asset := range h.packAssets {
 			out[i].Build.PackBytes += asset.Bytes
 		}
-		if i == len(localHNSWFixedBudgetScreenArmsV1)-1 {
+		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
 			out[i].Control, err = localHNSWFixedBudgetScreenControlV1(source, h)
 			if err != nil {
 				_ = h.Close()
@@ -300,6 +332,29 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		if err := h.Close(); err != nil {
 			return nil, err
 		}
+	}
+	return out, nil
+}
+
+func localHNSWFixedBudgetScreenPostfillBudgetV1(source *m8ProductionMultiGroupAssetsV1, h *localHNSWVariantHarnessV1, diagnostics []collections.VectorPartitionPackDiagnosticsV1) ([]localHNSWFixedBudgetPostfillBudgetV1, error) {
+	if source == nil || h == nil || len(h.packAssets) != len(localHNSWM18EdgeDiagnosisPacksV1) || len(diagnostics) != len(h.packAssets) {
+		return nil, errors.New("invalid fixed-budget postfill inputs")
+	}
+	canonical := make(map[uint32]collections.VectorPartitionAssetV1, len(source.manifest.Assets))
+	for _, asset := range source.manifest.Assets {
+		canonical[asset.PartitionID] = asset
+	}
+	out := make([]localHNSWFixedBudgetPostfillBudgetV1, len(h.packAssets))
+	for i, asset := range h.packAssets {
+		control, ok := canonical[asset.PartitionID]
+		if !ok || control.Bytes == 0 || diagnostics[i].Rows == 0 || len(diagnostics[i].EdgesByLayer) == 0 {
+			return nil, errors.New("missing fixed-budget postfill canonical budget")
+		}
+		target := uint64(270000)
+		if diagnostics[i].Rows != 7500 || diagnostics[i].EdgesByLayer[0] != target || asset.Bytes != control.Bytes {
+			return nil, errors.New("fixed-budget postfill encoded capacity mismatch")
+		}
+		out[i] = localHNSWFixedBudgetPostfillBudgetV1{Partition: asset.PartitionID, Rows: diagnostics[i].Rows, Layer0Edges: diagnostics[i].EdgesByLayer[0], TargetLayer0Edges: target, CandidateBytes: asset.Bytes, CanonicalBytes: control.Bytes}
 	}
 	return out, nil
 }

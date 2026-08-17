@@ -61,17 +61,23 @@ type VectorPartitionConstructionFinalOriginV1 struct {
 // VectorPartitionConstructionCompactLifecycleV1 is the count-only history
 // for non-selected M18 partitions. Origin order is the evidence origin_order.
 type VectorPartitionConstructionCompactLifecycleV1 struct {
-	InitialAdd    [5]uint64 `json:"initial_add"`
-	ReciprocalAdd [5]uint64 `json:"reciprocal_add"`
-	PruneKeep     [5]uint64 `json:"reciprocal_prune_keep"`
-	PruneDrop     [5]uint64 `json:"reciprocal_prune_drop"`
-	VariantAdd    [5]uint64 `json:"variant_add"`
-	VariantDrop   [5]uint64 `json:"variant_drop"`
+	InitialAdd    [6]uint64 `json:"initial_add"`
+	ReciprocalAdd [6]uint64 `json:"reciprocal_add"`
+	PruneKeep     [6]uint64 `json:"reciprocal_prune_keep"`
+	PruneDrop     [6]uint64 `json:"reciprocal_prune_drop"`
+	VariantAdd    [6]uint64 `json:"variant_add"`
+	VariantDrop   [6]uint64 `json:"variant_drop"`
 	// QualityPostfillAdd is a final-stage, offline-only fill of unused L0
 	// capacity from rejected diverse candidates. It is distinct from ordinary
 	// construction-time nearest backfill even though both retain its origin.
-	QualityPostfillAdd [5]uint64 `json:"quality_postfill_add"`
+	QualityPostfillAdd [6]uint64 `json:"quality_postfill_add"`
 }
+
+// VectorPartitionConstructionEvidenceSchemaV1 identifies the current
+// construction-evidence wire shape.  The v2 value adds quality_postfill as a
+// sixth origin; evidence is offline-only and intentionally fails closed on an
+// older shape.
+const VectorPartitionConstructionEvidenceSchemaV1 = "treedb_vector_partition_construction_evidence_v2"
 
 func vectorPartitionConstructionDetailedTraceV1(variant VectorPartitionLocalGraphVariantV1, partition uint32) bool {
 	switch variant {
@@ -117,7 +123,7 @@ type VectorPartitionConstructionEdgeEventV1 struct {
 
 func vectorPartitionConstructionOriginValidV1(origin string) bool {
 	switch origin {
-	case "diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite":
+	case "diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "quality_postfill":
 		return true
 	default:
 		return false
@@ -819,12 +825,6 @@ func buildVectorPartitionLocalGraphAdjacencyVariantWithConstructionTraceV1(rows 
 	if configured, ok := vectorPartitionLocalGraphVariantLayer0ConstructionPolicyV1(variant); ok {
 		policy = &configured
 	}
-	// Final quality postfill needs the rejected construction pool and live edge
-	// origins even when the caller did not request exported evidence. This is an
-	// offline-only variant; ordinary materialization still passes nil unchanged.
-	if trace == nil && policy != nil && policy.qualityPostfill {
-		trace = &vectorIndexConstructionTraceV1{}
-	}
 	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows, def, trace, false, policy); err != nil {
 		return vectorPartitionLocalAuxiliaryNavigationV1{}, err
 	}
@@ -1431,7 +1431,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsVariantV1(index 
 // offline diagnostic sibling of the normal materializer. Pack bytes are
 // identical; only the temporary builder receives the nullable trace sink.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstructionEvidenceV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, VectorPartitionConstructionEvidenceV1, error) {
-	evidence := VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
+	evidence := VectorPartitionConstructionEvidenceV1{Schema: VectorPartitionConstructionEvidenceSchemaV1, Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
 	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, false)
 	return assets, resources, evidence, err
 }
@@ -1441,7 +1441,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithConstruction
 // retain detailed lifecycle events; all other packs retain count-only history
 // and a live final-origin map. Search-pack bytes are unchanged.
 func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithBoundedConstructionEvidenceV1(index string, manifest VectorPartitionManifestV1, fileID uint32, inputs []VectorPartitionSearchAssetV1, variant VectorPartitionLocalGraphVariantV1) ([]VectorPartitionAssetV1, *rootpublication.StableResourceSet, VectorPartitionConstructionEvidenceV1, error) {
-	evidence := VectorPartitionConstructionEvidenceV1{Schema: "treedb_vector_partition_construction_evidence_v1", Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
+	evidence := VectorPartitionConstructionEvidenceV1{Schema: VectorPartitionConstructionEvidenceSchemaV1, Variant: string(variant), ManifestChecksum: manifest.IntegrityDigest, IndexDefinitionDigest: manifest.IndexDefinitionDigest}
 	assets, resources, err := c.materializeVectorPartitionLocalSearchAssetsVariantV1(index, manifest, fileID, inputs, vectorPartitionSearchAssetMaxBytesV1, variant, &evidence, true)
 	return assets, resources, evidence, err
 }
@@ -1450,7 +1450,7 @@ func (c *Collection) MaterializeVectorPartitionLocalSearchAssetsWithBoundedConst
 // trace binds the supplied immutable assets and its final survivors are their
 // exact native packed adjacency.
 func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx context.Context, index string, manifest VectorPartitionManifestV1, assets []VectorPartitionAssetV1, evidence VectorPartitionConstructionEvidenceV1) error {
-	if c == nil || evidence.Schema != "treedb_vector_partition_construction_evidence_v1" || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) == 0 || len(assets) != len(evidence.Partitions) {
+	if c == nil || evidence.Schema != VectorPartitionConstructionEvidenceSchemaV1 || evidence.ManifestChecksum != manifest.IntegrityDigest || evidence.IndexDefinitionDigest != manifest.IndexDefinitionDigest || len(assets) == 0 || len(assets) != len(evidence.Partitions) {
 		return fmt.Errorf("%w: construction evidence envelope assets=%d partitions=%d schema=%q", ErrVectorPartitionSearchUnavailable, len(assets), len(evidence.Partitions), evidence.Schema)
 	}
 	variant := VectorPartitionLocalGraphVariantV1(evidence.Variant)
@@ -1705,7 +1705,7 @@ func (c *Collection) ValidateVectorPartitionLocalConstructionEvidenceV1(ctx cont
 				}
 				live[key] = event.Origin
 			case "quality_postfill_add":
-				if event.Origin != "nearest_backfill" {
+				if event.Origin != "quality_postfill" {
 					searcher.Close()
 					return ErrVectorPartitionSearchUnavailable
 				}
@@ -1777,21 +1777,24 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	if len(part.Events) != 0 || len(part.FinalOrigins) == 0 || part.TraceMode != "compact" || pack == nil {
 		return fmt.Errorf("%w: compact trace shape events=%d finals=%d mode=%q pack=%t", ErrVectorPartitionSearchUnavailable, len(part.Events), len(part.FinalOrigins), part.TraceMode, pack != nil)
 	}
-	var initial [5]uint64
+	var initial [6]uint64
 	for _, counts := range selections {
 		initial[0] += uint64(counts[0])
 		initial[1] += uint64(counts[1])
 	}
 	pruneKeeps, ok := vectorPartitionConstructionOriginCountsSumV1(part.CompactLifecycle.PruneKeep)
-	if !ok || part.CompactLifecycle.InitialAdd != initial || part.CompactLifecycle.InitialAdd[2] != 0 || part.CompactLifecycle.InitialAdd[3] != 0 || part.CompactLifecycle.InitialAdd[4] != 0 || part.CompactLifecycle.ReciprocalAdd[0] != 0 || part.CompactLifecycle.ReciprocalAdd[1] != 0 || part.CompactLifecycle.ReciprocalAdd[3] != 0 || part.CompactLifecycle.ReciprocalAdd[4] != 0 || part.PruneKeeps != pruneKeeps {
+	if !ok || part.CompactLifecycle.InitialAdd != initial || part.CompactLifecycle.InitialAdd[2] != 0 || part.CompactLifecycle.InitialAdd[3] != 0 || part.CompactLifecycle.InitialAdd[4] != 0 || part.CompactLifecycle.InitialAdd[5] != 0 || part.CompactLifecycle.ReciprocalAdd[0] != 0 || part.CompactLifecycle.ReciprocalAdd[1] != 0 || part.CompactLifecycle.ReciprocalAdd[3] != 0 || part.CompactLifecycle.ReciprocalAdd[4] != 0 || part.CompactLifecycle.ReciprocalAdd[5] != 0 || part.PruneKeeps != pruneKeeps {
 		return fmt.Errorf("%w: compact lifecycle initial=%v expected=%v reciprocal=%v prune_keeps=%d expected=%d", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.InitialAdd, initial, part.CompactLifecycle.ReciprocalAdd, part.PruneKeeps, pruneKeeps)
 	}
 	postfill, postfillOK := vectorPartitionConstructionOriginCountsSumV1(part.CompactLifecycle.QualityPostfillAdd)
-	if !postfillOK || (variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && (part.PostfillEdges != 0 || postfill != 0)) || (variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && (part.CompactLifecycle.QualityPostfillAdd[0] != 0 || part.CompactLifecycle.QualityPostfillAdd[2] != 0 || part.CompactLifecycle.QualityPostfillAdd[3] != 0 || part.CompactLifecycle.QualityPostfillAdd[4] != 0 || postfill != part.PostfillEdges)) {
+	if !postfillOK || (variant != VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && (part.PostfillEdges != 0 || postfill != 0)) || (variant == VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 && (part.CompactLifecycle.QualityPostfillAdd[0] != 0 || part.CompactLifecycle.QualityPostfillAdd[1] != 0 || part.CompactLifecycle.QualityPostfillAdd[2] != 0 || part.CompactLifecycle.QualityPostfillAdd[3] != 0 || part.CompactLifecycle.QualityPostfillAdd[4] != 0 || part.CompactLifecycle.QualityPostfillAdd[5] != part.PostfillEdges)) {
 		return fmt.Errorf("%w: compact quality postfill variant=%q edges=%d lifecycle=%v", ErrVectorPartitionSearchUnavailable, variant, part.PostfillEdges, part.CompactLifecycle.QualityPostfillAdd)
 	}
 	if part.CompactLifecycle.VariantAdd[0] != 0 || part.CompactLifecycle.VariantAdd[1] != 0 || part.CompactLifecycle.VariantAdd[2] != 0 {
 		return fmt.Errorf("%w: compact variant adds have native origins %v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.VariantAdd)
+	}
+	if part.CompactLifecycle.PruneKeep[3] != 0 || part.CompactLifecycle.PruneKeep[4] != 0 || part.CompactLifecycle.PruneKeep[5] != 0 || part.CompactLifecycle.PruneDrop[3] != 0 || part.CompactLifecycle.PruneDrop[4] != 0 || part.CompactLifecycle.PruneDrop[5] != 0 || part.CompactLifecycle.VariantAdd[5] != 0 || part.CompactLifecycle.VariantDrop[5] != 0 {
+		return fmt.Errorf("%w: compact lifecycle invalid quality origin prune_keep=%v prune_drop=%v variant_add=%v variant_drop=%v", ErrVectorPartitionSearchUnavailable, part.CompactLifecycle.PruneKeep, part.CompactLifecycle.PruneDrop, part.CompactLifecycle.VariantAdd, part.CompactLifecycle.VariantDrop)
 	}
 	if variant == VectorPartitionLocalGraphVariantOverlayCurrentV1 {
 		if part.CompactLifecycle.VariantAdd[3] != 0 || part.CompactLifecycle.VariantDrop[3] != 0 || part.CompactLifecycle.VariantDrop[4] != 0 {
@@ -1811,7 +1814,7 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 			}
 		}
 	}
-	finalCounts := [5]uint64{}
+	finalCounts := [6]uint64{}
 	seen := make(map[vectorIndexConstructionEdgeKeyV1]struct{}, len(part.FinalOrigins))
 	var previous vectorIndexConstructionEdgeKeyV1
 	for i, final := range part.FinalOrigins {
@@ -1855,7 +1858,7 @@ func vectorPartitionConstructionValidateCompactPartitionV1(part VectorPartitionC
 	return nil
 }
 
-func vectorPartitionConstructionOriginCountsSumV1(counts [5]uint64) (uint64, bool) {
+func vectorPartitionConstructionOriginCountsSumV1(counts [6]uint64) (uint64, bool) {
 	var total uint64
 	for _, count := range counts {
 		var ok bool

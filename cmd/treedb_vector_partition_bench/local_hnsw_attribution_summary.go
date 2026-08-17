@@ -296,7 +296,7 @@ func localHNSWAttributionQueryUtilityAddV1(dst *localHNSWAttributionQueryUtility
 			return err
 		}
 	}
-	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
+	for _, pair := range [][2]*localHNSWAttributionQueryOriginUtilityV1{{&dst.Diversity, &value.Diversity}, {&dst.Backfill, &value.Backfill}, {&dst.Reciprocal, &value.Reciprocal}, {&dst.Repair, &value.Repair}, {&dst.Overlay, &value.Overlay}, {&dst.QualityPostfill, &value.QualityPostfill}, {&dst.Auxiliary, &value.Auxiliary}, {&dst.Unattributed, &value.Unattributed}} {
 		if err := localHNSWAttributionQueryOriginUtilityAddV1(pair[0], *pair[1]); err != nil {
 			return err
 		}

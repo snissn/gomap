@@ -618,7 +618,7 @@ func localHNSWAttributionQueryRecordValidateV1(record localHNSWAttributionQueryS
 		counts[recovery.Origin]++
 		previous = recovery.ID
 	}
-	for _, origin := range []string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "auxiliary", "unattributed"} {
+	for _, origin := range []string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "quality_postfill", "auxiliary", "unattributed"} {
 		bucket, _ := localHNSWAttributionTruthRecoveryBucketV1(&record.Utility, origin)
 		if *bucket != counts[origin] {
 			return nil, errors.New("local HNSW truth recovery origin count mismatch")
@@ -740,7 +740,7 @@ func localHNSWAttributionVisitedOrdinalsSHA256V1(ordinals []uint32) string {
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
-	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.Auxiliary, value.Unattributed}
+	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.QualityPostfill, value.Auxiliary, value.Unattributed}
 	for i, origin := range origins {
 		if origin.Scored > origin.Examined || origin.NewlyVisited > origin.Scored || origin.TopAdmissions != origin.FrontierAdmissions || origin.TopAdmissions > origin.Scored || origin.StateImprovements > origin.Scored {
 			return false

@@ -63,7 +63,7 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	if m18Evidence.Variant != string(collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256V1) || m18Evidence.VariantIdentity == "" || len(m18.constructionEvidence.Partitions) != 4 {
 		t.Fatalf("M18 construction evidence=%+v trace=%+v", m18Evidence, m18.constructionEvidence)
 	}
-	if m18.constructionEvidence.Partitions[0].TraceMode != "detailed" || m18.constructionEvidence.Partitions[2].TraceMode != "compact" || len(m18.constructionEvidence.Partitions[2].Events) != 0 || len(m18.constructionEvidence.Partitions[2].FinalOrigins) == 0 || m18.constructionEvidence.Partitions[2].PruneKeeps != m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[0]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[1]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[2]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[3]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[4] {
+	if m18.constructionEvidence.Partitions[0].TraceMode != "detailed" || m18.constructionEvidence.Partitions[2].TraceMode != "compact" || len(m18.constructionEvidence.Partitions[2].Events) != 0 || len(m18.constructionEvidence.Partitions[2].FinalOrigins) == 0 || m18.constructionEvidence.Partitions[2].PruneKeeps != m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[0]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[1]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[2]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[3]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[4]+m18.constructionEvidence.Partitions[2].CompactLifecycle.PruneKeep[5] {
 		t.Fatalf("unexpected bounded M18 evidence: detailed=%+v compact=%+v", m18.constructionEvidence.Partitions[0], m18.constructionEvidence.Partitions[2])
 	}
 	m18Construction, err := localHNSWAttributionConstructionReduceV1(m18.constructionEvidence)
@@ -180,7 +180,7 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	detailedHarness := *compactHarness
 	detailedHarness.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{detailedPart}
 	detailedOracle, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&detailedHarness, []collections.VectorPartitionPackDiagnosticsV1{m18Diagnostics[2]}, m18Vectors)
-	if err != nil || !reflect.DeepEqual(compactOracle, detailedOracle) || compactOracle.FinalEdgesByOrigin == [5]uint64{} {
+	if err != nil || !reflect.DeepEqual(compactOracle, detailedOracle) || compactOracle.FinalEdgesByOrigin == [6]uint64{} {
 		t.Fatalf("compact final origins differ from detailed events: compact=%+v detailed=%+v err=%v", compactOracle, detailedOracle, err)
 	}
 	bad := harness.constructionEvidence.Partitions[0].Selections[0]

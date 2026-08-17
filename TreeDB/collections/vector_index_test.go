@@ -646,7 +646,7 @@ func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.
 	}
 	traced := &vectorIndexConstructionTraceV1{detailed: true}
 	withTrace, withoutTrace := build(traced), build(nil)
-	if traced.postfillEdges == 0 || traced.compactLifecycle.QualityPostfillAdd[1] != traced.postfillEdges {
+	if traced.postfillEdges == 0 || traced.compactLifecycle.QualityPostfillAdd[5] != traced.postfillEdges {
 		t.Fatalf("quality postfill provenance=%d lifecycle=%+v", traced.postfillEdges, traced.compactLifecycle)
 	}
 	for node := range withTrace.nodes {

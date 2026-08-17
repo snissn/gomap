@@ -47,7 +47,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Build = localHNSWAttributionBuildEvidenceV1{Variant: string(arm.Variant), VariantIdentity: identity, FileID: 4172000 + uint32(i), Partitions: 5, PackBytes: 1}
 		report.Arms[i].SelectedDiagnostics = make([]localHNSWFixedBudgetDiagnosticV1, len(report.VariantPacks))
 		for j := range report.Arms[i].SelectedDiagnostics {
-			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 1}}
+			report.Arms[i].SelectedDiagnostics[j] = localHNSWFixedBudgetDiagnosticV1{Partition: report.VariantPacks[j], Diagnostics: collections.VectorPartitionPackDiagnosticsV1{Rows: 7500, EdgesByLayer: []uint64{270000}}}
 		}
 		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
@@ -73,10 +73,16 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			}
 			report.Arms[i].Cells[j] = localHNSWFixedBudgetScreenCellV1{EFSearch: ef, QueryPackOpportunities: uint64(len(packs)), Work: localHNSWAttributionQueryWorkV1{Candidates: uint64(len(packs))}, PerPack: packs}
 		}
-		if i == len(report.Arms)-1 {
+		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1 {
 			report.Arms[i].Control = make([]localHNSWFixedBudgetControlPackV1, len(report.VariantPacks))
 			for j := range report.Arms[i].Control {
 				report.Arms[i].Control[j] = localHNSWFixedBudgetControlPackV1{Partition: report.VariantPacks[j], CandidateChecksum: localHNSWM18GraphSHA256V1, CanonicalChecksum: localHNSWM18GraphSHA256V1, CandidateGraphSHA256: localHNSWM18GraphSHA256V1, CanonicalGraphSHA256: localHNSWM18GraphSHA256V1, CandidateBytes: 1, CanonicalBytes: 1}
+			}
+		}
+		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+			report.Arms[i].PostfillBudget = make([]localHNSWFixedBudgetPostfillBudgetV1, len(report.VariantPacks))
+			for j := range report.Arms[i].PostfillBudget {
+				report.Arms[i].PostfillBudget[j] = localHNSWFixedBudgetPostfillBudgetV1{Partition: report.VariantPacks[j], Rows: 7500, Layer0Edges: 270000, TargetLayer0Edges: 270000, CandidateBytes: 1, CanonicalBytes: 1}
 			}
 		}
 	}
@@ -108,15 +114,35 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 
 	reorderedControl := localHNSWFixedBudgetScreenCloneV1(t, report)
-	last := len(reorderedControl.Arms) - 1
-	reorderedControl.Arms[last].Control[0], reorderedControl.Arms[last].Control[1] = reorderedControl.Arms[last].Control[1], reorderedControl.Arms[last].Control[0]
+	control := 3
+	reorderedControl.Arms[control].Control[0], reorderedControl.Arms[control].Control[1] = reorderedControl.Arms[control].Control[1], reorderedControl.Arms[control].Control[0]
 	if err := localHNSWFixedBudgetScreenContractV1(reorderedControl); err == nil {
 		t.Fatal("reordered M18 control accepted")
 	}
 	tamperedControl := localHNSWFixedBudgetScreenCloneV1(t, report)
-	tamperedControl.Arms[last].Control[0].CandidateGraphSHA256 = localHNSWM18AssignmentSHA256V1
+	tamperedControl.Arms[control].Control[0].CandidateGraphSHA256 = localHNSWM18AssignmentSHA256V1
 	if err := localHNSWFixedBudgetScreenContractV1(tamperedControl); err == nil {
 		t.Fatal("identity-neutral M18 control mismatch accepted")
+	}
+
+	// Candidate membership identity is intentionally domain separated from the
+	// canonical M18 pack. The control binds graph bytes and graph identity, not
+	// the raw pack checksum.
+	domainSeparatedControl := localHNSWFixedBudgetScreenCloneV1(t, report)
+	domainSeparatedControl.Arms[control].Control[0].CandidateChecksum = localHNSWM18AssignmentSHA256V1
+	if err := localHNSWFixedBudgetScreenContractV1(domainSeparatedControl); err != nil {
+		t.Fatalf("domain-separated raw candidate checksum rejected: %v", err)
+	}
+
+	badPostfill := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badPostfill.Arms[len(badPostfill.Arms)-1].PostfillBudget[0].Layer0Edges--
+	if err := localHNSWFixedBudgetScreenContractV1(badPostfill); err == nil {
+		t.Fatal("underfilled least-redundant separation postfill accepted")
+	}
+	wrongPostfillArm := localHNSWFixedBudgetScreenCloneV1(t, report)
+	wrongPostfillArm.Arms[0].PostfillBudget = append([]localHNSWFixedBudgetPostfillBudgetV1(nil), report.Arms[len(report.Arms)-1].PostfillBudget...)
+	if err := localHNSWFixedBudgetScreenContractV1(wrongPostfillArm); err == nil {
+		t.Fatal("postfill budget accepted on a non-postfill arm")
 	}
 
 	reorderedNeighborhood := localHNSWFixedBudgetScreenCloneV1(t, report)

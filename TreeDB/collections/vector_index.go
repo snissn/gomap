@@ -366,6 +366,8 @@ func vectorIndexConstructionOriginIndexV1(origin string) (int, bool) {
 		return 3, true
 	case "overlay_rewrite":
 		return 4, true
+	case "quality_postfill":
+		return 5, true
 	}
 	return 0, false
 }
@@ -2542,11 +2544,12 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 			continue
 		}
 		neighbors := idx.nodes[from].neighbors[0]
-		if len(neighbors) > degreeLimit {
-			return fmt.Errorf("collections: quality postfill degree from=%d degree=%d limit=%d", from, len(neighbors), degreeLimit)
+		target := minInt(degreeLimit, len(idx.nodes)-1)
+		if len(neighbors) > target {
+			return fmt.Errorf("collections: least-redundant separation postfill degree from=%d degree=%d limit=%d", from, len(neighbors), degreeLimit)
 		}
 		pool := idx.qualityPostfillCandidates[from]
-		for len(neighbors) < degreeLimit {
+		for len(neighbors) < target {
 			present := make(map[int]struct{}, len(neighbors))
 			for _, neighbor := range neighbors {
 				present[neighbor.nodeID] = struct{}{}
@@ -2585,17 +2588,20 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 				trace.init()
 				key := vectorIndexConstructionEdgeKeyV1{From: from, To: best, Layer: 0}
 				if _, exists := trace.origins[key]; exists {
-					return fmt.Errorf("collections: quality postfill duplicate edge from=%d to=%d", from, best)
+					return fmt.Errorf("collections: least-redundant separation postfill duplicate edge from=%d to=%d", from, best)
 				}
-				trace.origins[key] = "nearest_backfill"
-				trace.record(from, best, 0, "nearest_backfill", "quality_postfill_add")
+				trace.origins[key] = "quality_postfill"
+				trace.record(from, best, 0, "quality_postfill", "quality_postfill_add")
 				if trace.postfillEdges == ^uint64(0) {
-					return fmt.Errorf("collections: quality postfill overflow")
+					return fmt.Errorf("collections: least-redundant separation postfill overflow")
 				}
 				trace.postfillEdges++
 			}
 		}
 		idx.nodes[from].neighbors[0] = neighbors
+		if len(neighbors) != target {
+			return fmt.Errorf("collections: least-redundant separation postfill insufficient candidates from=%d degree=%d target=%d", from, len(neighbors), target)
+		}
 	}
 	return nil
 }
