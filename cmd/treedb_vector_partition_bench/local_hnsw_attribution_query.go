@@ -769,7 +769,10 @@ func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQuery
 	frontierAdmissions, frontierAdmissionsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.FrontierAdmissions })
 	stateImprovements, stateImprovementsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.StateImprovements })
 	truthRecovered, truthRecoveredOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.TruthRecovered })
-	nativeExamined, nativeExaminedOK := sum(origins[:5], func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
+	// The first six buckets are native final-edge origins. Auxiliary and the
+	// seed-only unattributed bucket follow them. Keep this bound aligned with
+	// localHNSWAttributionConstructionOriginOrderV1.
+	nativeExamined, nativeExaminedOK := sum(origins[:6], func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
 	if math.MaxUint64-value.ExaminedNative < value.ExaminedAuxiliary {
 		return false
 	}

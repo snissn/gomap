@@ -89,6 +89,44 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
 		t.Fatalf("valid screen contract rejected: %v", err)
 	}
+
+	// The fifth arm's final origins are query-visible native edges. Exercise a
+	// real nonzero quality_postfill bucket through the cell contract rather
+	// than relying on an all-zero synthetic utility.
+	qualityUtility := localHNSWAttributionQueryUtilityV1{
+		ExaminedNative:     1,
+		NewlyVisited:       1,
+		Scored:             1,
+		TopAdmissions:      1,
+		FrontierAdmissions: 1,
+		QualityPostfill: localHNSWAttributionQueryOriginUtilityV1{
+			Examined:           1,
+			NewlyVisited:       1,
+			Scored:             1,
+			TopAdmissions:      1,
+			FrontierAdmissions: 1,
+		},
+	}
+	qualityArm := len(report.Arms) - 1
+	for i := range report.Arms[qualityArm].Cells {
+		cell := &report.Arms[qualityArm].Cells[i]
+		var aggregate localHNSWAttributionQueryWorkV1
+		for j := range cell.PerPack {
+			cell.PerPack[j].Work = localHNSWAttributionQueryWorkV1{Candidates: 1, Edges: 1, FrontierAdmissions: 1, Utility: qualityUtility}
+			if err := localHNSWM18EdgeDiagnosisWorkAddV1(&aggregate, 1, 1, 1, qualityUtility); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cell.Work = aggregate
+	}
+	if err := localHNSWFixedBudgetScreenContractV1(report); err != nil {
+		t.Fatalf("quality-postfill cell rejected: %v", err)
+	}
+	badQualityUtility := localHNSWFixedBudgetScreenCloneV1(t, report)
+	badQualityUtility.Arms[qualityArm].Cells[0].PerPack[0].Work.Utility.QualityPostfill.Examined--
+	if err := localHNSWFixedBudgetScreenContractV1(badQualityUtility); err == nil {
+		t.Fatal("tampered quality-postfill utility accepted")
+	}
 	wrongEF := localHNSWFixedBudgetScreenCloneV1(t, report)
 	wrongEF.Arms[0].Cells[0].EFSearch = 64
 	if err := localHNSWFixedBudgetScreenContractV1(wrongEF); err == nil {

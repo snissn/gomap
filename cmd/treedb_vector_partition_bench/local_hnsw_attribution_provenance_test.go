@@ -117,6 +117,40 @@ func TestLocalHNSWAttributionQueryUtilityReducerV1(t *testing.T) {
 	}
 }
 
+func TestLocalHNSWAttributionQueryUtilityReducerCreditsQualityPostfillV1(t *testing.T) {
+	trace := collections.VectorPartitionSearchAttributionV1{
+		Schema:                localHNSWAttributionSearchSchemaV1,
+		FrontierAdmissions:    1,
+		VisitedRows:           1,
+		VisitedOrdinalsSHA256: strings.Repeat("a", 64),
+		VisitedOrdinals:       []uint32{1},
+		TerminationReason:     "distance_bound",
+		EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{{
+			Layer:              0,
+			SourceOrdinal:      0,
+			DestinationOrdinal: 1,
+			NewlyVisited:       true,
+			Scored:             true,
+			TopAdmission:       true,
+			FrontierAdmission:  true,
+		}},
+	}
+	origins := map[localHNSWAttributionFinalEdgeKeyV1]string{{From: 0, To: 1, Layer: 0}: "quality_postfill"}
+	utility, err := localHNSWAttributionQueryUtilityReduceV1(collections.VectorPartitionSearchMetricsV1{Candidates: 1, Edges: 1}, trace, origins, []string{"source", "quality-truth"}, map[string]struct{}{"quality-truth": {}})
+	if err != nil || utility.QualityPostfill.Examined != 1 || utility.QualityPostfill.TruthRecovered != 1 || !localHNSWAttributionQueryUtilityConservedV1(utility, 1) {
+		t.Fatalf("quality-postfill utility=%+v err=%v", utility, err)
+	}
+	var work localHNSWAttributionQueryWorkV1
+	if err := localHNSWM18EdgeDiagnosisWorkAddV1(&work, 1, 1, 1, utility); err != nil || work.Utility.QualityPostfill != utility.QualityPostfill || !localHNSWAttributionQueryUtilityConservedV1(work.Utility, work.Edges) {
+		t.Fatalf("quality-postfill merged work=%+v err=%v", work, err)
+	}
+	tampered := utility
+	tampered.QualityPostfill.Examined--
+	if localHNSWAttributionQueryUtilityConservedV1(tampered, 1) {
+		t.Fatal("tampered quality-postfill utility accepted")
+	}
+}
+
 func TestLocalHNSWAttributionQueryUtilityReducerSeparatesAuxiliaryMetricsV1(t *testing.T) {
 	metrics := collections.VectorPartitionSearchMetricsV1{Candidates: 2, Edges: 1, AuxiliaryEdges: 1}
 	trace := collections.VectorPartitionSearchAttributionV1{Schema: localHNSWAttributionSearchSchemaV1, FrontierAdmissions: 2, VisitedRows: 2, VisitedOrdinalsSHA256: strings.Repeat("a", 64), VisitedOrdinals: []uint32{0, 1}, TerminationReason: "distance_bound", EdgeEvents: []collections.VectorPartitionSearchEdgeEventV1{
