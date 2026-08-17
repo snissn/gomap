@@ -464,10 +464,11 @@ func localHNSWFixedBudgetScreenAngularPairCapacityV1(finalEdges, degreeLimit uin
 	return completeRows*pairsPerCompleteRow + remainder*(remainder-1)/2
 }
 
-// localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1 bounds each exact-kNN
-// recovery denominator independently of report aggregation. This prevents a
-// self-consistent per-pack report from claiming more exact neighbors than its
-// sampled rows can have, while checking multiplication before it can wrap.
+// localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1 binds each exact-kNN
+// recovery denominator independently of report aggregation. Candidate truth
+// can be short when the construction-time predecessor set is small, while
+// final truth always searches the other rows in a retained pack and must have
+// exactly ExactK neighbors for every canonical sample.
 func localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one localHNSWAttributionNeighborhoodOracleV1) error {
 	if one.ExactK <= 0 {
 		return errors.New("invalid fixed-budget neighborhood exact k")
@@ -476,7 +477,7 @@ func localHNSWFixedBudgetScreenNeighborhoodTruthBoundsV1(one localHNSWAttributio
 	if one.CandidateSamples > ^uint64(0)/exactK || one.FinalSamples > ^uint64(0)/exactK {
 		return errors.New("fixed-budget neighborhood truth bound overflow")
 	}
-	if one.CandidateTruthNeighbors > one.CandidateSamples*exactK || one.FinalSampleTruthNeighbors > one.FinalSamples*exactK {
+	if one.CandidateTruthNeighbors > one.CandidateSamples*exactK || one.FinalSampleTruthNeighbors != one.FinalSamples*exactK {
 		return errors.New("invalid fixed-budget neighborhood truth bound")
 	}
 	return nil

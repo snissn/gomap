@@ -78,7 +78,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].SelectedNeighborhood = make([]localHNSWFixedBudgetPackNeighborhoodV1, len(report.VariantPacks))
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 		for j, partition := range report.VariantPacks {
-			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: localHNSWFixedBudgetScreenCanonicalSampleCountV1, CandidateTruthNeighbors: localHNSWFixedBudgetScreenCanonicalSampleCountV1, CandidateTruthRecovered: localHNSWFixedBudgetScreenCanonicalSampleCountV1, FinalSamples: localHNSWFixedBudgetScreenCanonicalSampleCountV1, FinalSampleTruthNeighbors: localHNSWFixedBudgetScreenCanonicalSampleCountV1, FinalSampleTruthRecovered: localHNSWFixedBudgetScreenCanonicalSampleCountV1, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: localHNSWFixedBudgetScreenCanonicalSampleCountV1, CandidateTruthNeighbors: localHNSWFixedBudgetScreenCanonicalSampleCountV1, CandidateTruthRecovered: localHNSWFixedBudgetScreenCanonicalSampleCountV1, FinalSamples: localHNSWFixedBudgetScreenCanonicalSampleCountV1, FinalSampleTruthNeighbors: localHNSWFixedBudgetScreenCanonicalSampleCountV1 * uint64(localHNSWAttributionNeighborhoodExactKV1), FinalSampleTruthRecovered: localHNSWFixedBudgetScreenCanonicalSampleCountV1, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
 			if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 || arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
 				one.AngularPairs = localHNSWFixedBudgetScreenCanonicalSampleCountV1 * localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
 				one.AngularCosineDistanceMean = 0.25
@@ -154,6 +154,11 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	badFinalBound.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalSampleTruthNeighbors = localHNSWFixedBudgetScreenCanonicalSampleCountV1*uint64(localHNSWAttributionNeighborhoodExactKV1) + 1
 	if err := localHNSWFixedBudgetScreenContractV1(badFinalBound); err == nil || err.Error() != "invalid fixed-budget neighborhood truth bound" {
 		t.Fatalf("per-pack final truth beyond exact-k sample bound err=%v", err)
+	}
+	shortFinalDenominator := localHNSWFixedBudgetScreenCloneV1(t, report)
+	shortFinalDenominator.Arms[0].SelectedNeighborhood[0].Neighborhood.FinalSampleTruthNeighbors--
+	if err := localHNSWFixedBudgetScreenContractV1(shortFinalDenominator); err == nil || err.Error() != "invalid fixed-budget neighborhood truth bound" {
+		t.Fatalf("per-pack final truth below exact-k sample denominator err=%v", err)
 	}
 	badTruthBoundOverflow := localHNSWFixedBudgetScreenCloneV1(t, report)
 	badTruthBoundOverflow.Arms[0].SelectedNeighborhood[0].Neighborhood.CandidateSamples = ^uint64(0)
