@@ -79,7 +79,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 				report.Arms[i].Control[j] = localHNSWFixedBudgetControlPackV1{Partition: report.VariantPacks[j], CandidateChecksum: localHNSWM18GraphSHA256V1, CanonicalChecksum: localHNSWM18GraphSHA256V1, CandidateGraphSHA256: localHNSWM18GraphSHA256V1, CanonicalGraphSHA256: localHNSWM18GraphSHA256V1, CandidateBytes: 1, CanonicalBytes: 1}
 			}
 		}
-		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+		if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 || arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
 			report.Arms[i].PostfillBudget = make([]localHNSWFixedBudgetPostfillBudgetV1, len(report.VariantPacks))
 			for j := range report.Arms[i].PostfillBudget {
 				report.Arms[i].PostfillBudget[j] = localHNSWFixedBudgetPostfillBudgetV1{Partition: report.VariantPacks[j], Rows: 7500, Layer0Edges: 270000, TargetLayer0Edges: 270000, CandidateBytes: 1, CanonicalBytes: 1}
@@ -107,7 +107,16 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			FrontierAdmissions: 1,
 		},
 	}
-	qualityArm := len(report.Arms) - 1
+	qualityArm := -1
+	for i, arm := range report.Arms {
+		if arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+			qualityArm = i
+			break
+		}
+	}
+	if qualityArm < 0 {
+		t.Fatal("missing quality-postfill arm")
+	}
 	for i := range report.Arms[qualityArm].Cells {
 		cell := &report.Arms[qualityArm].Cells[i]
 		var aggregate localHNSWAttributionQueryWorkV1
@@ -173,7 +182,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	}
 
 	badPostfill := localHNSWFixedBudgetScreenCloneV1(t, report)
-	badPostfill.Arms[len(badPostfill.Arms)-1].PostfillBudget[0].Layer0Edges--
+	badPostfill.Arms[qualityArm].PostfillBudget[0].Layer0Edges--
 	if err := localHNSWFixedBudgetScreenContractV1(badPostfill); err == nil {
 		t.Fatal("underfilled least-redundant separation postfill accepted")
 	}

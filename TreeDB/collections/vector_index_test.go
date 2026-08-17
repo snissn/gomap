@@ -668,6 +668,49 @@ func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.
 	}
 }
 
+func TestVectorIndexRobustPruneRetainsRejectedPoolWithoutTraceV1(t *testing.T) {
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
+	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+		t.Helper()
+		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx.constructionTrace = trace
+		idx.layer0ConstructionPolicy = &vectorIndexLayer0ConstructionPolicyV1{initialSelectionFactor: 2, robustPruneRefinement: true}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		for i := 0; i < 32; i++ {
+			a := float64((i*i*31)%509) * 2 * math.Pi / 509
+			if err := idx.insertVectorLocked([]byte(fmt.Sprintf("robust-%03d", i)), []float32{float32(math.Cos(a)), float32(math.Sin(a))}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(idx.qualityPostfillCandidates) == 0 {
+			t.Fatal("robust-prune did not retain rejected candidates")
+		}
+		if err := idx.applyRobustPruneRefinementLocked(trace, 2*def.M); err != nil {
+			t.Fatal(err)
+		}
+		return idx
+	}
+	traced := &vectorIndexConstructionTraceV1{detailed: true}
+	withTrace, withoutTrace := build(traced), build(nil)
+	for node := range withTrace.nodes {
+		if len(withTrace.nodes[node].neighbors[0]) != 2*def.M || len(withoutTrace.nodes[node].neighbors[0]) != 2*def.M {
+			t.Fatalf("robust degree node=%d traced=%d untraced=%d", node, len(withTrace.nodes[node].neighbors[0]), len(withoutTrace.nodes[node].neighbors[0]))
+		}
+		for edge := range withTrace.nodes[node].neighbors[0] {
+			if withTrace.nodes[node].neighbors[0][edge].nodeID != withoutTrace.nodes[node].neighbors[0][edge].nodeID {
+				t.Fatalf("trace changed robust edge node=%d edge=%d", node, edge)
+			}
+		}
+	}
+	if traced.compactLifecycle.VariantAdd[6]+traced.compactLifecycle.VariantAdd[7] == 0 {
+		t.Fatal("robust refinement emitted no provenance")
+	}
+}
+
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

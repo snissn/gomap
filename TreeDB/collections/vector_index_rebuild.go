@@ -529,6 +529,11 @@ func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVector
 			return err
 		}
 	}
+	if policy != nil && policy.robustPruneRefinement {
+		if err := index.applyRobustPruneRefinementLocked(trace, def.M*2); err != nil {
+			return err
+		}
+	}
 
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {

@@ -21,7 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-const localHNSWFixedBudgetScreenSchemaV1 = "treedb_local_hnsw_fixed_budget_screen_v2"
+const localHNSWFixedBudgetScreenSchemaV1 = "treedb_local_hnsw_fixed_budget_screen_v3"
 
 func localHNSWFixedBudgetConstructionVariantV1(variant collections.VectorPartitionLocalGraphVariantV1) bool {
 	for _, arm := range localHNSWFixedBudgetScreenArmsV1 {
@@ -43,6 +43,7 @@ var localHNSWFixedBudgetScreenArmsV1 = []localHNSWFixedBudgetScreenArmV1{
 	{"2m_backfill_off", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOffV1},
 	{"2m_backfill_on", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MBackfillOnV1},
 	{"2m_least_redundant_separation_postfill", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1},
+	{"2m_robust_prune_alpha_1_2", collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1},
 }
 
 type localHNSWFixedBudgetScreenArmResultV1 struct {
@@ -190,15 +191,15 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				}
 			}
 		}
-		isPostfill := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1
-		if !isPostfill && len(arm.PostfillBudget) != 0 || isPostfill && len(arm.PostfillBudget) != len(report.VariantPacks) {
+		isExactBudget := arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 || arm.Arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1
+		if !isExactBudget && len(arm.PostfillBudget) != 0 || isExactBudget && len(arm.PostfillBudget) != len(report.VariantPacks) {
 			return errors.New("invalid fixed-budget postfill budget")
 		}
-		if isPostfill {
+		if isExactBudget {
 			for j, budget := range arm.PostfillBudget {
 				diagnostic := arm.SelectedDiagnostics[j].Diagnostics
 				if budget.Partition != report.VariantPacks[j] || budget.Rows != diagnostic.Rows || len(diagnostic.EdgesByLayer) == 0 || budget.Layer0Edges != diagnostic.EdgesByLayer[0] || budget.Rows != 7500 || budget.TargetLayer0Edges != 270000 || budget.Layer0Edges != budget.TargetLayer0Edges || budget.CandidateBytes == 0 || budget.CandidateBytes != budget.CanonicalBytes {
-					return errors.New("fixed-budget least-redundant separation postfill budget mismatch")
+					return errors.New("fixed-budget exact refinement budget mismatch")
 				}
 			}
 		}
@@ -303,7 +304,7 @@ func localHNSWFixedBudgetScreenBuildV1(ctx context.Context, source *m8Production
 		if err == nil {
 			out[i].SelectedNeighborhood, err = localHNSWFixedBudgetScreenSelectedNeighborhoodV1(h, diagnostics, vectors)
 		}
-		if err == nil && arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 {
+		if err == nil && (arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 || arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1) {
 			out[i].PostfillBudget, err = localHNSWFixedBudgetScreenPostfillBudgetV1(source, h, diagnostics)
 		}
 		if err == nil {

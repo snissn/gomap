@@ -618,7 +618,7 @@ func localHNSWAttributionQueryRecordValidateV1(record localHNSWAttributionQueryS
 		counts[recovery.Origin]++
 		previous = recovery.ID
 	}
-	for _, origin := range []string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "quality_postfill", "auxiliary", "unattributed"} {
+	for _, origin := range []string{"diversity_selected", "nearest_backfill", "reciprocal_add", "reciprocity_repair", "overlay_rewrite", "quality_postfill", "robust_prune_refinement", "robust_prune_residual_fill", "auxiliary", "unattributed"} {
 		bucket, _ := localHNSWAttributionTruthRecoveryBucketV1(&record.Utility, origin)
 		if *bucket != counts[origin] {
 			return nil, errors.New("local HNSW truth recovery origin count mismatch")
@@ -740,7 +740,7 @@ func localHNSWAttributionVisitedOrdinalsSHA256V1(ordinals []uint32) string {
 }
 
 func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQueryUtilityV1, edges uint64) bool {
-	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.QualityPostfill, value.Auxiliary, value.Unattributed}
+	origins := []localHNSWAttributionQueryOriginUtilityV1{value.Diversity, value.Backfill, value.Reciprocal, value.Repair, value.Overlay, value.QualityPostfill, value.RobustPrune, value.RobustPruneResidual, value.Auxiliary, value.Unattributed}
 	for i, origin := range origins {
 		if origin.Scored > origin.Examined || origin.NewlyVisited > origin.Scored || origin.TopAdmissions != origin.FrontierAdmissions || origin.TopAdmissions > origin.Scored || origin.StateImprovements > origin.Scored {
 			return false
@@ -769,10 +769,10 @@ func localHNSWAttributionQueryUtilityConservedV1(value localHNSWAttributionQuery
 	frontierAdmissions, frontierAdmissionsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.FrontierAdmissions })
 	stateImprovements, stateImprovementsOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.StateImprovements })
 	truthRecovered, truthRecoveredOK := sum(origins, func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.TruthRecovered })
-	// The first six buckets are native final-edge origins. Auxiliary and the
+	// The first eight buckets are native final-edge origins. Auxiliary and the
 	// seed-only unattributed bucket follow them. Keep this bound aligned with
 	// localHNSWAttributionConstructionOriginOrderV1.
-	nativeExamined, nativeExaminedOK := sum(origins[:6], func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
+	nativeExamined, nativeExaminedOK := sum(origins[:8], func(origin localHNSWAttributionQueryOriginUtilityV1) uint64 { return origin.Examined })
 	if math.MaxUint64-value.ExaminedNative < value.ExaminedAuxiliary {
 		return false
 	}

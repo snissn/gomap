@@ -180,7 +180,7 @@ func TestLocalHNSWAttributionBuildVariantV1(t *testing.T) {
 	detailedHarness := *compactHarness
 	detailedHarness.constructionEvidence.Partitions = []collections.VectorPartitionConstructionPartitionEvidenceV1{detailedPart}
 	detailedOracle, err := localHNSWAttributionNeighborhoodOracleWithVectorsV1(&detailedHarness, []collections.VectorPartitionPackDiagnosticsV1{m18Diagnostics[2]}, m18Vectors)
-	if err != nil || !reflect.DeepEqual(compactOracle, detailedOracle) || compactOracle.FinalEdgesByOrigin == [6]uint64{} {
+	if err != nil || !reflect.DeepEqual(compactOracle, detailedOracle) || compactOracle.FinalEdgesByOrigin == [8]uint64{} {
 		t.Fatalf("compact final origins differ from detailed events: compact=%+v detailed=%+v err=%v", compactOracle, detailedOracle, err)
 	}
 	bad := harness.constructionEvidence.Partitions[0].Selections[0]

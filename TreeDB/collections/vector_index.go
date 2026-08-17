@@ -324,6 +324,7 @@ type vectorIndexLayer0ConstructionPolicyV1 struct {
 	initialSelectionFactor int
 	backfill               bool
 	qualityPostfill        bool
+	robustPruneRefinement  bool
 }
 
 // vectorIndexConstructionTraceV1 is deliberately private: construction
@@ -368,6 +369,10 @@ func vectorIndexConstructionOriginIndexV1(origin string) (int, bool) {
 		return 4, true
 	case "quality_postfill":
 		return 5, true
+	case "robust_prune_refinement":
+		return 6, true
+	case "robust_prune_residual_fill":
+		return 7, true
 	}
 	return 0, false
 }
@@ -390,6 +395,10 @@ func (t *vectorIndexConstructionTraceV1) countLifecycle(origin, action string) {
 	case "reciprocity_repair_add", "overlay_rewrite_add":
 		t.compactLifecycle.VariantAdd[originIndex]++
 	case "reciprocity_repair_drop", "overlay_rewrite_drop":
+		t.compactLifecycle.VariantDrop[originIndex]++
+	case "robust_prune_add", "robust_prune_residual_fill_add":
+		t.compactLifecycle.VariantAdd[originIndex]++
+	case "robust_prune_drop":
 		t.compactLifecycle.VariantDrop[originIndex]++
 	case "quality_postfill_add":
 		t.compactLifecycle.QualityPostfillAdd[originIndex]++
@@ -2372,20 +2381,22 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 	var diversity map[int]bool
 	backfill := true
 	qualityPostfill := false
+	robustPruneRefinement := false
 	if layer == 0 && idx.layer0ConstructionPolicy != nil {
 		backfill = idx.layer0ConstructionPolicy.backfill
 		qualityPostfill = idx.layer0ConstructionPolicy.qualityPostfill
+		robustPruneRefinement = idx.layer0ConstructionPolicy.robustPruneRefinement
 	}
 	if trace == nil {
 		var postfillCandidates []vectorIndexCandidate
-		scored, diversitySelected, _, _, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill, qualityPostfill)
-		if qualityPostfill {
+		scored, diversitySelected, _, _, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, false, backfill, qualityPostfill || robustPruneRefinement)
+		if qualityPostfill || robustPruneRefinement {
 			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
 		}
 	} else {
 		var postfillCandidates []vectorIndexCandidate
-		scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill, qualityPostfill)
-		if qualityPostfill {
+		scored, diversitySelected, _, diversity, postfillCandidates = idx.selectDiverseCandidatesWithDetailsLocked(scored, limit, true, backfill, qualityPostfill || robustPruneRefinement)
+		if qualityPostfill || robustPruneRefinement {
 			idx.captureQualityPostfillCandidatesLocked(excludeNodeID, postfillCandidates)
 		}
 	}
@@ -2602,6 +2613,132 @@ func (idx *VectorIndex) applyQualityPostfillLocked(trace *vectorIndexConstructio
 		if len(neighbors) != target {
 			return fmt.Errorf("collections: least-redundant separation postfill insufficient candidates from=%d degree=%d target=%d", from, len(neighbors), target)
 		}
+	}
+	return nil
+}
+
+// applyRobustPruneRefinementLocked is the single #4172 causal follow-up. It
+// applies DiskANN RobustPrune with the predeclared alpha=1.2 to each completed
+// L0 neighbourhood, using only its current edges and the bounded rejected
+// construction pool. Classic RobustPrune may underfill R; a separately
+// attributed nearest residual fill restores the fixed 2M encoded degree budget.
+func (idx *VectorIndex) applyRobustPruneRefinementLocked(trace *vectorIndexConstructionTraceV1, degreeLimit int) error {
+	const alpha = float32(1.2)
+	if degreeLimit <= 0 {
+		return nil
+	}
+	type candidate struct {
+		nodeID   int
+		distance float32
+	}
+	for from := range idx.nodes {
+		if len(idx.nodes[from].neighbors) == 0 {
+			continue
+		}
+		target := minInt(degreeLimit, len(idx.nodes)-1)
+		old := append([]vectorIndexNeighbor(nil), idx.nodes[from].neighbors[0]...)
+		pool := make(map[int]struct{}, len(old)+len(idx.qualityPostfillCandidates[from]))
+		for _, neighbor := range old {
+			pool[neighbor.nodeID] = struct{}{}
+		}
+		for to := range idx.qualityPostfillCandidates[from] {
+			pool[to] = struct{}{}
+		}
+		candidates := make([]candidate, 0, len(pool))
+		for to := range pool {
+			if to < 0 || to >= len(idx.nodes) || to == from {
+				continue
+			}
+			distance, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[from], &idx.nodes[to])
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, candidate{nodeID: to, distance: distance})
+		}
+		slices.SortFunc(candidates, func(left, right candidate) int {
+			if left.distance < right.distance {
+				return -1
+			}
+			if left.distance > right.distance {
+				return 1
+			}
+			return left.nodeID - right.nodeID
+		})
+		selected := make([]candidate, 0, target)
+		remaining := append([]candidate(nil), candidates...)
+		for len(remaining) != 0 && len(selected) < target {
+			chosen := remaining[0]
+			selected = append(selected, chosen)
+			next := remaining[:0]
+			for _, other := range remaining[1:] {
+				separation, err := vectorDistanceBetweenFloat32NodesCosine(&idx.nodes[chosen.nodeID], &idx.nodes[other.nodeID])
+				if err != nil {
+					return err
+				}
+				if alpha*separation <= other.distance {
+					continue
+				}
+				next = append(next, other)
+			}
+			remaining = next
+		}
+		robust := make(map[int]struct{}, len(selected))
+		for _, item := range selected {
+			robust[item.nodeID] = struct{}{}
+		}
+		present := make(map[int]struct{}, len(selected))
+		for _, item := range selected {
+			present[item.nodeID] = struct{}{}
+		}
+		for _, item := range candidates {
+			if len(selected) == target {
+				break
+			}
+			if _, exists := present[item.nodeID]; exists {
+				continue
+			}
+			selected = append(selected, item)
+			present[item.nodeID] = struct{}{}
+		}
+		if len(selected) != target {
+			return fmt.Errorf("collections: robust prune refinement insufficient candidates from=%d selected=%d target=%d", from, len(selected), target)
+		}
+		oldSet := make(map[int]struct{}, len(old))
+		for _, neighbor := range old {
+			oldSet[neighbor.nodeID] = struct{}{}
+		}
+		if trace != nil {
+			trace.init()
+			for _, neighbor := range old {
+				if _, keep := present[neighbor.nodeID]; keep {
+					continue
+				}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: neighbor.nodeID, Layer: 0}
+				origin, ok := trace.origins[key]
+				if !ok {
+					return fmt.Errorf("collections: robust prune refinement missing origin from=%d to=%d", from, neighbor.nodeID)
+				}
+				delete(trace.origins, key)
+				trace.record(from, neighbor.nodeID, 0, origin, "robust_prune_drop")
+			}
+			for _, item := range selected {
+				if _, existed := oldSet[item.nodeID]; existed {
+					continue
+				}
+				origin, action := "robust_prune_refinement", "robust_prune_add"
+				if _, selectedByRobust := robust[item.nodeID]; !selectedByRobust {
+					origin, action = "robust_prune_residual_fill", "robust_prune_residual_fill_add"
+				}
+				key := vectorIndexConstructionEdgeKeyV1{From: from, To: item.nodeID, Layer: 0}
+				trace.origins[key] = origin
+				trace.record(from, item.nodeID, 0, origin, action)
+			}
+		}
+		neighbors := make([]vectorIndexNeighbor, len(selected))
+		for i, item := range selected {
+			neighbors[i] = vectorIndexNeighbor{nodeID: item.nodeID, distance: item.distance}
+		}
+		idx.nodes[from].neighbors[0] = neighbors
 	}
 	return nil
 }
