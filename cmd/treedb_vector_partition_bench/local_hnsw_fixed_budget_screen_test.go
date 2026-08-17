@@ -78,6 +78,9 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 		report.Arms[i].Neighborhood = localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1}
 		for j, partition := range report.VariantPacks {
 			one := localHNSWAttributionNeighborhoodOracleV1{Schema: localHNSWAttributionNeighborhoodOracleSchemaV1, OriginOrder: localHNSWAttributionConstructionOriginOrderV1, ExactK: localHNSWAttributionNeighborhoodExactKV1, CandidateSamples: 1, CandidateTruthNeighbors: 1, CandidateTruthRecovered: 1, FinalSamples: 1, FinalSampleTruthNeighbors: 1, FinalSampleTruthRecovered: 1, AngularPairs: 1, AngularCosineDistanceMean: 0.25, PackDiagnostics: []collections.VectorPartitionPackDiagnosticsV1{report.Arms[i].SelectedDiagnostics[j].Diagnostics}}
+			if arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1 || arm.Variant == collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1 {
+				one.AngularPairs = localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
+			}
 			one.FinalEdgesByOrigin[0], one.FinalTruthByOrigin[0] = 1, 1
 			switch arm.Variant {
 			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1:
@@ -92,7 +95,7 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			report.Arms[i].Neighborhood.FinalSamples++
 			report.Arms[i].Neighborhood.FinalSampleTruthNeighbors++
 			report.Arms[i].Neighborhood.FinalSampleTruthRecovered++
-			report.Arms[i].Neighborhood.AngularPairs++
+			report.Arms[i].Neighborhood.AngularPairs += one.AngularPairs
 			for origin := range one.FinalEdgesByOrigin {
 				report.Arms[i].Neighborhood.FinalEdgesByOrigin[origin] += one.FinalEdgesByOrigin[origin]
 				report.Arms[i].Neighborhood.FinalTruthByOrigin[origin] += one.FinalTruthByOrigin[origin]
@@ -402,6 +405,14 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	badPostfill.Arms[qualityArm].PostfillBudget[0].Layer0Edges--
 	if err := localHNSWFixedBudgetScreenContractV1(badPostfill); err == nil {
 		t.Fatal("underfilled least-redundant separation postfill accepted")
+	}
+	missingSaturatedAngularPairs := localHNSWFixedBudgetScreenCloneV1(t, report)
+	saturatedPairCount := localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
+	missingSaturatedAngularPairs.Arms[qualityArm].SelectedNeighborhood[0].Neighborhood.AngularPairs = 0
+	missingSaturatedAngularPairs.Arms[qualityArm].SelectedNeighborhood[0].Neighborhood.AngularCosineDistanceMean = 0
+	missingSaturatedAngularPairs.Arms[qualityArm].Neighborhood.AngularPairs -= saturatedPairCount
+	if err := localHNSWFixedBudgetScreenContractV1(missingSaturatedAngularPairs); err == nil {
+		t.Fatal("missing saturated-arm angular pairs accepted")
 	}
 	wrongPostfillArm := localHNSWFixedBudgetScreenCloneV1(t, report)
 	wrongPostfillArm.Arms[0].PostfillBudget = append([]localHNSWFixedBudgetPostfillBudgetV1(nil), report.Arms[len(report.Arms)-1].PostfillBudget...)

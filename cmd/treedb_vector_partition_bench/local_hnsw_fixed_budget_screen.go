@@ -226,6 +226,11 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				if budget.Partition != report.VariantPacks[j] || budget.Rows != diagnostic.Rows || len(diagnostic.EdgesByLayer) == 0 || budget.Layer0Edges != diagnostic.EdgesByLayer[0] || budget.Rows != localHNSWFixedBudgetRetainedRowsV1 || budget.TargetLayer0Edges != localHNSWFixedBudgetTargetLayer0EdgesV1 || budget.Layer0Edges != budget.TargetLayer0Edges || budget.CandidateBytes == 0 || budget.CandidateBytes != budget.CanonicalBytes {
 					return errors.New("fixed-budget exact refinement budget mismatch")
 				}
+				neighborhood := arm.SelectedNeighborhood[j].Neighborhood
+				pairsPerSample := localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
+				if neighborhood.AngularPairs != neighborhood.FinalSamples*pairsPerSample {
+					return fmt.Errorf("invalid fixed-budget saturated angular pairs arm=%s partition=%d", arm.Arm.Name, budget.Partition)
+				}
 			}
 		}
 	}
