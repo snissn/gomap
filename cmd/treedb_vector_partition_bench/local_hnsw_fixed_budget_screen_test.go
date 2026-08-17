@@ -37,6 +37,7 @@ func localHNSWFixedBudgetScreenTestDiagnosticV1() collections.VectorPartitionPac
 		Layer0StrongComponents:  1,
 		Layer0LargestComponent:  localHNSWFixedBudgetRetainedRowsV1,
 		Layer0Distances:         collections.VectorPartitionLocalGraphDistanceDistributionV1{Count: localHNSWFixedBudgetTargetLayer0EdgesV1},
+		AuxiliaryCSRBytes:       (localHNSWFixedBudgetRetainedRowsV1 + 1) * 8,
 		CombinedReachableRows:   localHNSWFixedBudgetRetainedRowsV1,
 	}
 }
@@ -84,8 +85,10 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 			one.FinalEdgesByOrigin[0], one.FinalTruthByOrigin[0] = 1, 1
 			switch arm.Variant {
 			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MQualityPostfillV1:
+				one.FinalEdgesByOrigin[0] = localHNSWFixedBudgetLayer0SlotsV1 - 1
 				one.FinalEdgesByOrigin[5] = 1
 			case collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1:
+				one.FinalEdgesByOrigin[0] = localHNSWFixedBudgetLayer0SlotsV1 - 2
 				one.FinalEdgesByOrigin[6], one.FinalEdgesByOrigin[7] = 1, 1
 			}
 			report.Arms[i].SelectedNeighborhood[j] = localHNSWFixedBudgetPackNeighborhoodV1{Partition: partition, Neighborhood: one}
@@ -197,6 +200,23 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	if err := localHNSWFixedBudgetScreenContractV1(badDiagnostic); err == nil {
 		t.Fatal("structurally impossible selected diagnostic accepted")
 	}
+	missingAuxiliaryDiagnostics := localHNSWFixedBudgetScreenCloneV1(t, report)
+	for i := range missingAuxiliaryDiagnostics.Arms {
+		for j := range missingAuxiliaryDiagnostics.Arms[i].SelectedDiagnostics {
+			missingAuxiliaryDiagnostics.Arms[i].SelectedDiagnostics[j].Diagnostics.AuxiliaryEdges = 0
+			missingAuxiliaryDiagnostics.Arms[i].SelectedDiagnostics[j].Diagnostics.AuxiliaryCSRBytes = 0
+			missingAuxiliaryDiagnostics.Arms[i].SelectedDiagnostics[j].Diagnostics.AuxiliaryMaxDegree = 0
+			missingAuxiliaryDiagnostics.Arms[i].SelectedNeighborhood[j].Neighborhood.PackDiagnostics[0].AuxiliaryEdges = 0
+			missingAuxiliaryDiagnostics.Arms[i].SelectedNeighborhood[j].Neighborhood.PackDiagnostics[0].AuxiliaryCSRBytes = 0
+			missingAuxiliaryDiagnostics.Arms[i].SelectedNeighborhood[j].Neighborhood.PackDiagnostics[0].AuxiliaryMaxDegree = 0
+			missingAuxiliaryDiagnostics.Arms[i].Neighborhood.PackDiagnostics[j].AuxiliaryEdges = 0
+			missingAuxiliaryDiagnostics.Arms[i].Neighborhood.PackDiagnostics[j].AuxiliaryCSRBytes = 0
+			missingAuxiliaryDiagnostics.Arms[i].Neighborhood.PackDiagnostics[j].AuxiliaryMaxDegree = 0
+		}
+	}
+	if err := localHNSWFixedBudgetScreenContractV1(missingAuxiliaryDiagnostics); err == nil {
+		t.Fatal("missing fixed-budget auxiliary diagnostics accepted")
+	}
 	badAngularPairs := localHNSWFixedBudgetScreenCloneV1(t, report)
 	maxPairs := localHNSWFixedBudgetLayer0SlotsV1 * (localHNSWFixedBudgetLayer0SlotsV1 - 1) / 2
 	badAngularPairs.Arms[0].SelectedNeighborhood[0].Neighborhood.AngularPairs = maxPairs + 1
@@ -235,8 +255,11 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	robustArm := localHNSWFixedBudgetScreenArmIndexV1(t, report, collections.VectorPartitionLocalGraphVariantAuxiliaryNavigationM18EfConstruction256Layer0Initial2MRobustPruneV1)
 	zeroResidual := localHNSWFixedBudgetScreenCloneV1(t, report)
 	for i := range zeroResidual.Arms[robustArm].SelectedNeighborhood {
-		zeroResidual.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin[7] = 0
+		counts := &zeroResidual.Arms[robustArm].SelectedNeighborhood[i].Neighborhood.FinalEdgesByOrigin
+		counts[0] += counts[7]
+		counts[7] = 0
 	}
+	zeroResidual.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[0] += zeroResidual.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[7]
 	zeroResidual.Arms[robustArm].Neighborhood.FinalEdgesByOrigin[7] = 0
 	if err := localHNSWFixedBudgetScreenContractV1(zeroResidual); err != nil {
 		t.Fatalf("robust treatment with no residual fill rejected: %v", err)
@@ -413,6 +436,12 @@ func TestLocalHNSWFixedBudgetScreenContractV1(t *testing.T) {
 	missingSaturatedAngularPairs.Arms[qualityArm].Neighborhood.AngularPairs -= saturatedPairCount
 	if err := localHNSWFixedBudgetScreenContractV1(missingSaturatedAngularPairs); err == nil {
 		t.Fatal("missing saturated-arm angular pairs accepted")
+	}
+	missingSaturatedFinalEdges := localHNSWFixedBudgetScreenCloneV1(t, report)
+	missingSaturatedFinalEdges.Arms[qualityArm].SelectedNeighborhood[0].Neighborhood.FinalEdgesByOrigin[0]--
+	missingSaturatedFinalEdges.Arms[qualityArm].Neighborhood.FinalEdgesByOrigin[0]--
+	if err := localHNSWFixedBudgetScreenContractV1(missingSaturatedFinalEdges); err == nil {
+		t.Fatal("missing saturated-arm final edges accepted")
 	}
 	wrongPostfillArm := localHNSWFixedBudgetScreenCloneV1(t, report)
 	wrongPostfillArm.Arms[0].PostfillBudget = append([]localHNSWFixedBudgetPostfillBudgetV1(nil), report.Arms[len(report.Arms)-1].PostfillBudget...)

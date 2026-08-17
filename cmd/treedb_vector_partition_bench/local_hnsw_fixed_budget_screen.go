@@ -231,6 +231,16 @@ func localHNSWFixedBudgetScreenContractV1(report localHNSWFixedBudgetScreenRepor
 				if neighborhood.AngularPairs != neighborhood.FinalSamples*pairsPerSample {
 					return fmt.Errorf("invalid fixed-budget saturated angular pairs arm=%s partition=%d", arm.Arm.Name, budget.Partition)
 				}
+				var finalEdges uint64
+				for _, count := range neighborhood.FinalEdgesByOrigin {
+					if ^uint64(0)-finalEdges < count {
+						return fmt.Errorf("fixed-budget saturated final edge overflow arm=%s partition=%d", arm.Arm.Name, budget.Partition)
+					}
+					finalEdges += count
+				}
+				if neighborhood.FinalSamples > ^uint64(0)/localHNSWFixedBudgetLayer0SlotsV1 || finalEdges != neighborhood.FinalSamples*localHNSWFixedBudgetLayer0SlotsV1 {
+					return fmt.Errorf("invalid fixed-budget saturated final edges arm=%s partition=%d", arm.Arm.Name, budget.Partition)
+				}
 			}
 		}
 	}
@@ -314,15 +324,15 @@ func localHNSWFixedBudgetScreenDiagnosticV1(d collections.VectorPartitionPackDia
 		return errors.New("invalid fixed-budget layer0 indegree totals")
 	}
 
-	auxiliaryPresent := d.AuxiliaryEdges != 0 || d.AuxiliaryCSRBytes != 0 || d.AuxiliaryMaxDegree != 0
-	if auxiliaryPresent {
-		if d.Rows == maxUint64 || d.Rows+1 > maxUint64/8 || d.AuxiliaryEdges > maxUint64/4 || d.AuxiliaryMaxDegree == 0 || d.Rows > maxUint64/d.AuxiliaryMaxDegree || d.AuxiliaryEdges > d.Rows*d.AuxiliaryMaxDegree || (d.AuxiliaryEdges == 0) != (d.AuxiliaryMaxDegree == 0) {
-			return errors.New("invalid fixed-budget auxiliary diagnostics")
-		}
-		offsetBytes, edgeBytes := (d.Rows+1)*8, d.AuxiliaryEdges*4
-		if edgeBytes > maxUint64-offsetBytes || d.AuxiliaryCSRBytes != offsetBytes+edgeBytes {
-			return errors.New("invalid fixed-budget auxiliary diagnostic bytes")
-		}
+	if d.AuxiliaryCSRBytes == 0 {
+		return errors.New("missing fixed-budget auxiliary diagnostics")
+	}
+	if d.Rows == maxUint64 || d.Rows+1 > maxUint64/8 || d.AuxiliaryEdges > maxUint64/4 || d.AuxiliaryEdges != 0 && d.AuxiliaryMaxDegree == 0 || d.AuxiliaryMaxDegree != 0 && (d.Rows > maxUint64/d.AuxiliaryMaxDegree || d.AuxiliaryEdges > d.Rows*d.AuxiliaryMaxDegree) {
+		return errors.New("invalid fixed-budget auxiliary diagnostics")
+	}
+	offsetBytes, edgeBytes := (d.Rows+1)*8, d.AuxiliaryEdges*4
+	if edgeBytes > maxUint64-offsetBytes || d.AuxiliaryCSRBytes != offsetBytes+edgeBytes {
+		return errors.New("invalid fixed-budget auxiliary diagnostic bytes")
 	}
 	return nil
 }
