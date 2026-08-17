@@ -398,7 +398,7 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 		if asset.PartitionID != inputs[p].PartitionID {
 			return nil, errors.New("retained variant partition ordering mismatch")
 		}
-		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset)
+		h.searchers[p], err = owned.collection.OpenVectorPartitionLocalSearcherForOfflineAssetVariantWithContextV1(context.Background(), source.manifest.IndexName, source.manifest, asset, variant)
 		if err != nil {
 			return nil, fmt.Errorf("retained variant open partition %d: %w", asset.PartitionID, err)
 		}
