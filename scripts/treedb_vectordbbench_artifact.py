@@ -699,6 +699,15 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
     return cmd
 
 
+def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
+    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results")
+    env["LOG_FILE"] = str(state.root / "vdbbench.log")
+    env["NUM_PER_BATCH"] = str(args.num_per_batch)
+    return env
+
+
 def run_vdbbench_rows(
     state: HarnessState,
     *,
@@ -713,10 +722,7 @@ def run_vdbbench_rows(
         return
     if vectordbbench_dir is None or not vectordbbench_dir.exists():
         raise RuntimeError("--run-vdbbench requires VECTORDBBENCH_DIR or --vectordbbench-dir")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
-    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results")
-    env["LOG_FILE"] = str(state.root / "vdbbench.log")
+    env = vdbbench_row_env(args, vectordbbench_dir, gomap_root, state)
     rows = [row.strip().lower() for row in args.rows.split(",") if row.strip()]
     row_specs = {
         "exact": ("treedbcolumngraphexact", f"{index_prefix}_exact_vdbbench"),
@@ -750,6 +756,7 @@ def run_vdbbench_rows(
             "exit_code": record.exit_code,
             "results_dir": "vdbbench-results",
             "log_file": "vdbbench.log",
+            "num_per_batch": args.num_per_batch,
         })
 
 
@@ -768,6 +775,7 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
         f"- route proof: `route_proof.json`",
         f"- service log: `service.log`",
         f"- data dir: `{args.data_dir}`",
+        f"- VDBBench load batch: `{args.num_per_batch}` documents",
         f"- route-proof shape: `{args.smoke_documents} x {args.smoke_dimension}`, topK `{args.smoke_top_k}`, efSearch `{args.ef_search}`, rerank `{args.rerank_candidates}`",
         "",
         "## Route proof summary",
@@ -847,6 +855,7 @@ def write_manifest(
             "smoke_documents": args.smoke_documents,
             "smoke_top_k": args.smoke_top_k,
             "rerank_candidates": args.rerank_candidates,
+            "num_per_batch": args.num_per_batch,
             "vdbbench_dry_run": args.vdbbench_dry_run,
         },
         "commands": [asdict(record) for record in state.commands],
@@ -891,6 +900,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ef-search", type=int, default=int(env_text("TREEDB_VDBBENCH_EF_SEARCH", "128")))
     parser.add_argument("--quantized-index-name", default=env_text("TREEDB_VDBBENCH_QUANTIZED_INDEX_NAME", DEFAULT_QUANTIZED_INDEX_NAME))
     parser.add_argument("--rerank-candidates", type=int, default=int(env_text("TREEDB_VDBBENCH_RERANK_CANDIDATES", "32")))
+    parser.add_argument("--num-per-batch", type=int, default=int(env_text("TREEDB_VDBBENCH_NUM_PER_BATCH", "1000")), help="TreeDB VectorDBBench documents per load batch")
     parser.add_argument("--smoke-dimension", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DIMENSION", "2")))
     parser.add_argument("--smoke-documents", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DOCUMENTS", "4")))
     parser.add_argument("--smoke-top-k", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_TOP_K", "2")))
@@ -899,6 +909,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     try:
         validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
+        if args.num_per_batch <= 0:
+            raise ValueError("num-per-batch must be positive")
     except ValueError as exc:
         parser.error(str(exc))
     args.out = Path(args.out).expanduser().resolve()

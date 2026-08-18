@@ -1,6 +1,6 @@
 # TreeDB VectorDBBench Artifact Harness
 
-Issues: `snissn/gomap#2599`, `#4181`. Parent tracker: `#2598`.
+Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
@@ -132,7 +132,10 @@ The generated VDBBench commands use unique index names derived from
 `$OUT/vdbbench-results` plus `LOG_FILE` to `$OUT/vdbbench.log`. The exact row is
 `treedbcolumngraphexact`; the scalar row is `treedbscalaru8rerank` with
 `query_mode="quantized_rerank"`, `quantized_index_name="embedding.scalar_u8.fast"`,
-and `quantized_rerank_candidates=32`.
+and `quantized_rerank_candidates=32`. TreeDB rows also receive
+`NUM_PER_BATCH=1000` by default; override only this harness with
+`--num-per-batch` or `TREEDB_VDBBENCH_NUM_PER_BATCH`. The selected value is
+recorded in the manifest, README, and each VDBBench row record.
 
 ## Environment variables
 
@@ -157,6 +160,7 @@ Most flags also have environment equivalents:
 | `TREEDB_VDBBENCH_EF_SEARCH` | HNSW efSearch | `128` |
 | `TREEDB_VDBBENCH_QUANTIZED_INDEX_NAME` | scalar score-plane name | `embedding.scalar_u8.fast` |
 | `TREEDB_VDBBENCH_RERANK_CANDIDATES` | scalar rerank shortlist | `32` |
+| `TREEDB_VDBBENCH_NUM_PER_BATCH` | TreeDB VDBBench load batch size | `1000` |
 | `TREEDB_VDBBENCH_SMOKE_DIMENSION` | route-proof vector dimensions | `2` |
 | `TREEDB_VDBBENCH_SMOKE_DOCUMENTS` | route-proof document count | `4` |
 | `TREEDB_VDBBENCH_SMOKE_TOP_K` | route-proof topK | `2` |
