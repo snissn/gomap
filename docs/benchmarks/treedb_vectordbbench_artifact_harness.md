@@ -135,7 +135,9 @@ The generated VDBBench commands use unique index names derived from
 and `quantized_rerank_candidates=32`. TreeDB rows also receive
 `NUM_PER_BATCH=1000` by default; override only this harness with
 `--num-per-batch` or `TREEDB_VDBBENCH_NUM_PER_BATCH`. The selected value is
-recorded in the manifest, README, and each VDBBench row record.
+recorded in the manifest, README, and each VDBBench row record. CLI and
+environment values must be positive integers; zero and negative values are
+rejected before service startup.
 
 ## Environment variables
 

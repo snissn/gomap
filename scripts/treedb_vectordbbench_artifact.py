@@ -909,10 +909,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     try:
         validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
-        if args.num_per_batch <= 0:
-            raise ValueError("num-per-batch must be positive")
     except ValueError as exc:
         parser.error(str(exc))
+    if args.num_per_batch <= 0:
+        parser.error("num-per-batch must be positive")
     args.out = Path(args.out).expanduser().resolve()
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
     if args.port == 0:
