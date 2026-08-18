@@ -759,6 +759,9 @@ func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha
 			t.Fatalf("warm quantized_rerank iteration %d results=%d err=%v", i, len(got.Results), err)
 		}
 	}
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
 	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 		got, err := searcher.SearchWithBuffer(quantizedOnlyOpts, &buffer)
 		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
