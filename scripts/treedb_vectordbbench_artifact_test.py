@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,12 @@ import treedb_vectordbbench_artifact as harness
 
 
 class RouteProofSummaryTest(unittest.TestCase):
+    def test_iso_now_is_utc(self) -> None:
+        self.assertTrue(harness.iso_now().endswith("Z"))
+
+    def test_cpu_brand_is_recorded(self) -> None:
+        self.assertTrue(harness.cpu_brand())
+
     def test_scalar_summary_extracts_required_counters(self) -> None:
         response = {
             "metric": "cosine",
@@ -27,6 +35,8 @@ class RouteProofSummaryTest(unittest.TestCase):
                 "quantized_rerank_candidates": 4,
                 "quantized_rerank_exact_score_calls": 4,
                 "search_route_quantized_rerank": 1,
+                "score_batch_calls": 1,
+                "score_batch_optimized": 1,
             },
             "diagnostics": {"route": "quantized_rerank", "fallback_reason": "none"},
         }
@@ -43,6 +53,8 @@ class RouteProofSummaryTest(unittest.TestCase):
         self.assertEqual(got["documents_fetched"], 0)
         self.assertEqual(got["quantized_scorer_active"], 1)
         self.assertEqual(got["quantized_rerank_exact_score_calls"], 4)
+        self.assertEqual(got["score_batch_optimized"], 1)
+        self.assertEqual(got["score_batch_fallback"], 0)
         self.assertEqual(got["response"]["quantized_rerank_candidates"], 32)
 
     def test_missing_fallback_reason_normalizes_to_none(self) -> None:
@@ -57,6 +69,24 @@ class ArtifactRootTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "must be new or empty"):
                 harness.prepare_artifact_root(root)
+
+
+class SmokeShapeTest(unittest.TestCase):
+    def test_campaign_shape_is_valid_and_deterministic(self) -> None:
+        harness.validate_smoke_shape(768, 256, 100, 192, 150)
+        documents = harness.smoke_documents(256, 768)
+
+        self.assertEqual(len(documents), 256)
+        self.assertEqual(len(documents[0]["embedding"]), 768)
+        self.assertEqual(documents[0], harness.smoke_documents(1, 768)[0])
+
+    def test_rejects_rerank_shorter_than_top_k(self) -> None:
+        with self.assertRaisesRegex(ValueError, "rerank candidates"):
+            harness.validate_smoke_shape(768, 256, 100, 192, 32)
+
+    def test_parse_args_rejects_invalid_shape_before_service_start(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            harness.parse_args(["--smoke-documents", "256", "--smoke-top-k", "100", "--rerank-candidates", "32"])
 
 
 class ManifestFileListTest(unittest.TestCase):
