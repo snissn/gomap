@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 ARTIFACT_SCHEMA = "treedb-vectordbbench-artifact/v1"
-ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v1"
+ROUTE_PROOF_SCHEMA = "treedb-vectordbbench-route-proof/v2"
 DEFAULT_QUANTIZED_INDEX_NAME = "embedding.scalar_u8.fast"
 VDBBENCH_UV_DEPS = [
     "pytest",
@@ -55,7 +55,7 @@ VDBBENCH_UV_DEPS = [
 
 
 def iso_now() -> str:
-    return _dt.datetime.now(_dt.UTC).isoformat().replace("+00:00", "Z")
+    return _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def default_out_dir() -> Path:
@@ -197,6 +197,17 @@ def command_output(cmd: list[str], cwd: Path | None = None) -> str:
         return f"unavailable: {exc}"
 
 
+def cpu_brand() -> str:
+    if platform.system() == "Darwin":
+        return command_output(["sysctl", "-n", "machdep.cpu.brand_string"])
+    if platform.system() == "Linux":
+        with contextlib.suppress(OSError):
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("model name"):
+                    return line.partition(":")[2].strip()
+    return platform.processor() or "unknown"
+
+
 def collect_context(gomap_root: Path, vectordbbench_dir: Path | None) -> dict[str, Any]:
     return {
         "generated_at": iso_now(),
@@ -209,7 +220,7 @@ def collect_context(gomap_root: Path, vectordbbench_dir: Path | None) -> dict[st
             "python": sys.version.replace("\n", " "),
             "go": command_output(["go", "version"]),
             "uname": command_output(["uname", "-a"]),
-            "cpu_brand": command_output(["sysctl", "-n", "machdep.cpu.brand_string"]) if platform.system() == "Darwin" else "",
+            "cpu_brand": cpu_brand(),
         },
         "gomap": git_context(gomap_root),
         "vectordbbench": git_context(vectordbbench_dir) if vectordbbench_dir else {"available": False, "reason": "VECTORDBBENCH_DIR not set"},
@@ -376,6 +387,9 @@ def proof_summary(kind: str, index_name: str, response: dict[str, Any], request_
         "quantized_score_calls": int_field(stats, "quantized_score_calls"),
         "quantized_rerank_candidates_observed": int_field(stats, "quantized_rerank_candidates"),
         "quantized_rerank_exact_score_calls": int_field(stats, "quantized_rerank_exact_score_calls"),
+        "score_batch_calls": int_field(stats, "score_batch_calls"),
+        "score_batch_optimized": int_field(stats, "score_batch_optimized"),
+        "score_batch_fallback": int_field(stats, "score_batch_fallback"),
         "search_route_hnsw_search_pack": int_field(stats, "search_route_hnsw_search_pack"),
         "search_route_quantized_rerank": int_field(stats, "search_route_quantized_rerank"),
         "raw_response_file": f"route_proof_{kind}_response.json",
@@ -391,6 +405,28 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def validate_smoke_shape(dimension: int, documents: int, top_k: int, ef_search: int, rerank_candidates: int) -> None:
+    if dimension <= 0 or top_k <= 0:
+        raise ValueError("smoke dimension and top-k must be positive")
+    if documents < top_k:
+        raise ValueError("smoke documents must be at least smoke top-k")
+    if ef_search < top_k:
+        raise ValueError("ef-search must be at least smoke top-k")
+    if rerank_candidates < top_k:
+        raise ValueError("rerank candidates must be at least smoke top-k")
+
+
+def smoke_documents(count: int, dimension: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(101 + row),
+            "embedding": [((row * 17 + column * 31) % 257 - 128) / 128.0 for column in range(dimension)],
+            "content": f"route proof {101 + row}",
+        }
+        for row in range(count)
+    ]
+
+
 def run_route_proof_smoke(
     state: HarnessState,
     *,
@@ -401,18 +437,19 @@ def run_route_proof_smoke(
     ef_search: int,
     quantized_index_name: str,
     rerank_candidates: int,
+    smoke_dimension: int,
+    smoke_documents_count: int,
+    smoke_top_k: int,
 ) -> dict[str, Any]:
+    validate_smoke_shape(smoke_dimension, smoke_documents_count, smoke_top_k, ef_search, rerank_candidates)
     exact_index = f"{index_prefix}_exact_smoke"
     scalar_index = f"{index_prefix}_scalar_u8_smoke"
-    documents = [
-        {"id": "101", "embedding": [1.0, 0.0], "content": "route proof 101"},
-        {"id": "102", "embedding": [0.0, 1.0], "content": "route proof 102"},
-        {"id": "103", "embedding": [0.95, 0.05], "content": "route proof 103"},
-        {"id": "104", "embedding": [-1.0, 0.0], "content": "route proof 104"},
-    ]
+    documents = smoke_documents(smoke_documents_count, smoke_dimension)
+    query = list(documents[0]["embedding"])
+    optimized_scoring_expected = smoke_dimension >= 32
     create_exact = {
         "name": exact_index,
-        "dimension": 2,
+        "dimension": smoke_dimension,
         "metric": "cosine",
         "vector_index_options": {
             "strategy": "column_graph",
@@ -423,7 +460,7 @@ def run_route_proof_smoke(
     }
     create_scalar = {
         "name": scalar_index,
-        "dimension": 2,
+        "dimension": smoke_dimension,
         "metric": "cosine",
         "vector_index_options": {
             "strategy": "column_graph",
@@ -441,14 +478,14 @@ def run_route_proof_smoke(
         write_json(state.root / f"route_proof_{index}_optimize.json", optimize)
 
     exact_request = {
-        "query_embedding": [1.0, 0.0],
-        "top_k": 2,
+        "query_embedding": query,
+        "top_k": smoke_top_k,
         "ef_search": ef_search,
         "query_mode": "exact",
     }
     scalar_request = {
-        "query_embedding": [1.0, 0.0],
-        "top_k": 2,
+        "query_embedding": query,
+        "top_k": smoke_top_k,
         "ef_search": ef_search,
         "query_mode": "quantized_rerank",
         "quantized_index_name": quantized_index_name,
@@ -482,6 +519,18 @@ def run_route_proof_smoke(
     )
     add_assert(
         assertions,
+        "exact_result_count",
+        exact["response"]["result_count"] == smoke_top_k,
+        f"result_count={exact['response']['result_count']} want={smoke_top_k}",
+    )
+    add_assert(
+        assertions,
+        "exact_optimized_scoring",
+        not optimized_scoring_expected or (exact["score_batch_optimized"] > 0 and exact["score_batch_fallback"] == 0),
+        f"expected={optimized_scoring_expected} optimized={exact['score_batch_optimized']} fallback={exact['score_batch_fallback']}",
+    )
+    add_assert(
+        assertions,
         "scalar_route",
         scalar["route"] == "quantized_rerank",
         f"route={scalar['route']} want quantized_rerank",
@@ -504,21 +553,41 @@ def run_route_proof_smoke(
         scalar["fallback_reason"] == "none",
         f"fallback_reason={scalar['fallback_reason']}",
     )
+    add_assert(
+        assertions,
+        "scalar_result_count",
+        scalar["response"]["result_count"] == smoke_top_k,
+        f"result_count={scalar['response']['result_count']} want={smoke_top_k}",
+    )
+    add_assert(
+        assertions,
+        "scalar_optimized_scoring",
+        not optimized_scoring_expected or (scalar["score_batch_optimized"] > 0 and scalar["score_batch_fallback"] == 0),
+        f"expected={optimized_scoring_expected} optimized={scalar['score_batch_optimized']} fallback={scalar['score_batch_fallback']}",
+    )
     scalar_requested = int(scalar["response"].get("quantized_rerank_candidates") or rerank_candidates)
     scalar_exact_calls = int(scalar["quantized_rerank_exact_score_calls"])
     add_assert(
         assertions,
         "scalar_rerank_exact_calls_bounded",
-        scalar_requested > 0 and 0 < scalar_exact_calls <= scalar_requested,
-        f"exact_calls={scalar_exact_calls} quantized_rerank_candidates={scalar_requested}",
+        smoke_top_k <= scalar_exact_calls <= scalar_requested,
+        f"exact_calls={scalar_exact_calls} want={smoke_top_k}..{scalar_requested}",
     )
     proof = {
         "schema_version": ROUTE_PROOF_SCHEMA,
         "generated_at": iso_now(),
         "base_url": base_url,
         "note": "Smoke route proof only; not throughput or public claim-quality benchmark evidence.",
+        "shape": {
+            "dimension": smoke_dimension,
+            "documents": smoke_documents_count,
+            "top_k": smoke_top_k,
+            "ef_search": ef_search,
+            "rerank_candidates": rerank_candidates,
+            "optimized_scoring_expected": optimized_scoring_expected,
+        },
         "exact_fp32": exact,
-        "scalar_u8_rerank32": scalar,
+        "scalar_u8_rerank": scalar,
         "assertions": assertions,
         "passed": all(item["passed"] for item in assertions),
     }
@@ -687,7 +756,7 @@ def run_vdbbench_rows(
 def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
     proof = state.route_proof or {}
     exact = proof.get("exact_fp32", {})
-    scalar = proof.get("scalar_u8_rerank32", {})
+    scalar = proof.get("scalar_u8_rerank", {})
     lines = [
         "# TreeDB VectorDBBench Artifact",
         "",
@@ -699,13 +768,14 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
         f"- route proof: `route_proof.json`",
         f"- service log: `service.log`",
         f"- data dir: `{args.data_dir}`",
+        f"- route-proof shape: `{args.smoke_documents} x {args.smoke_dimension}`, topK `{args.smoke_top_k}`, efSearch `{args.ef_search}`, rerank `{args.rerank_candidates}`",
         "",
         "## Route proof summary",
         "",
-        "| row | route | fallback_reason | documents_fetched | quantized_scorer_active | rerank exact calls |",
-        "| --- | --- | --- | ---: | ---: | ---: |",
-        f"| exact FP32 | `{exact.get('route', '')}` | `{exact.get('fallback_reason', '')}` | {exact.get('documents_fetched', '')} | {exact.get('quantized_scorer_active', '')} | {exact.get('quantized_rerank_exact_score_calls', '')} |",
-        f"| scalar_u8 rerank32 | `{scalar.get('route', '')}` | `{scalar.get('fallback_reason', '')}` | {scalar.get('documents_fetched', '')} | {scalar.get('quantized_scorer_active', '')} | {scalar.get('quantized_rerank_exact_score_calls', '')} |",
+        "| row | route | fallback_reason | documents_fetched | optimized batches | fallback batches | rerank exact calls |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+        f"| exact FP32 | `{exact.get('route', '')}` | `{exact.get('fallback_reason', '')}` | {exact.get('documents_fetched', '')} | {exact.get('score_batch_optimized', '')} | {exact.get('score_batch_fallback', '')} | {exact.get('quantized_rerank_exact_score_calls', '')} |",
+        f"| scalar_u8 rerank{args.rerank_candidates} | `{scalar.get('route', '')}` | `{scalar.get('fallback_reason', '')}` | {scalar.get('documents_fetched', '')} | {scalar.get('score_batch_optimized', '')} | {scalar.get('score_batch_fallback', '')} | {scalar.get('quantized_rerank_exact_score_calls', '')} |",
         "",
         "VDBBench TreeDB rows include Python/client/HTTP/service overhead and must not be reported as native Go `B/op` or `allocs/op` evidence.",
     ]
@@ -773,6 +843,10 @@ def write_manifest(
             "m": args.m,
             "ef_construction": args.ef_construction,
             "ef_search": args.ef_search,
+            "smoke_dimension": args.smoke_dimension,
+            "smoke_documents": args.smoke_documents,
+            "smoke_top_k": args.smoke_top_k,
+            "rerank_candidates": args.rerank_candidates,
             "vdbbench_dry_run": args.vdbbench_dry_run,
         },
         "commands": [asdict(record) for record in state.commands],
@@ -817,9 +891,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--ef-search", type=int, default=int(env_text("TREEDB_VDBBENCH_EF_SEARCH", "128")))
     parser.add_argument("--quantized-index-name", default=env_text("TREEDB_VDBBENCH_QUANTIZED_INDEX_NAME", DEFAULT_QUANTIZED_INDEX_NAME))
     parser.add_argument("--rerank-candidates", type=int, default=int(env_text("TREEDB_VDBBENCH_RERANK_CANDIDATES", "32")))
+    parser.add_argument("--smoke-dimension", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DIMENSION", "2")))
+    parser.add_argument("--smoke-documents", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DOCUMENTS", "4")))
+    parser.add_argument("--smoke-top-k", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_TOP_K", "2")))
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
+    try:
+        validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
+    except ValueError as exc:
+        parser.error(str(exc))
     args.out = Path(args.out).expanduser().resolve()
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
     if args.port == 0:
@@ -858,6 +939,7 @@ def self_test() -> None:
     assert summary["documents_fetched"] == 0
     assert summary["quantized_scorer_active"] == 1
     assert summary["quantized_rerank_exact_score_calls"] == 4
+    assert summary["score_batch_optimized"] == 0
     assert fallback_reason({"diagnostics": {}}) == "none"
     print("self-test passed")
 
@@ -901,6 +983,9 @@ def main(argv: list[str]) -> int:
             ef_search=args.ef_search,
             quantized_index_name=args.quantized_index_name,
             rerank_candidates=args.rerank_candidates,
+            smoke_dimension=args.smoke_dimension,
+            smoke_documents_count=args.smoke_documents,
+            smoke_top_k=args.smoke_top_k,
         )
         run_vdbbench_tests(state, args=args, gomap_root=gomap_root, vectordbbench_dir=args.vectordbbench_dir)
         run_vdbbench_rows(
