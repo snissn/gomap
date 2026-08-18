@@ -1044,23 +1044,25 @@ func TestSearchVectorIndexWithBufferQuantizedOnlyAndRerank2415(t *testing.T) {
 	}
 	assertCollectionBufferedQuantizedRouteStats2415(t, emptyRerank.Stats, columnVectorGraphNativeSearchQueryModeQuantizedRerank, emptyRerankOpts, def.Dimensions)
 
-	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
-		got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
-		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
-			panic("unexpected quantized_only SearchVectorIndexWithBuffer allocation probe result")
+	if !collectionsRaceEnabled {
+		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
+			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
+			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
+				panic("unexpected quantized_only SearchVectorIndexWithBuffer allocation probe result")
+			}
+		})
+		if quantizedOnlyAllocs != 0 {
+			t.Fatalf("quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
 		}
-	})
-	if quantizedOnlyAllocs != 0 {
-		t.Fatalf("quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
-	}
-	rerankAllocs := testing.AllocsPerRun(100, func() {
-		got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
-		if err != nil || len(got.Results) != rerankOpts.TopK {
-			panic("unexpected quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
+		rerankAllocs := testing.AllocsPerRun(100, func() {
+			got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
+			if err != nil || len(got.Results) != rerankOpts.TopK {
+				panic("unexpected quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
+			}
+		})
+		if rerankAllocs != 0 {
+			t.Fatalf("quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 		}
-	})
-	if rerankAllocs != 0 {
-		t.Fatalf("quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 	}
 
 	exactOpts := VectorIndexSearchOptions{IndexName: def.Name, Query: query, QueryMode: VectorIndexQueryModeExact, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
