@@ -678,6 +678,12 @@ jobs:
           min_cpu_efficiency_frac="0.95"
           if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
             min_cpu_efficiency_frac="0.94"
+          elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then
+            # Fifteen recent hosted aggregates on this exact model ranged
+            # 0.9396-1.0026 (geomean 0.9698). Keep a one-point margin below
+            # that observed low while rejecting a material seven-percent CPU
+            # efficiency regression.
+            min_cpu_efficiency_frac="0.93"
           fi
 
           # This gate measures the explicit bench_unsafe compression ceiling,
@@ -766,7 +772,7 @@ jobs:
           # tradeoff gate; #3863 uses exact-function CPU samples so hosted runner
           # descheduling remains visible in raw wall throughput without becoming
           # the blocking product-work metric.
-          # EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
+          # EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or unknown CPU uses 0.95x.
           # One lucky sample cannot override a mostly
           # failing sample set, and every pair retains the 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"
