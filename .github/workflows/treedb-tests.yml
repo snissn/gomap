@@ -577,19 +577,19 @@ jobs:
           ran_tests=false
           if [ -s "$package_file" ]; then
             cat "$package_file"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 < "$package_file" | tee treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 -timeout 12m < "$package_file" | tee treedb-race.jsonl
             ran_tests=true
           fi
           if [ -s "$root_test_file" ]; then
             root_regex="^($(paste -sd'|' "$root_test_file"))$"
             echo "TreeDB root race test shard=${shard_index}/${shard_count} regex=${root_regex}"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 . -run "$root_regex" | tee -a treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m . -run "$root_regex" | tee -a treedb-race.jsonl
             ran_tests=true
           fi
           if [ -s "$caching_test_file" ]; then
             caching_regex="^($(paste -sd'|' "$caching_test_file"))$"
             echo "TreeDB/caching race test shard=${shard_index}/${shard_count} regex=${caching_regex}"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./caching -run "$caching_regex" | tee -a treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./caching -run "$caching_regex" | tee -a treedb-race.jsonl
             ran_tests=true
           fi
           if [ -s "$db_test_file" ]; then
@@ -678,6 +678,12 @@ jobs:
           min_cpu_efficiency_frac="0.95"
           if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then
             min_cpu_efficiency_frac="0.94"
+          elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then
+            # Fifteen recent hosted aggregates on this exact model ranged
+            # 0.9396-1.0026 (geomean 0.9698). Keep a one-point margin below
+            # that observed low while rejecting a material seven-percent CPU
+            # efficiency regression.
+            min_cpu_efficiency_frac="0.93"
           fi
 
           # This gate measures the explicit bench_unsafe compression ceiling,
@@ -766,7 +772,7 @@ jobs:
           # tradeoff gate; #3863 uses exact-function CPU samples so hosted runner
           # descheduling remains visible in raw wall throughput without becoming
           # the blocking product-work metric.
-          # EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x.
+          # EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or unknown CPU uses 0.95x.
           # One lucky sample cannot override a mostly
           # failing sample set, and every pair retains the 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"

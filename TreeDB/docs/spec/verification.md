@@ -1353,11 +1353,12 @@ publication, so the live gate uses `batch_write_steady` and profiles every exact
 timed row. It publishes every raw wall-throughput ratio for diagnosis, but the
 blocking pair ratio is off CPU sample seconds divided by auto CPU sample
 seconds. The geometric mean of every fixed, order-balanced CPU-efficiency pair
-must be strictly greater than `0.94x` on AMD EPYC 7763 runners. Every other or
-unknown CPU model retains a threshold strictly greater than `0.95x`. The
-evidence records the CPU model and selected threshold, plus wall ratios, CPU
-sample seconds, and CPU-efficiency ratios. Missing, ambiguous, or shorter-than-`0.25s`
-CPU profiles fail closed; rows are never retried, selected, or discarded. One
+must be strictly greater than `0.94x` on AMD EPYC 7763 runners or `0.93x` on
+AMD EPYC 9V74 runners. Every other or unknown CPU model retains a threshold
+strictly greater than `0.95x`. The evidence records the CPU model and selected
+threshold, plus wall ratios, CPU sample seconds, and CPU-efficiency ratios.
+Missing, ambiguous, or shorter-than-`0.25s` CPU profiles fail closed; rows are
+never retried, selected, or discarded. One
 favorable sample cannot override a mostly failing sample set. Each pair must
 also keep the sum of the `total=` fields reported for `maindb/value_vlog` and
 `maindb/leaf_vlog` less than or equal to `1.02x`. The checker separately
