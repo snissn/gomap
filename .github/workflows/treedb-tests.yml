@@ -772,8 +772,7 @@ jobs:
           # tradeoff gate; #3863 uses exact-function CPU samples so hosted runner
           # descheduling remains visible in raw wall throughput without becoming
           # the blocking product-work metric.
-          # EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or
-          # unknown CPU uses 0.95x.
+          # EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or unknown CPU uses 0.95x.
           # One lucky sample cannot override a mostly
           # failing sample set, and every pair retains the 1.02x storage ceiling.
           summary_log="vlog_auto_incompressible_summary.txt"
