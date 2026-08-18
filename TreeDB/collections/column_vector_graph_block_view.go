@@ -104,8 +104,15 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlanInternal(reader 
 		plan.scoreSource.reset()
 		return plan, nil
 	}
-	if err := plan.scoreSource.prepare(plan); err != nil {
-		return nil, err
+	// The source route is also the Windows compatibility route when prepared
+	// mmap views are unavailable. Keep its already-validated bindings across
+	// warm searches; rebuilding them for every query can make the hot path
+	// allocate on that route. A closed or replaced source is prepared again so
+	// stale state keeps the existing fail-closed behavior.
+	if !plan.scoreSource.liveFor(plan) {
+		if err := plan.scoreSource.prepare(plan); err != nil {
+			return nil, err
+		}
 	}
 	return plan, nil
 }
