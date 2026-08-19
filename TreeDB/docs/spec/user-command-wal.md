@@ -1208,9 +1208,10 @@ Acceptance:
   ratio as diagnostic evidence. The blocking ratio for each pair is off CPU
   sample seconds divided by auto CPU sample seconds. The gate records the CPU
   model and selected threshold and applies a strict `>0.94x` threshold on AMD
-  EPYC 7763 runners or a strict `>0.95x` threshold on all other or unknown CPU
-  models to the geometric mean of every fixed, order-balanced CPU-efficiency
-  pair. Missing, ambiguous, or shorter-than-`0.25s` CPU profiles fail closed;
+  EPYC 7763 runners, a strict `>0.93x` threshold on AMD EPYC 9V74 runners, or
+  a strict `>0.95x` threshold on all other or unknown CPU models to the
+  geometric mean of every fixed, order-balanced CPU-efficiency pair. Missing,
+  ambiguous, or shorter-than-`0.25s` CPU profiles fail closed;
   no row is retried, selected, or discarded. The gate keeps the sum of each
   pair's `total=` fields for `maindb/value_vlog` plus `maindb/leaf_vlog` at or
   below `1.02x`. One favorable sample cannot override a mostly failing sample

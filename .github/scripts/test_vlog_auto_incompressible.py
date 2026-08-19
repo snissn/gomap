@@ -299,6 +299,30 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("<= 0.9400", result.stderr)
 
+    def test_epyc_9v74_class_retains_a_material_cpu_regression_failure(self) -> None:
+        # Fifteen recent hosted 9V74 aggregates ranged from 0.9396 to 1.0026.
+        # The dedicated 0.93 floor leaves a one-point sampling margin below that
+        # observed low while still rejecting a material seven-percent regression.
+        baseline_result = self.run_checker(
+            [0.9396, 0.9492, 0.9641, 0.9684, 0.9707, 0.9762],
+            min_cpu_efficiency_frac=0.93,
+        )
+        regression_result = self.run_checker(
+            [0.92, 0.92], min_cpu_efficiency_frac=0.93
+        )
+
+        self.assertEqual(
+            baseline_result.returncode,
+            0,
+            baseline_result.stdout + baseline_result.stderr,
+        )
+        self.assertEqual(
+            regression_result.returncode,
+            1,
+            regression_result.stdout + regression_result.stderr,
+        )
+        self.assertIn("<= 0.9300", regression_result.stderr)
+
     def test_any_sample_over_size_bound_fails(self) -> None:
         result = self.run_checker([1.02, 1.03], [0.996, 1.021])
 
@@ -500,18 +524,20 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("-test batch_write ", script)
         self.assertIn('min_cpu_efficiency_frac="0.95"', script)
         self.assertIn(
-            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_cpu_efficiency_frac="0.94" fi',
+            'if [[ "${cpu_model}" == "AMD EPYC 7763 64-Core Processor" ]]; then min_cpu_efficiency_frac="0.94" elif [[ "${cpu_model}" == "AMD EPYC 9V74 80-Core Processor" ]]; then',
             script,
         )
+        self.assertIn('min_cpu_efficiency_frac="0.93" fi', script)
         self.assertIn(
             '-min-cpu-efficiency-frac "${min_cpu_efficiency_frac}"', script
         )
         self.assertIn("-min-cpu-seconds 0.25", script)
         self.assertIn("-max-size-frac 1.02", script)
         self.assertIn(
-            "EPYC 7763 uses 0.94x; every other or unknown CPU uses 0.95x",
+            "EPYC 7763 uses 0.94x, EPYC 9V74 uses 0.93x, and every other or",
             script,
         )
+        self.assertIn("unknown CPU uses 0.95x", script)
         self.assertIn("total= fields from value_vlog plus leaf_vlog", script)
         self.assertIn("Upload value-log performance evidence", script)
         self.assertIn("if: always()", script)

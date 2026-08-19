@@ -54,8 +54,7 @@ func TestVectorPartitionProductionAssetBindingsAllowSingleOwnerV1(t *testing.T) 
 
 func newVectorPartitionServingSnapshotFixtureV1(tb testing.TB) *vectorPartitionServingSnapshotFixtureV1 {
 	tb.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := tb.Context()
 	ref := raftplacement.CollectionRefV1{Database: "db", Catalog: "default", Collection: "docs"}
 	features := raftplacement.DefaultFeatureSet()
 	features.Required = append(features.Required, raftcluster.RequiredFeature{Name: raftcluster.FeatureVectorPartitionLifecycle, Version: raftcluster.SupportedFeatureFloors[raftcluster.FeatureVectorPartitionLifecycle]})

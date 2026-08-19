@@ -1,6 +1,6 @@
 # TreeDB VectorDBBench Artifact Harness
 
-Issue: `snissn/gomap#2599`. Parent tracker: `#2598`.
+Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
@@ -39,19 +39,36 @@ collections or modify WAL/storage semantics.
 ## Route-proof sidecar contract
 
 `route_proof.json` uses schema
-`treedb-vectordbbench-route-proof/v1` and contains:
+`treedb-vectordbbench-route-proof/v2` and contains:
 
 - `exact_fp32.route == "exact_hnsw_search_pack_v1"`
 - `exact_fp32.documents_fetched == 0`
 - `exact_fp32.fallback_reason == "none"`
-- `scalar_u8_rerank32.route == "quantized_rerank"`
-- `scalar_u8_rerank32.quantized_scorer_active == 1`
-- `scalar_u8_rerank32.documents_fetched == 0`
-- `scalar_u8_rerank32.quantized_rerank_exact_score_calls <= scalar_u8_rerank32.response.quantized_rerank_candidates`
+- for dimensions `>=32`, both rows report optimized score batches greater than
+  zero and fallback batches equal to zero
+- `scalar_u8_rerank.route == "quantized_rerank"`
+- `scalar_u8_rerank.quantized_scorer_active == 1`
+- `scalar_u8_rerank.documents_fetched == 0`
+- `smoke_top_k <= scalar_u8_rerank.quantized_rerank_exact_score_calls <= scalar_u8_rerank.response.quantized_rerank_candidates`
 - `assertions[]` and top-level `passed` for machine-readable gating.
 
-The scalar smoke loads only a tiny fixture, so exact rerank calls may be below
-`32`; that proves the exact-read bound, not benchmark recall or throughput.
+The default remains the historical tiny `4 x 2`, `topK=2` smoke. Set only the
+three route-proof shape knobs when validating a campaign shape. The harness
+rejects document count, efSearch, or rerank candidates below `topK` before it
+starts the service.
+
+For the Cohere 1M campaign shape:
+
+```sh
+python3 scripts/treedb_vectordbbench_artifact.py \
+  --out "$OUT" \
+  --run-tests off \
+  --smoke-dimension 768 \
+  --smoke-documents 256 \
+  --smoke-top-k 100 \
+  --ef-search 192 \
+  --rerank-candidates 150
+```
 
 ## VectorDBBench checkout
 
@@ -115,7 +132,12 @@ The generated VDBBench commands use unique index names derived from
 `$OUT/vdbbench-results` plus `LOG_FILE` to `$OUT/vdbbench.log`. The exact row is
 `treedbcolumngraphexact`; the scalar row is `treedbscalaru8rerank` with
 `query_mode="quantized_rerank"`, `quantized_index_name="embedding.scalar_u8.fast"`,
-and `quantized_rerank_candidates=32`.
+and `quantized_rerank_candidates=32`. TreeDB rows also receive
+`NUM_PER_BATCH=1000` by default; override only this harness with
+`--num-per-batch` or `TREEDB_VDBBENCH_NUM_PER_BATCH`. The selected value is
+recorded in the manifest, README, and each VDBBench row record. CLI and
+environment values must be positive integers; zero and negative values are
+rejected before service startup.
 
 ## Environment variables
 
@@ -140,6 +162,10 @@ Most flags also have environment equivalents:
 | `TREEDB_VDBBENCH_EF_SEARCH` | HNSW efSearch | `128` |
 | `TREEDB_VDBBENCH_QUANTIZED_INDEX_NAME` | scalar score-plane name | `embedding.scalar_u8.fast` |
 | `TREEDB_VDBBENCH_RERANK_CANDIDATES` | scalar rerank shortlist | `32` |
+| `TREEDB_VDBBENCH_NUM_PER_BATCH` | TreeDB VDBBench load batch size | `1000` |
+| `TREEDB_VDBBENCH_SMOKE_DIMENSION` | route-proof vector dimensions | `2` |
+| `TREEDB_VDBBENCH_SMOKE_DOCUMENTS` | route-proof document count | `4` |
+| `TREEDB_VDBBENCH_SMOKE_TOP_K` | route-proof topK | `2` |
 | `TREEDB_VDBBENCH_EXTRA_ARGS` | appended to each VDBBench row command | unset |
 | `TREEDB_VDBBENCH_USE_UV` | `auto`, `on`, or `off` for VDBBench Python commands | `auto` |
 | `TREEDB_VDBBENCH_TEST_CMD` | override VDBBench test command | auto `uv run ... python -m pytest ...` or `python -m pytest ...` |
