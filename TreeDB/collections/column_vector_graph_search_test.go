@@ -271,10 +271,16 @@ func TestColumnVectorGraphNativeSearchTopRetentionCharacterization4136(t *testin
 				t.Fatalf("limit=%d insert=%d got=%+v want=%+v", limit, i, got, want)
 			}
 		}
-		outputLimit := min(limit, 10)
-		scratch.retainTopBestFirst(outputLimit)
-		if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want[:outputLimit]) {
-			t.Fatalf("limit=%d retained output=%+v want=%+v", limit, scratch.top, want[:outputLimit])
+		retained := append([]columnVectorGraphSearchCandidate(nil), scratch.top...)
+		for _, outputLimit := range []int{1, 10, 32, 33, 100, 128} {
+			if outputLimit > limit {
+				continue
+			}
+			scratch.top = append(scratch.top[:0], retained...)
+			scratch.retainTopBestFirst(outputLimit)
+			if !columnVectorGraphCandidateSlicesEqual2272(scratch.top, want[:outputLimit]) {
+				t.Fatalf("limit=%d output_limit=%d retained=%+v want=%+v", limit, outputLimit, scratch.top, want[:outputLimit])
+			}
 		}
 		scratch.top = scratch.top[:0]
 		if !scratch.insertTop(limit, columnVectorGraphSearchCandidate{ordinal: 1, score: 1}) || len(scratch.top) != 1 {

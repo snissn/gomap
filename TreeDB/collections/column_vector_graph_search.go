@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/brq"
@@ -27,7 +26,7 @@ const columnVectorGraphNativeScratchOversizeSlack = 16
 const columnVectorGraphNativeFrontierCapacityDegreeFloor = 1
 
 // Default TopK values are small; insertion order avoids sort overhead there.
-// Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
+// Larger result sets switch to slices.SortFunc so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
 // Frontier traversal uses a max-heap ordered by score/ordinal. A modest fanout
@@ -2324,8 +2323,14 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 		}
 		return
 	}
-	sort.Slice(order, func(i, j int) bool {
-		return top[order[i]].ordinal < top[order[j]].ordinal
+	slices.SortFunc(order, func(left, right int) int {
+		if top[left].ordinal < top[right].ordinal {
+			return -1
+		}
+		if top[left].ordinal > top[right].ordinal {
+			return 1
+		}
+		return 0
 	})
 }
 
@@ -3036,6 +3041,11 @@ func (s *columnVectorGraphNativeSearchScratch) retainTopBestFirst(limit int) {
 	}
 	if len(s.top) <= limit {
 		s.sortTopBestFirst()
+		return
+	}
+	if limit > columnVectorGraphNativeResultOrderInsertionSortLimit {
+		s.sortTopBestFirst()
+		s.top = s.top[:limit]
 		return
 	}
 
