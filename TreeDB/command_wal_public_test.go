@@ -2365,11 +2365,20 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 
 func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, DisableSideStores: true})
+	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, MaxWALBytes: -1, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1, DisableSideStores: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	cleanupCalls := 0
+	db.cached.SetCommandWALCheckpointCleanupHook(func(sync bool) error {
+		cleanupCalls++
+		if cleanupCalls <= 2 {
+			return nil
+		}
+		return db.cleanupPublicCommandWALCheckpoint(sync)
+	})
 
 	for _, epoch := range []string{"first", "second"} {
 		batch := db.NewBatch()
@@ -2392,6 +2401,10 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	if len(before) < 2 {
 		t.Fatalf("segments after two checkpointed epochs=%v, want closed command WAL generations", before)
 	}
+	if cleanupCalls != 2 {
+		t.Fatalf("suppressed cleanup calls=%d, want 2", cleanupCalls)
+	}
+	db.cached.SetCommandWALCheckpointCleanupHook(db.cleanupPublicCommandWALCheckpoint)
 	stateBefore := db.backend.State()
 	nextLSNBefore := db.backend.CommandWALNextLSN()
 	if err := db.Checkpoint(); err != nil {

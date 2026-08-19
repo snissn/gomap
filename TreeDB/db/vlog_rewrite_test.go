@@ -22,6 +22,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -1041,6 +1042,31 @@ func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *test
 	db, leafLog := openLeafGenerationGCTestDB(t)
 	dir := db.dir
 
+	// Freeze publication of this test's relaxed root at the seal write. That
+	// lets the trailing scan capture its recoverable basis before Checkpoint
+	// advances the durable root, without depending on publication timing.
+	publisherEntered := make(chan struct{})
+	releasePublisher := make(chan struct{})
+	var publisherPaused atomic.Bool
+	restoreCuts := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Root == dir && event.Point == durabilitycut.BeforePublicationSealWrite && publisherPaused.CompareAndSwap(false, true) {
+			close(publisherEntered)
+			<-releasePublisher
+		}
+		return nil
+	})
+	publisherReleased := false
+	releasePublication := func() {
+		if !publisherReleased {
+			close(releasePublisher)
+			publisherReleased = true
+		}
+	}
+	t.Cleanup(func() {
+		releasePublication()
+		restoreCuts()
+	})
+
 	ptr := appendPointersInNewSegment(t, dir, 0, 1, 521_000, 1, func(int) []byte {
 		return bytes.Repeat([]byte("collection-online-stale-leaf-gc|"), 24)
 	})[0]
@@ -1060,6 +1086,11 @@ func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *test
 	if err != nil {
 		t.Fatalf("publish collection leaf-ref root: %v", err)
 	}
+	select {
+	case <-publisherEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("relaxed root publication did not reach seal write")
+	}
 	oldRoot := rootIDs[0]
 	oldLeafPtrs := requireLeafLogRootChildren(t, db, oldRoot)
 	if err := leafLog.Sync(); err != nil {
@@ -1068,6 +1099,14 @@ func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *test
 
 	scanEntered := make(chan struct{})
 	releaseScan := make(chan struct{})
+	scanReleased := false
+	releaseTrailingScan := func() {
+		if !scanReleased {
+			close(releaseScan)
+			scanReleased = true
+		}
+	}
+	t.Cleanup(releaseTrailingScan)
 	var paused atomic.Bool
 	unregister := registerLeafGenerationLiveScanHook(func() {
 		if paused.CompareAndSwap(false, true) {
@@ -1092,14 +1131,20 @@ func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *test
 	select {
 	case <-scanEntered:
 	case <-time.After(5 * time.Second):
-		close(releaseScan)
+		releaseTrailingScan()
 		t.Fatal("online rewrite did not enter trailing leaf-generation scan")
 	}
+	releasePublication()
 	if err := db.Checkpoint(); err != nil {
-		close(releaseScan)
+		releaseTrailingScan()
 		t.Fatalf("checkpoint while trailing leaf-generation scan paused: %v", err)
 	}
-	close(releaseScan)
+	publication := db.rootPublication.coordinator.Stats()
+	if publication.DurableCommitSeq != publication.VisibleCommitSeq {
+		releaseTrailingScan()
+		t.Fatalf("checkpoint publication frontier=(durable=%d visible=%d), want equal", publication.DurableCommitSeq, publication.VisibleCommitSeq)
+	}
+	releaseTrailingScan()
 
 	var result rewriteResult
 	select {
