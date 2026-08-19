@@ -2,11 +2,27 @@ package documentservice
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestBenchmarkVectorSearchResultsOwnsSource(t *testing.T) {
+	source := []collections.VectorIndexSearchResult{
+		{ID: []byte("first"), Ordinal: 7, Score: 0.9},
+		{ID: []byte("second"), Ordinal: 11, Score: 0.8},
+	}
+	got := benchmarkVectorSearchResults(source)
+	clear(source[0].ID)
+	clear(source[1].ID)
+	source[0].Ordinal, source[0].Score = 0, 0
+	source[1].Ordinal, source[1].Score = 0, 0
+	if len(got) != 2 || got[0].ID != "first" || got[0].Ordinal != 7 || got[0].Score != 0.9 || got[1].ID != "second" || got[1].Ordinal != 11 || got[1].Score != 0.8 {
+		t.Fatalf("converted results changed after source reset: %+v", got)
+	}
+}
 
 func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 	svc, db := newTestService(t)
@@ -77,6 +93,14 @@ func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
 			}
 			if res.Stats.HNSWSearchPackCacheHits != 1 || res.Stats.HNSWSearchPackCacheMisses != 0 || res.Stats.HNSWSearchPackCacheBuilds != 0 || res.Stats.DocumentsFetched != 0 {
 				errs <- serviceErrorf(CodeInternal, "unexpected concurrent cache stats: hits=%d misses=%d builds=%d docs=%d", res.Stats.HNSWSearchPackCacheHits, res.Stats.HNSWSearchPackCacheMisses, res.Stats.HNSWSearchPackCacheBuilds, res.Stats.DocumentsFetched)
+				return
+			}
+			wantID := "a"
+			if i%2 == 1 {
+				wantID = "b"
+			}
+			if len(res.Results) == 0 || res.Results[0].ID != wantID {
+				errs <- serviceErrorf(CodeInternal, "query %d first result=%+v want id %q", i, res.Results, wantID)
 			}
 		}()
 	}
@@ -85,6 +109,29 @@ func TestServiceBenchmarkVectorSearchCacheConcurrentReuse(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatalf("concurrent search error: %v", err)
+	}
+}
+
+func BenchmarkServiceBenchmarkVectorSearchBufferScratch(b *testing.B) {
+	svc, db := newTestService(b)
+	defer db.Close()
+	const rows = 4096
+	docs := make([]Document, rows)
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("doc-%04d", i), Embedding: []float32{float32(i + 1), 1}}
+	}
+	createBenchmarkColumnGraphIndex(b, svc, "bench_scratch")
+	loadBenchmarkDocsDeferred(b, svc, "bench_scratch", docs)
+	if _, err := svc.OptimizeIndex(context.Background(), "bench_scratch", OptimizeIndexRequest{}); err != nil {
+		b.Fatalf("OptimizeIndex: %v", err)
+	}
+	req := BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 100, EfSearch: 100}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := svc.SearchBenchmarkVector(context.Background(), "bench_scratch", req); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
@@ -184,6 +231,9 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *te
 	}
 	if got := svc.benchmarkSearchCacheSizeForTest(); got != 0 {
 		t.Fatalf("cache size after close=%d want 0", got)
+	}
+	if got := svc.benchmarkSearchBufferPool.Get(); got != nil {
+		t.Fatalf("benchmark search buffer pool retained %T after close", got)
 	}
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench_close", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("search after close err=%v code=%s, want index_unavailable", err, ErrorCodeOf(err))
