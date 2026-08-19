@@ -7,6 +7,7 @@ import contextlib
 import io
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import treedb_vectordbbench_artifact as harness
@@ -87,6 +88,34 @@ class SmokeShapeTest(unittest.TestCase):
     def test_parse_args_rejects_invalid_shape_before_service_start(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             harness.parse_args(["--smoke-documents", "256", "--smoke-top-k", "100", "--rerank-candidates", "32"])
+
+
+class VDBBenchBatchTest(unittest.TestCase):
+    def test_vdbbench_rows_receive_default_and_override_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = harness.HarnessState(root=Path(tmp))
+            with mock.patch.dict("os.environ", {}, clear=True):
+                args = harness.parse_args([])
+            default = harness.vdbbench_row_env(args, Path("/vdbbench"), Path("/gomap"), state)
+            cli_override_args = harness.parse_args(["--num-per-batch", "500"])
+            with mock.patch.dict("os.environ", {"TREEDB_VDBBENCH_NUM_PER_BATCH": "250"}, clear=True):
+                override_args = harness.parse_args([])
+            override = harness.vdbbench_row_env(override_args, Path("/vdbbench"), Path("/gomap"), state)
+
+        self.assertEqual(default["NUM_PER_BATCH"], "1000")
+        self.assertEqual(cli_override_args.num_per_batch, 500)
+        self.assertEqual(override["NUM_PER_BATCH"], "250")
+
+    def test_parse_args_rejects_nonpositive_batch_before_service_start(self) -> None:
+        for value in ("0", "-1"):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                harness.parse_args(["--num-per-batch", value])
+
+    def test_parse_args_rejects_nonpositive_batch_environment(self) -> None:
+        for value in ("0", "-1"):
+            with mock.patch.dict("os.environ", {"TREEDB_VDBBENCH_NUM_PER_BATCH": value}, clear=True):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    harness.parse_args([])
 
 
 class ManifestFileListTest(unittest.TestCase):
