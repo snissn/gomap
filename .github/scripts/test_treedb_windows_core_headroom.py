@@ -170,7 +170,7 @@ class TreeDBLinuxAllPackagesHeadroomTest(unittest.TestCase):
 
 
 class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
-    def test_db_package_timeout_is_bounded_inside_the_job_cap(self) -> None:
+    def test_package_timeouts_are_bounded_inside_the_job_cap(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         race_job = workflow_job(workflow, "race")
 
@@ -178,25 +178,20 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         self.assertIsNotNone(outer_match, "race job must keep a bounded outer timeout")
         outer_minutes = int(outer_match.group("timeout"))
 
-        command_match = re.search(
-            r"^(?P<command>\s*GOMEMLIMIT=.*go test -json -race -p 1 "
-            r"-timeout (?P<timeout>\d+)m ./db -run \"\$db_regex\".*)$",
-            race_job,
-            re.MULTILINE,
+        commands = (
+            "xargs go test -json -race -p 1 -timeout 12m",
+            'go test -json -race -p 1 -timeout 12m . -run "$root_regex"',
+            'go test -json -race -p 1 -timeout 12m ./caching -run "$caching_regex"',
+            'go test -json -race -p 1 -timeout 12m ./db -run "$db_regex"',
         )
-        self.assertIsNotNone(
-            command_match,
-            "TreeDB/db race invocation must keep coverage and an explicit package timeout",
-        )
-        inner_minutes = int(command_match.group("timeout"))
 
-        # The failed hosted run spent about 11m15s before TreeDB/db and then
-        # exhausted Go's 10-minute default. Twelve minutes restores 20%
-        # package headroom while preserving time for fail-closed artifacts
-        # under the existing 25-minute job cap.
+        # Root and collections each exhausted Go's 10-minute default on later
+        # hosted runs. Use the existing evidence-derived DB budget uniformly.
         self.assertEqual(outer_minutes, 25)
-        self.assertEqual(inner_minutes, 12)
-        self.assertLess(inner_minutes, outer_minutes)
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertIn(command, race_job)
+        self.assertLess(12, outer_minutes)
 
 
 if __name__ == "__main__":
