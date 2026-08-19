@@ -15,16 +15,11 @@ import (
 )
 
 func openLeafGenerationGCTestDB(t *testing.T) (*DB, *rewriteWriter) {
-	return openLeafGenerationGCTestDBWithRootPublicationDelay(t, 0)
-}
-
-func openLeafGenerationGCTestDBWithRootPublicationDelay(t *testing.T, rootPublicationDelay time.Duration) (*DB, *rewriteWriter) {
 	t.Helper()
 	dir := t.TempDir()
 	db, err := Open(Options{
 		Dir:                        dir,
 		Durability:                 DurabilityWALOffRelaxed,
-		rootPublicationFixedDelay:  rootPublicationDelay,
 		DisableBackgroundPrune:     true,
 		IndexOuterLeavesInValueLog: true,
 		LeafPrefixCompression:      true,
