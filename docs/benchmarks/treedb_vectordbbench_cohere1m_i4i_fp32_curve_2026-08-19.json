@@ -880,6 +880,16 @@
     "retrieved": "2026-08-18",
     "leaderboard_url": "https://zilliz.com/vdbbench-leaderboard?dataset=vectorSearch",
     "plotted_points": 49,
+    "milvus_sq4u_comparison_points": [
+      {
+        "recall": 0.9541,
+        "qps": 7704
+      },
+      {
+        "recall": 0.962,
+        "qps": 7024
+      }
+    ],
     "hardware_normalized": false
   },
   "ec2_run_cost": {

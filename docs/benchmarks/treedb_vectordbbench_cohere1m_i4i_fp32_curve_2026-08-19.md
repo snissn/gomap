@@ -141,10 +141,10 @@ fell to 31.61%; the AVX-512 indexed dot kernel itself was only 16.35%.
 The high-ef cost is therefore not simply an unoptimized distance kernel. The
 path exactly re-scores the candidates returned by every selected partition
 using the deterministic public binary64 accumulation contract. Successive
-allocation snapshots recorded 16.7 GiB and 5.38 GiB of additional allocation
+allocation snapshots recorded 16.3 GiB and 5.25 GiB of additional allocation
 over the complete p16/ef100 and p16/ef1000 phases; the lower latter total is a
 consequence of much lower query throughput. Live heap rose from 734 MiB to
-1.06 GiB to 1.16 GiB, led by retained native candidate and visited scratch.
+1.03 GiB to 1.13 GiB, led by retained native candidate and visited scratch.
 Memory is not the present hardware limit, but pooling and bounding this scratch
 will matter when choosing a smaller-RAM, higher-vCPU instance.
 
@@ -193,7 +193,7 @@ used by local HNSW.
 Reopening all 561 local packs took 38m36s before the first query. The newer
 generation search-open plan removed repeated manifest work, but every local
 searcher still validated/prepared the same 3.29 GiB authoritative source.
-Userspace read more than 1.84 TiB from warm page cache with zero block-device
+Userspace read more than 1.67 TiB from warm page cache with zero block-device
 reads. A 30-second profile attributed 31.17% to CRC32 and 26.95% to
 `prepareSectionViewsWithContext`. Generation-scoped prepared source/checksum
 state should be shared across local searchers; this is a CPU cold-start defect,
@@ -238,6 +238,7 @@ Its size is 17,873,167,472 bytes and SHA-256 is
 Restore it to instance-store NVMe with:
 
 ```sh
+mkdir -p /mnt/nvme/db
 aws s3 cp s3://treedb-benchmark-assets-941641221830-us-west-1/cohere-medium-1m/partitioned/graph-v1-local-m18-efc256/gomap-8c6ef660/treedb-cohere1m-partitioned-p561-o20-m18-efc256-8c6ef660.tar.zst - \
   | tar -C /mnt/nvme/db -I zstd -xf -
 ```
