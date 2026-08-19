@@ -586,9 +586,9 @@ func catalogMetaTestConfig(root string, id NodeID, peers []Peer) Config {
 
 func catalogMetaFastRaftConfig() *hraft.Config {
 	config := hraft.DefaultConfig()
-	config.HeartbeatTimeout = 300 * time.Millisecond
-	config.ElectionTimeout = 300 * time.Millisecond
-	config.LeaderLeaseTimeout = 300 * time.Millisecond
+	config.HeartbeatTimeout = 2 * time.Second
+	config.ElectionTimeout = 2 * time.Second
+	config.LeaderLeaseTimeout = 2 * time.Second
 	config.CommitTimeout = 5 * time.Millisecond
 	config.SnapshotInterval = time.Hour
 	config.SnapshotThreshold = ^uint64(0)
@@ -597,6 +597,14 @@ func catalogMetaFastRaftConfig() *hraft.Config {
 	config.LogLevel = "ERROR"
 	config.NoLegacyTelemetry = true
 	return config
+}
+
+func TestCatalogMetaFastRaftConfigProvidesSchedulingHeadroom(t *testing.T) {
+	config := catalogMetaFastRaftConfig()
+	const minimum = 2 * time.Second
+	if config.HeartbeatTimeout < minimum || config.ElectionTimeout < minimum || config.LeaderLeaseTimeout < minimum {
+		t.Fatalf("coordination timeouts heartbeat=%s election=%s lease=%s want each at least %s", config.HeartbeatTimeout, config.ElectionTimeout, config.LeaderLeaseTimeout, minimum)
+	}
 }
 
 func waitCatalogMetaLeader(t *testing.T, providers map[NodeID]*CatalogMetaRaftProviderV1) NodeID {
@@ -613,7 +621,14 @@ func waitCatalogMetaLeader(t *testing.T, providers map[NodeID]*CatalogMetaRaftPr
 				leader = id
 			}
 		}
-		return leader != ""
+		if leader == "" {
+			return false
+		}
+		provider := providers[leader]
+		ctx, cancel := context.WithTimeout(context.Background(), provider.applyTimeout)
+		err := waitHashicorpRaftFuture(ctx, provider.raft.VerifyLeader())
+		cancel()
+		return err == nil && provider.raft.State() == hraft.Leader
 	}, fmt.Sprintf("catalog meta cluster has no unique leader among %d providers", len(providers)))
 	return leader
 }
