@@ -185,9 +185,11 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             'go test -json -race -p 1 -timeout 12m ./db -run "$db_regex"',
         )
 
-        # Root and collections each exhausted Go's 10-minute default on later
-        # hosted runs. Use the existing evidence-derived DB budget uniformly.
-        self.assertEqual(outer_minutes, 25)
+        # Healthy exact-head race jobs took 17m19s, 17m52s, and 17m35s; a
+        # 25m18s recurrence was outer-canceled during the final DB invocation
+        # before its preserved 12m inner bound. Keep bounded headroom for the
+        # healthy pre-DB path, final 12m, and artifact collection.
+        self.assertEqual(outer_minutes, 40)
         for command in commands:
             with self.subTest(command=command):
                 self.assertIn(command, race_job)

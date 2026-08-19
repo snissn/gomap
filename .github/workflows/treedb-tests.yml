@@ -502,7 +502,7 @@ jobs:
           - shard: 2
             shard_index: 1
             shard_count: 2
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
