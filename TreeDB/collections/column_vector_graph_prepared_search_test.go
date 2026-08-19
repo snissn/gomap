@@ -213,6 +213,56 @@ func TestColumnVectorGraphPreparedSearchNonMmapCompatibility2045(t *testing.T) {
 	assertColumnVectorGraphDebugCountersZero2126(t, stats)
 }
 
+func TestColumnVectorGraphPreparedSearchNonMmapWarmScratchZeroAllocs3996(t *testing.T) {
+	if collectionsRaceEnabled {
+		t.Skip("exact allocation counts are unstable under race instrumentation")
+	}
+	rows := columnGraphRebuildSyntheticRowsV2A(24, 8)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	forceColumnVectorGraphPreparedSearchNonMmapCompatibility2045(reader)
+	if err := maybePrepareColumnVectorGraphPreparedSearchView(reader); err != nil {
+		t.Fatalf("maybePrepareColumnVectorGraphPreparedSearchView: %v", err)
+	}
+	if reader.preparedSearch != nil {
+		t.Fatal("preparedSearch is not nil after forcing the non-mmap compatibility route")
+	}
+	query := append([]float32(nil), rows[5].vector...)
+	options := columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: len(rows)}
+	var scratch columnVectorGraphNativeSearchScratch
+	if _, _, err := reader.SearchCosine(query, options, &scratch); err != nil {
+		t.Fatalf("warm SearchCosine: %v", err)
+	}
+	if !enterIsolatedVectorAllocationGate(t, "non-mmap-native-search-warm-scratch") {
+		return
+	}
+	var searchErr error
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, _, err := reader.SearchCosine(query, options, &scratch)
+		if err != nil {
+			searchErr = err
+			return
+		}
+		if len(got) == 0 {
+			searchErr = fmt.Errorf("SearchCosine returned no results")
+		}
+	})
+	if searchErr != nil {
+		t.Fatalf("SearchCosine: %v", searchErr)
+	}
+	if allocs != 0 {
+		t.Fatalf("non-mmap warm SearchCosine allocs=%v want zero", allocs)
+	}
+}
+
 func TestColumnVectorGraphPreparedSearchStaleStateFailsClosed2045(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("combined prepared graph-search view requires mmap_direct test support")

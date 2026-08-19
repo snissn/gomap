@@ -67,6 +67,23 @@ func (s *columnVectorGraphSearchSource) reset() {
 	*s = columnVectorGraphSearchSource{}
 }
 
+// liveFor reports whether the source bindings prepared for plan can be reused
+// for another search. The reader owns these immutable sources for its lifetime;
+// an explicitly closed or replaced source must be prepared again so the normal
+// source validation and fallback behavior remains in force.
+func (s *columnVectorGraphSearchSource) liveFor(plan *columnVectorGraphSearchPlan) bool {
+	if s == nil || plan == nil || plan.reader == nil || s.reader != plan.reader || s.dims != plan.reader.def.Dimensions || s.rowCount != plan.reader.RowCount() {
+		return false
+	}
+	if s.vectorKind == columnVectorGraphSearchVectorSourceTypedColumn && (s.typedVectorSource == nil || s.typedVectorSource != plan.reader.typedVectorSource || s.typedVectorSource.closed) {
+		return false
+	}
+	if s.normKind == columnVectorGraphSearchNormSourceInvNormByOrdinal && (s.invNormSource == nil || s.invNormSource != plan.reader.invNormSource || s.invNormSource.closed || (s.invNormSource.handle != nil && s.invNormSource.handle.Released())) {
+		return false
+	}
+	return true
+}
+
 func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPlan) error {
 	s.reset()
 	if plan == nil || plan.reader == nil {
