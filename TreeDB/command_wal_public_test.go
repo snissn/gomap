@@ -2365,7 +2365,7 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 
 func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testing.T) {
 	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1, DisableSideStores: true})
+	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, CommandWALStatsScan: true, MaxWALBytes: -1, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1, DisableSideStores: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
