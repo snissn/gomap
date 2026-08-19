@@ -338,6 +338,11 @@ func materializeRetainedLocalHNSWVariantPartitionsV1(source *m8ProductionMultiGr
 	if err != nil {
 		return nil, err
 	}
+	// Read-only retained inputs were already reopened from a durable source.
+	if err := source.db.Checkpoint(); err != nil && !errors.Is(err, backenddb.ErrReadOnly) {
+		_ = os.RemoveAll(clone)
+		return nil, fmt.Errorf("checkpoint retained M8 source before clone: %w", err)
+	}
 	if output, err := vectorPartitionCloneTreeCommandV1(source.dir, clone).CombinedOutput(); err != nil {
 		_ = os.RemoveAll(clone)
 		return nil, fmt.Errorf("reflink clone retained DB: %w: %s", err, strings.TrimSpace(string(output)))
