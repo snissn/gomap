@@ -1038,7 +1038,9 @@ func TestValueLogRewriteOnline_RewritesCollectionLeafRefRootPointers(t *testing.
 }
 
 func TestValueLogRewriteOnline_RetainsStaleTrailingLeafGenerationCleanup(t *testing.T) {
-	db, leafLog := openLeafGenerationGCTestDB(t)
+	// Keep the relaxed root unpublished until Checkpoint advances its durable
+	// basis while the trailing leaf-generation scan is paused.
+	db, leafLog := openLeafGenerationGCTestDBWithRootPublicationDelay(t, 100*time.Millisecond)
 	dir := db.dir
 
 	ptr := appendPointersInNewSegment(t, dir, 0, 1, 521_000, 1, func(int) []byte {
