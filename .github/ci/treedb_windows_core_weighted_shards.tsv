@@ -1,5 +1,5 @@
-# kind	shard	item	max seconds from successful main medians and PR runs 32407394988, 32410661113, 32412648919
-root	0	TestPowerLossOracleEnumerateCutPoints	322.12
+# kind	shard	item	max seconds from successful main medians and PR runs 32407394988, 32410661113, 32412648919, 32416637299
+package	0	github.com/snissn/gomap/TreeDB/mvcc	166.88
 root	0	TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords	11.24
 root	1	TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay	16.22
 root	1	TestCrashRecovery_WALReplayIsCoherent	15.65
@@ -29,7 +29,6 @@ db	4	TestCompactIndex_AllocatesNewPagesByAppending	27.52
 db	4	TestIndexVacuumTriggerReportContextCancelsCollectionWalk	13.68
 package	4	github.com/snissn/gomap/TreeDB/internal/powerlosscert	21.18
 package	4	github.com/snissn/gomap/TreeDB/internal/raftharness	16.90
-package	4	github.com/snissn/gomap/TreeDB/mvcc	170.29
 root	4	TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys	16.16
 root	4	TestPowerLossCertificationGroupedDependencyFailurePublicReopen	15.40
 root	4	TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages	36.38

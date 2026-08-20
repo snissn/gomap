@@ -138,7 +138,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
-    def test_core_shards_use_seven_weighted_jobs_plus_dedicated_mongo(self) -> None:
+    def test_core_shards_use_seven_weighted_jobs_plus_dedicated_heavy_tests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
             len(re.findall(r"^          - name: windows-core-\d+$", workflow, re.MULTILINE)),
@@ -150,6 +150,7 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                 self.assertEqual(matrix_timeout(workflow, job_name), 40)
                 self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 7))
         self.assertEqual(matrix_timeout(workflow, "windows-mongo-gateway"), 40)
+        self.assertEqual(matrix_timeout(workflow, "windows-powerloss-oracle"), 40)
 
     def test_core_selector_weights_every_split_domain(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -167,6 +168,15 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
             "go test -json -timeout 30m -p 1 ./mongo_gateway",
             body,
         )
+
+    def test_powerloss_oracle_has_one_dedicated_windows_shard(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        core = shell_case(workflow_job(workflow, "test"), "windows-core")
+        dedicated = shell_case(
+            workflow_job(workflow, "test"), "windows-powerloss-oracle"
+        )
+        self.assertIn("grep -v '^TestPowerLossOracleEnumerateCutPoints$'", core)
+        self.assertIn("-run '^TestPowerLossOracleEnumerateCutPoints$'", dedicated)
 
     def test_collections_runnables_remain_individually_sharded(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
