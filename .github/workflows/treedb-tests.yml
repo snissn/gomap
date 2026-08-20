@@ -279,6 +279,10 @@ jobs:
             os: windows-latest
             timeout: 40
             shard_kind: windows-mongo
+          - name: windows-nativewire
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-nativewire
           - name: windows-powerloss-oracle
             os: windows-latest
             timeout: 40
@@ -477,7 +481,7 @@ jobs:
               db_test_file="$(make_tmp)"
               collections_all_file="$(make_tmp)"
               collections_test_file="$(make_tmp)"
-              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | grep -v '^github.com/snissn/gomap/TreeDB/mongo_gateway$' > "$package_all_file"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | grep -v '^github.com/snissn/gomap/TreeDB/mongo_gateway$' | grep -v '^github.com/snissn/gomap/TreeDB/nativewire$' > "$package_all_file"
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' | grep -v '^TestPowerLossOracleEnumerateCutPoints$' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
               go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | grep -E '^(Test|Example|Fuzz)' > "$collections_all_file"
@@ -512,6 +516,10 @@ jobs:
             windows-mongo)
               echo "TreeDB/mongo_gateway dedicated Windows shard"
               go test -json -timeout 30m -p 1 ./mongo_gateway | tee treedb-test.jsonl
+              ;;
+            windows-nativewire)
+              echo "TreeDB/nativewire dedicated Windows shard"
+              go test -json -timeout 30m -p 1 ./nativewire | tee treedb-test.jsonl
               ;;
             windows-powerloss-oracle)
               echo "TreeDB power-loss oracle dedicated Windows shard"

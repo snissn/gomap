@@ -150,6 +150,7 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                 self.assertEqual(matrix_timeout(workflow, job_name), 40)
                 self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 7))
         self.assertEqual(matrix_timeout(workflow, "windows-mongo-gateway"), 40)
+        self.assertEqual(matrix_timeout(workflow, "windows-nativewire"), 40)
         self.assertEqual(matrix_timeout(workflow, "windows-powerloss-oracle"), 40)
 
     def test_core_selector_weights_every_split_domain(self) -> None:
@@ -157,6 +158,7 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
         body = shell_case(workflow_job(workflow, "test"), "windows-core")
         self.assertIn("treedb_windows_core_weighted_shards.tsv", body)
         self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/mongo_gateway$'", body)
+        self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/nativewire$'", body)
         for kind in ("package", "root", "db", "collections"):
             with self.subTest(kind=kind):
                 self.assertIn(f'weighted_shard_file {kind} "$package_shard_index"', body)
@@ -166,6 +168,14 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
         body = shell_case(workflow_job(workflow, "test"), "windows-mongo")
         self.assertIn(
             "go test -json -timeout 30m -p 1 ./mongo_gateway",
+            body,
+        )
+
+    def test_nativewire_has_one_dedicated_windows_shard(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        body = shell_case(workflow_job(workflow, "test"), "windows-nativewire")
+        self.assertIn(
+            "go test -json -timeout 30m -p 1 ./nativewire",
             body,
         )
 

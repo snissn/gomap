@@ -34,7 +34,6 @@ root	4	TestPowerLossCertificationGroupedDependencyFailurePublicReopen	15.40
 root	4	TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages	36.38
 root	4	TestReopenVerify_IndexColumnarLeaves	10.25
 db	5	TestFuzzModel	11.94
-package	5	github.com/snissn/gomap/TreeDB/nativewire	245.53
 root	5	TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen	16.49
 root	5	TestProductionProfileLifecycleFrontiersMatchFrozenContract	15.76
 root	5	TestProductionProfilesForcedPointersDeleteReuseRotationReopen	20.64
