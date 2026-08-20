@@ -47,9 +47,11 @@ python -m pip install -e .
 ```
 
 The client has no runtime dependencies outside the Python standard library.
-Each client instance reuses one HTTP(S) connection; call `client.close()` when
-the instance is no longer needed. Only `/search/vector-index` retries once
-after a broken connection; writes are never replayed automatically.
+Benchmark `/search/vector-index` calls reuse one HTTP(S) connection per client;
+call `client.close()` when the instance is no longer needed. Ordinary client
+and Haystack operations retain independent urllib requests. Only
+`/search/vector-index` retries once after a broken connection; writes are never
+replayed automatically.
 
 ## Run tests
 

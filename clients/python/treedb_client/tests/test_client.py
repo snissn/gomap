@@ -149,15 +149,41 @@ def json_body(record: dict[str, Any]) -> Any:
 
 class TreeDBClientTests(unittest.TestCase):
     def test_reuses_connection_and_close_reconnects(self) -> None:
-        with FixtureServer({("GET", "/v1/health"): (200, {"ok": True}, 0)}) as server:
+        route = ("POST", "/v1/indexes/docs/search/vector-index")
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+        with FixtureServer({route: (200, response, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
 
-            self.assertTrue(client.health()["ok"])
-            self.assertTrue(client.health()["ok"])
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
             self.assertEqual(server.accepted_connections, 1)
             client.close()
             self.assertIsNone(client._connection.sock)  # type: ignore[attr-defined]
-            self.assertTrue(client.health()["ok"])
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(server.accepted_connections, 2)
+            client.close()
+
+    def test_ordinary_requests_remain_independent(self) -> None:
+        with FixtureServer({("GET", "/v1/health"): (200, {"ok": True}, 0.05)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            start = threading.Barrier(3)
+            errors: list[Exception] = []
+
+            def health() -> None:
+                start.wait()
+                try:
+                    client.health()
+                except Exception as exc:  # pragma: no cover - assertion below reports it
+                    errors.append(exc)
+
+            first = threading.Thread(target=health)
+            second = threading.Thread(target=health)
+            first.start()
+            second.start()
+            start.wait()
+            first.join(timeout=2)
+            second.join(timeout=2)
+            self.assertFalse(errors)
             self.assertEqual(server.accepted_connections, 2)
             client.close()
 
@@ -641,15 +667,12 @@ class TreeDBClientTests(unittest.TestCase):
                 client.health()
 
     def test_peer_reset_maps_to_transport_error(self) -> None:
-        class ResettingConnection:
-            def request(self, method: str, url: str, body: Any = None, headers: Any = None) -> None:
+        class ResettingOpener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
                 raise ConnectionResetError("connection reset by peer")
 
-            def close(self) -> None:
-                return
-
         client = TreeDBClient("http://127.0.0.1:9", timeout=1)
-        client._connection = ResettingConnection()  # type: ignore[assignment]
+        client._opener = ResettingOpener()  # type: ignore[attr-defined]
 
         with self.assertRaisesRegex(TreeDBTransportError, "connection reset"):
             client.health()

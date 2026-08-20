@@ -7,7 +7,9 @@ import http.client
 import json
 import socket
 import struct
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional, TypeVar, Union
 
@@ -61,6 +63,7 @@ class TreeDBClient:
         self._request_prefix = parsed.path
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         self._connection = connection_type(parsed.hostname, parsed.port, timeout=self.timeout)
+        self._opener = urllib.request.build_opener()
 
     def close(self) -> None:
         """Close this client's reusable HTTP connection."""
@@ -447,6 +450,26 @@ class TreeDBClient:
         self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False
     ) -> Any:
         url = self.base_url + path
+        if not retry_broken_connection:
+            request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
+            try:
+                with self._opener.open(request, timeout=self.timeout) as response:
+                    response_body = response.read()
+                    return self._decode_success(response.getcode(), response_body)
+            except urllib.error.HTTPError as exc:
+                try:
+                    response_body = exc.read()
+                finally:
+                    exc.close()
+                raise self._decode_error(exc.code, response_body) from None
+            except urllib.error.URLError as exc:
+                if _is_timeout(exc.reason):
+                    raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
+                raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc.reason}") from exc
+            except (socket.timeout, TimeoutError) as exc:
+                raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
+            except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+                raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
         for attempt in range(2 if retry_broken_connection else 1):
             try:
                 self._connection.request(method, self._request_prefix + path, body=data, headers=dict(headers))
@@ -727,3 +750,9 @@ def _decode_json_body(body: bytes, *, status_code: int) -> Any:
 
 def _body_to_text(body: bytes) -> str:
     return body.decode("utf-8", errors="replace")
+
+
+def _is_timeout(reason: Any) -> bool:
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return True
+    return "timed out" in str(reason).lower()
