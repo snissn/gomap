@@ -384,11 +384,14 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(server.records[0]["path"], "/api/v1/health")
 
     def test_base_url_path_params_are_preserved(self) -> None:
-        with FixtureServer({("GET", "/api;v=1/v1/health"): (200, {"ok": True}, 0)}, prefix="/api;v=1") as server:
+        route = ("POST", "/api;v=1/v1/indexes/docs/search/vector-index")
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+        with FixtureServer({route: (200, response, 0)}, prefix="/api;v=1") as server:
             client = TreeDBClient(server.base_url, timeout=1)
 
-            self.assertEqual(client.health()["ok"], True)
-            self.assertEqual(server.records[0]["path"], "/api;v=1/v1/health")
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(server.records[0]["path"], route[1])
+            client.close()
 
     def test_upsert_documents_omits_response_score_from_write_payload(self) -> None:
         route = "/v1/indexes/docs/documents/upsert"
