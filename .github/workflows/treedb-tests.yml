@@ -194,6 +194,44 @@ jobs:
           path: ${{ runner.temp }}/mvcc-raw-path-gate
           if-no-files-found: error
 
+  vet:
+    name: vet (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+          cache-dependency-path: |
+            go.sum
+
+      - name: CI shard contracts
+        if: ${{ matrix.name == 'ubuntu' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_treedb_windows_core_headroom.py
+
+      - name: Vet
+        working-directory: TreeDB
+        run: go vet ./...
+
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -201,51 +239,66 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: ubuntu-latest
+          - name: ubuntu-latest-1
             os: ubuntu-latest
             timeout: 25
             shard_kind: all
-            run_vet: true
-          - name: macos-latest
+            package_shard_index: 0
+            package_shard_count: 2
+          - name: ubuntu-latest-2
+            os: ubuntu-latest
+            timeout: 25
+            shard_kind: all
+            package_shard_index: 1
+            package_shard_count: 2
+          - name: macos-latest-1
             os: macos-latest
             timeout: 30
             shard_kind: all
-            run_vet: true
+            package_shard_index: 0
+            package_shard_count: 2
+          - name: macos-latest-2
+            os: macos-latest
+            timeout: 30
+            shard_kind: all
+            package_shard_index: 1
+            package_shard_count: 2
           - name: windows-core-1
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 0
-            package_shard_count: 5
-            run_vet: true
+            package_shard_count: 6
           - name: windows-core-2
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 1
-            package_shard_count: 5
-            run_vet: false
+            package_shard_count: 6
           - name: windows-core-3
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 2
-            package_shard_count: 5
-            run_vet: false
+            package_shard_count: 6
           - name: windows-core-4
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 3
-            package_shard_count: 5
-            run_vet: false
+            package_shard_count: 6
           - name: windows-core-5
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 4
-            package_shard_count: 5
-            run_vet: false
+            package_shard_count: 6
+          - name: windows-core-6
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 5
+            package_shard_count: 6
           - name: windows-caching-heavy-1
             os: windows-latest
             timeout: 25
@@ -289,11 +342,6 @@ jobs:
           cache-dependency-path: |
             go.sum
 
-      - name: Vet
-        if: ${{ matrix.run_vet != false && matrix.shard_kind != 'windows-caching-heavy' && matrix.shard_kind != 'windows-caching-rest' }}
-        working-directory: TreeDB
-        run: go vet ./...
-
       - name: Test
         working-directory: TreeDB
         shell: bash
@@ -311,6 +359,26 @@ jobs:
           }
           ci_list() {
             sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
+          }
+          weighted_shard_file() {
+            kind="$1"
+            shard_index="$2"
+            shard_count="$3"
+            weights_file="$4"
+            all_file="$5"
+            shard_file="$6"
+            awk -F '\t' -v kind="$kind" -v idx="$shard_index" -v n="$shard_count" '
+              NR == FNR {
+                if ($0 !~ /^#/ && NF >= 3 && $1 == kind) pinned[$3] = $2
+                next
+              }
+              $0 in pinned {
+                if ((pinned[$0] + 0) == idx) print
+                next
+              }
+              (fallback % n) == idx { print }
+              { fallback++ }
+            ' "$weights_file" "$all_file" > "$shard_file"
           }
           run_named_test_file() {
             pkg="$1"
@@ -352,7 +420,15 @@ jobs:
           trap cleanup EXIT
           case "${{ matrix.shard_kind }}" in
             all)
-              go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl
+              package_shard_index="${{ matrix.package_shard_index }}"
+              package_shard_count="${{ matrix.package_shard_count }}"
+              package_all_file="$(make_tmp)"
+              package_file="$(make_tmp)"
+              go list ./... > "$package_all_file"
+              weighted_shard_file package "$package_shard_index" "$package_shard_count" ../.github/ci/treedb_unix_weighted_shards.tsv "$package_all_file" "$package_file"
+              echo "TreeDB package shard=${package_shard_index}/${package_shard_count}"
+              cat "$package_file"
+              xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
               ;;
             windows-core)
               package_shard_index="${{ matrix.package_shard_index }}"
@@ -363,6 +439,7 @@ jobs:
               if [ -z "$package_shard_count" ] || [ "$package_shard_count" -lt 1 ]; then
                 package_shard_count=1
               fi
+              package_all_file="$(make_tmp)"
               package_file="$(make_tmp)"
               root_all_file="$(make_tmp)"
               root_test_file="$(make_tmp)"
@@ -370,13 +447,15 @@ jobs:
               db_test_file="$(make_tmp)"
               collections_all_file="$(make_tmp)"
               collections_test_file="$(make_tmp)"
-              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
               go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
               go test ./collections -list '^(Test|Example|Fuzz).*' | tr -d '\r' | grep -E '^(Test|Example|Fuzz)' > "$collections_all_file"
-              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
-              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
-              awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$collections_all_file" > "$collections_test_file"
+              weights_file=../.github/ci/treedb_windows_core_weighted_shards.tsv
+              weighted_shard_file package "$package_shard_index" "$package_shard_count" "$weights_file" "$package_all_file" "$package_file"
+              weighted_shard_file root "$package_shard_index" "$package_shard_count" "$weights_file" "$root_all_file" "$root_test_file"
+              weighted_shard_file db "$package_shard_index" "$package_shard_count" "$weights_file" "$db_all_file" "$db_test_file"
+              weighted_shard_file collections "$package_shard_index" "$package_shard_count" "$weights_file" "$collections_all_file" "$collections_test_file"
               echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
               ran_tests=false
               if [ -s "$package_file" ]; then
@@ -498,10 +577,13 @@ jobs:
         include:
           - shard: 1
             shard_index: 0
-            shard_count: 2
+            shard_count: 3
           - shard: 2
             shard_index: 1
-            shard_count: 2
+            shard_count: 3
+          - shard: 3
+            shard_index: 2
+            shard_count: 3
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -527,52 +609,46 @@ jobs:
           make_tmp() {
             mktemp "$tmp_dir/tmp.XXXXXX"
           }
-          ci_list() {
-            sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
+          weighted_shard_file() {
+            kind="$1"
+            shard_index="$2"
+            shard_count="$3"
+            weights_file="$4"
+            all_file="$5"
+            shard_file="$6"
+            awk -F '\t' -v kind="$kind" -v idx="$shard_index" -v n="$shard_count" '
+              NR == FNR {
+                if ($0 !~ /^#/ && NF >= 3 && $1 == kind) pinned[$3] = $2
+                next
+              }
+              $0 in pinned {
+                if ((pinned[$0] + 0) == idx) print
+                next
+              }
+              (fallback % n) == idx { print }
+              { fallback++ }
+            ' "$weights_file" "$all_file" > "$shard_file"
           }
           trap cleanup EXIT
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
+          weights_file=../.github/ci/treedb_race_weighted_shards.tsv
+          package_all_file="$(make_tmp)"
           package_file="$(make_tmp)"
           root_all_file="$(make_tmp)"
           root_test_file="$(make_tmp)"
-          root_pin_file="$(make_tmp)"
           caching_all_file="$(make_tmp)"
           caching_test_file="$(make_tmp)"
-          caching_pin_file="$(make_tmp)"
           db_all_file="$(make_tmp)"
           db_test_file="$(make_tmp)"
-          db_pin_file="$(make_tmp)"
-          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
           go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
           go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
           go test ./db -list 'Test.*' | grep '^Test' > "$db_all_file"
-          ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
-          ci_list ../.github/ci/treedb_caching_race_weighted_shard0_tests.txt > "$caching_pin_file"
-          ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
-          if [ "$shard_count" -eq 2 ]; then
-            case "$shard_index" in
-              0)
-                grep -F -x -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                grep -F -x -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file" || true
-                grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                ;;
-              1)
-                grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
-                grep -F -x -v -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file" || true
-                grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
-                ;;
-              *)
-                : > "$root_test_file"
-                : > "$caching_test_file"
-                : > "$db_test_file"
-                ;;
-            esac
-          else
-            awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$root_all_file" > "$root_test_file"
-            awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$caching_all_file" > "$caching_test_file"
-            awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
-          fi
+          weighted_shard_file package "$shard_index" "$shard_count" "$weights_file" "$package_all_file" "$package_file"
+          weighted_shard_file root "$shard_index" "$shard_count" "$weights_file" "$root_all_file" "$root_test_file"
+          weighted_shard_file caching "$shard_index" "$shard_count" "$weights_file" "$caching_all_file" "$caching_test_file"
+          weighted_shard_file db "$shard_index" "$shard_count" "$weights_file" "$db_all_file" "$db_test_file"
           echo "TreeDB race package shard=${shard_index}/${shard_count}"
           ran_tests=false
           if [ -s "$package_file" ]; then
@@ -902,6 +978,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - mvcc-raw-path-gate
+      - vet
       - test
       - race
       - perf
@@ -913,6 +990,7 @@ jobs:
         shell: bash
         env:
           MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          VET_RESULT: ${{ needs.vet.result }}
           TEST_RESULT: ${{ needs.test.result }}
           RACE_RESULT: ${{ needs.race.result }}
           PERF_RESULT: ${{ needs.perf.result }}
@@ -922,6 +1000,7 @@ jobs:
           failed=false
           for result in \
             "$MVCC_RESULT" \
+            "$VET_RESULT" \
             "$TEST_RESULT" \
             "$RACE_RESULT" \
             "$PERF_RESULT" \

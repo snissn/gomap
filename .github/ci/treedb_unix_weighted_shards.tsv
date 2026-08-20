@@ -1,0 +1,11 @@
+# kind	shard	item	mean of Ubuntu/macOS medians from successful main runs 32400622297, 32350821222, 32348450505
+package	0	github.com/snissn/gomap/TreeDB	92.87
+package	0	github.com/snissn/gomap/TreeDB/internal/raftcluster	90.30
+package	0	github.com/snissn/gomap/TreeDB/collections	63.55
+package	0	github.com/snissn/gomap/TreeDB/internal/raftplacement	55.61
+package	0	github.com/snissn/gomap/TreeDB/internal/rootpublication	10.32
+package	1	github.com/snissn/gomap/TreeDB/nativewire	171.53
+package	1	github.com/snissn/gomap/TreeDB/db	85.39
+package	1	github.com/snissn/gomap/TreeDB/caching	42.11
+package	1	github.com/snissn/gomap/TreeDB/internal/powerlosscert	11.73
+package	1	github.com/snissn/gomap/TreeDB/mongo_gateway	11.64

@@ -49,6 +49,7 @@ class TreeDBCIContractTests(unittest.TestCase):
 
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
+            ("vet", "test"),
             ("test", "race"),
             ("race", "perf"),
             ("perf", "snapshot-iterator-perf"),
@@ -99,6 +100,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", required)
         for job in (
             "mvcc-raw-path-gate",
+            "vet",
             "test",
             "race",
             "perf",

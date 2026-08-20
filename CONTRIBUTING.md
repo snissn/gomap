@@ -34,8 +34,8 @@ This repo is a dev playground for two storage engines (HashDB + TreeDB) and benc
 
 GitHub Actions runs with `actions/setup-go` using the root `go.mod` as the version file.
 
-- Root module `go vet` + `go test ./...` (Linux + macOS)
-- TreeDB `go vet` + `go test ./...` (Linux + macOS)
+- Non-TreeDB root packages: `go vet` + weighted `go test` shards (Linux + macOS)
+- TreeDB: separate vet jobs plus weighted test/race shards (Linux, macOS, Windows)
 - `cmd/unified_bench` `go vet` + `go test ./...` (Linux + macOS)
 - HashDB `go vet` + `go test ./...` (Windows)
 - Manual: `-race` runs (workflow dispatch)
