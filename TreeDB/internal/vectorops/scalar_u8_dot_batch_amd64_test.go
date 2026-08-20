@@ -11,7 +11,7 @@ import (
 func TestScalarU8DotBatchAMD64Dispatch2702(t *testing.T) {
 	want := "indexed_amd64_sse2"
 	switch {
-	case cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512DQ && cpu.X86.HasAVX512VL && cpu.X86.HasAVX512VNNI:
+	case cpu.X86.HasAVX2 && cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512DQ && cpu.X86.HasAVX512VL && cpu.X86.HasAVX512VNNI:
 		want = "indexed_amd64_avx512_vnni"
 	case cpu.X86.HasAVX2:
 		want = "indexed_amd64_avx2"

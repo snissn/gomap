@@ -5,7 +5,7 @@ package vectorops
 import "golang.org/x/sys/cpu"
 
 var (
-	dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable = cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512DQ && cpu.X86.HasAVX512VL && cpu.X86.HasAVX512VNNI
+	dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable = cpu.X86.HasAVX2 && cpu.X86.HasAVX512F && cpu.X86.HasAVX512BW && cpu.X86.HasAVX512DQ && cpu.X86.HasAVX512VL && cpu.X86.HasAVX512VNNI
 	dotScalarU8CenteredIndexedAMD64AVX2Available       = cpu.X86.HasAVX2
 )
 
