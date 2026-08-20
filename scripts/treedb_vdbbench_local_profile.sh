@@ -127,6 +127,12 @@ for ef in "${ef_values[@]}"; do
 	[[ $ef =~ ^[0-9]+$ && $ef -gt 0 ]] || die "EFS must contain positive integers: $EFS"
 done
 
+if [[ -e $RUN_DIR && ! -d $RUN_DIR ]]; then
+	die "RUN_DIR is not a directory: $RUN_DIR"
+fi
+if [[ -d $RUN_DIR ]] && [[ -n $(find "$RUN_DIR" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+	die "RUN_DIR must be empty: $RUN_DIR"
+fi
 mkdir -p "$RUN_DIR" "$RUN_DIR/bin" "$RUN_DIR/cells"
 SEARCH_SCRIPT=$RUN_DIR/search_existing_index.py
 printf '%s\n' \
@@ -225,7 +231,6 @@ run_vdbbench() {
 	local phase=$2
 	shift 2
 	local phase_dir=$cell_dir/$phase
-	find "$phase_dir/results" -mindepth 1 -delete
 	mkdir -p "$phase_dir/results"
 	record_command "$phase_dir/command.txt" "$@"
 	env \
@@ -350,7 +355,6 @@ for ef in "${ef_values[@]}"; do
 	common_command "$ef" "$CELL_SECONDS" "$CONCURRENCY"
 	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-$cell_name" --task-label "profile-$cell_name")
 	profile_dir=$cell_dir/profile
-	find "$profile_dir/results" -mindepth 1 -delete
 	setsid env \
 		PYTHONPATH="$VDBBENCH_DIR:$ROOT/clients/python/treedb_client/src" \
 		DATASET_LOCAL_DIR="$DATASET_DIR" RESULTS_LOCAL_DIR="$profile_dir/results" \

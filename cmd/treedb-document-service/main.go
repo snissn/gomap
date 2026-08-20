@@ -62,6 +62,10 @@ func main() {
 			}
 		}()
 	}
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %v", *addr, err)
+	}
 	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		log.Fatalf("Failed to open TreeDB: %v", err)
@@ -86,7 +90,7 @@ func main() {
 	fmt.Printf("TreeDB Document Service listening on http://%s\n", *addr)
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("Server error: %v", err)
 		exitCode = 1
 		return
