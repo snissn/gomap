@@ -30,6 +30,8 @@ func TestDotScalarU8CenteredIndexedParity(t *testing.T) {
 		{name: "dims64", dims: 64, rowIDs: []uint32{12, 2, 9, 0, 7, 3, 15, 1, 6, 10, 4, 14, 5}},
 		{name: "tail65", dims: 65, rowIDs: []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
 		{name: "dims128_larger", dims: 128, rowIDs: scalarU8DotBatchTestRowIDs(64, 97)},
+		{name: "avx512_tail159", dims: 159, rowIDs: scalarU8DotBatchTestRowIDs(17, 31)},
+		{name: "avx512_tail191", dims: 191, rowIDs: scalarU8DotBatchTestRowIDs(17, 37)},
 		{name: "dims256", dims: 256, rowIDs: scalarU8DotBatchTestRowIDs(16, 41)},
 	}
 
