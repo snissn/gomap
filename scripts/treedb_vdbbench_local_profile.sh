@@ -98,6 +98,9 @@ SERVICE_BIN=${SERVICE_BIN:-$RUN_DIR/bin/treedb-document-service}
 PYTHON_BIN=${PYTHON_BIN:-$VDBBENCH_DIR/.venv/bin/python}
 [[ -x $PYTHON_BIN ]] || PYTHON_BIN=$(command -v python3 || true)
 [[ -n $PYTHON_BIN && -x $PYTHON_BIN ]] || die "set PYTHON_BIN to a Python with VectorDBBench dependencies"
+if ! PYTHONPATH="$VDBBENCH_DIR:$ROOT/clients/python/treedb_client/src" LOG_FILE=/dev/null "$PYTHON_BIN" -c 'import vectordb_bench.cli.vectordbbench; import treedb_client' >/dev/null 2>&1; then
+	die "PYTHON_BIN cannot import VectorDBBench and treedb_client; set it to an environment containing the VectorDBBench dependencies"
+fi
 command -v curl >/dev/null || die "curl is required"
 command -v setsid >/dev/null || die "setsid is required"
 command -v go >/dev/null || die "go is required"
