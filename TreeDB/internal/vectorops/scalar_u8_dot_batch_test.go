@@ -33,6 +33,7 @@ func TestDotScalarU8CenteredIndexedParity(t *testing.T) {
 		{name: "avx512_tail159", dims: 159, rowIDs: scalarU8DotBatchTestRowIDs(17, 31)},
 		{name: "avx512_tail191", dims: 191, rowIDs: scalarU8DotBatchTestRowIDs(17, 37)},
 		{name: "dims256", dims: 256, rowIDs: scalarU8DotBatchTestRowIDs(16, 41)},
+		{name: "dims768_odd_rows", dims: 768, rowIDs: scalarU8DotBatchTestRowIDs(17, 47)},
 	}
 
 	for _, tc := range cases {
