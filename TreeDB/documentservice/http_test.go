@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -175,6 +177,58 @@ func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
 	}
 }
 
+func TestHTTPBenchmarkVectorSearchCompactIDsParityTopK100(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	const index = "compact_ids"
+	const quantized = "embedding.scalar_u8.fast"
+	postJSON(t, handler, "/v1/indexes/"+index+"/reset", ResetIndexRequest{
+		Dimension:          2,
+		DropOld:            true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, QuantizedIndexes: []QuantizedIndexInfo{{Name: quantized, Codec: collections.QuantizedVectorCodecScalarU8}}},
+	}, http.StatusOK, nil)
+	docs := make([]Document, 100)
+	for i := range docs {
+		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Embedding: []float32{float32(100 - i), float32(i + 1)}}
+	}
+	postJSON(t, handler, "/v1/indexes/"+index+"/documents/upsert", UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/"+index+"/optimize", OptimizeIndexRequest{}, http.StatusOK, nil)
+
+	for _, tc := range []BenchmarkVectorSearchRequest{
+		{QueryEmbedding: []float32{1, 0}, TopK: 100, EfSearch: 100},
+		{QueryEmbedding: []float32{1, 0}, TopK: 100, EfSearch: 100, QueryMode: BenchmarkVectorQueryModeQuantizedOnly, QuantizedIndexName: quantized},
+		{QueryEmbedding: []float32{1, 0}, TopK: 100, EfSearch: 100, QueryMode: BenchmarkVectorQueryModeQuantizedRerank, QuantizedIndexName: quantized, QuantizedRerankCandidates: 100},
+	} {
+		var full BenchmarkVectorSearchResponse
+		postJSON(t, handler, "/v1/indexes/"+index+"/search/vector-index", tc, http.StatusOK, &full)
+		compactRequest := tc
+		compactRequest.ResponseFormat = BenchmarkVectorResponseFormatIDs
+		var compact BenchmarkVectorSearchIDsResponse
+		postJSON(t, handler, "/v1/indexes/"+index+"/search/vector-index", compactRequest, http.StatusOK, &compact)
+		ids := make([]string, len(full.Results))
+		for i := range full.Results {
+			ids[i] = full.Results[i].ID
+		}
+		if compact.ResponseFormat != BenchmarkVectorResponseFormatIDs || !slices.Equal(compact.IDs, ids) {
+			t.Fatalf("mode=%q compact=%+v full IDs=%v", tc.QueryMode, compact, ids)
+		}
+		fullBody, err := json.Marshal(full)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compactBody, err := json.Marshal(compact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(compactBody)*10 > len(fullBody)*3 {
+			t.Fatalf("mode=%q compact bytes=%d full bytes=%d: want compact at least 70%% smaller", tc.QueryMode, len(compactBody), len(fullBody))
+		}
+	}
+
+	postJSON(t, handler, "/v1/indexes/"+index+"/search/vector-index", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ResponseFormat: BenchmarkVectorResponseFormat("unknown")}, http.StatusBadRequest, nil)
+}
+
 func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -201,6 +255,16 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 	}, http.StatusOK, &benchmark)
 	if !benchmark.NoDocuments || len(benchmark.Results) != 1 || benchmark.Results[0].ID != "a" || benchmark.Stats.DocumentsFetched != 0 {
 		t.Fatalf("benchmark vector response=%+v stats=%+v", benchmark, benchmark.Stats)
+	}
+	var compact BenchmarkVectorSearchIDsResponse
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding_f32_le_b64": encodeFloat32LEBase64ForTest([]float32{1, 0}),
+		"top_k":                      1,
+		"ef_search":                  8,
+		"response_format":            "ids",
+	}, http.StatusOK, &compact)
+	if compact.ResponseFormat != BenchmarkVectorResponseFormatIDs || !slices.Equal(compact.IDs, []string{"a"}) {
+		t.Fatalf("compact base64 response=%+v", compact)
 	}
 
 	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{

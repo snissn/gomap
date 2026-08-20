@@ -24,6 +24,28 @@ func TestBenchmarkVectorSearchResultsOwnsSource(t *testing.T) {
 	}
 }
 
+func TestServiceBenchmarkVectorSearchDoesNotMutateOrRetainQuery(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	createBenchmarkColumnGraphIndex(t, svc, "query_ownership")
+	loadBenchmarkDocsDeferred(t, svc, "query_ownership", []Document{{ID: "a", Embedding: []float32{1, 0}}, {ID: "b", Embedding: []float32{0, 1}}})
+	if _, err := svc.OptimizeIndex(context.Background(), "query_ownership", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	query := []float32{1, 0}
+	response, err := svc.SearchBenchmarkVector(context.Background(), "query_ownership", BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 1, EfSearch: 8})
+	if err != nil {
+		t.Fatalf("SearchBenchmarkVector: %v", err)
+	}
+	if query[0] != 1 || query[1] != 0 || len(response.Results) != 1 || response.Results[0].ID != "a" {
+		t.Fatalf("query=%v response=%+v", query, response)
+	}
+	query[0], query[1] = 0, 1
+	if response.Results[0].ID != "a" {
+		t.Fatalf("response retained query-backed state: %+v", response)
+	}
+}
+
 func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

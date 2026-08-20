@@ -334,6 +334,8 @@ func decodeBenchmarkVectorSearchJSON(raw []byte) (BenchmarkVectorSearchRequest, 
 			err = json.Unmarshal(value, &req.QuantizedRerankCandidates)
 		case "stats_mode":
 			err = json.Unmarshal(value, &req.StatsMode)
+		case "response_format":
+			err = json.Unmarshal(value, &req.ResponseFormat)
 		default:
 			return req, fmt.Errorf("json: unknown field %q", key)
 		}

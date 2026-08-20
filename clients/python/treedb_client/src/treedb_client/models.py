@@ -674,6 +674,22 @@ class BenchmarkVectorSearchResult:
 
 
 @dataclass(frozen=True)
+class BenchmarkVectorSearchIDsResponse:
+    response_format: str
+    ids: list[str]
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorSearchIDsResponse":
+        data = _as_mapping(data, "benchmark vector IDs response")
+        if _as_str(data["response_format"], "benchmark IDs response.response_format") != "ids":
+            raise ValueError("benchmark IDs response.response_format must be 'ids'")
+        ids = data.get("ids")
+        if not isinstance(ids, list):
+            raise ValueError("benchmark IDs response.ids must be a list")
+        return cls(response_format="ids", ids=[_as_str(value, "benchmark IDs response.ids") for value in ids])
+
+
+@dataclass(frozen=True)
 class BenchmarkVectorSearchResponse:
     index: IndexInfo
     results: list[BenchmarkVectorSearchResult]
