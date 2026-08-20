@@ -323,7 +323,7 @@ setsid "${SERVICE_CMD[@]}" >"$RUN_DIR/service.log" 2>&1 &
 service_pid=$!
 printf '%s\n' "$service_pid" >"$RUN_DIR/service.pid"
 for ((attempt = 0; attempt < HEALTH_TIMEOUT_SECONDS; attempt++)); do
-	if curl --fail --silent "$SERVICE_URL/v1/health" >"$RUN_DIR/health.json" 2>/dev/null; then
+	if curl --fail --silent --max-time 1 "$SERVICE_URL/v1/health" >"$RUN_DIR/health.json" 2>/dev/null; then
 		break
 	fi
 	if ! kill -0 "$service_pid" 2>/dev/null; then
@@ -332,8 +332,8 @@ for ((attempt = 0; attempt < HEALTH_TIMEOUT_SECONDS; attempt++)); do
 	fi
 	sleep 1
 done
-curl --fail --silent "$SERVICE_URL/v1/health" >"$RUN_DIR/health.json" || die "service did not become healthy"
-curl --fail --silent "$PPROF_URL/" >/dev/null || die "pprof did not become ready"
+curl --fail --silent --max-time 5 "$SERVICE_URL/v1/health" >"$RUN_DIR/health.json" || die "service did not become healthy"
+curl --fail --silent --max-time 5 "$PPROF_URL/" >/dev/null || die "pprof did not become ready"
 
 for ef in "${ef_values[@]}"; do
 	cell_name=ef${ef}-r${RERANK_CANDIDATES}
