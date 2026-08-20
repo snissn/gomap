@@ -216,6 +216,7 @@ class TreeDBUnixHeadroomTest(unittest.TestCase):
                 self.assertIsNotNone(match, f"missing weighted Unix shard {name}")
         all_case = shell_case(workflow_job(workflow, "test"), "all")
         self.assertIn("treedb_unix_weighted_shards.tsv", all_case)
+        self.assertIn('if [ -s "$package_file" ]; then', all_case)
         self.assertIn("xargs go test -json -timeout 30m -p 1", all_case)
 
     def test_vet_is_a_separate_three_os_matrix_and_required_gate_dependency(self) -> None:

@@ -450,7 +450,11 @@ jobs:
               weighted_shard_file package "$package_shard_index" "$package_shard_count" ../.github/ci/treedb_unix_weighted_shards.tsv "$package_all_file" "$package_file"
               echo "TreeDB package shard=${package_shard_index}/${package_shard_count}"
               cat "$package_file"
-              xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+              if [ -s "$package_file" ]; then
+                xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+              else
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+              fi
               ;;
             windows-core)
               package_shard_index="${{ matrix.package_shard_index }}"

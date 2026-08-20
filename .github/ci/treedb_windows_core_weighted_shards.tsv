@@ -1,13 +1,10 @@
 # kind	shard	item	max seconds from successful main medians and PR runs 32407394988, 32410661113, 32412648919
 root	0	TestPowerLossOracleEnumerateCutPoints	322.12
 root	0	TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords	11.24
-package	1	github.com/snissn/gomap/TreeDB/cmd/treemap	48.14
-package	1	github.com/snissn/gomap/TreeDB/documentservice	13.70
 root	1	TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay	16.22
 root	1	TestCrashRecovery_WALReplayIsCoherent	15.65
 root	1	TestPowerLossCertificationGroupedDependencyFailureDirtyPublicReopen	23.97
 root	1	TestProfileFast_ModelCorrectness_WithFlushAndIterators	18.90
-root	1	TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn	32.83
 root	1	TestReopenVerify_SplitMergeDeleteRange_IteratorParity	107.10
 root	1	TestValuePlacement_PerDomainThreshold_ReopenDurability	12.75
 collections	2	TestColumnStoreDeleteUpdatedRowAfterManyMutationsM13C	12.50
@@ -45,6 +42,8 @@ root	5	TestProductionProfilesForcedPointersDeleteReuseRotationReopen	20.64
 root	5	TestValueLogGCOnline_ProtectedSetSafety	15.15
 db	6	TestBatchWritesPreserveUniformLeafDepthWithOuterLeafInternalSplits	12.18
 db	6	TestIndexVacuumTriggerReportMatchesFragmentationSpan	19.55
+package	6	github.com/snissn/gomap/TreeDB/cmd/treemap	108.01
+package	6	github.com/snissn/gomap/TreeDB/documentservice	43.05
 root	6	TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks	187.76
 root	6	TestPowerLossCertificationGroupedAmbiguousFailureDirtyPublicReopen	15.60
 root	6	TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID	22.94
@@ -52,4 +51,5 @@ root	6	TestProfileFast_BulkRestoreMaintainsKeyValueParity	14.68
 root	6	TestProfileFast_MultiDomainWritesAvoidPageExplosionAtCheckpointBoundaries	16.28
 root	6	TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix	45.41
 root	6	TestReopenVerify_DurableWALCoalescedInlineWrites	98.83
+root	6	TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn	55.84
 root	6	TestWriteReadVisibilityMatrix	34.94
