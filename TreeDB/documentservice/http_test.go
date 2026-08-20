@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"testing"
@@ -213,6 +214,40 @@ func TestHTTPBenchmarkVectorSearchCompactIDsParityTopK100(t *testing.T) {
 		if compact.ResponseFormat != BenchmarkVectorResponseFormatIDs || !slices.Equal(compact.IDs, ids) {
 			t.Fatalf("mode=%q compact=%+v full IDs=%v", tc.QueryMode, compact, ids)
 		}
+		base64Request := tc
+		base64Request.QueryEmbedding = nil
+		base64Request.QueryEmbeddingF32LEBase64 = encodeFloat32LEBase64ForTest([]float32{1, 0})
+		var base64Response BenchmarkVectorSearchResponse
+		postJSON(t, handler, "/v1/indexes/"+index+"/search/vector-index", base64Request, http.StatusOK, &base64Response)
+		base64IDs := make([]string, len(base64Response.Results))
+		for i := range base64Response.Results {
+			base64IDs[i] = base64Response.Results[i].ID
+		}
+		if !slices.Equal(base64IDs, ids) {
+			t.Fatalf("mode=%q base64 IDs=%v full IDs=%v", tc.QueryMode, base64IDs, ids)
+		}
+		mode := tc.QueryMode
+		if mode == "" {
+			mode = BenchmarkVectorQueryModeExact
+		}
+		binaryQuery := url.Values{
+			"top_k":           {"100"},
+			"ef_search":       {"100"},
+			"query_mode":      {string(mode)},
+			"stats_mode":      {"production"},
+			"response_format": {"ids"},
+		}
+		if tc.QuantizedIndexName != "" {
+			binaryQuery.Set("quantized_index_name", tc.QuantizedIndexName)
+		}
+		if tc.QuantizedRerankCandidates != 0 {
+			binaryQuery.Set("quantized_rerank_candidates", strconv.Itoa(tc.QuantizedRerankCandidates))
+		}
+		var binaryCompact BenchmarkVectorSearchIDsResponse
+		postBinaryVectorSearch(t, handler, "/v1/indexes/"+index+"/search/vector-index:binary?"+binaryQuery.Encode(), encodeFloat32LERawForTest([]float32{1, 0}), benchmarkVectorSearchBinaryContentType, http.StatusOK, &binaryCompact)
+		if binaryCompact.ResponseFormat != BenchmarkVectorResponseFormatIDs || !slices.Equal(binaryCompact.IDs, ids) {
+			t.Fatalf("mode=%q binary compact=%+v full IDs=%v", tc.QueryMode, binaryCompact, ids)
+		}
 		fullBody, err := json.Marshal(full)
 		if err != nil {
 			t.Fatal(err)
@@ -339,10 +374,15 @@ func TestHTTPBenchmarkVectorSearchBinaryF32LE(t *testing.T) {
 	assertExactBenchmarkNoDocumentRoute(t, binaryOptionsResponse)
 
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", rawQuery, "application/octet-stream", http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?query_mode=exact", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&top_k=2&query_mode=exact", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", []byte{1, 2, 3}, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", encodeFloat32LERawForTest([]float32{1, 0, 0}), benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=unknown", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_only", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_rerank", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&quantized_index_name=embedding.scalar_u8.fast", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&response_format=unknown", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearchWithRawQuery(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary", "top_k=1&ef_search=%zz", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", nil, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 

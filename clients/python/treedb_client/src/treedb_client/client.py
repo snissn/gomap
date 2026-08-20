@@ -281,8 +281,6 @@ class TreeDBClient:
         """
 
         if query_embedding_encoding == "f32_le":
-            if response_format is not None:
-                raise InvalidRequestError("invalid_request", "f32_le binary vector-index search does not support response_format")
             query = _encode_f32_le_bytes(query_embedding)
             params = _binary_vector_index_query_params(
                 top_k=top_k,
@@ -293,6 +291,7 @@ class TreeDBClient:
                 quantized_rerank_candidates=quantized_rerank_candidates,
                 stats_mode=stats_mode,
                 expected_generation=expected_generation,
+                response_format=response_format,
             )
             payload = self._request_bytes(
                 "POST",
@@ -562,21 +561,24 @@ def _binary_vector_index_query_params(
     quantized_rerank_candidates: Optional[int],
     stats_mode: Optional[str],
     expected_generation: Optional[int],
+    response_format: Optional[str],
 ) -> list[tuple[str, str]]:
-    if query_mode is not None and query_mode != "exact":
-        raise InvalidRequestError("invalid_request", "f32_le binary vector-index search supports query_mode='exact' only")
-    if quantized_index_name is not None or quantized_rerank_candidates is not None:
-        raise InvalidRequestError("invalid_request", "f32_le binary vector-index search does not support quantized options")
     _validate_expected_generation(expected_generation)
     top_k_value = _validate_binary_int_query_param(top_k, "top_k", minimum=1)
-    params = [("top_k", str(top_k_value)), ("query_mode", "exact")]
+    params = [("top_k", str(top_k_value))]
+    _add_binary_optional_non_empty_string(params, "query_mode", "exact" if query_mode is None else query_mode, "query_mode")
     if ef_search is not None:
         ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
         params.append(("ef_search", str(ef_search_value)))
     _add_binary_optional_non_empty_string(params, "vector_index_name", vector_index_name, "vector_index_name")
+    _add_binary_optional_non_empty_string(params, "quantized_index_name", quantized_index_name, "quantized_index_name")
+    if quantized_rerank_candidates is not None:
+        rerank_value = _validate_binary_int_query_param(quantized_rerank_candidates, "quantized_rerank_candidates", minimum=0)
+        params.append(("quantized_rerank_candidates", str(rerank_value)))
     _add_binary_optional_non_empty_string(params, "stats_mode", stats_mode, "stats_mode")
     if expected_generation is not None:
         params.append(("expected_generation", str(expected_generation)))
+    _add_binary_optional_non_empty_string(params, "response_format", response_format, "response_format")
     return params
 
 

@@ -178,15 +178,19 @@ compact = client.search_vector_index(
 print(compact.ids)
 
 # Best-case single-query HTTP request lane: raw little-endian float32 bytes to
-# /search/vector-index:binary. This is exact-only and separate from batch APIs.
+# /search/vector-index:binary. It keeps the same explicit exact, quantized-only,
+# and quantized-rerank modes as the JSON route; it is separate from batch APIs.
 bench_binary = client.search_vector_index(
     "bench_run_001",
     query_embedding=[0.1, 0.2, 0.3],
     top_k=1,
     query_embedding_encoding="f32_le",
-    query_mode="exact",
+    query_mode="quantized_rerank",
+    quantized_index_name="embedding.scalar_u8.fast",
+    quantized_rerank_candidates=32,
+    response_format="ids",
 )
-print(bench_binary.results[0].id, bench_binary.no_documents, bench_binary.diagnostics.get("route"))
+print(bench_binary.ids)
 
 keyword = client.search_keyword(
     "docs",
