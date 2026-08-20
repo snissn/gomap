@@ -353,6 +353,22 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(opener.calls, 2)
             client.close()
 
+    def test_http_error_body_read_failure_maps_to_transport_error(self) -> None:
+        class BrokenHTTPError(urllib.error.HTTPError):
+            def read(self) -> bytes:
+                raise http.client.IncompleteRead(b"", 1)
+
+        class Opener:
+            def open(self, request: Any, timeout: float | None = None) -> Any:
+                raise BrokenHTTPError(request.full_url, 503, "unavailable", {}, None)
+
+        client = TreeDBClient("http://treedb.example", timeout=1)
+        client._opener = Opener()  # type: ignore[attr-defined]
+
+        with self.assertRaises(TreeDBTransportError):
+            client.health()
+        client.close()
+
     def test_write_is_not_replayed_after_connection_break(self) -> None:
         route = ("POST", "/v1/indexes")
         with FixtureServer({route: (200, {"index": SAMPLE_INDEX}, 0)}, drop_once_routes={route}) as server:

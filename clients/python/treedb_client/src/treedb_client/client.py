@@ -462,7 +462,14 @@ class TreeDBClient:
                         return self._decode_success(response.getcode(), response_body)
                 except urllib.error.HTTPError as exc:
                     try:
-                        response_body = exc.read()
+                        try:
+                            response_body = exc.read()
+                        except (socket.timeout, TimeoutError) as read_exc:
+                            raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from read_exc
+                        except (http.client.RemoteDisconnected, http.client.IncompleteRead, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError) as read_exc:
+                            if retry_broken_connection and attempt == 0:
+                                continue
+                            raise TreeDBTransportError(f"TreeDB request to {url} failed: {read_exc}") from read_exc
                     finally:
                         exc.close()
                     raise self._decode_error(exc.code, response_body) from None
