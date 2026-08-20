@@ -87,26 +87,41 @@ func BenchmarkBenchmarkVectorSearchHTTPPredecodedRequest(b *testing.B) {
 	index := "bench_http_predecoded"
 	query := benchmarkVectorQuery(1536)
 	createBenchmarkColumnGraphIndexWithDimension(b, svc, index, len(query))
-	loadBenchmarkDocsDeferred(b, svc, index, benchmarkVectorDocumentsForQuery(query))
+	docs := make([]Document, 100)
+	for i := range docs {
+		embedding := append([]float32(nil), query...)
+		embedding[0] += float32(i + 1)
+		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Embedding: embedding}
+	}
+	loadBenchmarkDocsDeferred(b, svc, index, docs)
 	if _, err := svc.OptimizeIndex(ctx, index, OptimizeIndexRequest{}); err != nil {
 		b.Fatalf("OptimizeIndex: %v", err)
 	}
-	request := BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 1, EfSearch: 8}
+	request := BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 100, EfSearch: 100}
 	httpRequest := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_http_predecoded/search/vector-index", nil)
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		rr := httptest.NewRecorder()
-		response, err := svc.SearchBenchmarkVector(httpRequest.Context(), index, request)
-		if err != nil {
-			b.Fatal(err)
-		}
-		writeJSON(rr, http.StatusOK, response)
-		if rr.Code != http.StatusOK {
-			b.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-		}
-		benchmarkVectorResponseSink = response
+	for _, tc := range []struct {
+		name   string
+		format BenchmarkVectorResponseFormat
+	}{{"full", BenchmarkVectorResponseFormatFull}, {"ids", BenchmarkVectorResponseFormatIDs}} {
+		b.Run(tc.name, func(b *testing.B) {
+			req := request
+			req.ResponseFormat = tc.format
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rr := httptest.NewRecorder()
+				response, err := svc.SearchBenchmarkVector(httpRequest.Context(), index, req)
+				if err != nil {
+					b.Fatal(err)
+				}
+				writeBenchmarkVectorSearchResponse(rr, response, tc.format)
+				if rr.Code != http.StatusOK {
+					b.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+				}
+				benchmarkVectorResponseSink = response
+			}
+		})
 	}
 }
 
@@ -160,20 +175,29 @@ func BenchmarkBenchmarkVectorSearchHTTPHandler(b *testing.B) {
 
 func BenchmarkBenchmarkVectorSearchResponseEncode(b *testing.B) {
 	response := benchmarkVectorSearchResponseForEncode()
-	payload, err := json.Marshal(response)
-	if err != nil {
-		b.Fatal(err)
+	ids := make([]string, len(response.Results))
+	for i := range response.Results {
+		ids[i] = response.Results[i].ID
 	}
-	b.ReportAllocs()
-	b.SetBytes(int64(len(payload)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		payload, err := json.Marshal(response)
+	compact := BenchmarkVectorSearchIDsResponse{ResponseFormat: BenchmarkVectorResponseFormatIDs, IDs: ids}
+	benchEncode := func(b *testing.B, value any) {
+		payload, err := json.Marshal(value)
 		if err != nil {
 			b.Fatal(err)
 		}
-		benchmarkVectorBytesSink = payload
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			payload, err := json.Marshal(value)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkVectorBytesSink = payload
+		}
 	}
+	b.Run("full", func(b *testing.B) { benchEncode(b, response) })
+	b.Run("ids", func(b *testing.B) { benchEncode(b, compact) })
 }
 
 func decodeBenchmarkVectorSearchJSONForBenchmark(raw []byte) (BenchmarkVectorSearchRequest, error) {
@@ -235,7 +259,7 @@ func benchmarkVectorSearchF32LEBase64Payload(query []float32) []byte {
 }
 
 func benchmarkVectorSearchResponseForEncode() BenchmarkVectorSearchResponse {
-	results := make([]BenchmarkVectorSearchResult, 10)
+	results := make([]BenchmarkVectorSearchResult, 100)
 	for i := range results {
 		results[i] = BenchmarkVectorSearchResult{ID: fmt.Sprintf("doc-%06d", i), Ordinal: i + 1, Score: 1 - float64(i)*0.001}
 	}

@@ -126,6 +126,14 @@ func (h *Handler) serveIndexOperation(w http.ResponseWriter, r *http.Request, in
 	}
 }
 
+func writeBenchmarkVectorSearchResponse(w http.ResponseWriter, response BenchmarkVectorSearchResponse, format BenchmarkVectorResponseFormat) {
+	if format == BenchmarkVectorResponseFormatIDs {
+		writeJSON(w, http.StatusOK, BenchmarkVectorSearchIDsResponse{ResponseFormat: format, IDs: response.compactIDs})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (h *Handler) serveDocumentOperation(w http.ResponseWriter, r *http.Request, index, op string, maxBodyBytes int64) {
 	switch op {
 	case "upsert":
@@ -222,7 +230,7 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, res)
+		writeBenchmarkVectorSearchResponse(w, res, req.ResponseFormat)
 	case "vector-index:binary":
 		req, ok := h.decodeBenchmarkVectorSearchBinaryRequest(w, r, maxBodyBytes)
 		if !ok {
@@ -233,7 +241,7 @@ func (h *Handler) serveSearchOperation(w http.ResponseWriter, r *http.Request, i
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, res)
+		writeBenchmarkVectorSearchResponse(w, res, req.ResponseFormat)
 	default:
 		writeError(w, serviceErrorf(CodeInvalidRequest, "unknown search operation %q", op))
 	}

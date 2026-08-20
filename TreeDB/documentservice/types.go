@@ -240,6 +240,15 @@ const (
 	BenchmarkVectorQueryModeQuantizedRerank BenchmarkVectorQueryMode = "quantized_rerank"
 )
 
+// BenchmarkVectorResponseFormat selects the benchmark search HTTP response
+// shape. The default full response is retained for diagnostics and clients.
+type BenchmarkVectorResponseFormat string
+
+const (
+	BenchmarkVectorResponseFormatFull BenchmarkVectorResponseFormat = ""
+	BenchmarkVectorResponseFormatIDs  BenchmarkVectorResponseFormat = "ids"
+)
+
 // BenchmarkVectorSearchRequest runs fail-closed no-document vector-index search
 // through Collection.SearchVectorIndexWithBuffer. Quantized modes require an
 // explicit quantized index name; quantized_rerank may bound exact rerank with
@@ -255,6 +264,7 @@ type BenchmarkVectorSearchRequest struct {
 	QuantizedIndexName        string                                 `json:"quantized_index_name,omitempty"`
 	QuantizedRerankCandidates int                                    `json:"quantized_rerank_candidates,omitempty"`
 	StatsMode                 collections.VectorIndexSearchStatsMode `json:"stats_mode,omitempty"`
+	ResponseFormat            BenchmarkVectorResponseFormat          `json:"response_format,omitempty"`
 }
 
 type BenchmarkVectorSearchResult struct {
@@ -274,6 +284,14 @@ type BenchmarkVectorSearchResponse struct {
 	NoDocuments               bool                                     `json:"no_documents"`
 	Stats                     collections.VectorIndexSearchStats       `json:"stats"`
 	Diagnostics               collections.VectorIndexSearchDiagnostics `json:"diagnostics"`
+	compactIDs                []string
+}
+
+// BenchmarkVectorSearchIDsResponse is the timed benchmark response. It is
+// intentionally limited to the ordered IDs after a full response preflight.
+type BenchmarkVectorSearchIDsResponse struct {
+	ResponseFormat BenchmarkVectorResponseFormat `json:"response_format"`
+	IDs            []string                      `json:"ids"`
 }
 
 // KeywordSearchRequest runs ranked lexical search over the service content text

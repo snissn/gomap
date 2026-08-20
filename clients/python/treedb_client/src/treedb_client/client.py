@@ -24,6 +24,7 @@ from .errors import (
 from .filters import FilterLike, InvalidFilterError, normalize_filter
 from .models import (
     BenchmarkVectorIndexOptions,
+    BenchmarkVectorSearchIDsResponse,
     BenchmarkVectorSearchResponse,
     CountDocumentsResponse,
     DeleteDocumentsResponse,
@@ -270,7 +271,8 @@ class TreeDBClient:
         stats_mode: Optional[str] = None,
         expected_generation: Optional[int] = None,
         query_embedding_encoding: str = "json",
-    ) -> BenchmarkVectorSearchResponse:
+        response_format: Optional[str] = None,
+    ) -> Union[BenchmarkVectorSearchResponse, BenchmarkVectorSearchIDsResponse]:
         """Run fail-closed no-document vector-index benchmark search.
 
         This calls `/search/vector-index`, not the exact dense `/search/vector`
@@ -279,6 +281,8 @@ class TreeDBClient:
         """
 
         if query_embedding_encoding == "f32_le":
+            if response_format is not None:
+                raise InvalidRequestError("invalid_request", "f32_le binary vector-index search does not support response_format")
             query = _encode_f32_le_bytes(query_embedding)
             params = _binary_vector_index_query_params(
                 top_k=top_k,
@@ -297,7 +301,7 @@ class TreeDBClient:
                 BINARY_VECTOR_SEARCH_F32LE_CONTENT_TYPE,
                 query_params=params,
             )
-            return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
+            return _parse_benchmark_vector_search_response(payload, response_format)
 
         request: dict[str, Any] = {"top_k": top_k}
         _add_query_embedding(request, query_embedding, query_embedding_encoding)
@@ -311,8 +315,9 @@ class TreeDBClient:
         if quantized_rerank_candidates is not None:
             request["quantized_rerank_candidates"] = int(quantized_rerank_candidates)
         _add_optional_non_empty_string(request, "stats_mode", stats_mode, "stats_mode")
+        _add_optional_non_empty_string(request, "response_format", response_format, "response_format")
         payload = self._request("POST", self._index_path(index, "search", "vector-index"), request)
-        return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
+        return _parse_benchmark_vector_search_response(payload, response_format)
 
     def search_keyword(
         self,
@@ -646,6 +651,14 @@ def _parse_response(
     payload: Any,
 ) -> _ResponseT:
     return _parse_mapping(label, parser, _expect_mapping(payload, label))
+
+
+def _parse_benchmark_vector_search_response(
+    payload: Any, response_format: Optional[str]
+) -> Union[BenchmarkVectorSearchResponse, BenchmarkVectorSearchIDsResponse]:
+    if response_format == "ids":
+        return _parse_response("benchmark vector IDs response", BenchmarkVectorSearchIDsResponse.from_dict, payload)
+    return _parse_response("benchmark vector search response", BenchmarkVectorSearchResponse.from_dict, payload)
 
 
 def _parse_mapping(

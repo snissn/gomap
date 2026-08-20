@@ -596,6 +596,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if err := validateBenchmarkVectorStatsMode(req.StatsMode); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
+	if err := validateBenchmarkVectorResponseFormat(req.ResponseFormat); err != nil {
+		return BenchmarkVectorSearchResponse{}, err
+	}
 	if err := normalizeBenchmarkVectorQueryEmbedding(&req); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
@@ -623,7 +626,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	}()
 	search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
 		IndexName:                 vectorIndexName,
-		Query:                     append([]float32(nil), req.QueryEmbedding...),
+		Query:                     req.QueryEmbedding,
 		QueryMode:                 collectionQueryMode,
 		QuantizedIndexName:        req.QuantizedIndexName,
 		QuantizedRerankCandidates: req.QuantizedRerankCandidates,
@@ -641,9 +644,15 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if search.Stats.WorkAccountingSearches != 0 {
 		responseStart = time.Now()
 	}
-	results := benchmarkVectorSearchResults(search.Results)
-	if results == nil {
-		results = []BenchmarkVectorSearchResult{}
+	var results []BenchmarkVectorSearchResult
+	var compactIDs []string
+	if req.ResponseFormat == BenchmarkVectorResponseFormatIDs {
+		compactIDs = benchmarkVectorSearchIDs(search.Results)
+	} else {
+		results = benchmarkVectorSearchResults(search.Results)
+		if results == nil {
+			results = []BenchmarkVectorSearchResult{}
+		}
 	}
 	stats := search.Stats
 	if !responseStart.IsZero() {
@@ -663,6 +672,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		NoDocuments:               true,
 		Stats:                     stats,
 		Diagnostics:               stats.Diagnostics(),
+		compactIDs:                compactIDs,
 	}, nil
 }
 
@@ -1396,6 +1406,23 @@ func benchmarkVectorSearchResults(results []collections.VectorIndexSearchResult)
 		out[i] = BenchmarkVectorSearchResult{ID: string(result.ID), Ordinal: result.Ordinal, Score: result.Score}
 	}
 	return out
+}
+
+func benchmarkVectorSearchIDs(results []collections.VectorIndexSearchResult) []string {
+	ids := make([]string, len(results))
+	for i := range results {
+		ids[i] = string(results[i].ID)
+	}
+	return ids
+}
+
+func validateBenchmarkVectorResponseFormat(format BenchmarkVectorResponseFormat) error {
+	switch format {
+	case BenchmarkVectorResponseFormatFull, BenchmarkVectorResponseFormatIDs:
+		return nil
+	default:
+		return serviceErrorf(CodeInvalidRequest, "unsupported benchmark vector response_format %q", format)
+	}
 }
 
 func validateBenchmarkVectorStatsMode(mode collections.VectorIndexSearchStatsMode) error {
