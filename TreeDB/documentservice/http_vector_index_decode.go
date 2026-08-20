@@ -141,7 +141,7 @@ func parseBenchmarkVectorSearchBinaryQuery(values url.Values) (BenchmarkVectorSe
 	var req BenchmarkVectorSearchRequest
 	for key := range values {
 		switch key {
-		case "top_k", "ef_search", "query_mode", "vector_index_name", "expected_generation", "stats_mode":
+		case "top_k", "ef_search", "query_mode", "vector_index_name", "quantized_index_name", "quantized_rerank_candidates", "expected_generation", "stats_mode", "response_format":
 		default:
 			return req, serviceErrorf(CodeInvalidRequest, "unsupported binary vector search query parameter %q", key)
 		}
@@ -170,17 +170,31 @@ func parseBenchmarkVectorSearchBinaryQuery(values url.Values) (BenchmarkVectorSe
 		return req, err
 	}
 	if ok {
-		if queryMode != string(BenchmarkVectorQueryModeExact) {
-			return req, serviceErrorf(CodeInvalidRequest, "binary vector search supports query_mode=%q only", BenchmarkVectorQueryModeExact)
-		}
+		req.QueryMode = BenchmarkVectorQueryMode(queryMode)
+	} else {
+		req.QueryMode = BenchmarkVectorQueryModeExact
 	}
-	req.QueryMode = BenchmarkVectorQueryModeExact
 	vectorIndexName, ok, err := singleBenchmarkVectorSearchQueryValue(values, "vector_index_name")
 	if err != nil {
 		return req, err
 	}
 	if ok {
 		req.VectorIndexName = vectorIndexName
+	}
+	quantizedIndexName, ok, err := singleBenchmarkVectorSearchQueryValue(values, "quantized_index_name")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		req.QuantizedIndexName = quantizedIndexName
+	}
+	if quantizedRerankCandidates, ok, err := parseRequiredBenchmarkVectorSearchIntParam(values, "quantized_rerank_candidates"); err != nil {
+		return req, err
+	} else if ok {
+		if quantizedRerankCandidates < 0 {
+			return req, serviceError(CodeInvalidRequest, "quantized_rerank_candidates must be non-negative")
+		}
+		req.QuantizedRerankCandidates = quantizedRerankCandidates
 	}
 	expectedGeneration, ok, err := parseBenchmarkVectorSearchUint64Param(values, "expected_generation")
 	if err != nil {
@@ -198,6 +212,13 @@ func parseBenchmarkVectorSearchBinaryQuery(values url.Values) (BenchmarkVectorSe
 	}
 	if ok {
 		req.StatsMode = collections.VectorIndexSearchStatsMode(statsMode)
+	}
+	responseFormat, ok, err := singleBenchmarkVectorSearchQueryValue(values, "response_format")
+	if err != nil {
+		return req, err
+	}
+	if ok {
+		req.ResponseFormat = BenchmarkVectorResponseFormat(responseFormat)
 	}
 	return req, nil
 }

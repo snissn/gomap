@@ -232,6 +232,7 @@ class TreeDBClientTests(unittest.TestCase):
         optimize_route = "/v1/indexes/bench/optimize"
         search_route = "/v1/indexes/bench/search/vector-index"
         raw_search_route = "/v1/indexes/bench/search/vector-index:binary?top_k=1&query_mode=exact"
+        raw_quantized_route = "/v1/indexes/bench/search/vector-index:binary?top_k=1&query_mode=quantized_rerank&quantized_index_name=embedding.scalar_u8.fast&quantized_rerank_candidates=32&stats_mode=production&response_format=ids"
         routes = {
             ("POST", reset_route): (
                 200,
@@ -277,6 +278,11 @@ class TreeDBClientTests(unittest.TestCase):
                 },
                 0,
             ),
+            ("POST", raw_quantized_route): (
+                200,
+                {"response_format": "ids", "ids": ["doc-1"]},
+                0,
+            ),
         }
         with FixtureServer(routes) as server:
             client = TreeDBClient(server.base_url, timeout=1)
@@ -317,12 +323,24 @@ class TreeDBClientTests(unittest.TestCase):
                 1,
                 query_embedding_encoding="f32_le",
             )
+            raw_quantized = client.search_vector_index(
+                "bench",
+                [1, 0],
+                1,
+                query_embedding_encoding="f32_le",
+                query_mode="quantized_rerank",
+                quantized_index_name="embedding.scalar_u8.fast",
+                quantized_rerank_candidates=32,
+                stats_mode="production",
+                response_format="ids",
+            )
 
             self.assertEqual(search.query_mode, "quantized_rerank")
             self.assertEqual(search.results[0].id, "doc-1")
             self.assertEqual(b64_search.results[0].id, "doc-1")
             self.assertEqual(raw_search.query_mode, "exact")
             self.assertEqual(raw_search.results[0].id, "doc-1")
+            self.assertEqual(raw_quantized.ids, ["doc-1"])
             reset_body = json_body(server.records[0])
             self.assertNotIn("metric", reset_body)
             self.assertEqual(reset_body["vector_index_options"]["strategy"], "column_graph")
@@ -336,6 +354,9 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(raw_record["path"], raw_search_route)
             self.assertEqual(raw_record["headers"]["Content-Type"], "application/vnd.treedb.vector-search.f32le")
             self.assertEqual(struct.unpack("<2f", raw_record["body"]), (1.0, 0.0))
+            raw_quantized_record = server.records[5]
+            self.assertEqual(raw_quantized_record["path"], raw_quantized_route)
+            self.assertEqual(struct.unpack("<2f", raw_quantized_record["body"]), (1.0, 0.0))
 
     def test_empty_optional_benchmark_fields_fail_closed_locally(self) -> None:
         client = TreeDBClient("http://127.0.0.1:1", timeout=1)
@@ -350,10 +371,12 @@ class TreeDBClientTests(unittest.TestCase):
             client.search_vector_index("docs", [1, 0], 1, stats_mode="")
         with self.assertRaisesRegex(InvalidRequestError, "query_embedding_encoding"):
             client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="binary")
-        with self.assertRaisesRegex(InvalidRequestError, "query_mode='exact'"):
-            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", query_mode="quantized_rerank")
-        with self.assertRaisesRegex(InvalidRequestError, "quantized"):
-            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", quantized_index_name="embedding.scalar_u8.fast")
+        with self.assertRaisesRegex(InvalidRequestError, "query_mode"):
+            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", query_mode="")
+        with self.assertRaisesRegex(InvalidRequestError, "quantized_index_name"):
+            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", quantized_index_name="")
+        with self.assertRaisesRegex(InvalidRequestError, "response_format"):
+            client.search_vector_index("docs", [1, 0], 1, query_embedding_encoding="f32_le", response_format="")
         for bad_top_k in (True, 1.9, 0):
             with self.subTest(bad_top_k=bad_top_k):
                 with self.assertRaisesRegex(InvalidRequestError, "top_k"):
