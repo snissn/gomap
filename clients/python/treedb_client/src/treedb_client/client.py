@@ -62,10 +62,11 @@ class TreeDBClient:
         parsed = urllib.parse.urlparse(self.base_url)
         self._request_prefix = parsed.path
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
-        self._connection = connection_type(parsed.hostname, parsed.port, timeout=self.timeout)
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+        self._connection = connection_type(parsed.hostname, port, timeout=self.timeout)
         self._opener = urllib.request.build_opener()
         proxies = urllib.request.getproxies()
-        self._benchmark_uses_proxy = bool(proxies.get(parsed.scheme) or proxies.get("all")) and not urllib.request.proxy_bypass(parsed.hostname)
+        self._benchmark_uses_proxy = bool(proxies.get(parsed.scheme)) and not urllib.request.proxy_bypass(parsed.hostname)
 
     def close(self) -> None:
         """Close this client's reusable HTTP connection."""
@@ -544,9 +545,16 @@ def _normalize_base_url(base_url: str) -> str:
     if not isinstance(base_url, str) or not base_url.strip():
         raise TreeDBConfigError("base_url must be a non-empty HTTP(S) URL")
     trimmed = base_url.strip().rstrip("/")
-    parsed = urllib.parse.urlparse(trimmed)
+    try:
+        parsed = urllib.parse.urlparse(trimmed)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError as exc:
+        raise TreeDBConfigError("base_url must have a valid host and port") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise TreeDBConfigError("base_url must be an absolute HTTP(S) URL")
+    if hostname is None:
+        raise TreeDBConfigError("base_url must have a valid host and port")
     if parsed.query or parsed.fragment:
         raise TreeDBConfigError("base_url must not include query parameters or fragments")
     return trimmed

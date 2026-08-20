@@ -220,6 +220,27 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(direct.calls, 1)
             client.close()
 
+        with mock.patch.dict(os.environ, {"all_proxy": "http://proxy.example:8080"}, clear=True):
+            client = TreeDBClient("http://treedb.example", timeout=1)
+            opener = Opener()
+            direct = DirectConnection()
+            client._opener = opener  # type: ignore[attr-defined]
+            client._connection = direct  # type: ignore[assignment]
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(opener.calls, 0)
+            self.assertEqual(direct.calls, 1)
+            client.close()
+
+    def test_default_ports_handle_bracketed_ipv6(self) -> None:
+        http_client = TreeDBClient("http://[::1]")
+        https_client = TreeDBClient("https://[::1]")
+
+        self.assertEqual((http_client._connection.host, http_client._connection.port), ("::1", 80))
+        self.assertEqual((https_client._connection.host, https_client._connection.port), ("::1", 443))
+        http_client.close()
+        https_client.close()
+
     def test_reuses_connection_and_close_reconnects(self) -> None:
         route = ("POST", "/v1/indexes/docs/search/vector-index")
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
@@ -724,7 +745,7 @@ class TreeDBClientTests(unittest.TestCase):
                 client.count_documents("docs")
 
     def test_config_validation(self) -> None:
-        for base_url in ("", "localhost:7120", "ftp://127.0.0.1:7120", "http://127.0.0.1:7120?x=1"):
+        for base_url in ("", "localhost:7120", "ftp://127.0.0.1:7120", "http://127.0.0.1:7120?x=1", "http://127.0.0.1:invalid", "http://127.0.0.1:99999", "http://[::1"):
             with self.subTest(base_url=base_url):
                 with self.assertRaises(TreeDBConfigError):
                     TreeDBClient(base_url)
