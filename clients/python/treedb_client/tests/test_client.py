@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import struct
 import threading
 import time
+import urllib.error
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Tuple
+from unittest import mock
 
 import _support  # noqa: F401
 from treedb_client import (
@@ -148,6 +151,75 @@ def json_body(record: dict[str, Any]) -> Any:
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_vector_index_proxy_selection_preserves_urllib_and_bypass_uses_direct_connection(self) -> None:
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+
+        class Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return json.dumps(response).encode("utf-8")
+
+            def close(self) -> None:
+                return
+
+            def getcode(self) -> int:
+                return self.status
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                self.close()
+
+        class Opener:
+            def __init__(self, fail_once: bool = False) -> None:
+                self.calls = 0
+                self.fail_once = fail_once
+
+            def open(self, request: Any, timeout: float | None = None) -> Response:
+                self.calls += 1
+                if self.fail_once and self.calls == 1:
+                    raise urllib.error.URLError(ConnectionResetError("connection reset by proxy"))
+                return Response()
+
+        class DirectConnection:
+            calls = 0
+
+            def request(self, method: str, path: str, body: Any = None, headers: Any = None) -> None:
+                self.calls += 1
+
+            def getresponse(self) -> Response:
+                return Response()
+
+            def close(self) -> None:
+                return
+
+        proxy_env = {"http_proxy": "http://proxy.example:8080", "HTTP_PROXY": "http://proxy.example:8080", "no_proxy": "", "NO_PROXY": ""}
+        with mock.patch.dict(os.environ, proxy_env):
+            client = TreeDBClient("http://treedb.example", timeout=1)
+            opener = Opener(fail_once=True)
+            direct = DirectConnection()
+            client._opener = opener  # type: ignore[attr-defined]
+            client._connection = direct  # type: ignore[assignment]
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(opener.calls, 2)
+            self.assertEqual(direct.calls, 0)
+            client.close()
+
+        with mock.patch.dict(os.environ, {**proxy_env, "no_proxy": "treedb.example", "NO_PROXY": "treedb.example"}):
+            client = TreeDBClient("http://treedb.example", timeout=1)
+            opener = Opener()
+            direct = DirectConnection()
+            client._opener = opener  # type: ignore[attr-defined]
+            client._connection = direct  # type: ignore[assignment]
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(opener.calls, 0)
+            self.assertEqual(direct.calls, 1)
+            client.close()
+
     def test_reuses_connection_and_close_reconnects(self) -> None:
         route = ("POST", "/v1/indexes/docs/search/vector-index")
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}

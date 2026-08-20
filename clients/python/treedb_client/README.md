@@ -51,7 +51,9 @@ Benchmark `/search/vector-index` calls reuse one HTTP(S) connection per client;
 call `client.close()` when the instance is no longer needed. Ordinary client
 and Haystack operations retain independent urllib requests. Only
 `/search/vector-index` retries once after a broken connection; writes are never
-replayed automatically.
+replayed automatically. If the normalized TreeDB host uses an environment
+proxy (and is not bypassed by `NO_PROXY`), vector-index calls retain urllib's
+proxy/TLS/auth behavior instead of using the direct reusable connection.
 
 ## Run tests
 
