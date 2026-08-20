@@ -256,6 +256,16 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 	if !benchmark.NoDocuments || len(benchmark.Results) != 1 || benchmark.Results[0].ID != "a" || benchmark.Stats.DocumentsFetched != 0 {
 		t.Fatalf("benchmark vector response=%+v stats=%+v", benchmark, benchmark.Stats)
 	}
+	var compact BenchmarkVectorSearchIDsResponse
+	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
+		"query_embedding_f32_le_b64": encodeFloat32LEBase64ForTest([]float32{1, 0}),
+		"top_k":                      1,
+		"ef_search":                  8,
+		"response_format":            "ids",
+	}, http.StatusOK, &compact)
+	if compact.ResponseFormat != BenchmarkVectorResponseFormatIDs || !slices.Equal(compact.IDs, []string{"a"}) {
+		t.Fatalf("compact base64 response=%+v", compact)
+	}
 
 	postJSON(t, handler, "/v1/indexes/bench_b64/search/vector-index", map[string]any{
 		"query_embedding":            []float32{1, 0},
