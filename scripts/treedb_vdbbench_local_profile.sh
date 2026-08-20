@@ -223,6 +223,7 @@ run_vdbbench() {
 	local phase=$2
 	shift 2
 	local phase_dir=$cell_dir/$phase
+	find "$phase_dir/results" -mindepth 1 -delete
 	mkdir -p "$phase_dir/results"
 	record_command "$phase_dir/command.txt" "$@"
 	env \
@@ -347,6 +348,7 @@ for ef in "${ef_values[@]}"; do
 	common_command "$ef" "$CELL_SECONDS" "$CONCURRENCY"
 	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-$cell_name" --task-label "profile-$cell_name")
 	profile_dir=$cell_dir/profile
+	find "$profile_dir/results" -mindepth 1 -delete
 	setsid env \
 		PYTHONPATH="$VDBBENCH_DIR:$ROOT/clients/python/treedb_client/src" \
 		DATASET_LOCAL_DIR="$DATASET_DIR" RESULTS_LOCAL_DIR="$profile_dir/results" \
@@ -388,6 +390,10 @@ for ef in "${ef_values[@]}"; do
 	pprof_top "$cell_dir/mutex-delta-top.txt" -base "$cell_dir/mutex-before.pb" "$SERVICE_BIN" "$cell_dir/mutex.pb"
 done
 
+cleanup
+service_pid=
+client_pid=
+telemetry_pid=
 printf 'completed_utc=%s\n' "$(date --iso-8601=ns --utc)" >>"$RUN_DIR/context.txt"
 checksum_tmp=$RUN_DIR/.SHA256SUMS.tmp
 (cd "$RUN_DIR" && find . -type f ! -name SHA256SUMS ! -name .SHA256SUMS.tmp -print0 | sort -z | xargs -0 sha256sum) >"$checksum_tmp"

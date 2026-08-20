@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -50,9 +51,13 @@ func main() {
 		runtime.SetMutexProfileFraction(*mutexProfileFraction)
 	}
 	if handler := optionalPprofHandler(*pprofAddr); handler != nil {
+		listener, err := net.Listen("tcp", *pprofAddr)
+		if err != nil {
+			log.Fatalf("Failed to listen for pprof on %s: %v", *pprofAddr, err)
+		}
 		go func() {
 			log.Printf("TreeDB Document Service pprof listening on http://%s/debug/pprof/", *pprofAddr)
-			if err := http.ListenAndServe(*pprofAddr, handler); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := http.Serve(listener, handler); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("pprof server error: %v", err)
 			}
 		}()
