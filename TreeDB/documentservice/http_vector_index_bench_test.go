@@ -160,20 +160,25 @@ func BenchmarkBenchmarkVectorSearchHTTPHandler(b *testing.B) {
 
 func BenchmarkBenchmarkVectorSearchResponseEncode(b *testing.B) {
 	response := benchmarkVectorSearchResponseForEncode()
-	payload, err := json.Marshal(response)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.ReportAllocs()
-	b.SetBytes(int64(len(payload)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		payload, err := json.Marshal(response)
+	compact := BenchmarkVectorSearchIDsResponse{ResponseFormat: BenchmarkVectorResponseFormatIDs, IDs: benchmarkVectorSearchIDs(response.Results)}
+	benchEncode := func(b *testing.B, value any) {
+		payload, err := json.Marshal(value)
 		if err != nil {
 			b.Fatal(err)
 		}
-		benchmarkVectorBytesSink = payload
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			payload, err := json.Marshal(value)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchmarkVectorBytesSink = payload
+		}
 	}
+	b.Run("full", func(b *testing.B) { benchEncode(b, response) })
+	b.Run("ids", func(b *testing.B) { benchEncode(b, compact) })
 }
 
 func decodeBenchmarkVectorSearchJSONForBenchmark(raw []byte) (BenchmarkVectorSearchRequest, error) {
@@ -235,7 +240,7 @@ func benchmarkVectorSearchF32LEBase64Payload(query []float32) []byte {
 }
 
 func benchmarkVectorSearchResponseForEncode() BenchmarkVectorSearchResponse {
-	results := make([]BenchmarkVectorSearchResult, 10)
+	results := make([]BenchmarkVectorSearchResult, 100)
 	for i := range results {
 		results[i] = BenchmarkVectorSearchResult{ID: fmt.Sprintf("doc-%06d", i), Ordinal: i + 1, Score: 1 - float64(i)*0.001}
 	}

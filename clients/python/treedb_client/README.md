@@ -168,6 +168,15 @@ bench = client.search_vector_index(
 )
 print(bench.results[0].id, bench.no_documents, bench.diagnostics.get("route"))
 
+# Timed runs may request only ordered IDs after a separate full-response
+# preflight has checked the route, mode, and diagnostics.
+compact = client.search_vector_index(
+    "bench_run_001", query_embedding=[0.1, 0.2, 0.3], top_k=1,
+    query_mode="quantized_rerank", quantized_index_name="embedding.scalar_u8.fast",
+    quantized_rerank_candidates=32, response_format="ids",
+)
+print(compact.ids)
+
 # Best-case single-query HTTP request lane: raw little-endian float32 bytes to
 # /search/vector-index:binary. This is exact-only and separate from batch APIs.
 bench_binary = client.search_vector_index(

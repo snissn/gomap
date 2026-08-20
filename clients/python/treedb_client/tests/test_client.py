@@ -133,6 +133,13 @@ def json_body(record: dict[str, Any]) -> Any:
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_vector_index_compact_ids_response(self) -> None:
+        with FixtureServer({("POST", "/v1/indexes/docs/search/vector-index"): (200, {"response_format": "ids", "ids": ["doc-1", "doc-2"]}, 0)}) as server:
+            response = TreeDBClient(server.base_url, timeout=1).search_vector_index("docs", [1, 0], 2, response_format="ids")
+
+            self.assertEqual(response.ids, ["doc-1", "doc-2"])
+            self.assertEqual(json_body(server.records[0])["response_format"], "ids")
+
     def test_create_index_posts_contract_payload(self) -> None:
         with FixtureServer({("POST", "/v1/indexes"): (200, {"index": SAMPLE_INDEX}, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)

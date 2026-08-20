@@ -20,6 +20,7 @@ from .errors import (
 from .filters import Filter, InvalidFilterError, normalize_filter
 from .models import (
     BenchmarkVectorIndexOptions,
+    BenchmarkVectorSearchIDsResponse,
     BenchmarkVectorSearchResponse,
     BenchmarkVectorSearchResult,
     CountDocumentsResponse,
@@ -49,6 +50,7 @@ from .models import (
 
 __all__ = [
     "BenchmarkVectorIndexOptions",
+	"BenchmarkVectorSearchIDsResponse",
     "BenchmarkVectorSearchResponse",
     "BenchmarkVectorSearchResult",
     "ConflictError",
