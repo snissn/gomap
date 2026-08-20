@@ -60,7 +60,7 @@ class TreeDBClient:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = _normalize_timeout(timeout)
         parsed = urllib.parse.urlparse(self.base_url)
-        self._request_prefix = parsed.path
+        self._request_prefix = parsed.path + (";" + parsed.params if parsed.params else "")
         connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
         port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
         self._connection = connection_type(parsed.hostname, port, timeout=self.timeout)
@@ -474,7 +474,7 @@ class TreeDBClient:
                     raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc.reason}") from exc
                 except (socket.timeout, TimeoutError) as exc:
                     raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
-                except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+                except (http.client.RemoteDisconnected, http.client.IncompleteRead, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
                     if retry_broken_connection and attempt == 0:
                         continue
                     raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import struct
@@ -290,6 +291,56 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(len(server.records), 2)
             client.close()
 
+    def test_proxy_vector_index_retries_incomplete_response_once(self) -> None:
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+
+        class Response:
+            status = 200
+
+            def __init__(self, incomplete: bool = False) -> None:
+                self.incomplete = incomplete
+
+            def read(self) -> bytes:
+                if self.incomplete:
+                    raise http.client.IncompleteRead(b"", 1)
+                return json.dumps(response).encode("utf-8")
+
+            def getcode(self) -> int:
+                return self.status
+
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+                return
+
+        class Opener:
+            def __init__(self, always_incomplete: bool = False) -> None:
+                self.calls = 0
+                self.always_incomplete = always_incomplete
+
+            def open(self, request: Any, timeout: float | None = None) -> Response:
+                self.calls += 1
+                return Response(incomplete=self.always_incomplete or self.calls == 1)
+
+        with mock.patch.dict(os.environ, {"http_proxy": "http://proxy.example:8080"}, clear=True):
+            client = TreeDBClient("http://treedb.example", timeout=1)
+            opener = Opener()
+            client._opener = opener  # type: ignore[attr-defined]
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(opener.calls, 2)
+            client.close()
+
+            client = TreeDBClient("http://treedb.example", timeout=1)
+            opener = Opener(always_incomplete=True)
+            client._opener = opener  # type: ignore[attr-defined]
+
+            with self.assertRaises(TreeDBTransportError):
+                client.search_vector_index("docs", [1, 0], 1)
+            self.assertEqual(opener.calls, 2)
+            client.close()
+
     def test_write_is_not_replayed_after_connection_break(self) -> None:
         route = ("POST", "/v1/indexes")
         with FixtureServer({route: (200, {"index": SAMPLE_INDEX}, 0)}, drop_once_routes={route}) as server:
@@ -331,6 +382,13 @@ class TreeDBClientTests(unittest.TestCase):
 
             self.assertEqual(client.health()["ok"], True)
             self.assertEqual(server.records[0]["path"], "/api/v1/health")
+
+    def test_base_url_path_params_are_preserved(self) -> None:
+        with FixtureServer({("GET", "/api;v=1/v1/health"): (200, {"ok": True}, 0)}, prefix="/api;v=1") as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            self.assertEqual(client.health()["ok"], True)
+            self.assertEqual(server.records[0]["path"], "/api;v=1/v1/health")
 
     def test_upsert_documents_omits_response_score_from_write_payload(self) -> None:
         route = "/v1/indexes/docs/documents/upsert"
