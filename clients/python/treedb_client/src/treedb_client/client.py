@@ -6,6 +6,7 @@ import base64
 import http.client
 import json
 import socket
+import ssl
 import struct
 import urllib.error
 import urllib.parse
@@ -481,7 +482,7 @@ class TreeDBClient:
                     raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc.reason}") from exc
                 except (socket.timeout, TimeoutError) as exc:
                     raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
-                except (http.client.RemoteDisconnected, http.client.IncompleteRead, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
+                except (http.client.RemoteDisconnected, http.client.IncompleteRead, ssl.SSLEOFError, ssl.SSLZeroReturnError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
                     if retry_broken_connection and attempt == 0:
                         continue
                     raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
@@ -502,6 +503,8 @@ class TreeDBClient:
                 http.client.ResponseNotReady,
                 http.client.BadStatusLine,
                 http.client.IncompleteRead,
+                ssl.SSLEOFError,
+                ssl.SSLZeroReturnError,
                 ConnectionResetError,
                 ConnectionAbortedError,
                 BrokenPipeError,
@@ -789,6 +792,8 @@ def _is_broken_connection(reason: Any) -> bool:
             http.client.ResponseNotReady,
             http.client.BadStatusLine,
             http.client.IncompleteRead,
+            ssl.SSLEOFError,
+            ssl.SSLZeroReturnError,
             ConnectionResetError,
             ConnectionAbortedError,
             BrokenPipeError,

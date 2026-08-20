@@ -4,6 +4,7 @@ import base64
 import http.client
 import json
 import os
+import ssl
 import struct
 import threading
 import time
@@ -302,6 +303,41 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
             self.assertEqual(len(server.records), 2)
             client.close()
+
+    def test_vector_index_search_retries_once_after_tls_eof(self) -> None:
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+
+        class Response:
+            status = 200
+
+            def read(self) -> bytes:
+                return json.dumps(response).encode("utf-8")
+
+            def close(self) -> None:
+                return
+
+        class Connection:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def request(self, method: str, path: str, body: Any = None, headers: Any = None) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+
+            def getresponse(self) -> Response:
+                return Response()
+
+            def close(self) -> None:
+                return
+
+        client = TreeDBClient("https://treedb.example", timeout=1)
+        connection = Connection()
+        client._connection = connection  # type: ignore[assignment]
+
+        self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+        self.assertEqual(connection.calls, 2)
+        client.close()
 
     def test_proxy_vector_index_retries_incomplete_response_once(self) -> None:
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
