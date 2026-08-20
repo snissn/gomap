@@ -73,6 +73,7 @@ if [[ -z ${RUN_DIR:-} ]]; then
 	[[ -d $run_base && -w $run_base ]] || run_base=${TMPDIR:-/tmp}
 	RUN_DIR=$run_base/treedb_vdbbench_profile_$(date -u +%Y%m%dT%H%M%SZ)
 fi
+[[ $RUN_DIR == /* ]] || RUN_DIR=$PWD/$RUN_DIR
 DATASET_DIR=${DATASET_DIR:-/tmp/vectordb_bench/dataset}
 [[ -f $DATASET_DIR/cohere/cohere_medium_1m/test.parquet ]] || die "Cohere query cache not found under DATASET_DIR: $DATASET_DIR"
 [[ -f $DATASET_DIR/cohere/cohere_medium_1m/neighbors.parquet ]] || die "Cohere ground-truth cache not found under DATASET_DIR: $DATASET_DIR"
@@ -95,6 +96,7 @@ HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS:-300}
 INDEX_NAME=${INDEX_NAME:-cohere1m_scalar_u8_8c6ef660}
 QUANTIZED_INDEX_NAME=${QUANTIZED_INDEX_NAME:-embedding.scalar_u8.fast}
 SERVICE_BIN=${SERVICE_BIN:-$RUN_DIR/bin/treedb-document-service}
+[[ $SERVICE_BIN == /* ]] || SERVICE_BIN=$PWD/$SERVICE_BIN
 PYTHON_BIN=${PYTHON_BIN:-$VDBBENCH_DIR/.venv/bin/python}
 [[ -x $PYTHON_BIN ]] || PYTHON_BIN=$(command -v python3 || true)
 [[ -n $PYTHON_BIN && -x $PYTHON_BIN ]] || die "set PYTHON_BIN to a Python with VectorDBBench dependencies"
@@ -231,6 +233,26 @@ run_vdbbench() {
 		"$@" >"$phase_dir/stdout.log" 2>"$phase_dir/stderr.log"
 }
 
+validate_vdbbench_result() {
+	local phase_dir=$1
+	"$PYTHON_BIN" - "$phase_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+phase = Path(sys.argv[1])
+results = sorted((phase / "results").glob("*/result_*.json"))
+if not results:
+    sys.exit(f"VDBBench completed without a result JSON: {phase}")
+data = json.loads(results[-1].read_text())
+cases = data.get("results") or []
+failed = [case for case in cases if case.get("label") != ":)"]
+if not cases or failed:
+    label = failed[0].get("label") if failed else None
+    sys.exit(f"VDBBench result failed (label={label!r}): {results[-1]}")
+PY
+}
+
 capture() {
 	local dest=$1
 	local endpoint=$2
@@ -313,6 +335,7 @@ for ef in "${ef_values[@]}"; do
 	common_command "$ef" "$WARMUP_SECONDS" "$CONCURRENCY"
 	WARMUP_CMD=("${VDB_CMD[@]}" --stats-mode full_diagnostics --response-format full --require-vector-index-guards --db-label "TreeDB-warmup-$cell_name" --task-label "warmup-$cell_name")
 	run_vdbbench "$cell_dir" warmup "${WARMUP_CMD[@]}"
+	validate_vdbbench_result "$cell_dir/warmup"
 
 	process_snapshot "$cell_dir/process-before.txt"
 	capture "$cell_dir/heap-before.pb" 'heap?gc=1'
@@ -343,6 +366,7 @@ for ef in "${ef_values[@]}"; do
 		die "VDBBench profile cell failed: $profile_dir/stderr.log"
 	fi
 	client_pid=
+	validate_vdbbench_result "$profile_dir"
 	if [[ -n $telemetry_pid ]]; then
 		kill -- "-$telemetry_pid" 2>/dev/null || true
 		wait "$telemetry_pid" 2>/dev/null || true
