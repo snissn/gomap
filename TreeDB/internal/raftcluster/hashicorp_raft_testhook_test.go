@@ -27,6 +27,32 @@ func HashicorpRaftTestLeaderReady(ctx context.Context, provider *HashicorpRaftPr
 	return term, nil
 }
 
+// HashicorpRaftTestFrontier exposes Raft's diagnostic frontier to the
+// external-package integration harness without expanding the provider API.
+type HashicorpRaftTestFrontierV1 struct {
+	State    hraft.RaftState
+	Term     uint64
+	LeaderID NodeID
+	LastLog  uint64
+	Commit   uint64
+	Applied  uint64
+}
+
+func HashicorpRaftTestFrontier(provider *HashicorpRaftProvider) (HashicorpRaftTestFrontierV1, error) {
+	if provider == nil || provider.raft == nil {
+		return HashicorpRaftTestFrontierV1{}, ErrHashicorpRaftUnavailable
+	}
+	_, leaderID := provider.raft.LeaderWithID()
+	return HashicorpRaftTestFrontierV1{
+		State:    provider.raft.State(),
+		Term:     provider.raft.CurrentTerm(),
+		LeaderID: NodeID(leaderID),
+		LastLog:  provider.raft.LastIndex(),
+		Commit:   provider.raft.CommitIndex(),
+		Applied:  provider.raft.AppliedIndex(),
+	}, nil
+}
+
 type blockingHashicorpRaftFuture struct {
 	release <-chan struct{}
 }

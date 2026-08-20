@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -614,6 +615,15 @@ func TestHashicorpRaftProviderFollowerRejectsWithoutDirectMutation(t *testing.T)
 }
 
 func TestHashicorpRaftProviderLeaderCrashAfterCommitRestartCatchUpConverges(t *testing.T) {
+	testHashicorpRaftProviderLeaderCrashRestartCatchUp(t, false)
+}
+
+func TestHashicorpRaftProviderLeaderCrashRestartCatchUpSurvivesReplicationBackoff(t *testing.T) {
+	testHashicorpRaftProviderLeaderCrashRestartCatchUp(t, true)
+}
+
+func testHashicorpRaftProviderLeaderCrashRestartCatchUp(t *testing.T, waitForBackoff bool) {
+	t.Helper()
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeader(t)
 	acknowledged := testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/failover", 7)
@@ -669,17 +679,18 @@ func TestHashicorpRaftProviderLeaderCrashAfterCommitRestartCatchUpConverges(t *t
 	if second.CatalogVersion != 9 || !second.HasCatalogVersion {
 		t.Fatalf("second catalog version=%d has=%t want 9/true", second.CatalogVersion, second.HasCatalogVersion)
 	}
-	cluster.waitAppliedOn(t, second.CommittedEntry.EntryID(), cluster.runningNodeIDs()...)
-	for _, id := range cluster.runningNodeIDs() {
-		assertClusterCollectionExists(t, cluster.nodes[id], "orders")
-	}
-
 	restarted := cluster.restartDBNode(t, crashedID)
-	cluster.waitApplied(t, second.CommittedEntry.EntryID())
+	if waitForBackoff {
+		cluster.waitRestartBackoff(t, newLeader.id, crashedID, second.CommittedEntry.EntryID())
+	}
+	cluster.connectAllTransports(t)
+	cluster.waitRestartCatchUp(t, crashedID, second.CommittedEntry.EntryID())
 	assertHashicorpRaftStoreFiles(t, restarted, "after leader restart")
-	assertClusterLastApplied(t, restarted, second.CommittedEntry.EntryID())
-	assertClusterCollectionExists(t, restarted, "users")
-	assertClusterCollectionExists(t, restarted, "orders")
+	for _, node := range cluster.nodes {
+		assertClusterLastApplied(t, node, second.CommittedEntry.EntryID())
+		assertClusterCollectionExists(t, node, "users")
+		assertClusterCollectionExists(t, node, "orders")
+	}
 
 	replayed, err := restarted.fsm.ApplyCommittedCommandEntryV1(context.Background(), first.CommittedEntry.Clone())
 	if err != nil {
@@ -927,10 +938,62 @@ type hashicorpRaftTestNode struct {
 	provider        *HashicorpRaftProvider
 	submitter       *SingleGroupSubmitter
 	transport       *hraft.InmemTransport
+	raftTransport   *countingAppendEntriesTransport
 	barrierLogStore *barrierCountingLogStore
 }
 
 const hashicorpRaftTestCoordinationTimeout = 5 * time.Second
+
+const (
+	// HashiCorp Raft v1.7.3 caps failed ordinary replication backoff at 10.24s.
+	// Keep the existing 5s coordination headroom for scheduling and the
+	// succeeding AppendEntries round trip, but only for restart catch-up.
+	hashicorpRaftTestRestartCatchUpTimeout = 10_240*time.Millisecond + hashicorpRaftTestCoordinationTimeout
+
+	// The controlled pre-reconnect setup may begin one coordination window
+	// after the replacement leader is observed, so it retains one additional
+	// existing coordination window while it reaches the required generation.
+	hashicorpRaftTestRestartBackoffSetupTimeout = hashicorpRaftTestRestartCatchUpTimeout + hashicorpRaftTestCoordinationTimeout
+
+	// After eleven failed ordinary AppendEntries RPCs, HashiCorp Raft's next
+	// retry is in its upstream generation that sleeps for more than five
+	// seconds. This is a fixed regression seam, not a reimplementation of
+	// HashiCorp Raft backoff arithmetic.
+	hashicorpRaftTestRestartBackoffFailureCount = 11
+)
+
+// countingAppendEntriesTransport is a test-only controlled fault seam. It
+// leaves InmemTransport behavior intact while exposing failed ordinary
+// replication to a disconnected peer.
+type countingAppendEntriesTransport struct {
+	*hraft.InmemTransport
+
+	mu       sync.Mutex
+	failures map[hraft.ServerAddress]uint64
+}
+
+func newCountingAppendEntriesTransport(transport *hraft.InmemTransport) *countingAppendEntriesTransport {
+	return &countingAppendEntriesTransport{
+		InmemTransport: transport,
+		failures:       make(map[hraft.ServerAddress]uint64),
+	}
+}
+
+func (t *countingAppendEntriesTransport) AppendEntries(id hraft.ServerID, target hraft.ServerAddress, args *hraft.AppendEntriesRequest, resp *hraft.AppendEntriesResponse) error {
+	err := t.InmemTransport.AppendEntries(id, target, args, resp)
+	if err != nil && len(args.Entries) != 0 {
+		t.mu.Lock()
+		t.failures[target]++
+		t.mu.Unlock()
+	}
+	return err
+}
+
+func (t *countingAppendEntriesTransport) appendFailures(target hraft.ServerAddress) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.failures[target]
+}
 
 func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
 	tb.Helper()
@@ -1006,9 +1069,11 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 		{ID: "node-c", Address: "node-c"},
 	}
 	transports := make(map[NodeID]*hraft.InmemTransport, len(peers))
+	raftTransports := make(map[NodeID]*countingAppendEntriesTransport, len(peers))
 	for _, peer := range peers {
 		_, transport := hraft.NewInmemTransportWithTimeout(hraft.ServerAddress(peer.Address), hashicorpRaftTestCoordinationTimeout)
 		transports[peer.ID] = transport
+		raftTransports[peer.ID] = newCountingAppendEntriesTransport(transport)
 	}
 	for _, from := range peers {
 		for _, to := range peers {
@@ -1039,7 +1104,7 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 		provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
 			Cluster:             cfg,
 			Applier:             applier,
-			Transport:           transports[peer.ID],
+			Transport:           raftTransports[peer.ID],
 			RaftConfig:          hashicorpRaftFastTestConfig(),
 			LogStore:            logStore,
 			StableStore:         stableStore,
@@ -1057,6 +1122,7 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 			db:              db,
 			provider:        provider,
 			transport:       transports[peer.ID],
+			raftTransport:   raftTransports[peer.ID],
 			barrierLogStore: barrierLogStore,
 		}
 		if fsm, ok := applier.(*raftfsm.FSM); ok {
@@ -1388,6 +1454,103 @@ func (c *hashicorpRaftTestCluster) waitAppliedOn(tb testing.TB, id raftentry.App
 	tb.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
 }
 
+func (c *hashicorpRaftTestCluster) waitRestartCatchUp(tb testing.TB, restartedID NodeID, id raftentry.ApplyEntryID) {
+	tb.Helper()
+	nodeIDs := c.allNodeIDs()
+	started := time.Now()
+	deadline := started.Add(hashicorpRaftTestRestartCatchUpTimeout)
+	for time.Now().Before(deadline) {
+		allApplied := true
+		for _, nodeID := range nodeIDs {
+			node := c.nodes[nodeID]
+			if node == nil || node.fsm == nil {
+				allApplied = false
+				break
+			}
+			got, ok := node.fsm.LastApplied()
+			if !ok || got.Index < id.Index || got.Term != id.Term {
+				allApplied = false
+				break
+			}
+		}
+		if allApplied {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("restart catch-up timed out: phase=post-restart elapsed=%s restarted_id=%q target=%d/%d configured_peers=%s nodes=%s", time.Since(started), restartedID, id.Term, id.Index, c.configuredPeers(restartedID), c.restartCatchUpFrontier())
+}
+
+func (c *hashicorpRaftTestCluster) waitRestartBackoff(tb testing.TB, leaderID, restartedID NodeID, id raftentry.ApplyEntryID) {
+	tb.Helper()
+	leader := c.nodes[leaderID]
+	transport := leader.raftTransport
+	restarted := c.nodes[restartedID]
+	if restarted == nil {
+		tb.Fatalf("restart backoff seam missing restarted node %q", restartedID)
+	}
+	var target hraft.ServerAddress
+	for _, peer := range restarted.cfg.Peers {
+		if peer.ID == restartedID {
+			target = hraft.ServerAddress(peer.Address)
+			break
+		}
+	}
+	if target == "" {
+		tb.Fatalf("restart backoff seam missing configured peer %q", restartedID)
+	}
+	started := time.Now()
+	deadline := started.Add(hashicorpRaftTestRestartBackoffSetupTimeout)
+	for time.Now().Before(deadline) {
+		if transport.appendFailures(target) >= hashicorpRaftTestRestartBackoffFailureCount {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	tb.Fatalf("restart backoff seam timed out: phase=pre-reconnect-backoff elapsed=%s leader_id=%q restarted_id=%q target=%d/%d ordinary_append_failures=%d want_at_least=%d configured_peers=%s nodes=%s", time.Since(started), leaderID, restartedID, id.Term, id.Index, transport.appendFailures(target), hashicorpRaftTestRestartBackoffFailureCount, c.configuredPeers(restartedID), c.restartCatchUpFrontier())
+}
+
+func (c *hashicorpRaftTestCluster) configuredPeers(nodeID NodeID) string {
+	node := c.nodes[nodeID]
+	if node == nil {
+		return "<missing restarted node>"
+	}
+	peers := make([]string, 0, len(node.cfg.Peers))
+	for _, peer := range node.cfg.Peers {
+		peers = append(peers, fmt.Sprintf("%s@%s", peer.ID, peer.Address))
+	}
+	return strings.Join(peers, ",")
+}
+
+func (c *hashicorpRaftTestCluster) restartCatchUpFrontier() string {
+	ids := c.allNodeIDs()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	states := make([]string, 0, len(ids))
+	for _, nodeID := range ids {
+		node := c.nodes[nodeID]
+		if node == nil || node.provider == nil {
+			states = append(states, fmt.Sprintf("%s=stopped", nodeID))
+			continue
+		}
+		frontier, err := HashicorpRaftTestFrontier(node.provider)
+		if err != nil {
+			states = append(states, fmt.Sprintf("%s raft_error=%v", nodeID, err))
+			continue
+		}
+		fsmApplied, fsmAppliedOK := raftentry.ApplyEntryID{}, false
+		if node.fsm != nil {
+			fsmApplied, fsmAppliedOK = node.fsm.LastApplied()
+		}
+		admission, admissionErr := node.provider.ClusterAdmissionStatus(context.Background())
+		if admissionErr != nil {
+			states = append(states, fmt.Sprintf("%s raft_state=%s term=%d leader_id=%q last_log=%d commit=%d applied=%d fsm_applied=%d/%d fsm_applied_ok=%t admission_error=%v", nodeID, frontier.State, frontier.Term, frontier.LeaderID, frontier.LastLog, frontier.Commit, frontier.Applied, fsmApplied.Term, fsmApplied.Index, fsmAppliedOK, admissionErr))
+			continue
+		}
+		states = append(states, fmt.Sprintf("%s raft_state=%s term=%d leader_id=%q last_log=%d commit=%d applied=%d fsm_applied=%d/%d fsm_applied_ok=%t admission={leader=%t unavailable=%t hint=%q reason=%q}", nodeID, frontier.State, frontier.Term, frontier.LeaderID, frontier.LastLog, frontier.Commit, frontier.Applied, fsmApplied.Term, fsmApplied.Index, fsmAppliedOK, admission.Leader, admission.Unavailable, admission.LeaderHint, admission.Reason))
+	}
+	return strings.Join(states, "; ")
+}
+
 func (c *hashicorpRaftTestCluster) admissionSummary() string {
 	var states []string
 	for _, node := range c.nodes {
@@ -1445,7 +1608,7 @@ func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashi
 	provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
 		Cluster:      node.cfg,
 		Applier:      fsm,
-		Transport:    node.transport,
+		Transport:    node.raftTransport,
 		RaftConfig:   hashicorpRaftFastTestConfig(),
 		Bootstrap:    true,
 		ApplyTimeout: 2 * time.Second,
@@ -1473,7 +1636,6 @@ func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashi
 	node.fsm = fsm
 	node.provider = provider
 	node.submitter = submitter
-	c.connectAllTransports(t)
 	return node
 }
 
