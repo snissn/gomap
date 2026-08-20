@@ -331,13 +331,14 @@ class TreeDBClientTests(unittest.TestCase):
             def close(self) -> None:
                 return
 
-        client = TreeDBClient("https://treedb.example", timeout=1)
-        connection = Connection()
-        client._connection = connection  # type: ignore[assignment]
+        with mock.patch.dict(os.environ, {}, clear=True):
+            client = TreeDBClient("https://treedb.example", timeout=1)
+            connection = Connection()
+            client._connection = connection  # type: ignore[assignment]
 
-        self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
-        self.assertEqual(connection.calls, 2)
-        client.close()
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(connection.calls, 2)
+            client.close()
 
     def test_proxy_vector_index_retries_incomplete_response_once(self) -> None:
         response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
