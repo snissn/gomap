@@ -244,61 +244,85 @@ jobs:
             timeout: 25
             shard_kind: all
             package_shard_index: 0
-            package_shard_count: 2
+            package_shard_count: 3
           - name: ubuntu-latest-2
             os: ubuntu-latest
             timeout: 25
             shard_kind: all
             package_shard_index: 1
-            package_shard_count: 2
+            package_shard_count: 3
+          - name: ubuntu-latest-3
+            os: ubuntu-latest
+            timeout: 25
+            shard_kind: all
+            package_shard_index: 2
+            package_shard_count: 3
           - name: macos-latest-1
             os: macos-latest
             timeout: 30
             shard_kind: all
             package_shard_index: 0
-            package_shard_count: 2
+            package_shard_count: 3
           - name: macos-latest-2
             os: macos-latest
             timeout: 30
             shard_kind: all
             package_shard_index: 1
-            package_shard_count: 2
+            package_shard_count: 3
+          - name: macos-latest-3
+            os: macos-latest
+            timeout: 30
+            shard_kind: all
+            package_shard_index: 2
+            package_shard_count: 3
           - name: windows-core-1
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 0
-            package_shard_count: 6
+            package_shard_count: 8
           - name: windows-core-2
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 1
-            package_shard_count: 6
+            package_shard_count: 8
           - name: windows-core-3
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 2
-            package_shard_count: 6
+            package_shard_count: 8
           - name: windows-core-4
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 3
-            package_shard_count: 6
+            package_shard_count: 8
           - name: windows-core-5
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 4
-            package_shard_count: 6
+            package_shard_count: 8
           - name: windows-core-6
             os: windows-latest
             timeout: 40
             shard_kind: windows-core
             package_shard_index: 5
-            package_shard_count: 6
+            package_shard_count: 8
+          - name: windows-core-7
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 6
+            package_shard_count: 8
+          - name: windows-core-8
+            os: windows-latest
+            timeout: 40
+            shard_kind: windows-core
+            package_shard_index: 7
+            package_shard_count: 8
           - name: windows-caching-heavy-1
             os: windows-latest
             timeout: 25
@@ -576,14 +600,21 @@ jobs:
       matrix:
         include:
           - shard: 1
+            shard_kind: core
             shard_index: 0
             shard_count: 3
           - shard: 2
+            shard_kind: core
             shard_index: 1
             shard_count: 3
           - shard: 3
+            shard_kind: core
             shard_index: 2
             shard_count: 3
+          - shard: 4
+            shard_kind: collections
+            shard_index: 0
+            shard_count: 1
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -630,8 +661,14 @@ jobs:
             ' "$weights_file" "$all_file" > "$shard_file"
           }
           trap cleanup EXIT
+          shard_kind="${{ matrix.shard_kind }}"
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
+          if [ "$shard_kind" = collections ]; then
+            echo "TreeDB/collections dedicated race shard"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./collections | tee treedb-race.jsonl
+            exit 0
+          fi
           weights_file=../.github/ci/treedb_race_weighted_shards.tsv
           package_all_file="$(make_tmp)"
           package_file="$(make_tmp)"
@@ -641,7 +678,7 @@ jobs:
           caching_test_file="$(make_tmp)"
           db_all_file="$(make_tmp)"
           db_test_file="$(make_tmp)"
-          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
           go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
           go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
           go test ./db -list 'Test.*' | grep '^Test' > "$db_all_file"

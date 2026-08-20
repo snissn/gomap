@@ -108,7 +108,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         manifests = (
             (
                 "treedb_windows_core_weighted_shards.tsv",
-                6,
+                8,
                 {"package", "root", "db", "collections"},
             ),
             (
@@ -116,7 +116,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
                 3,
                 {"package", "root", "caching", "db"},
             ),
-            ("treedb_unix_weighted_shards.tsv", 2, {"package"}),
+            ("treedb_unix_weighted_shards.tsv", 3, {"package"}),
         )
         for filename, count, kinds in manifests:
             with self.subTest(filename=filename):
@@ -138,17 +138,17 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
-    def test_core_shards_use_bounded_weighted_six_way_partition(self) -> None:
+    def test_core_shards_use_bounded_weighted_eight_way_partition(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
             len(re.findall(r"^          - name: windows-core-\d+$", workflow, re.MULTILINE)),
-            6,
+            8,
         )
-        for shard in range(6):
+        for shard in range(8):
             job_name = f"windows-core-{shard + 1}"
             with self.subTest(job_name=job_name):
                 self.assertEqual(matrix_timeout(workflow, job_name), 40)
-                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 6))
+                self.assertEqual(core_matrix_partition(workflow, job_name), (shard, 8))
 
     def test_core_selector_weights_every_split_domain(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -189,10 +189,10 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
 
 
 class TreeDBUnixHeadroomTest(unittest.TestCase):
-    def test_ubuntu_and_macos_use_two_weighted_test_shards(self) -> None:
+    def test_ubuntu_and_macos_use_three_weighted_test_shards(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         for os_name, timeout in (("ubuntu", 25), ("macos", 30)):
-            for shard in range(2):
+            for shard in range(3):
                 name = f"{os_name}-latest-{shard + 1}"
                 match = re.search(
                     rf"- name: {re.escape(name)}\s+"
@@ -200,7 +200,7 @@ class TreeDBUnixHeadroomTest(unittest.TestCase):
                     rf"timeout: {timeout}\s+"
                     r"shard_kind: all\s+"
                     rf"package_shard_index: {shard}\s+"
-                    r"package_shard_count: 2",
+                    r"package_shard_count: 3",
                     workflow,
                 )
                 self.assertIsNotNone(match, f"missing weighted Unix shard {name}")
@@ -223,15 +223,28 @@ class TreeDBUnixHeadroomTest(unittest.TestCase):
 
 
 class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
-    def test_three_weighted_shards_keep_bounded_package_timeouts(self) -> None:
+    def test_three_weighted_core_shards_and_dedicated_collections_shard_are_bounded(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         race_job = workflow_job(workflow, "race")
         matrix = re.findall(
-            r"- shard: (\d+)\s+shard_index: (\d+)\s+shard_count: (\d+)",
+            r"- shard: (\d+)\s+shard_kind: ([a-z-]+)\s+shard_index: (\d+)\s+shard_count: (\d+)",
             race_job,
         )
-        self.assertEqual(matrix, [("1", "0", "3"), ("2", "1", "3"), ("3", "2", "3")])
+        self.assertEqual(
+            matrix,
+            [
+                ("1", "core", "0", "3"),
+                ("2", "core", "1", "3"),
+                ("3", "core", "2", "3"),
+                ("4", "collections", "0", "1"),
+            ],
+        )
         self.assertIn("treedb_race_weighted_shards.tsv", race_job)
+        self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/collections$'", race_job)
+        self.assertIn(
+            "go test -json -race -p 1 -timeout 12m ./collections",
+            race_job,
+        )
         for kind in ("package", "root", "caching", "db"):
             self.assertIn(f'weighted_shard_file {kind} "$shard_index"', race_job)
 
