@@ -166,18 +166,24 @@ class RootCIHeadroomContractTests(unittest.TestCase):
             },
         )
 
-    def test_timeout_and_shard_enumeration_contract_are_preserved(self) -> None:
+    def test_timeout_and_non_treedb_shard_contract_are_preserved(self) -> None:
         self.assertIn("    timeout-minutes: 40", self.source)
         self.assertIn(
-            "go list ./... | grep -v "
-            "'^github.com/snissn/gomap/TreeDB/db$'",
+            "go list ./... | grep -Ev "
+            "'^github.com/snissn/gomap/TreeDB($|/)'",
             self.source,
         )
+        self.assertNotIn("go test ./TreeDB/db", self.source)
+        self.assertEqual(self.source.count("if ((c % n) == idx) print"), 1)
+
+    def test_vet_excludes_the_dedicated_treedb_domain(self) -> None:
+        vet_steps = [step for step in self.steps if step["name"] == "Vet"]
+        self.assertEqual(len(vet_steps), 1)
         self.assertIn(
-            "go test ./TreeDB/db -list 'Test.*' | grep '^Test'",
-            self.source,
+            "go list ./... | grep -Ev "
+            "'^github.com/snissn/gomap/TreeDB($|/)' | xargs go vet",
+            vet_steps[0]["run"],
         )
-        self.assertEqual(self.source.count("if ((c % n) == idx) print"), 2)
 
     def test_contract_runs_on_one_existing_ubuntu_shard(self) -> None:
         contract_steps = [
@@ -196,43 +202,29 @@ class RootCIHeadroomContractTests(unittest.TestCase):
             ],
         )
 
-    def test_current_package_and_db_test_domains_partition_exactly_once(self) -> None:
+    def test_current_non_treedb_package_domain_partitions_exactly_once(self) -> None:
         test_steps = [step for step in self.steps if step["name"] == "Test"]
         self.assertEqual(len(test_steps), 1)
         test_command = test_steps[0]["run"]
         package_pipeline = (
-            "go list ./... | grep -v "
-            "'^github.com/snissn/gomap/TreeDB/db$' | "
+            "go list ./... | grep -Ev "
+            "'^github.com/snissn/gomap/TreeDB($|/)' | "
             'awk -v idx="$shard_index" -v n="$shard_count" '
             f"'{SHARD_AWK}' > \"$package_file\""
         )
-        db_pipeline = (
-            "go test ./TreeDB/db -list 'Test.*' | grep '^Test' | "
-            'awk -v idx="$shard_index" -v n="$shard_count" '
-            f"'{SHARD_AWK}' > \"$db_test_file\""
-        )
         self.assertEqual(test_command.count(package_pipeline), 1)
-        self.assertEqual(test_command.count(db_pipeline), 1)
         packages = [
             package
             for package in command_lines("go", "list", "./...")
-            if package != "github.com/snissn/gomap/TreeDB/db"
+            if package != "github.com/snissn/gomap/TreeDB"
+            and not package.startswith("github.com/snissn/gomap/TreeDB/")
         ]
-        db_tests = [
-            name
-            for name in command_lines(
-                "go", "test", "./TreeDB/db", "-list", "Test.*"
-            )
-            if name.startswith("Test")
-        ]
-        for label, domain in (("packages", packages), ("TreeDB/db tests", db_tests)):
-            with self.subTest(domain=label):
-                self.assertTrue(domain)
-                self.assertEqual(len(domain), len(set(domain)))
-                shards = awk_shards(domain, 2)
-                self.assertFalse(set(shards[0]) & set(shards[1]))
-                self.assertEqual(set(shards[0]) | set(shards[1]), set(domain))
-                self.assertEqual(sum(map(len, shards)), len(domain))
+        self.assertTrue(packages)
+        self.assertEqual(len(packages), len(set(packages)))
+        shards = awk_shards(packages, 2)
+        self.assertFalse(set(shards[0]) & set(shards[1]))
+        self.assertEqual(set(shards[0]) | set(shards[1]), set(packages))
+        self.assertEqual(sum(map(len, shards)), len(packages))
 
 
 if __name__ == "__main__":
