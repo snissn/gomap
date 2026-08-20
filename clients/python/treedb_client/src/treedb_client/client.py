@@ -66,7 +66,7 @@ class TreeDBClient:
         self._connection = connection_type(parsed.hostname, port, timeout=self.timeout)
         self._opener = urllib.request.build_opener()
         proxies = urllib.request.getproxies()
-        self._benchmark_uses_proxy = bool(proxies.get(parsed.scheme)) and not urllib.request.proxy_bypass(parsed.hostname)
+        self._benchmark_uses_proxy = bool(proxies.get(parsed.scheme)) and not urllib.request.proxy_bypass(parsed.netloc)
 
     def close(self) -> None:
         """Close this client's reusable HTTP connection."""

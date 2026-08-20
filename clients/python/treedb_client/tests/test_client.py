@@ -221,6 +221,18 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(direct.calls, 1)
             client.close()
 
+        with mock.patch.dict(os.environ, {**proxy_env, "no_proxy": "treedb.example:7120", "NO_PROXY": "treedb.example:7120"}):
+            client = TreeDBClient("http://treedb.example:7120", timeout=1)
+            opener = Opener()
+            direct = DirectConnection()
+            client._opener = opener  # type: ignore[attr-defined]
+            client._connection = direct  # type: ignore[assignment]
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(opener.calls, 0)
+            self.assertEqual(direct.calls, 1)
+            client.close()
+
         with mock.patch.dict(os.environ, {"all_proxy": "http://proxy.example:8080"}, clear=True):
             client = TreeDBClient("http://treedb.example", timeout=1)
             opener = Opener()
