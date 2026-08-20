@@ -158,8 +158,21 @@ func TestScalarU8PreparedTraversalRawDotQuantizedOnlyParity2658(t *testing.T) {
 	}
 	assertQuantizedOnlyGuardrailStats2416(t, packResults.Stats, def.Dimensions)
 	assertScalarU8PreparedTraversalPackAdjacencyStats2586(t, packResults.Stats, packStatus, "raw-dot quantized_only")
-	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls {
-		t.Fatalf("pack stats=%+v fallback stats=%+v want same quantized traversal counters", packResults.Stats, fallbackResults.Stats)
+	if packResults.Stats.Candidates != 0 || packResults.Stats.Edges != 0 || packResults.Stats.VisitedEdges != 0 {
+		t.Fatalf("production pack stats=%+v want no traversal diagnostics", packResults.Stats)
+	}
+	fullOpts := opts
+	fullOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+	packFull, err := packSearcher.SearchWithBuffer(fullOpts, &packBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics pack quantized_only SearchWithBuffer: %v", err)
+	}
+	fallbackFull, err := fallbackSearcher.SearchWithBuffer(fullOpts, &fallbackBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics fallback quantized_only SearchWithBuffer: %v", err)
+	}
+	if packFull.Stats.Candidates != fallbackFull.Stats.Candidates || packFull.Stats.VisitedEdges != fallbackFull.Stats.VisitedEdges || packFull.Stats.QuantizedScoreCalls != fallbackFull.Stats.QuantizedScoreCalls {
+		t.Fatalf("full pack stats=%+v fallback stats=%+v want same quantized traversal counters", packFull.Stats, fallbackFull.Stats)
 	}
 	for i := range packResults.Results {
 		got := packResults.Results[i]
@@ -185,8 +198,21 @@ func TestScalarU8PreparedTraversalRawDotQuantizedOnlyParity2658(t *testing.T) {
 	}
 	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, packRerank.Stats, rerankOpts.QuantizedRerankCandidates, def.Dimensions)
 	assertQuantizedRerankNoDocumentGuardrailStats2416(t, fallbackRerank.Stats, rerankOpts.QuantizedRerankCandidates)
-	if packRerank.Stats.Candidates != fallbackRerank.Stats.Candidates || packRerank.Stats.VisitedEdges != fallbackRerank.Stats.VisitedEdges || packRerank.Stats.QuantizedScoreCalls != fallbackRerank.Stats.QuantizedScoreCalls || packRerank.Stats.QuantizedRerankExactScoreCalls != fallbackRerank.Stats.QuantizedRerankExactScoreCalls {
-		t.Fatalf("rerank pack stats=%+v fallback stats=%+v want same raw-dot traversal and rerank counters", packRerank.Stats, fallbackRerank.Stats)
+	if packRerank.Stats.Candidates != 0 || packRerank.Stats.Edges != 0 || packRerank.Stats.VisitedEdges != 0 {
+		t.Fatalf("production rerank pack stats=%+v want no traversal diagnostics", packRerank.Stats)
+	}
+	fullRerankOpts := rerankOpts
+	fullRerankOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+	packRerankFull, err := packSearcher.SearchWithBuffer(fullRerankOpts, &packBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics pack quantized_rerank SearchWithBuffer: %v", err)
+	}
+	fallbackRerankFull, err := fallbackSearcher.SearchWithBuffer(fullRerankOpts, &fallbackBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics fallback quantized_rerank SearchWithBuffer: %v", err)
+	}
+	if packRerankFull.Stats.Candidates != fallbackRerankFull.Stats.Candidates || packRerankFull.Stats.VisitedEdges != fallbackRerankFull.Stats.VisitedEdges || packRerankFull.Stats.QuantizedScoreCalls != fallbackRerankFull.Stats.QuantizedScoreCalls || packRerankFull.Stats.QuantizedRerankExactScoreCalls != fallbackRerankFull.Stats.QuantizedRerankExactScoreCalls {
+		t.Fatalf("full rerank pack stats=%+v fallback stats=%+v want same raw-dot traversal and rerank counters", packRerankFull.Stats, fallbackRerankFull.Stats)
 	}
 	if len(packRerank.Results) != len(fallbackRerank.Results) {
 		t.Fatalf("rerank pack results=%d fallback results=%d", len(packRerank.Results), len(fallbackRerank.Results))
