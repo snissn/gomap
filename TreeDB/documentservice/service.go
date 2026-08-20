@@ -644,9 +644,15 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if search.Stats.WorkAccountingSearches != 0 {
 		responseStart = time.Now()
 	}
-	results := benchmarkVectorSearchResults(search.Results)
-	if results == nil {
-		results = []BenchmarkVectorSearchResult{}
+	var results []BenchmarkVectorSearchResult
+	var compactIDs []string
+	if req.ResponseFormat == BenchmarkVectorResponseFormatIDs {
+		compactIDs = benchmarkVectorSearchIDs(search.Results)
+	} else {
+		results = benchmarkVectorSearchResults(search.Results)
+		if results == nil {
+			results = []BenchmarkVectorSearchResult{}
+		}
 	}
 	stats := search.Stats
 	if !responseStart.IsZero() {
@@ -666,6 +672,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		NoDocuments:               true,
 		Stats:                     stats,
 		Diagnostics:               stats.Diagnostics(),
+		compactIDs:                compactIDs,
 	}, nil
 }
 
@@ -1401,10 +1408,10 @@ func benchmarkVectorSearchResults(results []collections.VectorIndexSearchResult)
 	return out
 }
 
-func benchmarkVectorSearchIDs(results []BenchmarkVectorSearchResult) []string {
+func benchmarkVectorSearchIDs(results []collections.VectorIndexSearchResult) []string {
 	ids := make([]string, len(results))
 	for i := range results {
-		ids[i] = results[i].ID
+		ids[i] = string(results[i].ID)
 	}
 	return ids
 }

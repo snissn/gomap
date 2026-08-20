@@ -284,6 +284,7 @@ type BenchmarkVectorSearchResponse struct {
 	NoDocuments               bool                                     `json:"no_documents"`
 	Stats                     collections.VectorIndexSearchStats       `json:"stats"`
 	Diagnostics               collections.VectorIndexSearchDiagnostics `json:"diagnostics"`
+	compactIDs                []string
 }
 
 // BenchmarkVectorSearchIDsResponse is the timed benchmark response. It is

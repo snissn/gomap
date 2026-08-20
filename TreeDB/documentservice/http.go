@@ -128,7 +128,7 @@ func (h *Handler) serveIndexOperation(w http.ResponseWriter, r *http.Request, in
 
 func writeBenchmarkVectorSearchResponse(w http.ResponseWriter, response BenchmarkVectorSearchResponse, format BenchmarkVectorResponseFormat) {
 	if format == BenchmarkVectorResponseFormatIDs {
-		writeJSON(w, http.StatusOK, BenchmarkVectorSearchIDsResponse{ResponseFormat: format, IDs: benchmarkVectorSearchIDs(response.Results)})
+		writeJSON(w, http.StatusOK, BenchmarkVectorSearchIDsResponse{ResponseFormat: format, IDs: response.compactIDs})
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
