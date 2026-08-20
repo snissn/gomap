@@ -154,7 +154,9 @@ cleanup() {
 		fi
 	done
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 write_context() {
 	{
