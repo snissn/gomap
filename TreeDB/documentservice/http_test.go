@@ -260,6 +260,24 @@ func TestHTTPBenchmarkVectorSearchCompactIDsParityTopK100(t *testing.T) {
 			t.Fatalf("mode=%q compact bytes=%d full bytes=%d: want compact at least 70%% smaller", tc.QueryMode, len(compactBody), len(fullBody))
 		}
 	}
+	productionQuery := url.Values{
+		"top_k":                {"100"},
+		"ef_search":            {"100"},
+		"query_mode":           {string(BenchmarkVectorQueryModeQuantizedOnly)},
+		"quantized_index_name": {quantized},
+		"stats_mode":           {"production"},
+	}
+	var production BenchmarkVectorSearchResponse
+	postBinaryVectorSearch(t, handler, "/v1/indexes/"+index+"/search/vector-index:binary?"+productionQuery.Encode(), encodeFloat32LERawForTest([]float32{1, 0}), benchmarkVectorSearchBinaryContentType, http.StatusOK, &production)
+	if production.Stats.Candidates != 0 || production.Stats.Edges != 0 || production.Stats.VisitedEdges != 0 {
+		t.Fatalf("raw production stats=%+v want no traversal diagnostics", production.Stats)
+	}
+	productionQuery.Set("stats_mode", "full_diagnostics")
+	var fullDiagnostics BenchmarkVectorSearchResponse
+	postBinaryVectorSearch(t, handler, "/v1/indexes/"+index+"/search/vector-index:binary?"+productionQuery.Encode(), encodeFloat32LERawForTest([]float32{1, 0}), benchmarkVectorSearchBinaryContentType, http.StatusOK, &fullDiagnostics)
+	if fullDiagnostics.Stats.Candidates == 0 || fullDiagnostics.Stats.Edges == 0 || fullDiagnostics.Stats.VisitedEdges == 0 {
+		t.Fatalf("raw full diagnostics stats=%+v want traversal diagnostics", fullDiagnostics.Stats)
+	}
 
 	postJSON(t, handler, "/v1/indexes/"+index+"/search/vector-index", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ResponseFormat: BenchmarkVectorResponseFormat("unknown")}, http.StatusBadRequest, nil)
 }
@@ -381,7 +399,9 @@ func TestHTTPBenchmarkVectorSearchBinaryF32LE(t *testing.T) {
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=unknown", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_only", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_rerank", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=quantized_rerank&quantized_index_name=embedding.scalar_u8.fast&quantized_rerank_candidates=-1", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&quantized_index_name=embedding.scalar_u8.fast", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
+	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&stats_mode=unsupported", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact&response_format=unknown", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearchWithRawQuery(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary", "top_k=1&ef_search=%zz", rawQuery, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
 	postBinaryVectorSearch(t, handler, "/v1/indexes/bench_binary/search/vector-index:binary?top_k=1&ef_search=8&query_mode=exact", nil, benchmarkVectorSearchBinaryContentType, http.StatusBadRequest, nil)
