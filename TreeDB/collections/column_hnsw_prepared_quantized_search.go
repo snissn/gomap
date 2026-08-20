@@ -210,19 +210,12 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 	if r.preparedSearch != nil && r.preparedSearch.ready() {
 		setupStats.PreparedGraphSearchViews = 1
 	}
-	traversalStatsMode := opts.StatsMode.normalized()
-	if traversalStatsMode == columnVectorGraphNativeSearchStatsModeMinimal {
-		// The existing quantized column_graph route keeps candidate/edge counters even
-		// for production/minimal stats because quantized traversal is the thing being
-		// measured. Preserve that counter contract while reusing the pack traversal.
-		traversalStatsMode = columnVectorGraphNativeSearchStatsModeFullDiagnostics
-	}
 	packOpts := columnHNSWPreparedTraversalOptions{
 		TopK:                                 opts.TopK,
 		EfSearch:                             opts.EfSearch,
 		RetainedCandidateLimit:               0,
 		ScoreBatchMode:                       opts.ScoreBatchMode,
-		StatsMode:                            traversalStatsMode,
+		StatsMode:                            opts.StatsMode,
 		OmitResultMaterialization:            opts.OmitResultMaterialization || queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 		SuppressOmittedResultMaterialization: queryMode == columnVectorGraphNativeSearchQueryModeQuantizedRerank,
 	}

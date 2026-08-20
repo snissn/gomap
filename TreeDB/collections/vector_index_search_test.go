@@ -1330,8 +1330,30 @@ func TestScalarU8QuantizedPreparedTraversalRerankPreservesEfTraversal2586(t *tes
 	}
 	assertScalarU8PackNativeQuantizedRerankNoDocumentGuardrailStats2657(t, packResults.Stats, opts.QuantizedRerankCandidates, def.Dimensions)
 	assertQuantizedRerankNoDocumentGuardrailStats2416(t, fallbackResults.Stats, opts.QuantizedRerankCandidates)
-	if packResults.Stats.Candidates != fallbackResults.Stats.Candidates || packResults.Stats.VisitedEdges != fallbackResults.Stats.VisitedEdges || packResults.Stats.QuantizedScoreCalls != fallbackResults.Stats.QuantizedScoreCalls || packResults.Stats.QuantizedRerankExactScoreCalls != fallbackResults.Stats.QuantizedRerankExactScoreCalls {
-		t.Fatalf("pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packResults.Stats, fallbackResults.Stats)
+	if packResults.Stats.Candidates != 0 || packResults.Stats.Edges != 0 || packResults.Stats.VisitedEdges != 0 {
+		t.Fatalf("production pack stats=%+v want no traversal diagnostics", packResults.Stats)
+	}
+	fullOpts := opts
+	fullOpts.StatsMode = VectorIndexSearchStatsModeFullDiagnostics
+	packFull, err := packSearcher.SearchWithBuffer(fullOpts, &packBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics pack SearchWithBuffer: %v", err)
+	}
+	fallbackFull, err := fallbackSearcher.SearchWithBuffer(fullOpts, &fallbackBuffer)
+	if err != nil {
+		t.Fatalf("full diagnostics fallback SearchWithBuffer: %v", err)
+	}
+	if packFull.Stats.Candidates != fallbackFull.Stats.Candidates || packFull.Stats.VisitedEdges != fallbackFull.Stats.VisitedEdges || packFull.Stats.QuantizedScoreCalls != fallbackFull.Stats.QuantizedScoreCalls || packFull.Stats.QuantizedRerankExactScoreCalls != fallbackFull.Stats.QuantizedRerankExactScoreCalls {
+		t.Fatalf("full pack stats=%+v fallback stats=%+v want same efSearch traversal and rerank counters", packFull.Stats, fallbackFull.Stats)
+	}
+	workOpts := opts
+	workOpts.StatsMode = VectorIndexSearchStatsModeWorkAccounting
+	packWork, err := packSearcher.SearchWithBuffer(workOpts, &packBuffer)
+	if err != nil {
+		t.Fatalf("work-accounting pack SearchWithBuffer: %v", err)
+	}
+	if packWork.Stats.Candidates == 0 || packWork.Stats.VisitedEdges == 0 || packWork.Stats.WorkAccountingSearches != 1 {
+		t.Fatalf("work-accounting pack stats=%+v want traversal counters", packWork.Stats)
 	}
 	if len(packResults.Results) != len(fallbackResults.Results) {
 		t.Fatalf("pack results=%d fallback results=%d", len(packResults.Results), len(fallbackResults.Results))
