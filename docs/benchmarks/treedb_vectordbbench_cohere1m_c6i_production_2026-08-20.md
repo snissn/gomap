@@ -2,7 +2,7 @@
 
 TreeDB's service-transport candidate improved median peak throughput by 36.4% at matched recall and by 26.3% at the higher-recall point. These are paired TreeDB results from separate c6i.8xlarge server and client hosts; public VDBBench curves below are directional references, not same-host reproductions.
 
-| Workload | Baseline QPS | Candidate QPS | Gain | Recall@100 | Candidate p99 |
+| Workload | Baseline QPS | Candidate QPS | Gain | Shared recall@100 | Candidate p99 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | scalar-u8 + FP32 rerank, ef150/r150 | 18,961.83 | 25,862.73 | +36.4% | 0.9390 | 1.2 ms |
 | scalar-u8 + FP32 rerank, ef350/r300 | 10,152.05 | 12,821.00 | +26.3% | 0.9809 | 2.1 ms |
@@ -10,6 +10,7 @@ TreeDB's service-transport candidate improved median peak throughput by 36.4% at
 | FP32 exact, ef150 (single pair) | 10,381.90 | 13,886.94 | +33.8% | 0.9433 | 2.0 ms |
 
 The first three rows are medians of three paired, alternating-order repetitions. The FP32 row is one paired sweep and is therefore plotted as an isolated point rather than a curve.
+The recall value in each row was identical for baseline and candidate; the companion CSV records both points separately.
 
 ## Performance and recall
 
@@ -35,11 +36,27 @@ The TreeDB star curves connect scalar-u8-only and scalar-u8-plus-rerank operatin
 - Budgeted server: c6i.8xlarge at $992.80/month plus 90 GiB gp3 at $7.20/month, exactly $1,000/month using 730 hours. Client cost was separate.
 - Peak procedure: concurrency 20, 30, 40, 60, and 80 for 30 seconds each. Warmups and profiled rows were excluded from medians.
 - All 27 retained timed/profile command manifests explicitly used `--stats-mode production`.
+- This campaign did not use `unified-bench`, so no cross-database preset applies. Every baseline and candidate server used the same resolved TreeDB profile, `command_wal_durable`: canonical peak runs passed `-profile command_wal_durable`, while the profiling binary constructs `OptionsFor(ProfileCommandWALDurable)` directly. This enables the command WAL with durable acknowledgement, verifies value-log read checksums, and disables writable value-log mmap; no WAL-off, relaxed-sync, or checksum-skip override was used. The archived `collected/server/bin/start-server.sh`, service logs, and 27 client command manifests preserve these settings for every retained run.
 - Baseline TreeDB: `9bb3088ce2ecc0bddcd02500e2ca6e379691ae73`.
 - Benchmarked candidate: `f59c62a77230b24e52072fd89713393b1f12a38e` from PR #4220. Its later proxy-bypass and HTTP-error handling fixes did not alter the direct no-proxy benchmark path and were not rebenchmarked.
 - VDBBench adapter: `d1564fdff9990f0accebddc75ea69574579f0e02` from `snissn/vectordbbench` PR #7.
 
 Strict diagnostic preflight separately proved exact, scalar-u8-only, and rerank routing; `topK=100`; no fallback or document fetches; the requested quantized index; rerank activation and budget; and identical ordered IDs across compact/full and raw/base64 representations.
+
+## Acceptance gates
+
+| Gate | Required | Observed | Result | Archived evidence |
+| --- | --- | --- | --- | --- |
+| exact FP32 comparator | measured at `topK=100` with route/parity proof | baseline and candidate ef150 pair; recall 0.9433 | pass | `reports/fp32_comparator_runs.json`; preflight artifacts |
+| scalar-u8-only route | quantized traversal, no fallback/document fetch | ef150 curve point; recall 0.8800 | pass | `reports/official_peak5_summary.json`; preflight artifacts |
+| scalar-u8 + rerank route | rerank active with requested budget | ef150/r150 and ef350/r300 points | pass | `reports/official_peak5_summary.json`; preflight artifacts |
+| matched recall | at least 0.9383 | 0.9390 for baseline and candidate | pass | `reports/campaign-manifest.json` |
+| candidate median peak QPS | at least 5% gain | +36.4% | pass | `reports/campaign-manifest.json` |
+| candidate p99 | no more than 10% regression | 1.8 to 1.2 ms (-33.3%) | pass | `reports/campaign-manifest.json` |
+| candidate allocation | at least 50% lower and at most 26 KiB/query | -66.3%; 17.05 KiB/query | pass | representative allocation profiles; `reports/campaign-manifest.json` |
+| steady-state memory | bounded and stable | high-recall RSS 10.036 to 9.992 GiB; anonymous 1.364 to 1.321 GiB | pass | profile host/process telemetry |
+
+No acceptance gate missed. All evidence paths above are relative to the checksum-addressed campaign archive listed below; profiled rows were separate from peak-QPS medians.
 
 ## Resource findings
 
