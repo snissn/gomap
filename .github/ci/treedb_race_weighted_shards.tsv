@@ -1,6 +1,5 @@
-# kind	shard	item	max seconds from successful main medians and PR run 32407394988
+# kind	shard	item	max seconds from successful main medians and PR runs 32407394988, 32418139347
 db	0	TestCompactIndex_AllocatesNewPagesByAppending	29.20
-db	0	TestVacuumRaceMissingKey	58.08
 package	0	github.com/snissn/gomap/TreeDB/docs	12.28
 package	0	github.com/snissn/gomap/TreeDB/internal/raftcluster	90.57
 root	0	TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters	18.19

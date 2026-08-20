@@ -266,6 +266,11 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             "go test -json -race -p 1 -timeout 12m ./collections",
             race_job,
         )
+        self.assertIn("grep -v '^TestVacuumRaceMissingKey$'", race_job)
+        self.assertIn(
+            "go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$'",
+            race_job,
+        )
         for kind in ("package", "root", "caching", "db"):
             self.assertIn(f'weighted_shard_file {kind} "$shard_index"', race_job)
 

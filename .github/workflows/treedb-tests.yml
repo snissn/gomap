@@ -679,8 +679,9 @@ jobs:
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
           if [ "$shard_kind" = collections ]; then
-            echo "TreeDB/collections dedicated race shard"
+            echo "TreeDB/collections and vacuum-race dedicated race shard"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./collections | tee treedb-race.jsonl
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m ./db -run '^TestVacuumRaceMissingKey$' | tee -a treedb-race.jsonl
             exit 0
           fi
           weights_file=../.github/ci/treedb_race_weighted_shards.tsv
@@ -695,7 +696,7 @@ jobs:
           go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' > "$package_all_file"
           go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
           go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
-          go test ./db -list 'Test.*' | grep '^Test' > "$db_all_file"
+          go test ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$db_all_file"
           weighted_shard_file package "$shard_index" "$shard_count" "$weights_file" "$package_all_file" "$package_file"
           weighted_shard_file root "$shard_index" "$shard_count" "$weights_file" "$root_all_file" "$root_test_file"
           weighted_shard_file caching "$shard_index" "$shard_count" "$weights_file" "$caching_all_file" "$caching_test_file"
