@@ -133,6 +133,7 @@ func BenchmarkServiceBenchmarkVectorSearchBufferScratch(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	b.StopTimer()
 }
 
 func TestServiceBenchmarkVectorSearchCacheInvalidatesOnLifecycleEvents(t *testing.T) {
