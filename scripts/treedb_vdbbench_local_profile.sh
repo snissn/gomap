@@ -17,9 +17,9 @@ Example:
 
 Useful overrides:
   RUN_DIR, SERVICE_BIN, PYTHON_BIN, DATASET_DIR, EFS (default 600,1000),
-  CONCURRENCY (default GOMAXPROCS), PROFILE_SECONDS, PROFILE_DELAY_SECONDS,
-  TRACE_SECONDS, WARMUP_SECONDS, CELL_SECONDS, SERVICE_ADDR, PPROF_ADDR,
-  DRY_RUN=true.
+  QUERY_MODE (quantized_rerank or quantized_only), CONCURRENCY (default
+  GOMAXPROCS), PROFILE_SECONDS, PROFILE_DELAY_SECONDS, TRACE_SECONDS,
+  WARMUP_SECONDS, CELL_SECONDS, SERVICE_ADDR, PPROF_ADDR, DRY_RUN=true.
 
 The script never loads data, creates an index, or rebuilds a graph. Each cell
 runs a full-diagnostic warmup/route proof before the production IDs-only row.
@@ -74,11 +74,14 @@ if [[ -z ${RUN_DIR:-} ]]; then
 	RUN_DIR=$run_base/treedb_vdbbench_profile_$(date -u +%Y%m%dT%H%M%SZ)
 fi
 DATASET_DIR=${DATASET_DIR:-/tmp/vectordb_bench/dataset}
+[[ -f $DATASET_DIR/cohere/cohere_medium_1m/test.parquet ]] || die "Cohere query cache not found under DATASET_DIR: $DATASET_DIR"
+[[ -f $DATASET_DIR/cohere/cohere_medium_1m/neighbors.parquet ]] || die "Cohere ground-truth cache not found under DATASET_DIR: $DATASET_DIR"
 SERVICE_ADDR=${SERVICE_ADDR:-127.0.0.1:7120}
 PPROF_ADDR=${PPROF_ADDR:-127.0.0.1:6060}
 SERVICE_URL=http://$SERVICE_ADDR
 PPROF_URL=http://$PPROF_ADDR/debug/pprof
 EFS=${EFS:-600,1000}
+QUERY_MODE=${QUERY_MODE:-quantized_rerank}
 RERANK_CANDIDATES=${RERANK_CANDIDATES:-200}
 TOP_K=${TOP_K:-100}
 GOMAXPROCS_VALUE=${GOMAXPROCS:-$(getconf _NPROCESSORS_ONLN)}
@@ -99,10 +102,18 @@ command -v curl >/dev/null || die "curl is required"
 command -v setsid >/dev/null || die "setsid is required"
 command -v go >/dev/null || die "go is required"
 
-for value in "$RERANK_CANDIDATES" "$TOP_K" "$GOMAXPROCS_VALUE" "$CONCURRENCY" "$PROFILE_SECONDS" "$TRACE_SECONDS" "$PROFILE_DELAY_SECONDS" "$WARMUP_SECONDS" "$CELL_SECONDS"; do
+for value in "$TOP_K" "$GOMAXPROCS_VALUE" "$CONCURRENCY" "$PROFILE_SECONDS" "$TRACE_SECONDS" "$PROFILE_DELAY_SECONDS" "$WARMUP_SECONDS" "$CELL_SECONDS"; do
 	[[ $value =~ ^[0-9]+$ && $value -gt 0 ]] || die "positive integer required, got: $value"
 done
-(( RERANK_CANDIDATES >= TOP_K )) || die "RERANK_CANDIDATES must be at least TOP_K"
+case "$QUERY_MODE" in
+	quantized_rerank)
+		if [[ ! $RERANK_CANDIDATES =~ ^[0-9]+$ ]] || (( RERANK_CANDIDATES < TOP_K )); then
+			die "RERANK_CANDIDATES must be an integer at least TOP_K"
+		fi
+		;;
+	quantized_only) ;;
+	*) die "QUERY_MODE must be quantized_rerank or quantized_only" ;;
+esac
 (( CELL_SECONDS > PROFILE_DELAY_SECONDS + PROFILE_SECONDS + TRACE_SECONDS )) || die "CELL_SECONDS must cover profile delay, CPU profile, and trace"
 
 IFS=',' read -r -a ef_values <<<"$EFS"
@@ -153,7 +164,7 @@ write_context() {
 		find "$DB_DIR" -maxdepth 1 -name '.durable-root-rebound-*' -printf 'db_marker=%f\n' 2>/dev/null || true
 		printf 'dataset_dir=%s\n' "$DATASET_DIR"
 		printf 'service_addr=%s\npprof_addr=%s\n' "$SERVICE_ADDR" "$PPROF_ADDR"
-		printf 'efs=%s\nrerank_candidates=%s\ntop_k=%s\nconcurrency=%s\n' "$EFS" "$RERANK_CANDIDATES" "$TOP_K" "$CONCURRENCY"
+		printf 'efs=%s\nquery_mode=%s\nrerank_candidates=%s\ntop_k=%s\nconcurrency=%s\n' "$EFS" "$QUERY_MODE" "$RERANK_CANDIDATES" "$TOP_K" "$CONCURRENCY"
 		printf 'profile_seconds=%s\ntrace_seconds=%s\nprofile_delay_seconds=%s\nwarmup_seconds=%s\ncell_seconds=%s\n' "$PROFILE_SECONDS" "$TRACE_SECONDS" "$PROFILE_DELAY_SECONDS" "$WARMUP_SECONDS" "$CELL_SECONDS"
 		printf 'gomaxprocs=%s\n' "$GOMAXPROCS_VALUE"
 		go version
@@ -182,10 +193,12 @@ common_command() {
 		--num-concurrency "$concurrency" --concurrency-duration "$duration"
 		--base-url "$SERVICE_URL" --index-name "$INDEX_NAME" --timeout 300
 		--query-embedding-encoding f32_le --use-vector-index
-		--query-mode quantized_rerank --m 16 --ef-construction 300 --ef-search "$ef"
+		--query-mode "$QUERY_MODE" --m 16 --ef-construction 300 --ef-search "$ef"
 		--quantized-codec scalar_u8 --quantized-index-name "$QUANTIZED_INDEX_NAME"
-		--quantized-rerank-candidates "$RERANK_CANDIDATES"
 	)
+	if [[ $QUERY_MODE == quantized_rerank ]]; then
+		VDB_CMD+=(--quantized-rerank-candidates "$RERANK_CANDIDATES")
+	fi
 }
 
 record_command() {
@@ -249,13 +262,15 @@ quote_cmd "${BUILD_CMD[@]}" >"$RUN_DIR/build-command.txt"
 quote_cmd "${SERVICE_CMD[@]}" >"$RUN_DIR/service-command.txt"
 
 for ef in "${ef_values[@]}"; do
-	cell_dir=$RUN_DIR/cells/ef${ef}-r${RERANK_CANDIDATES}
+	cell_name=ef${ef}-r${RERANK_CANDIDATES}
+	[[ $QUERY_MODE == quantized_rerank ]] || cell_name=ef${ef}-quantized-only
+	cell_dir=$RUN_DIR/cells/$cell_name
 	mkdir -p "$cell_dir/warmup/results" "$cell_dir/profile/results"
 	common_command "$ef" "$WARMUP_SECONDS" "$CONCURRENCY"
-	WARMUP_CMD=("${VDB_CMD[@]}" --stats-mode full_diagnostics --response-format full --require-vector-index-guards --db-label "TreeDB-warmup-ef${ef}-r${RERANK_CANDIDATES}" --task-label "warmup-ef${ef}-r${RERANK_CANDIDATES}")
+	WARMUP_CMD=("${VDB_CMD[@]}" --stats-mode full_diagnostics --response-format full --require-vector-index-guards --db-label "TreeDB-warmup-$cell_name" --task-label "warmup-$cell_name")
 	record_command "$cell_dir/warmup/command.txt" "${WARMUP_CMD[@]}"
 	common_command "$ef" "$CELL_SECONDS" "$CONCURRENCY"
-	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-ef${ef}-r${RERANK_CANDIDATES}" --task-label "profile-ef${ef}-r${RERANK_CANDIDATES}")
+	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-$cell_name" --task-label "profile-$cell_name")
 	record_command "$cell_dir/profile/command.txt" "${PROFILE_CMD[@]}"
 done
 
@@ -288,10 +303,12 @@ curl --fail --silent "$SERVICE_URL/v1/health" >"$RUN_DIR/health.json" || die "se
 curl --fail --silent "$PPROF_URL/" >/dev/null || die "pprof did not become ready"
 
 for ef in "${ef_values[@]}"; do
-	cell_dir=$RUN_DIR/cells/ef${ef}-r${RERANK_CANDIDATES}
-	printf 'warming and validating efSearch=%s rerank=%s\n' "$ef" "$RERANK_CANDIDATES"
+	cell_name=ef${ef}-r${RERANK_CANDIDATES}
+	[[ $QUERY_MODE == quantized_rerank ]] || cell_name=ef${ef}-quantized-only
+	cell_dir=$RUN_DIR/cells/$cell_name
+	printf 'warming and validating mode=%s efSearch=%s rerank=%s\n' "$QUERY_MODE" "$ef" "$RERANK_CANDIDATES"
 	common_command "$ef" "$WARMUP_SECONDS" "$CONCURRENCY"
-	WARMUP_CMD=("${VDB_CMD[@]}" --stats-mode full_diagnostics --response-format full --require-vector-index-guards --db-label "TreeDB-warmup-ef${ef}-r${RERANK_CANDIDATES}" --task-label "warmup-ef${ef}-r${RERANK_CANDIDATES}")
+	WARMUP_CMD=("${VDB_CMD[@]}" --stats-mode full_diagnostics --response-format full --require-vector-index-guards --db-label "TreeDB-warmup-$cell_name" --task-label "warmup-$cell_name")
 	run_vdbbench "$cell_dir" warmup "${WARMUP_CMD[@]}"
 
 	process_snapshot "$cell_dir/process-before.txt"
@@ -302,7 +319,7 @@ for ef in "${ef_values[@]}"; do
 	capture "$cell_dir/goroutine-before.txt" 'goroutine?debug=2'
 
 	common_command "$ef" "$CELL_SECONDS" "$CONCURRENCY"
-	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-ef${ef}-r${RERANK_CANDIDATES}" --task-label "profile-ef${ef}-r${RERANK_CANDIDATES}")
+	PROFILE_CMD=("${VDB_CMD[@]}" --stats-mode production --response-format ids --skip-vector-index-guards --db-label "TreeDB-profile-$cell_name" --task-label "profile-$cell_name")
 	profile_dir=$cell_dir/profile
 	setsid env \
 		PYTHONPATH="$VDBBENCH_DIR:$ROOT/clients/python/treedb_client/src" \
