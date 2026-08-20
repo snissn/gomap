@@ -1190,8 +1190,8 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 
 // SearchVectorIndexWithBuffer searches a collection vector index through a
 // no-document high-QPS seam using caller-owned result storage. Query is read
-// synchronously and is neither mutated nor retained after this method returns. Returned Results
-// and result IDs alias buffer and remain valid only until buffer is reused or
+// synchronously and is neither mutated nor retained after this method returns.
+// Returned Results and result IDs alias buffer and remain valid only until buffer is reused or
 // Reset is called. The same buffer must not be reused concurrently; parallel
 // callers should use independent buffers.
 //

@@ -50,7 +50,7 @@ from .models import (
 
 __all__ = [
     "BenchmarkVectorIndexOptions",
-	"BenchmarkVectorSearchIDsResponse",
+    "BenchmarkVectorSearchIDsResponse",
     "BenchmarkVectorSearchResponse",
     "BenchmarkVectorSearchResult",
     "ConflictError",
