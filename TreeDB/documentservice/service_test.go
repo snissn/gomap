@@ -968,6 +968,13 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if _, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, QueryMode: BenchmarkVectorQueryModeQuantizedRerank, QuantizedIndexName: "embedding.scalar_u8.missing", QuantizedRerankCandidates: 32}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("unsupported/missing quantized err=%v code=%s", err, ErrorCodeOf(err))
 	}
+	exact, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 4})
+	if err != nil {
+		t.Fatalf("exact search after missing quantized asset: %v", err)
+	}
+	if len(exact.Results) != 1 || exact.Results[0].ID != "a" || exact.QueryMode != BenchmarkVectorQueryModeExact || exact.Diagnostics.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || !exact.NoDocuments {
+		t.Fatalf("exact search after missing quantized asset=%+v", exact)
+	}
 	dense, err := svc.SearchDenseVector(ctx, "bench", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
 	if err != nil || !dense.Exact || len(dense.Documents) != 1 || dense.Documents[0].ID != "a" {
 		t.Fatalf("dense exact fallback contract changed dense=%+v err=%v", dense, err)

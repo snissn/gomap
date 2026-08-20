@@ -28,6 +28,7 @@ type Service struct {
 
 	benchmarkSearchCacheMu    sync.RWMutex
 	benchmarkSearchCache      map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool sync.Pool
 	vectorPartitionOperations *vectorpartition.OperationsV1
 	closed                    bool
 }
@@ -70,7 +71,12 @@ type serviceBenchmarkSearchCacheEntry struct {
 
 // New returns a document/search service backed by manager.
 func New(manager *collections.CollectionManager) *Service {
-	return &Service{manager: manager}
+	return &Service{
+		manager: manager,
+		benchmarkSearchBufferPool: sync.Pool{New: func() any {
+			return &collections.VectorIndexSearchBuffer{}
+		}},
+	}
 }
 
 // Close releases service-owned cached search resources and marks the service
@@ -88,6 +94,7 @@ func (s *Service) Close() error {
 	}
 	s.closed = true
 	s.vectorPartitionOperations = nil
+	s.benchmarkSearchBufferPool = sync.Pool{}
 	for _, entry := range s.benchmarkSearchCache {
 		if entry != nil {
 			entries = append(entries, entry)
@@ -609,7 +616,11 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	if err := validateBenchmarkVectorSearchRequestShape(queryMode, req); err != nil {
 		return BenchmarkVectorSearchResponse{}, err
 	}
-	var buffer collections.VectorIndexSearchBuffer
+	buffer := s.benchmarkSearchBufferPool.Get().(*collections.VectorIndexSearchBuffer)
+	defer func() {
+		buffer.Reset()
+		s.benchmarkSearchBufferPool.Put(buffer)
+	}()
 	search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
 		IndexName:                 vectorIndexName,
 		Query:                     append([]float32(nil), req.QueryEmbedding...),
@@ -619,7 +630,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		TopK:                      req.TopK,
 		EfSearch:                  req.EfSearch,
 		StatsMode:                 req.StatsMode,
-	}, &buffer)
+	}, buffer)
 	if err != nil {
 		return BenchmarkVectorSearchResponse{}, mapVectorIndexSearchError("benchmark vector search", err)
 	}
