@@ -7,9 +7,7 @@ import http.client
 import json
 import socket
 import struct
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional, TypeVar, Union
 
@@ -59,7 +57,20 @@ class TreeDBClient:
     def __init__(self, base_url: str, timeout: Optional[float] = 30.0) -> None:
         self.base_url = _normalize_base_url(base_url)
         self.timeout = _normalize_timeout(timeout)
-        self._opener = urllib.request.build_opener()
+        parsed = urllib.parse.urlparse(self.base_url)
+        self._request_prefix = parsed.path
+        connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        self._connection = connection_type(parsed.hostname, parsed.port, timeout=self.timeout)
+
+    def close(self) -> None:
+        """Close this client's reusable HTTP connection."""
+
+        self._connection.close()
+
+    def __del__(self) -> None:
+        connection = getattr(self, "_connection", None)
+        if connection is not None:
+            connection.close()
 
     def health(self) -> Mapping[str, Any]:
         """Return the service health payload from `GET /v1/health`."""
@@ -299,6 +310,7 @@ class TreeDBClient:
                 query,
                 BINARY_VECTOR_SEARCH_F32LE_CONTENT_TYPE,
                 query_params=params,
+                retry_broken_connection=True,
             )
             return _parse_benchmark_vector_search_response(payload, response_format)
 
@@ -315,7 +327,9 @@ class TreeDBClient:
             request["quantized_rerank_candidates"] = int(quantized_rerank_candidates)
         _add_optional_non_empty_string(request, "stats_mode", stats_mode, "stats_mode")
         _add_optional_non_empty_string(request, "response_format", response_format, "response_format")
-        payload = self._request("POST", self._index_path(index, "search", "vector-index"), request)
+        payload = self._request(
+            "POST", self._index_path(index, "search", "vector-index"), request, retry_broken_connection=True
+        )
         return _parse_benchmark_vector_search_response(payload, response_format)
 
     def search_keyword(
@@ -401,7 +415,9 @@ class TreeDBClient:
             return f"/v1/indexes/{encoded}/{suffix}"
         return f"/v1/indexes/{encoded}"
 
-    def _request(self, method: str, path: str, body: Optional[Mapping[str, Any]] = None) -> Any:
+    def _request(
+        self, method: str, path: str, body: Optional[Mapping[str, Any]] = None, *, retry_broken_connection: bool = False
+    ) -> Any:
         data: Optional[bytes] = None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -410,7 +426,7 @@ class TreeDBClient:
             except (TypeError, ValueError) as exc:
                 raise InvalidRequestError("invalid_request", f"request payload is not JSON-serializable: {exc}") from exc
             headers["Content-Type"] = "application/json"
-        return self._send_request(method, path, data, headers)
+        return self._send_request(method, path, data, headers, retry_broken_connection=retry_broken_connection)
 
     def _request_bytes(
         self,
@@ -420,33 +436,48 @@ class TreeDBClient:
         content_type: str,
         *,
         query_params: Optional[Sequence[tuple[str, str]]] = None,
+        retry_broken_connection: bool = False,
     ) -> Any:
         if query_params:
             path = path + "?" + urllib.parse.urlencode(query_params)
         headers = {"Accept": "application/json", "Content-Type": content_type}
-        return self._send_request(method, path, body, headers)
+        return self._send_request(method, path, body, headers, retry_broken_connection=retry_broken_connection)
 
-    def _send_request(self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str]) -> Any:
+    def _send_request(
+        self, method: str, path: str, data: Optional[bytes], headers: Mapping[str, str], *, retry_broken_connection: bool = False
+    ) -> Any:
         url = self.base_url + path
-        request = urllib.request.Request(url, data=data, headers=dict(headers), method=method)
-        try:
-            with self._opener.open(request, timeout=self.timeout) as response:
-                response_body = response.read()
-                return self._decode_success(response.getcode(), response_body)
-        except urllib.error.HTTPError as exc:
+        for attempt in range(2 if retry_broken_connection else 1):
             try:
-                response_body = exc.read()
-            finally:
-                exc.close()
-            raise self._decode_error(exc.code, response_body) from None
-        except urllib.error.URLError as exc:
-            if _is_timeout(exc.reason):
+                self._connection.request(method, self._request_prefix + path, body=data, headers=dict(headers))
+                response = self._connection.getresponse()
+                try:
+                    response_body = response.read()
+                    if 200 <= response.status < 300:
+                        return self._decode_success(response.status, response_body)
+                    raise self._decode_error(response.status, response_body)
+                finally:
+                    response.close()
+            except (
+                http.client.RemoteDisconnected,
+                http.client.CannotSendRequest,
+                http.client.ResponseNotReady,
+                http.client.BadStatusLine,
+                http.client.IncompleteRead,
+                ConnectionResetError,
+                ConnectionAbortedError,
+                BrokenPipeError,
+            ) as exc:
+                self._connection.close()
+                if retry_broken_connection and attempt == 0:
+                    continue
+                raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
+            except (socket.timeout, TimeoutError) as exc:
+                self._connection.close()
                 raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
-            raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc.reason}") from exc
-        except (socket.timeout, TimeoutError) as exc:
-            raise TreeDBTimeoutError(f"TreeDB request to {url} timed out after {self.timeout} seconds") from exc
-        except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as exc:
-            raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
+            except OSError as exc:
+                self._connection.close()
+                raise TreeDBTransportError(f"TreeDB request to {url} failed: {exc}") from exc
 
     def _decode_success(self, status_code: int, body: bytes) -> Any:
         decoded = _decode_json_body(body, status_code=status_code)
@@ -696,9 +727,3 @@ def _decode_json_body(body: bytes, *, status_code: int) -> Any:
 
 def _body_to_text(body: bytes) -> str:
     return body.decode("utf-8", errors="replace")
-
-
-def _is_timeout(reason: Any) -> bool:
-    if isinstance(reason, (socket.timeout, TimeoutError)):
-        return True
-    return "timed out" in str(reason).lower()

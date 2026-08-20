@@ -47,6 +47,9 @@ python -m pip install -e .
 ```
 
 The client has no runtime dependencies outside the Python standard library.
+Each client instance reuses one HTTP(S) connection; call `client.close()` when
+the instance is no longer needed. Only `/search/vector-index` retries once
+after a broken connection; writes are never replayed automatically.
 
 ## Run tests
 

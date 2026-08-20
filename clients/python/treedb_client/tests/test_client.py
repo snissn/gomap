@@ -67,6 +67,11 @@ SAMPLE_INDEX = {
 
 class FixtureHandler(BaseHTTPRequestHandler):
     server_version = "TreeDBClientFixture/1.0"
+    protocol_version = "HTTP/1.1"
+
+    def setup(self) -> None:
+        super().setup()
+        self.server.accepted_connections += 1  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:  # noqa: N802
         self._serve()
@@ -84,6 +89,10 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.server.records.append(  # type: ignore[attr-defined]
             {"method": self.command, "path": self.path, "body": body, "headers": dict(self.headers)}
         )
+        if route in self.server.drop_once_routes:  # type: ignore[attr-defined]
+            self.server.drop_once_routes.remove(route)  # type: ignore[attr-defined]
+            self.close_connection = True
+            return
         status, payload, delay = self.server.routes.get(  # type: ignore[attr-defined]
             route, (404, {"error": {"code": "index_not_found", "message": "missing route"}}, 0)
         )
@@ -101,12 +110,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
 
 class FixtureServer:
-    def __init__(self, routes: Dict[Tuple[str, str], Tuple[int, Any, float]], prefix: str = "") -> None:
+    def __init__(self, routes: Dict[Tuple[str, str], Tuple[int, Any, float]], prefix: str = "", drop_once_routes: set[Tuple[str, str]] | None = None) -> None:
         self.routes = routes
         self.prefix = prefix
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
         self.httpd.routes = routes  # type: ignore[attr-defined]
         self.httpd.records = []  # type: ignore[attr-defined]
+        self.httpd.accepted_connections = 0  # type: ignore[attr-defined]
+        self.httpd.drop_once_routes = set(drop_once_routes or ())  # type: ignore[attr-defined]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
 
     def __enter__(self) -> "FixtureServer":
@@ -127,12 +138,48 @@ class FixtureServer:
     def records(self) -> list[dict[str, Any]]:
         return self.httpd.records  # type: ignore[attr-defined]
 
+    @property
+    def accepted_connections(self) -> int:
+        return self.httpd.accepted_connections  # type: ignore[attr-defined]
+
 
 def json_body(record: dict[str, Any]) -> Any:
     return json.loads(record["body"].decode("utf-8"))
 
 
 class TreeDBClientTests(unittest.TestCase):
+    def test_reuses_connection_and_close_reconnects(self) -> None:
+        with FixtureServer({("GET", "/v1/health"): (200, {"ok": True}, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            self.assertTrue(client.health()["ok"])
+            self.assertTrue(client.health()["ok"])
+            self.assertEqual(server.accepted_connections, 1)
+            client.close()
+            self.assertIsNone(client._connection.sock)  # type: ignore[attr-defined]
+            self.assertTrue(client.health()["ok"])
+            self.assertEqual(server.accepted_connections, 2)
+            client.close()
+
+    def test_vector_index_search_retries_once_after_connection_break(self) -> None:
+        route = ("POST", "/v1/indexes/docs/search/vector-index")
+        response = {"index": SAMPLE_INDEX, "results": [], "metric": "cosine", "vector_index_name": "embedding", "query_mode": "exact", "no_documents": True, "stats": {}, "diagnostics": {}}
+        with FixtureServer({route: (200, response, 0)}, drop_once_routes={route}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            self.assertEqual(client.search_vector_index("docs", [1, 0], 1).results, [])
+            self.assertEqual(len(server.records), 2)
+            client.close()
+
+    def test_write_is_not_replayed_after_connection_break(self) -> None:
+        route = ("POST", "/v1/indexes")
+        with FixtureServer({route: (200, {"index": SAMPLE_INDEX}, 0)}, drop_once_routes={route}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            with self.assertRaises(TreeDBTransportError):
+                client.create_index("docs", 2)
+            self.assertEqual(len(server.records), 1)
+            client.close()
     def test_vector_index_compact_ids_response(self) -> None:
         with FixtureServer({("POST", "/v1/indexes/docs/search/vector-index"): (200, {"response_format": "ids", "ids": ["doc-1", "doc-2"]}, 0)}) as server:
             response = TreeDBClient(server.base_url, timeout=1).search_vector_index("docs", [1, 0], 2, response_format="ids")
@@ -594,12 +641,15 @@ class TreeDBClientTests(unittest.TestCase):
                 client.health()
 
     def test_peer_reset_maps_to_transport_error(self) -> None:
-        class ResettingOpener:
-            def open(self, request: Any, timeout: float | None = None) -> Any:
+        class ResettingConnection:
+            def request(self, method: str, url: str, body: Any = None, headers: Any = None) -> None:
                 raise ConnectionResetError("connection reset by peer")
 
+            def close(self) -> None:
+                return
+
         client = TreeDBClient("http://127.0.0.1:9", timeout=1)
-        client._opener = ResettingOpener()  # type: ignore[attr-defined]
+        client._connection = ResettingConnection()  # type: ignore[assignment]
 
         with self.assertRaisesRegex(TreeDBTransportError, "connection reset"):
             client.health()
