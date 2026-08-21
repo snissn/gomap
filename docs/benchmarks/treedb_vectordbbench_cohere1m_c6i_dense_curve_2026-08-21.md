@@ -1,10 +1,10 @@
 # TreeDB Cohere 1M dense recall/QPS curves on c6i.8xlarge (2026-08-21)
 
-TreeDB's scalar-u8 plus FP32-rerank path sustained 33,749.90 QPS at 0.9390
-recall@100, 16,532.49 QPS at 0.9809 recall, and 6,969.31 QPS at 0.9944
-recall. The complete current-run graph contains 42 TreeDB operating points:
-nine scalar-u8-only, nine FP32 graph-traversal, and 24 scalar-u8-plus-rerank
-points.
+TreeDB's scalar-u8 plus FP32-rerank path reached a median peak of 33,749.90 QPS
+at 0.9390 recall@100, 16,532.49 QPS at 0.9809 recall, and 6,969.31 QPS at
+0.9944 recall. The complete current-run graph contains 42 TreeDB operating
+points: nine scalar-u8-only, nine FP32 graph-traversal, and 24
+scalar-u8-plus-rerank points.
 
 ![Cohere Medium 1M QPS versus recall](treedb_vectordbbench_cohere1m_c6i_dense_qps_recall_2026-08-21.png)
 
@@ -52,9 +52,10 @@ VDBBench.
 | 800 | 500 | 6,969.31 | 6,807.86-7,005.09 | 0.9944 | 5.73 ms |
 | 1000 | 700 | 5,519.70 | 5,508.22-5,609.22 | 0.9961 | 12.79 ms |
 
-The other 16 rerank cells are single-run budget-screening points. Scalar-u8 and
-FP32 `efSearch=150` also have three runs; the remaining 32 cells have one run.
-In total, the campaign retained 62 successful timed runs with no failed cells.
+The other 16 rerank cells are single-run budget-screening points. The scalar-u8
+and FP32 `efSearch=150` rows in the full sweeps are also three-run medians, so
+the campaign has 10 three-run-median configurations and 32 single-run cells. In
+total, the campaign retained 62 successful timed runs with no failed cells.
 
 ## Directional public comparison
 
