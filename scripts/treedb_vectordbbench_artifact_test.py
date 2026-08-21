@@ -161,12 +161,16 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
     def test_custom_dataset_uses_selected_result_size(self) -> None:
-        task_config = {"case_config": {"custom_case": {"dataset_config": {"size": 50_000}}}}
+        task_config = {"case_config": {"custom_case": {"dataset_config": {"size": "50000"}}}}
 
         count, source = harness.result_vector_count(task_config, "PerformanceCustomDataset")
 
         self.assertEqual(count, 50_000)
         self.assertEqual(source, "task_config.case_config.custom_case.dataset_config.size")
+
+    def test_custom_dataset_rejects_invalid_result_size(self) -> None:
+        with self.assertRaisesRegex(ValueError, "PerformanceCustomDataset"):
+            harness.result_vector_count({"case_config": {"custom_case": {"dataset_config": {"size": "0"}}}}, "PerformanceCustomDataset")
 
 
 class HarnessOrderTest(unittest.TestCase):

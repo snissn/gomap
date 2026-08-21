@@ -739,8 +739,8 @@ def case_vector_count(case_type: str) -> int:
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
     custom_case = task_config.get("case_config", {}).get("custom_case") or {}
     size = custom_case.get("dataset_config", {}).get("size")
-    if isinstance(size, int) and not isinstance(size, bool) and size > 0:
-        return size, "task_config.case_config.custom_case.dataset_config.size"
+    if (isinstance(size, int) and not isinstance(size, bool) and size > 0) or (isinstance(size, str) and size.isdigit() and int(size) > 0):
+        return int(size), "task_config.case_config.custom_case.dataset_config.size"
     return case_vector_count(case_type), "case_type suffix"
 
 
