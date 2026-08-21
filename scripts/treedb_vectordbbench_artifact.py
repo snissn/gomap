@@ -1078,6 +1078,15 @@ def main(argv: list[str]) -> int:
         )
         state.health = health
         write_json(args.out / "health.json", health)
+        run_vdbbench_tests(state, args=args, gomap_root=gomap_root, vectordbbench_dir=args.vectordbbench_dir)
+        run_vdbbench_rows(
+            state,
+            args=args,
+            gomap_root=gomap_root,
+            vectordbbench_dir=args.vectordbbench_dir,
+            base_url=args.base_url,
+            index_prefix=args.index_prefix,
+        )
         run_route_proof_smoke(
             state,
             base_url=args.base_url,
@@ -1090,15 +1099,6 @@ def main(argv: list[str]) -> int:
             smoke_dimension=args.smoke_dimension,
             smoke_documents_count=args.smoke_documents,
             smoke_top_k=args.smoke_top_k,
-        )
-        run_vdbbench_tests(state, args=args, gomap_root=gomap_root, vectordbbench_dir=args.vectordbbench_dir)
-        run_vdbbench_rows(
-            state,
-            args=args,
-            gomap_root=gomap_root,
-            vectordbbench_dir=args.vectordbbench_dir,
-            base_url=args.base_url,
-            index_prefix=args.index_prefix,
         )
         write_readme(state, args)
         write_manifest(state, args=args, context=context, service_command=service_command)

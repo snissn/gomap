@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import inspect
 import json
 import tempfile
 import unittest
@@ -166,6 +167,13 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
 
         self.assertEqual(count, 50_000)
         self.assertEqual(source, "task_config.case_config.custom_case.dataset_config.size")
+
+
+class HarnessOrderTest(unittest.TestCase):
+    def test_vdbbench_rows_run_before_route_proof_smoke(self) -> None:
+        source = inspect.getsource(harness.main)
+
+        self.assertLess(source.index("run_vdbbench_rows("), source.index("run_route_proof_smoke("))
 
 
 class ManifestFileListTest(unittest.TestCase):

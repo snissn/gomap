@@ -4,9 +4,9 @@ Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
-service logs and host/version context, runs a focused no-document route-proof
-smoke, and can optionally run selected TreeDB VectorDBBench rows from a local
-`snissn/vectordbbench` checkout.
+service logs and host/version context, optionally runs selected TreeDB
+VectorDBBench rows from a local `snissn/vectordbbench` checkout on that empty
+database, then runs a focused no-document route-proof smoke.
 
 The artifact is a reproducibility contract for downstream benchmark issues. A
 smoke artifact is **not** public claim-quality throughput evidence.
