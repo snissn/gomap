@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -53,6 +54,18 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	if asset.Role != columnVectorIndexStateAssetRoleQuantizedCodes || asset.AssetID != columnVectorGraphQuantizedCodesAssetID(def.QuantizedIndexes[0]) || asset.RowCount != len(rows) || asset.AssetBytes <= 0 {
 		t.Fatalf("quantized asset snapshot=%+v", asset)
 	}
+	if asset.Ref.Offset%64 != 0 {
+		t.Fatalf("scalar_u8 code asset offset=%d want 64-byte alignment", asset.Ref.Offset)
+	}
+	rawAsset, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatalf("read scalar_u8 code asset: %v", err)
+	}
+	rawImage, err := typedcolumn.ParseColumnPartImage(rawAsset)
+	if err != nil {
+		t.Fatalf("parse scalar_u8 code asset: %v", err)
+	}
+	assertColumnGraphScalarU8CodeSectionAligned4234(t, rawImage)
 	for _, stateAsset := range state.Assets {
 		if stateAsset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
 			t.Fatalf("legacy scalar_u8 unexpectedly published alpha asset: %+v", stateAsset)
@@ -114,6 +127,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 			_ = reader.Close()
 			t.Fatalf("reader scalar_u8 status=%+v want mmap/direct without heap copy", loaded)
 		}
+		assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t, loaded.Prepared)
 	} else if loaded.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || loaded.HeapCopyBytes == 0 {
 		_ = reader.Close()
 		t.Fatalf("reader scalar_u8 status=%+v want heap-copy fallback", loaded)
@@ -147,6 +161,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 		if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || reopenedStatus.MappedBytes == 0 || reopenedStatus.HeapCopyBytes != 0 {
 			t.Fatalf("reopened scalar_u8 status=%+v want mmap/direct without heap copy", reopenedStatus)
 		}
+		assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t, reopenedStatus.Prepared)
 	} else if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || reopenedStatus.HeapCopyBytes == 0 {
 		t.Fatalf("reopened scalar_u8 status=%+v want heap-copy fallback", reopenedStatus)
 	}
@@ -169,6 +184,40 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	exact, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
 	if err != nil || len(exact.Results) != 1 {
 		t.Fatalf("exact SearchVectorIndex results=%d err=%v", len(exact.Results), err)
+	}
+}
+
+func assertColumnGraphScalarU8CodeSectionAligned4234(t *testing.T, image typedcolumn.ColumnPartImage) {
+	t.Helper()
+	for _, section := range image.Sections {
+		if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Column == columnVectorGraphQuantizedCodesColumnName {
+			if section.Offset%64 != 0 {
+				t.Fatalf("scalar_u8 code section offset=%d want 64-byte alignment", section.Offset)
+			}
+			return
+		}
+	}
+	t.Fatal("scalar_u8 code section missing")
+}
+
+func assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t *testing.T, prepared *quantizedasset.Prepared) {
+	t.Helper()
+	view, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
+	if !ok {
+		t.Fatal("scalar_u8 code row view unavailable")
+	}
+	payload, ok := view.PayloadBytes()
+	if !ok || len(payload) == 0 {
+		t.Fatalf("scalar_u8 code payload ok=%v len=%d", ok, len(payload))
+	}
+	if uintptr(unsafe.Pointer(unsafe.SliceData(payload)))%64 != 0 {
+		t.Fatalf("scalar_u8 code payload pointer is not 64-byte aligned")
+	}
+	if view.Rows() > 1 && view.BytesPerRow()%64 != 0 {
+		row1 := payload[view.BytesPerRow():]
+		if uintptr(unsafe.Pointer(unsafe.SliceData(row1)))%64 == 0 {
+			t.Fatalf("scalar_u8 row 1 unexpectedly aligned with non-aligned stride=%d", view.BytesPerRow())
+		}
 	}
 }
 

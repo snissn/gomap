@@ -567,6 +567,28 @@ func TestTypedColumnTransplantFixedWidthSectionsAreAligned(t *testing.T) {
 	}
 }
 
+func TestTypedColumnTransplantRequestedSectionAlignment4234(t *testing.T) {
+	part := mustTransplantPart(t, 108, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{SectionAlignment: 64})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage 64-byte alignment: %v", err)
+	}
+	for _, section := range image.Sections {
+		if section.Offset%64 != 0 {
+			t.Fatalf("section %s offset=%d is not 64-byte aligned", section.Kind, section.Offset)
+		}
+	}
+	if padding := image.PaddingBytes(); padding > len(image.Sections)*63 {
+		t.Fatalf("padding=%d exceeds bounded 64-byte section padding=%d", padding, len(image.Sections)*63)
+	}
+	if _, err := ParseColumnPartImage(image.Bytes); err != nil {
+		t.Fatalf("ParseColumnPartImage 64-byte aligned image: %v", err)
+	}
+	if _, err := BuildColumnPartImage(part, ColumnPartImageOptions{SectionAlignment: 16}); err == nil || !strings.Contains(err.Error(), "section alignment") {
+		t.Fatalf("unsupported section alignment err=%v want rejection", err)
+	}
+}
+
 func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {

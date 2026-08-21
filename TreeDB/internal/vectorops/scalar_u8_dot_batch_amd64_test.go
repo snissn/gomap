@@ -5,6 +5,7 @@ package vectorops
 import (
 	"fmt"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/cpu"
 )
@@ -269,6 +270,46 @@ func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteRandomWorking
 			dst := make([]int64, rows)
 			b.ReportAllocs()
 			b.SetBytes(int64(rows * dims))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				start := (i & (tileCount - 1)) * rows
+				dotScalarU8CenteredIndexedPreparedByte(dst, codes, queryHalf, rowSums, rowIDs[start:start+rows], dims, rows, query.CenteredSum())
+				scalarU8DotBatchIntSink += dst[0]
+			}
+		})
+	}
+}
+
+func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteAlignment4234(b *testing.B) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		b.Skip("AVX-512 VNNI unavailable")
+	}
+	const (
+		dims      = 768
+		baseRows  = 1 << 16
+		rows      = 16
+		tileCount = 1 << 12
+	)
+	baseCodes := scalarU8DotBatchTestCodes(baseRows, dims)
+	query := scalarU8DotBatchTestQuery(b, dims, 71)
+	queryHalf := scalarU8DotBatchQueryHalf(query)
+	rowIDs := make([]uint32, tileCount*rows)
+	state := uint32(0x6d2b79f5)
+	for i := range rowIDs {
+		state = state*1664525 + 1013904223
+		rowIDs[i] = state & (baseRows - 1)
+	}
+	for _, targetMod64 := range []int{48, 0} {
+		storage := make([]byte, len(baseCodes)+63)
+		baseMod64 := int(uintptr(unsafe.Pointer(unsafe.SliceData(storage))) % 64)
+		start := (targetMod64 - baseMod64 + 64) % 64
+		codes := storage[start : start+len(baseCodes)]
+		copy(codes, baseCodes)
+		rowSums := scalarU8DotBatchRowSums(codes, dims)
+		b.Run(fmt.Sprintf("payload_mod64=%d", targetMod64), func(b *testing.B) {
+			dst := make([]int64, rows)
+			b.ReportAllocs()
+			b.SetBytes(rows * dims)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				start := (i & (tileCount - 1)) * rows

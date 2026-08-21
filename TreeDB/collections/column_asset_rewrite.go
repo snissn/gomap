@@ -470,8 +470,13 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 		}
 		rawScratch = raw
 		alignment := columnAssetSegmentPayloadAlignment(oldRef.Kind, cfg)
-		if oldRef.Kind == ColumnAssetKindTCS1TypedColumnPart && oldRef.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0 {
-			alignment = typedColumnPartDirectViewAssetAlignment
+		if oldRef.Kind == ColumnAssetKindTCS1TypedColumnPart {
+			switch {
+			case oldRef.Offset%columnVectorGraphScalarU8CodesAlignment == 0:
+				alignment = columnVectorGraphScalarU8CodesAlignment
+			case oldRef.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0:
+				alignment = typedColumnPartDirectViewAssetAlignment
+			}
 		}
 		newRef, err := appender.appendKindWithAlignment(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID, alignment)
 		if err != nil {

@@ -1526,7 +1526,14 @@ func deterministicColumnAssetReachabilityPaddingIntervals(segment columnAssetRea
 }
 
 func columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment columnAssetReachabilitySegment, previousEnd int64, r columnAssetReachabilityRange) bool {
+	if r.kind == ColumnAssetKindTCS1TypedColumnPart && columnAssetReachabilityRangeFollowsZeroPaddingAtAlignment(segment, previousEnd, r, columnVectorGraphScalarU8CodesAlignment) {
+		return true
+	}
 	alignment := columnAssetReachabilityRangeDeterministicPaddingAlignment(r.kind)
+	return columnAssetReachabilityRangeFollowsZeroPaddingAtAlignment(segment, previousEnd, r, alignment)
+}
+
+func columnAssetReachabilityRangeFollowsZeroPaddingAtAlignment(segment columnAssetReachabilitySegment, previousEnd int64, r columnAssetReachabilityRange, alignment int64) bool {
 	if alignment <= 1 || r.start <= previousEnd || r.start%alignment != 0 {
 		return false
 	}
@@ -1554,7 +1561,7 @@ func columnAssetReachabilityRangeDeterministicPaddingAlignment(kind ColumnAssetK
 
 func columnAssetReachabilityMaxDeterministicPaddingAlignment() int64 {
 	maxAlignment := int64(typedColumnPartDirectViewAssetAlignment)
-	for _, alignment := range []int64{dictionaryCodesDirectViewAssetAlignment, int64ValuesDirectViewAssetAlignment, int64(columnHNSWSearchPackVectorSectionAlignment)} {
+	for _, alignment := range []int64{dictionaryCodesDirectViewAssetAlignment, int64ValuesDirectViewAssetAlignment, int64(columnHNSWSearchPackVectorSectionAlignment), columnVectorGraphScalarU8CodesAlignment} {
 		if alignment > maxAlignment {
 			maxAlignment = alignment
 		}

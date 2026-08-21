@@ -29,6 +29,7 @@ const (
 	columnVectorGraphQuantizedRabitQPathConfigHashFormat     = "%s_quantized_rabitq_1bit_%016x_%s"
 	columnVectorGraphQuantizedBRQPathConfigHashFormat        = "%s_quantized_brq_1bit_%016x_%s"
 	columnVectorGraphQuantizedScalarU8UnsupportedVersionText = "scalar_u8 version=%d is unsupported"
+	columnVectorGraphScalarU8CodesAlignment                  = 64
 )
 
 type columnVectorGraphPreparedQuantizedAsset struct {
@@ -395,6 +396,11 @@ func appendColumnVectorGraphQuantizedPreparedAssetWithStableAuthority(assetRootD
 		return columnVectorGraphPreparedQuantizedAsset{}, err
 	}
 	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, sourceCfg)
+	if q.Codec == QuantizedVectorCodecScalarU8 && role == columnVectorIndexStateAssetRoleQuantizedCodes {
+		// This aligns the payload base. Every row is cache-line aligned only
+		// when the vector dimension (the byte stride) is divisible by 64.
+		alignment = columnVectorGraphScalarU8CodesAlignment
+	}
 	ref, appendErr := appender.appendKindWithAlignment(payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, alignment)
 	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
 	if appendErr != nil {
@@ -491,6 +497,9 @@ func prepareColumnVectorGraphScalarU8QuantizedCodesPayloadWithAlphaMetadata(coll
 	}
 	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{
 		LayoutLogicalTypes: map[string]string{columnVectorGraphQuantizedCodesColumnName: string(columnsemantics.LogicalByteVector)},
+		// SectionAlignment aligns row zero; contiguous rows retain the
+		// dimension-sized stride encoded by the scalar_u8 format.
+		SectionAlignment: columnVectorGraphScalarU8CodesAlignment,
 	})
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
