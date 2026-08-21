@@ -31,6 +31,8 @@ Expected primary files:
 - `commands/*.stdout.txt`, `commands/*.stderr.txt` — command output streams.
 - `vdbbench-results/` and `vdbbench.log` — VectorDBBench result JSON/logs when
   `--run-vdbbench` is enabled.
+- `vdbbench_load_metrics.json` — checksum-identified canonical VDBBench result
+  metrics for each completed load row.
 
 The harness requires `--out` to be new or empty, then creates a fresh
 `treedb-data` directory under that artifact root. It does not truncate durable
@@ -138,6 +140,16 @@ and `quantized_rerank_candidates=32`. TreeDB rows also receive
 recorded in the manifest, README, and each VDBBench row record. CLI and
 environment values must be positive integers; zero and negative values are
 rejected before service startup.
+
+For a completed load, the harness selects exactly one *new* canonical
+`result_*.json` matching that generated index name. It records the result path,
+SHA-256, run ID, task configuration, insert duration, offline optimize duration,
+total load duration, and `vector_count / insert_duration` in
+`vdbbench_load_metrics.json`. It fails closed if selection is ambiguous, a
+duration is absent/non-positive, the three durations disagree, or the case type
+does not end in a count suffix such as `50K` or `1M`. The profile is deliberately
+full-load only: phase-specific pprof would require VDBBench orchestration not
+owned by this harness.
 
 ## Environment variables
 

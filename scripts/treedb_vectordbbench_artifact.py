@@ -12,9 +12,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import hashlib
 import json
+import math
 import os
 import platform
+import re
 import shlex
 import shutil
 import signal
@@ -708,6 +711,72 @@ def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_ro
     return env
 
 
+def vdbbench_result_files(root: Path) -> set[Path]:
+    return set(root.rglob("result_*.json")) if root.exists() else set()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def positive_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"canonical VDBBench result is missing positive {name}")
+    return float(value)
+
+
+def case_vector_count(case_type: str) -> int:
+    match = re.search(r"(\d+)([KMG])$", case_type, flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(f"cannot derive vector count from VDBBench case type {case_type!r}")
+    return int(match.group(1)) * {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[match.group(2).upper()]
+
+
+def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read canonical VDBBench result {path}: {exc}") from exc
+    matches = [
+        item for item in result.get("results", [])
+        if item.get("task_config", {}).get("db_config", {}).get("index_name") == index_name
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"canonical VDBBench result {path} has {len(matches)} entries for index {index_name!r}; expected one")
+    metrics = matches[0].get("metrics") or {}
+    insert = positive_number(metrics.get("insert_duration"), "insert_duration")
+    optimize = positive_number(metrics.get("optimize_duration"), "optimize_duration")
+    load = positive_number(metrics.get("load_duration"), "load_duration")
+    if not math.isclose(load, insert + optimize, rel_tol=0.0, abs_tol=0.0002):
+        raise ValueError(f"canonical VDBBench result {path} has load_duration != insert_duration + optimize_duration")
+    vectors = case_vector_count(case_type)
+    return {
+        "result_file": str(path.relative_to(artifact_root)),
+        "result_sha256": sha256_file(path),
+        "result_run_id": result.get("run_id"),
+        "index_name": index_name,
+        "case_type": case_type,
+        "vector_count": vectors,
+        "vector_count_source": "case_type suffix",
+        "insert_duration_seconds": insert,
+        "offline_optimize_duration_seconds": optimize,
+        "total_load_duration_seconds": load,
+        "insert_vectors_per_second": vectors / insert,
+        "task_config": matches[0].get("task_config"),
+    }
+
+
+def capture_vdbbench_load_metrics(results_dir: Path, before: set[Path], index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
+    candidates = sorted(vdbbench_result_files(results_dir) - before)
+    if len(candidates) != 1:
+        raise ValueError(f"expected exactly one new canonical VDBBench result for {index_name!r}, found {len(candidates)}")
+    return load_metrics_from_result(candidates[0], index_name, case_type, artifact_root)
+
+
 def run_vdbbench_rows(
     state: HarnessState,
     *,
@@ -733,6 +802,7 @@ def run_vdbbench_rows(
             raise ValueError(f"unknown TreeDB VDBBench row {row!r}; allowed: exact,scalar")
         command_name, index_name = row_specs[row]
         cmd = vdbbench_base_cmd(args, base_url, index_name, command_name)
+        before_results = vdbbench_result_files(state.root / "vdbbench-results")
         if row == "scalar":
             cmd.extend([
                 "--quantized-index-name",
@@ -749,7 +819,7 @@ def run_vdbbench_rows(
             timeout=args.vdbbench_timeout,
             required=True,
         )
-        state.vdbbench.append({
+        row_record = {
             "row": row,
             "index_name": index_name,
             "command": record.command_string,
@@ -757,6 +827,17 @@ def run_vdbbench_rows(
             "results_dir": "vdbbench-results",
             "log_file": "vdbbench.log",
             "num_per_batch": args.num_per_batch,
+        }
+        if not args.vdbbench_dry_run and not args.skip_load:
+            row_record["load_metrics"] = capture_vdbbench_load_metrics(
+                state.root / "vdbbench-results", before_results, index_name, args.case_type, state.root
+            )
+        state.vdbbench.append(row_record)
+    if state.vdbbench:
+        write_json(state.root / "vdbbench_load_metrics.json", {
+            "schema_version": "treedb-vectordbbench-load-metrics/v1",
+            "rows": state.vdbbench,
+            "note": "Durations and derived insert throughput are selected from the checksum-identified canonical VDBBench result JSON.",
         })
 
 
@@ -860,6 +941,7 @@ def write_manifest(
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
+        "vdbbench_load_metrics": "vdbbench_load_metrics.json" if state.vdbbench else None,
         "route_proof": "route_proof.json" if state.route_proof else None,
         "skips": state.skips,
         "files": files,

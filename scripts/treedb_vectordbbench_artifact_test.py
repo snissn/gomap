@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -116,6 +117,37 @@ class VDBBenchBatchTest(unittest.TestCase):
             with mock.patch.dict("os.environ", {"TREEDB_VDBBENCH_NUM_PER_BATCH": value}, clear=True):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     harness.parse_args([])
+
+
+class VDBBenchLoadMetricsTest(unittest.TestCase):
+    def test_canonical_result_records_separated_durations_and_checksum(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "vdbbench-results" / "TreeDB" / "result_test.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"run_id": "run-1", "results": [{
+                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 5.0},
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            got = harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
+        self.assertEqual(got["vector_count"], 50_000)
+        self.assertEqual(got["insert_vectors_per_second"], 25_000)
+        self.assertEqual(got["offline_optimize_duration_seconds"], 3.0)
+        self.assertEqual(len(got["result_sha256"]), 64)
+
+    def test_canonical_result_fails_closed_when_duration_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 0.0},
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "load_duration"):
+                harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
 
 class ManifestFileListTest(unittest.TestCase):
