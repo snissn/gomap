@@ -84,7 +84,7 @@ func TestColumnHNSWPreparedScalarU8RerankScratchReuse4227(t *testing.T) {
 			}
 		}
 	})
-	if allocs != 0 {
+	if !collectionsRaceEnabled && allocs != 0 {
 		t.Fatalf("steady-state prepared rerank allocs/run=%v want 0", allocs)
 	}
 	for name, capacity := range map[string]int{
@@ -164,7 +164,7 @@ func TestColumnHNSWPreparedScalarU8RawDotRerankScratchReuse4227(t *testing.T) {
 			}
 		}
 	})
-	if allocs != 0 {
+	if !collectionsRaceEnabled && allocs != 0 {
 		t.Fatalf("steady-state raw-dot rerank allocs/run=%v want 0", allocs)
 	}
 	if cap(scratch.scoreTileScores) < rerank || cap(scratch.scoreTileRowIDs) < rerank || cap(scratch.scoreTileDots) < rerank {
