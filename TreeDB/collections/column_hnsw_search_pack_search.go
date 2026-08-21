@@ -703,12 +703,12 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	return scratch.results, stats, nil
 }
 
-func columnHNSWSearchPackNextCandidateSeed(start int, rowCount int, visitMarks []uint64, visitEpoch uint64) (int, bool) {
+func columnHNSWSearchPackNextCandidateSeed(start int, rowCount int, visitMarks []uint16, visitEpoch uint16) (int, bool) {
 	ordinal, ok, _ := columnHNSWSearchPackNextCandidateSeedWithContext(context.Background(), start, rowCount, visitMarks, visitEpoch)
 	return ordinal, ok
 }
 
-func columnHNSWSearchPackNextCandidateSeedWithContext(ctx context.Context, start int, rowCount int, visitMarks []uint64, visitEpoch uint64) (int, bool, error) {
+func columnHNSWSearchPackNextCandidateSeedWithContext(ctx context.Context, start int, rowCount int, visitMarks []uint16, visitEpoch uint16) (int, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

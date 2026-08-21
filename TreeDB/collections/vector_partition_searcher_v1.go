@@ -981,7 +981,7 @@ func validateVectorPartitionPackDiagnosticsMaxLayerV1(maxLayer, adjacencyLayers 
 // SearchScratchBytesV1 returns a conservative upper bound for the transient
 // candidate/search scratch allocated by one SearchWithOptionsV1 call. Serving
 // layers use it before search so a small ef_search cannot conceal the
-// row-count-sized visit bitmap required by the native HNSW pack.
+// row-count-sized visit-generation table required by the native HNSW pack.
 func (s *VectorPartitionLocalSearcherV1) SearchScratchBytesV1(opts VectorPartitionSearchOptionsV1) (uint64, error) {
 	_, scratchBytes, err := s.SearchPreflightV1(opts)
 	return scratchBytes, err
@@ -1126,7 +1126,7 @@ func vectorPartitionHNSWSearchScratchBytesV1(rowCount, dimensions, vectorStride,
 		count int
 		width uintptr
 	}{
-		{rowCount, unsafe.Sizeof(uint64(0))},
+		{rowCount, unsafe.Sizeof(uint16(0))},
 		{frontier, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{efSearch, unsafe.Sizeof(columnVectorGraphSearchCandidate{})},
 		{nativeTopK, unsafe.Sizeof(columnVectorGraphNativeSearchResult{})},

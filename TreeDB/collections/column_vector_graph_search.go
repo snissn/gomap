@@ -1062,8 +1062,8 @@ type columnVectorGraphNativeSearchScratch struct {
 	scoreScratch                 columnPhysicalRowReaderScratch
 	expandScratch                columnPhysicalRowReaderScratch
 	resultScratch                columnPhysicalRowReaderScratch
-	visitMarks                   []uint64
-	visitEpoch                   uint64
+	visitMarks                   []uint16
+	visitEpoch                   uint16
 	frontier                     []columnVectorGraphSearchCandidate
 	top                          []columnVectorGraphSearchCandidate
 	rawDot                       *columnVectorGraphRawDotSearchScratch
@@ -1151,10 +1151,10 @@ func (s *columnVectorGraphNativeSearchScratch) prepareHNSWSearchPack(rowCount, v
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepareVisitEpoch(rowCount int) {
-	s.visitMarks = resizeColumnVectorGraphNativeUint64Scratch(s.visitMarks, rowCount)
+	s.visitMarks = resizeColumnVectorGraphNativeUint16Scratch(s.visitMarks, rowCount)
 	s.visitEpoch++
 	if s.visitEpoch == 0 {
-		clear(s.visitMarks)
+		clear(s.visitMarks[:cap(s.visitMarks)])
 		s.visitEpoch = 1
 	}
 }
@@ -1265,9 +1265,9 @@ func resizeColumnVectorGraphNativeIntScratch(dst []int, target int) []int {
 	return dst[:0]
 }
 
-func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint64 {
+func resizeColumnVectorGraphNativeUint16Scratch(dst []uint16, target int) []uint16 {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
-		return make([]uint64, target)
+		return make([]uint16, target)
 	}
 	return dst[:target]
 }
@@ -1495,7 +1495,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	statsMode := opts.StatsMode.normalized()
 	columnVectorGraphNativeSearchStartWorkAccounting(&stats, statsMode)
-	visitEpochBeforePrepare := uint64(0)
+	visitEpochBeforePrepare := uint16(0)
 	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug {
 		visitEpochBeforePrepare = scratch.visitEpoch
 	}
@@ -1503,7 +1503,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 	visitResetClearedRows := 0
-	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug && visitEpochBeforePrepare == math.MaxUint64 {
+	if statsMode == columnVectorGraphNativeSearchStatsModeBenchmarkDebug && visitEpochBeforePrepare == math.MaxUint16 {
 		visitResetClearedRows = rowCount
 	}
 
@@ -2024,7 +2024,7 @@ func columnVectorGraphCandidateRowAllowed(selection typedcolumn.RowSelection, ha
 	return !hasSelection || selection.Contains(ordinal)
 }
 
-func columnVectorGraphNextCandidateSeed(start int, rowCount int, selection typedcolumn.RowSelection, hasSelection bool, visitMarks []uint64, visitEpoch uint64) (int, bool) {
+func columnVectorGraphNextCandidateSeed(start int, rowCount int, selection typedcolumn.RowSelection, hasSelection bool, visitMarks []uint16, visitEpoch uint16) (int, bool) {
 	if start < 0 {
 		start = 0
 	}

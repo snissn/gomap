@@ -58,7 +58,7 @@ func TestColumnVectorGraphNativeSearchFrontierHeapFanout2272(t *testing.T) {
 	}
 }
 
-func TestColumnVectorGraphNativeSearchVisitedEpochReuseGrowthWrap2273(t *testing.T) {
+func TestColumnVectorGraphNativeSearchCompactVisitedEpochReuseGrowthWrap4224(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
 	prepare := func(rows int) {
 		t.Helper()
@@ -68,6 +68,9 @@ func TestColumnVectorGraphNativeSearchVisitedEpochReuseGrowthWrap2273(t *testing
 	}
 
 	prepare(3)
+	if got := unsafe.Sizeof(scratch.visitMarks[0]); got != 2 {
+		t.Fatalf("visit mark bytes=%d want 2", got)
+	}
 	firstEpoch := scratch.visitEpoch
 	if firstEpoch == 0 || len(scratch.visitMarks) != 3 {
 		t.Fatalf("first prepare epoch=%d marks=%d", firstEpoch, len(scratch.visitMarks))
@@ -83,6 +86,9 @@ func TestColumnVectorGraphNativeSearchVisitedEpochReuseGrowthWrap2273(t *testing
 	if scratch.visitEpoch != firstEpoch+1 {
 		t.Fatalf("reuse prepare epoch=%d want %d", scratch.visitEpoch, firstEpoch+1)
 	}
+	if scratch.visitMarks[1] != firstEpoch {
+		t.Fatalf("normal reuse cleared prior mark=%d want stale epoch=%d", scratch.visitMarks[1], firstEpoch)
+	}
 	if !scratch.markVisited(1) {
 		t.Fatalf("reused scratch treated prior epoch mark as current: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
 	}
@@ -96,17 +102,22 @@ func TestColumnVectorGraphNativeSearchVisitedEpochReuseGrowthWrap2273(t *testing
 	}
 
 	for i := range scratch.visitMarks {
-		scratch.visitMarks[i] = math.MaxUint64
+		scratch.visitMarks[i] = math.MaxUint16
 	}
-	scratch.visitEpoch = math.MaxUint64
-	prepare(5)
+	scratch.visitMarks[4] = 2
+	scratch.visitEpoch = math.MaxUint16
+	prepare(3)
 	if scratch.visitEpoch != 1 {
 		t.Fatalf("wrap prepare epoch=%d want 1", scratch.visitEpoch)
 	}
-	for i, mark := range scratch.visitMarks {
+	for i, mark := range scratch.visitMarks[:cap(scratch.visitMarks)] {
 		if mark != 0 {
-			t.Fatalf("wrap mark[%d]=%d want cleared 0; marks=%v", i, mark, scratch.visitMarks)
+			t.Fatalf("wrap backing mark[%d]=%d want cleared 0", i, mark)
 		}
+	}
+	prepare(5)
+	if scratch.visitEpoch != 2 || !scratch.markVisited(4) {
+		t.Fatalf("regrow after wrap retained stale mark: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
 	}
 	if !scratch.markVisited(3) || scratch.markVisited(3) {
 		t.Fatalf("markVisited after wrap did not report first mark then duplicate: epoch=%d marks=%v", scratch.visitEpoch, scratch.visitMarks)
