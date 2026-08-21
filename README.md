@@ -19,7 +19,102 @@ TreeDB is pre-alpha:
 - Benchmark DB directories should be rebuilt from scratch unless a report says
   otherwise.
 
-## Benchmark Highlights
+## What TreeDB Provides
+
+- Persistent B+Tree index with copy-on-write root publishing.
+- Persistent value log for large values and leaf/value placement experiments.
+- Command WAL for collection and raw-key redo/recovery.
+- Snapshot-isolated readers and exclusive process-level DB directory locking.
+- Collection/document APIs with BSON, template-v1, secondary indexes, and vector
+  search experiments.
+- Native wire protocol through `cmd/treedb-native-server`.
+- Mongo-compatible gateway through `TreeDB/mongo_gateway`.
+- Benchmark and profiling scripts for YCSB, collections, vector search, and
+  storage-engine comparison.
+
+## Quickstart
+
+Build the primary TreeDB servers:
+
+```sh
+mkdir -p bin
+go build -o bin/treedb-native-server ./cmd/treedb-native-server
+go build -o bin/treedb-mongo-gateway ./TreeDB/mongo_gateway/server.go
+```
+
+Run the native server:
+
+```sh
+./bin/treedb-native-server \
+  -dir /tmp/treedb-native \
+  -profile command_wal_durable \
+  -addr 127.0.0.1:17130
+```
+
+Run the Mongo-compatible gateway:
+
+```sh
+./bin/treedb-mongo-gateway \
+  -dir /tmp/treedb-mongo \
+  -profile command_wal_durable \
+  -document-format bson \
+  -addr 127.0.0.1:27130
+```
+
+Minimal Go usage:
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+)
+
+func main() {
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./my-db")
+	db, err := treedb.Open(opts)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("key"), []byte("value")); err != nil {
+		log.Fatal(err)
+	}
+	value, err := db.Get([]byte("key"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(value))
+}
+```
+
+## Profiles
+
+The current public TreeDB profile surface is intentionally small:
+
+- `command_wal_durable`: recommended server default; ordinary acknowledgements
+  wait for a durable dependency-closed command-WAL prefix.
+- `command_wal_relaxed`: ordinary acknowledgements are relaxed, while every
+  explicit `*Sync` waits for a durable dependency-closed command-WAL prefix.
+- `no_wal_fast`: production no-WAL profile; ordinary acknowledgements are
+  relaxed and every explicit `*Sync` waits for a sealed durable root.
+- `bench_unsafe`: benchmark/test-only ceiling with no durability promise. It is
+  available only through the explicit benchmark constructor/parser boundary.
+
+All three production profiles verify value-log integrity. `Flush` is a
+visibility/drain operation, not a durability boundary. `Checkpoint` and clean
+`Close` wait for a sealed durable root.
+
+Legacy Go aliases are retained only for compatibility and focused low-level
+tests. CLI and environment parsers accept only canonical underscore names.
+
+More detail: `docs/TREEDB_PROFILES.md` and `docs/TREEDB_WRITE_PATHS.md`.
+
+## Benchmarking
 
 These checked-in reports use different workloads, profiles, and caveats. Treat
 each workload as scoped evidence from its linked benchmark, not as one combined
@@ -241,119 +336,15 @@ image builders, text analysis/posting construction, and vector rebuild state.
 Source, commands, artifact paths, guardrails, and caveats:
 [TreeDB indexed insertion/search benchmark](docs/benchmarks/treedb_index_insert_search_benchmarks.md).
 
-## What TreeDB Provides
+### Benchmark tools and runbooks
 
-- Persistent B+Tree index with copy-on-write root publishing.
-- Persistent value log for large values and leaf/value placement experiments.
-- Command WAL for collection and raw-key redo/recovery.
-- Snapshot-isolated readers and exclusive process-level DB directory locking.
-- Collection/document APIs with BSON, template-v1, secondary indexes, and vector
-  search experiments.
-- Native wire protocol through `cmd/treedb-native-server`.
-- Mongo-compatible gateway through `TreeDB/mongo_gateway`.
-- Benchmark and profiling scripts for YCSB, collections, vector search, and
-  storage-engine comparison.
+The dated reports above contain their own reproduction details. Start here for
+current benchmark entry points:
 
-## Quickstart
-
-Build the primary TreeDB servers:
-
-```sh
-mkdir -p bin
-go build -o bin/treedb-native-server ./cmd/treedb-native-server
-go build -o bin/treedb-mongo-gateway ./TreeDB/mongo_gateway/server.go
-```
-
-Run the native server:
-
-```sh
-./bin/treedb-native-server \
-  -dir /tmp/treedb-native \
-  -profile command_wal_durable \
-  -addr 127.0.0.1:17130
-```
-
-Run the Mongo-compatible gateway:
-
-```sh
-./bin/treedb-mongo-gateway \
-  -dir /tmp/treedb-mongo \
-  -profile command_wal_durable \
-  -document-format bson \
-  -addr 127.0.0.1:27130
-```
-
-Minimal Go usage:
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-
-	treedb "github.com/snissn/gomap/TreeDB"
-)
-
-func main() {
-	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./my-db")
-	db, err := treedb.Open(opts)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	if err := db.Set([]byte("key"), []byte("value")); err != nil {
-		log.Fatal(err)
-	}
-	value, err := db.Get([]byte("key"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println(string(value))
-}
-```
-
-## Profiles
-
-The current public TreeDB profile surface is intentionally small:
-
-- `command_wal_durable`: recommended server default; ordinary acknowledgements
-  wait for a durable dependency-closed command-WAL prefix.
-- `command_wal_relaxed`: ordinary acknowledgements are relaxed, while every
-  explicit `*Sync` waits for a durable dependency-closed command-WAL prefix.
-- `no_wal_fast`: production no-WAL profile; ordinary acknowledgements are
-  relaxed and every explicit `*Sync` waits for a sealed durable root.
-- `bench_unsafe`: benchmark/test-only ceiling with no durability promise. It is
-  available only through the explicit benchmark constructor/parser boundary.
-
-All three production profiles verify value-log integrity. `Flush` is a
-visibility/drain operation, not a durability boundary. `Checkpoint` and clean
-`Close` wait for a sealed durable root.
-
-Legacy Go aliases are retained only for compatibility and focused low-level
-tests. CLI and environment parsers accept only canonical underscore names.
-
-More detail: `docs/TREEDB_PROFILES.md` and `docs/TREEDB_WRITE_PATHS.md`.
-
-## Benchmarking
-
-Current YCSB status and rerun commands:
-
-- `docs/benchmarks/ycsb_mongodb_treedb_current.md`
-- `docs/benchmarks/ycsb_latest_main_2026-06-03.md`
-- `scripts/ycsb_compare_mongodb_treedb.sh`
-
-Collection, vector-search, and engine benchmark runbooks:
-
-- `docs/benchmarks/full_benchmark_report_2026-06-17.md`
-- `docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md`
-- `docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md`
-- `TreeDB/docs/guides/vector-search-high-qps-collection-api.md`
-- `TreeDB/docs/guides/vector-search-benchmark-workflow.md`
-- `cmd/treedb_vector_highqps_demo/README.md`
 - `docs/benchmarks/treedb_canonical_benchmark_runbook.md`
 - `docs/benchmarks/collections_canonical_benchmark.md`
+- `docs/benchmarks/ycsb_mongodb_treedb_current.md`
+- `scripts/ycsb_compare_mongodb_treedb.sh`
 - `cmd/unified_bench/README.md`
 - `cmd/benchprof/README.md`
 
