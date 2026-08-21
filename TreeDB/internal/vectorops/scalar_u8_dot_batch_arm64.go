@@ -20,6 +20,11 @@ func dotScalarU8CenteredIndexedOptimizedEligible(rows, dims int) bool {
 	return rows >= dotScalarU8CenteredIndexedARM64MinRows && dims >= dotScalarU8CenteredIndexedARM64MinDims
 }
 
+func dotScalarU8CenteredIndexedPreparedByteEligible(dims int) bool { return false }
+
+func dotScalarU8CenteredIndexedPreparedByte(dst []int64, codes []byte, queryHalf []int8, rowByteSums []uint32, rowIDs []uint32, dims int, rows int, querySum int64) {
+}
+
 // DotScalarU8CenteredIndexed writes integer dot products for row-major scalar_u8
 // code rows selected by rowIDs against a pre-centered scalar_u8 query. Supported
 // arm64 builds use a NEON-backed indexed-row kernel for sufficiently large

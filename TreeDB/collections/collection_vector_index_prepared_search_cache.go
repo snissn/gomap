@@ -1050,6 +1050,7 @@ func addCollectionVectorIndexPreparedQuantizedAssetStats(out *mappedresource.Sta
 	out.ActiveHandles += status.ActiveHandles
 	out.ActiveMappedBytes += int64(status.MappedBytes)
 	out.ActiveHeapCopyBytes += int64(status.HeapCopyBytes)
+	out.ActiveDerivedMetadataBytes += int64(len(status.ScalarU8CodeSums)) * 4
 }
 
 func (c *Collection) invalidateCollectionVectorIndexPreparedSearch(slot collectionVectorIndexPreparedSearchCacheSlot, prepared *collectionVectorIndexPreparedSearch) {

@@ -39,6 +39,10 @@ func dotScalarU8CenteredIndexedOptimizedEligible(rows, dims int) bool {
 	return rows >= dotScalarU8CenteredIndexedAMD64MinRows && dims >= dotScalarU8CenteredIndexedAMD64MinDims && dims <= dotScalarU8CenteredIndexedAMD64MaxSIMDDims
 }
 
+func dotScalarU8CenteredIndexedPreparedByteEligible(dims int) bool {
+	return dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable && dims >= dotScalarU8CenteredIndexedAMD64AVX512VNNIMinDims && dims <= dotScalarU8CenteredIndexedAMD64MaxSIMDDims && dims%64 == 0
+}
+
 // DotScalarU8CenteredIndexed writes integer dot products for row-major scalar_u8
 // code rows selected by rowIDs against a pre-centered scalar_u8 query. Supported
 // amd64 builds use an AVX-512 VNNI indexed-row kernel when available, then AVX2
@@ -113,3 +117,8 @@ func dotScalarU8CenteredIndexedAMD64AVX2(dst []int64, codes []byte, query []Scal
 // centered dot products with AVX-512 VNNI. The Go wrapper validates shapes,
 // CPU features, and the int32 SIMD accumulation bound before calling.
 func dotScalarU8CenteredIndexedAMD64AVX512VNNI(dst []int64, codes []byte, query []ScalarU8CenteredCode, rowIDs []uint32, dims int, rows int, querySum int64)
+
+// dotScalarU8CenteredIndexedPreparedByte computes exact centered scalar_u8
+// dots with AVX-512 byte VNNI. The Go wrapper validates all shapes, prepared
+// query halves, row sums, CPU features, and the int32 accumulation bound.
+func dotScalarU8CenteredIndexedPreparedByte(dst []int64, codes []byte, queryHalf []int8, rowByteSums []uint32, rowIDs []uint32, dims int, rows int, querySum int64)

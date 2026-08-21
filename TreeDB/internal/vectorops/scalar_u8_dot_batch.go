@@ -35,6 +35,33 @@ func DotScalarU8CenteredIndexedOptimizedEligible(rows, dims int) bool {
 	return dotScalarU8CenteredIndexedOptimizedEligible(rows, dims)
 }
 
+// DotScalarU8CenteredIndexedPreparedByteEligible reports whether this host can
+// use the exact prepared-byte scalar_u8 kernel for dims. Callers can avoid the
+// one-time row-sum side state when the active backend cannot consume it.
+func DotScalarU8CenteredIndexedPreparedByteEligible(dims int) bool {
+	return dotScalarU8CenteredIndexedPreparedByteEligible(dims)
+}
+
+// DotScalarU8CenteredIndexedPrevalidatedWithByteSums is the prepared-byte
+// variant of DotScalarU8CenteredIndexedPrevalidated. On eligible AVX-512 VNNI
+// hosts it uses raw byte codes, a signed-byte query, and one raw-code sum per
+// row to compute the exact centered score. Other shapes and platforms reuse the
+// existing implementation.
+func DotScalarU8CenteredIndexedPrevalidatedWithByteSums(dst []int64, codes []byte, rowByteSums []uint32, query ScalarU8CenteredQuery, rowIDs []uint32, dims int) ScalarU8DotBatchStatus {
+	rows := dotScalarU8CenteredIndexedRows(dst, rowIDs)
+	if rows == 0 {
+		return ScalarU8DotBatchStatus{}
+	}
+	if !dotScalarU8CenteredIndexedBasicShapeOK(codes, query, dims, rows) {
+		return scalarU8DotBatchInvalidStatus()
+	}
+	if !dotScalarU8CenteredIndexedPreparedByteEligible(dims) || len(query.halfValues) != dims || len(codes)%dims != 0 || len(rowByteSums) != len(codes)/dims {
+		return DotScalarU8CenteredIndexedPrevalidated(dst, codes, query, rowIDs, dims)
+	}
+	dotScalarU8CenteredIndexedPreparedByte(dst, codes, query.halfValues, rowByteSums, rowIDs, dims, rows, query.CenteredSum())
+	return scalarU8DotBatchStatus(rows, true)
+}
+
 func scalarU8DotBatchStatus(rows int, optimized bool) ScalarU8DotBatchStatus {
 	return ScalarU8DotBatchStatus{
 		Rows:      rows,

@@ -967,6 +967,56 @@ func TestColumnGraphScalarU8CenteredQueryScratch2258(t *testing.T) {
 	}
 }
 
+func TestPrepareColumnVectorGraphScalarU8CodeSums(t *testing.T) {
+	const (
+		dims = 128
+		rows = 3
+	)
+	codes := make([]byte, rows*dims)
+	want := make([]uint32, rows)
+	for row := range want {
+		for col := 0; col < dims; col++ {
+			code := byte((row*37 + col*17 + 11) & 0xff)
+			codes[row*dims+col] = code
+			want[row] += uint32(code)
+		}
+	}
+	_, _, prepared, _, _ := prepareScalarU8AlphaPreparedForTest2844(t, dims, codes, []float32{1}, []uint32{rows})
+	got := prepareColumnVectorGraphScalarU8CodeSums(prepared, dims)
+	if !vectorops.DotScalarU8CenteredIndexedPreparedByteEligible(dims) {
+		if got != nil {
+			t.Fatalf("unsupported host prepared %d code sums", len(got))
+		}
+		return
+	}
+	if len(got) != len(want) {
+		t.Fatalf("code sums=%d want %d", len(got), len(want))
+	}
+	for row := range want {
+		if got[row] != want[row] {
+			t.Fatalf("code sum row=%d got=%d want=%d", row, got[row], want[row])
+		}
+	}
+}
+
+func TestPreparedScalarU8CodeSumsCountedOnceAcrossSharedReaders(t *testing.T) {
+	resource := &columnVectorGraphQuantizedAssetResource{}
+	status := columnVectorGraphQuantizedAssetLoadStatus{
+		ScalarU8CodeSums: []uint32{1, 2, 3},
+		resource:         resource,
+	}
+	reader := func() *columnVectorGraphPhysicalRowReader {
+		return &columnVectorGraphPhysicalRowReader{quantizedAssetStatus: map[string]columnVectorGraphQuantizedAssetLoadStatus{"q": status}}
+	}
+	prepared := &collectionVectorIndexPreparedSearch{
+		quantizedIndexName: "q",
+		quantizedReaders:   []*columnVectorGraphPhysicalRowReader{reader(), reader()},
+	}
+	if got, want := prepared.stats().ActiveDerivedMetadataBytes, int64(len(status.ScalarU8CodeSums)*4); got != want {
+		t.Fatalf("derived metadata bytes=%d want %d", got, want)
+	}
+}
+
 func TestColumnGraphScalarU8QuantizedScoreOrdinalsUsesScalarU8BatchKernel2260(t *testing.T) {
 	shape := columnGraphScalarU8QuantizedBenchShape1926{rows: 8, dims: 32, m: 4, topK: 2, efSearch: 8, queryOrdinal: 3}
 	_, d, col, def, rows := openColumnGraphScalarU8QuantizedBenchCollection1926(t, shape, true)

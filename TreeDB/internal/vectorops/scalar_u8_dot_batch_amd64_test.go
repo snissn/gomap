@@ -135,3 +135,143 @@ func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIRandomWorkingSet4225(b *t
 		})
 	}
 }
+
+func TestDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteParity(t *testing.T) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		t.Skip("AVX-512 VNNI unavailable")
+	}
+	for _, dims := range []int{64, 128, 256, 768, 1536} {
+		for _, rows := range []int{1, 2, 3, 4, 5, 6, 7, 8, 17} {
+			t.Run(fmt.Sprintf("dims=%d/rows=%d", dims, rows), func(t *testing.T) {
+				const baseRows = 53
+				codes := scalarU8DotBatchTestCodes(baseRows, dims)
+				query := scalarU8DotBatchTestQuery(t, dims, 71)
+				queryHalf := scalarU8DotBatchQueryHalf(query)
+				rowSums := scalarU8DotBatchRowSums(codes, dims)
+				rowIDs := scalarU8DotBatchTestRowIDs(rows, baseRows)
+				got := make([]int64, rows)
+				want := make([]int64, rows)
+				dotScalarU8CenteredIndexedPreparedByte(got, codes, queryHalf, rowSums, rowIDs, dims, rows, query.CenteredSum())
+				dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, rows)
+				assertInt64SliceExact(t, got, want)
+			})
+		}
+	}
+}
+
+func TestDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteAllCodePairs(t *testing.T) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		t.Skip("AVX-512 VNNI unavailable")
+	}
+	const dims = 256
+	codes := make([]byte, dims)
+	for i := range codes {
+		codes[i] = byte(i)
+	}
+	queryCodes := make([]byte, dims)
+	rowSums := scalarU8DotBatchRowSums(codes, dims)
+	rowIDs := []uint32{0}
+	for queryCode := 0; queryCode < 256; queryCode++ {
+		for i := range queryCodes {
+			queryCodes[i] = byte(queryCode)
+		}
+		query, _, ok := PrepareScalarU8CenteredQuery(make([]ScalarU8CenteredCode, 0, dims), queryCodes, dims)
+		if !ok {
+			t.Fatalf("query code=%d rejected", queryCode)
+		}
+		got, want := make([]int64, 1), make([]int64, 1)
+		dotScalarU8CenteredIndexedPreparedByte(got, codes, scalarU8DotBatchQueryHalf(query), rowSums, rowIDs, dims, 1, query.CenteredSum())
+		dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, 1)
+		assertInt64SliceExact(t, got, want)
+	}
+}
+
+func TestDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteMaxSIMDDims(t *testing.T) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		t.Skip("AVX-512 VNNI unavailable")
+	}
+
+	const (
+		dims = dotScalarU8CenteredIndexedAMD64MaxSIMDDims
+		rows = 5
+	)
+	queryCodes := make([]byte, dims)
+	for i := range queryCodes {
+		queryCodes[i] = 255
+	}
+	query, _, ok := PrepareScalarU8CenteredQuery(make([]ScalarU8CenteredCode, 0, dims), queryCodes, dims)
+	if !ok {
+		t.Fatal("max-dimension query rejected")
+	}
+	codes := make([]byte, rows*dims)
+	for row := 0; row < rows; row += 2 {
+		for i := row * dims; i < (row+1)*dims; i++ {
+			codes[i] = 255
+		}
+	}
+	rowIDs := scalarU8DotBatchTestRowIDs(rows, rows)
+	got := make([]int64, rows)
+	want := make([]int64, rows)
+	dotScalarU8CenteredIndexedPreparedByte(got, codes, scalarU8DotBatchQueryHalf(query), scalarU8DotBatchRowSums(codes, dims), rowIDs, dims, rows, query.CenteredSum())
+	dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, rows)
+	assertInt64SliceExact(t, got, want)
+}
+
+func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByte(b *testing.B) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		b.Skip("AVX-512 VNNI unavailable")
+	}
+	for _, dims := range []int{128, 256, 768, 1536} {
+		for _, rows := range []int{1, 2, 3, 4, 8, 16, 64} {
+			b.Run(fmt.Sprintf("dims=%d/rows=%d/indexed", dims, rows), func(b *testing.B) {
+				baseRows := rows*3 + 17
+				codes := scalarU8DotBatchTestCodes(baseRows, dims)
+				query := scalarU8DotBatchTestQuery(b, dims, 71)
+				queryHalf := scalarU8DotBatchQueryHalf(query)
+				rowSums := scalarU8DotBatchRowSums(codes, dims)
+				rowIDs := scalarU8DotBatchTestRowIDs(rows, baseRows)
+				dst := make([]int64, rows)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					dotScalarU8CenteredIndexedPreparedByte(dst, codes, queryHalf, rowSums, rowIDs, dims, rows, query.CenteredSum())
+					scalarU8DotBatchIntSink += dst[0]
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteRandomWorkingSet(b *testing.B) {
+	if !dotScalarU8CenteredIndexedAMD64AVX512VNNIAvailable {
+		b.Skip("AVX-512 VNNI unavailable")
+	}
+	const (
+		dims      = 768
+		baseRows  = 1 << 16
+		tileCount = 1 << 12
+	)
+	codes := scalarU8DotBatchTestCodes(baseRows, dims)
+	query := scalarU8DotBatchTestQuery(b, dims, 71)
+	queryHalf := scalarU8DotBatchQueryHalf(query)
+	rowSums := scalarU8DotBatchRowSums(codes, dims)
+	for _, rows := range []int{4, 8, 16, 32} {
+		b.Run(fmt.Sprintf("dims=%d/rows=%d/working_set=48MiB", dims, rows), func(b *testing.B) {
+			rowIDs := make([]uint32, tileCount*rows)
+			state := uint32(0x6d2b79f5)
+			for i := range rowIDs {
+				state = state*1664525 + 1013904223
+				rowIDs[i] = state & (baseRows - 1)
+			}
+			dst := make([]int64, rows)
+			b.ReportAllocs()
+			b.SetBytes(int64(rows * dims))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				start := (i & (tileCount - 1)) * rows
+				dotScalarU8CenteredIndexedPreparedByte(dst, codes, queryHalf, rowSums, rowIDs[start:start+rows], dims, rows, query.CenteredSum())
+				scalarU8DotBatchIntSink += dst[0]
+			}
+		})
+	}
+}

@@ -81,6 +81,21 @@ func TestScalarU8CenteredQueryFromCentered2258(t *testing.T) {
 	}
 }
 
+func TestScalarU8CenteredQueryFromCenteredWithHalf(t *testing.T) {
+	centered := []ScalarU8CenteredCode{-255, -1, 1, 255}
+	half := []int8{-128, -1, 0, 127}
+	query, scratch, ok := PrepareScalarU8CenteredQueryFromCenteredWithHalf(centered, half, len(centered), 0)
+	if !ok || !query.ValidForDims(len(centered)) || len(scratch) != len(centered) {
+		t.Fatalf("prepared-byte query ok=%v query=%+v scratch_len=%d", ok, query, len(scratch))
+	}
+	if len(query.halfValues) != len(half) {
+		t.Fatalf("half values=%d want %d", len(query.halfValues), len(half))
+	}
+	if _, scratch, ok := PrepareScalarU8CenteredQueryFromCenteredWithHalf(centered, half[:3], len(centered), 0); ok || len(scratch) != 0 {
+		t.Fatalf("short half metadata accepted")
+	}
+}
+
 func TestScalarU8CenteredQueryRejectsInvalidShapes2258(t *testing.T) {
 	codes := []byte{1, 2, 3}
 	validScratch := make([]ScalarU8CenteredCode, 0, len(codes))
