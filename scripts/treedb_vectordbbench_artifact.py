@@ -736,6 +736,14 @@ def case_vector_count(case_type: str) -> int:
     return int(match.group(1)) * {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[match.group(2).upper()]
 
 
+def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
+    custom_case = task_config.get("case_config", {}).get("custom_case") or {}
+    size = custom_case.get("dataset_config", {}).get("size")
+    if isinstance(size, int) and not isinstance(size, bool) and size > 0:
+        return size, "task_config.case_config.custom_case.dataset_config.size"
+    return case_vector_count(case_type), "case_type suffix"
+
+
 def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
@@ -753,7 +761,8 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
     load = positive_number(metrics.get("load_duration"), "load_duration")
     if not math.isclose(load, insert + optimize, rel_tol=0.0, abs_tol=0.0002):
         raise ValueError(f"canonical VDBBench result {path} has load_duration != insert_duration + optimize_duration")
-    vectors = case_vector_count(case_type)
+    task_config = matches[0].get("task_config") or {}
+    vectors, vector_source = result_vector_count(task_config, case_type)
     return {
         "result_file": str(path.relative_to(artifact_root)),
         "result_sha256": sha256_file(path),
@@ -761,12 +770,12 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         "index_name": index_name,
         "case_type": case_type,
         "vector_count": vectors,
-        "vector_count_source": "case_type suffix",
+        "vector_count_source": vector_source,
         "insert_duration_seconds": insert,
         "offline_optimize_duration_seconds": optimize,
         "total_load_duration_seconds": load,
         "insert_vectors_per_second": vectors / insert,
-        "task_config": matches[0].get("task_config"),
+        "task_config": task_config,
     }
 
 

@@ -151,6 +151,9 @@ does not end in a count suffix such as `50K` or `1M`. The profile is deliberatel
 full-load only: phase-specific pprof would require VDBBench orchestration not
 owned by this harness.
 
+For `PerformanceCustomDataset`, the vector count instead comes fail-closed from
+the selected result's `task_config.case_config.custom_case.dataset_config.size`.
+
 ## Environment variables
 
 Most flags also have environment equivalents:

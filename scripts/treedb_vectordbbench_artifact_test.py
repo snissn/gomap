@@ -149,6 +149,14 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "load_duration"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
+    def test_custom_dataset_uses_selected_result_size(self) -> None:
+        task_config = {"case_config": {"custom_case": {"dataset_config": {"size": 50_000}}}}
+
+        count, source = harness.result_vector_count(task_config, "PerformanceCustomDataset")
+
+        self.assertEqual(count, 50_000)
+        self.assertEqual(source, "task_config.case_config.custom_case.dataset_config.size")
+
 
 class ManifestFileListTest(unittest.TestCase):
     def test_artifact_file_list_skips_treedb_data(self) -> None:
