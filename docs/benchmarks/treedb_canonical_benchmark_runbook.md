@@ -60,6 +60,14 @@ Use `--skip-collection-profiles` only when validating non-profile report logic;
 it removes the collection pprof manifests from the final Profiling Follow-Up
 section.
 
+## VectorDBBench Cohere 1M
+
+The canonical end-to-end vector-service benchmark is the
+[Cohere Medium 1M VDBBench campaign](treedb_vectordbbench_cohere1m_c6i_dense_curve_2026-08-21.md).
+Publish two TreeDB recall/QPS lines: FP32 HNSW graph traversal and scalar-u8
+graph traversal with FP32 reranking, limited to its non-dominated points. Keep
+scalar-u8-only and dominated rerank screening cells as supporting evidence.
+
 ## Principles
 
 - Start every report with the git commit, branch, host, OS, Go version, command,
@@ -80,7 +88,7 @@ section.
 
 ## Benchmark Layers
 
-TreeDB has three benchmark layers. Pick the lowest layer that answers the
+TreeDB has four benchmark layers. Pick the lowest layer that answers the
 question, then add higher layers only when the user-facing path matters.
 
 1. Raw TreeDB engine: `cmd/unified_bench` plus `cmd/benchprof`.
@@ -88,12 +96,15 @@ question, then add higher layers only when the user-facing path matters.
    TreeDB-vs-SQLite runner.
 3. Mongo-compatible collections: `cmd/mongo_gateway_bench` and
    `scripts/mongo_gateway_compare.sh`.
+4. End-to-end vector service: VDBBench through the TreeDB document-service
+   adapter.
 
 Raw engine results explain storage-engine ceilings and hot paths. Collection
 results explain document storage, secondary indexes, maintenance, and SQLite
 equivalence. Mongo gateway results explain Mongo-compatible ergonomics and the
 cost of the official MongoDB driver, BSON wire handling, and gateway command
-paths.
+paths. VDBBench results explain the complete vector client, transport, service,
+and index path at a recall target.
 
 ## Tiers
 
