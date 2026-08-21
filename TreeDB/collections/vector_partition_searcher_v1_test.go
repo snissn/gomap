@@ -522,8 +522,8 @@ func TestVectorPartitionLocalSearcherV1ScratchBoundIncludesRowSizedHNSWState(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got <= 8_000_000 {
-		t.Fatalf("scratch bytes=%d want row-count visit bitmap plus candidate queues", got)
+	if got <= 2_000_000 || got >= 3_000_000 {
+		t.Fatalf("scratch bytes=%d want compact row-count visit marks plus candidate queues", got)
 	}
 	if got <= 16*64 {
 		t.Fatalf("scratch bytes=%d incorrectly modeled only ef_search candidates", got)
@@ -547,7 +547,7 @@ func TestVectorPartitionHNSWSearchScratchIncludesOrdinalHandoffResultsV1(t *test
 		t.Fatal(err)
 	}
 	frontier := columnVectorGraphNativeSearchFrontierCapacity(rows, degree, topK, efSearch)
-	withoutCanonical := uint64(rows)*uint64(unsafe.Sizeof(uint64(0))) +
+	withoutCanonical := uint64(rows)*uint64(unsafe.Sizeof(uint16(0))) +
 		uint64(frontier)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
 		uint64(efSearch)*uint64(unsafe.Sizeof(columnVectorGraphSearchCandidate{})) +
 		uint64(topK)*uint64(unsafe.Sizeof(columnVectorGraphNativeSearchResult{})) +
