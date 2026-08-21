@@ -127,7 +127,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 			_ = reader.Close()
 			t.Fatalf("reader scalar_u8 status=%+v want mmap/direct without heap copy", loaded)
 		}
-		assertColumnGraphScalarU8PreparedPayloadAligned4234(t, loaded.Prepared)
+		assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t, loaded.Prepared)
 	} else if loaded.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || loaded.HeapCopyBytes == 0 {
 		_ = reader.Close()
 		t.Fatalf("reader scalar_u8 status=%+v want heap-copy fallback", loaded)
@@ -161,7 +161,7 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 		if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || reopenedStatus.MappedBytes == 0 || reopenedStatus.HeapCopyBytes != 0 {
 			t.Fatalf("reopened scalar_u8 status=%+v want mmap/direct without heap copy", reopenedStatus)
 		}
-		assertColumnGraphScalarU8PreparedPayloadAligned4234(t, reopenedStatus.Prepared)
+		assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t, reopenedStatus.Prepared)
 	} else if reopenedStatus.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || reopenedStatus.HeapCopyBytes == 0 {
 		t.Fatalf("reopened scalar_u8 status=%+v want heap-copy fallback", reopenedStatus)
 	}
@@ -200,7 +200,7 @@ func assertColumnGraphScalarU8CodeSectionAligned4234(t *testing.T, image typedco
 	t.Fatal("scalar_u8 code section missing")
 }
 
-func assertColumnGraphScalarU8PreparedPayloadAligned4234(t *testing.T, prepared *quantizedasset.Prepared) {
+func assertColumnGraphScalarU8PreparedPayloadBaseAligned4234(t *testing.T, prepared *quantizedasset.Prepared) {
 	t.Helper()
 	view, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
 	if !ok {
@@ -212,6 +212,12 @@ func assertColumnGraphScalarU8PreparedPayloadAligned4234(t *testing.T, prepared 
 	}
 	if uintptr(unsafe.Pointer(unsafe.SliceData(payload)))%64 != 0 {
 		t.Fatalf("scalar_u8 code payload pointer is not 64-byte aligned")
+	}
+	if view.Rows() > 1 && view.BytesPerRow()%64 != 0 {
+		row1 := payload[view.BytesPerRow():]
+		if uintptr(unsafe.Pointer(unsafe.SliceData(row1)))%64 == 0 {
+			t.Fatalf("scalar_u8 row 1 unexpectedly aligned with non-aligned stride=%d", view.BytesPerRow())
+		}
 	}
 }
 

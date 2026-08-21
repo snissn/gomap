@@ -78,10 +78,13 @@ candidates when the current segment offset would make
 `asset_ref.offset + section.offset` or `asset_ref.offset + block.payload_offset`
 unaligned. Most active candidates require at most 8-byte absolute alignment.
 Scalar-u8 vector-index `quantized_codes` images request 64-byte section and
-segment placement so every row begins on a cache-line boundary; legacy 8-byte
-images remain readable. Physical asset rewrite preserves 64-byte placement when
-the source ref is 64-byte aligned, and reachability accounting recognizes the
-deterministic zero prefix used for that placement.
+segment placement, aligning the payload base. Because rows remain contiguous,
+every row begins on a cache-line boundary only when the dimension/byte stride is
+divisible by 64; other dimensions retain base alignment without claiming
+per-row alignment or requiring a reader fallback. Legacy 8-byte images remain
+readable. Physical asset rewrite preserves 64-byte placement when the source ref
+is 64-byte aligned, and reachability accounting recognizes the deterministic
+zero prefix used for that placement.
 Segment-prefix padding is not part of the asset ref payload/checksum, but it is
 part of the segment file size and appender offset progression; tests assert the
 bytes are zero and that multiple typed-column-part assets in the same segment
