@@ -37,7 +37,7 @@ scalar-u8 traversal with FP32 reranking.
 
 | TreeDB curve | about 0.98 recall | about 0.994 recall | highest measured recall |
 | --- | ---: | ---: | ---: |
-| u8 + FP32 rerank | 16,532 QPS @ 0.9809 | 6,969 QPS @ 0.9944 | 5,520 QPS @ 0.9961 |
+| u8 + FP32 rerank | 16,532 QPS @ 0.9809 | 6,969 QPS @ 0.9944 | 5,626 QPS @ 0.9961 |
 | FP32 | 6,709 QPS @ 0.9808 | 2,649 QPS @ 0.9944 | 2,093 QPS @ 0.9960 |
 
 The public curves are a directional leaderboard overlay, not same-hardware
