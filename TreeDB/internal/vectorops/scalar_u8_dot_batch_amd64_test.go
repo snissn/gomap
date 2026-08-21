@@ -27,8 +27,8 @@ func TestDotScalarU8CenteredIndexedAMD64AVX512VNNIParity4225(t *testing.T) {
 		t.Skip("AVX-512 VNNI unavailable")
 	}
 
-	for _, dims := range []int{128, 129, 256, 257, 768, 769, 1536, 1537} {
-		for _, rows := range []int{1, 2, 3, 8, 17} {
+	for _, dims := range []int{32, 64, 65, 128, 129, 256, 257, 768, 769, 1536, 1537} {
+		for _, rows := range []int{1, 2, 3, 4, 5, 6, 7, 8, 17} {
 			name := fmt.Sprintf("dims=%d/rows=%d", dims, rows)
 			t.Run(name, func(t *testing.T) {
 				const baseRows = 53
