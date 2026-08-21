@@ -25,6 +25,26 @@ These checked-in reports use different workloads, profiles, and caveats. Treat
 each workload as scoped evidence from its linked benchmark, not as one combined
 benchmark suite.
 
+### VectorDBBench Cohere 1M
+
+End-to-end VDBBench search on Cohere Medium 1M (768-dimensional cosine,
+`topK=100`, IDs-only responses), with separate c6i.8xlarge client and server
+hosts. The budgeted TreeDB server was 32 vCPUs and 64 GiB at exactly
+$1,000/month. The two canonical TreeDB curves are FP32 HNSW traversal and
+scalar-u8 traversal with FP32 reranking.
+
+![TreeDB and public VDBBench Cohere Medium 1M QPS versus recall](docs/benchmarks/treedb_vectordbbench_cohere1m_c6i_dense_qps_recall_2026-08-21.png)
+
+| TreeDB curve | about 0.98 recall | about 0.994 recall | highest measured recall |
+| --- | ---: | ---: | ---: |
+| u8 + FP32 rerank | 16,532 QPS @ 0.9809 | 6,969 QPS @ 0.9944 | 5,520 QPS @ 0.9961 |
+| FP32 | 6,709 QPS @ 0.9808 | 2,649 QPS @ 0.9944 | 2,093 QPS @ 0.9960 |
+
+The public curves are a directional leaderboard overlay, not same-hardware
+reproductions. Full methodology, latency, profiles, supporting quantized-only
+measurements, raw data, and evidence archive:
+[August 21 Cohere 1M report](docs/benchmarks/treedb_vectordbbench_cohere1m_c6i_dense_curve_2026-08-21.md).
+
 ### YCSB Server Workload
 
 External `go-ycsb`, local loopback TCP, `recordcount=100000`,

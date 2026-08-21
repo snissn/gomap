@@ -8,6 +8,19 @@ For the repeatable artifact harness and route-proof sidecar contract used by
 follow-up benchmark issues, see
 [`treedb_vectordbbench_artifact_harness.md`](treedb_vectordbbench_artifact_harness.md).
 
+## Canonical Published Benchmark
+
+Use the [August 21 Cohere 1M report](treedb_vectordbbench_cohere1m_c6i_dense_curve_2026-08-21.md)
+for current claim-quality VDBBench results. Its two canonical TreeDB curves are:
+
+- FP32 HNSW graph traversal.
+- Scalar-u8 graph traversal with FP32 reranking, limited to the non-dominated
+  recall/QPS points.
+
+Scalar-u8-only and dominated rerank screening cells remain supporting evidence,
+not headline curves. This June 11 document remains the integration and smoke
+runbook.
+
 ## Merged Stack
 
 | issue | PR | merge commit | scope |

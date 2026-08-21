@@ -2,9 +2,10 @@
 
 TreeDB's scalar-u8 plus FP32-rerank path reached a median peak of 33,749.90 QPS
 at 0.9390 recall@100, 16,532.49 QPS at 0.9809 recall, and 6,969.31 QPS at
-0.9944 recall. The complete current-run graph contains 42 TreeDB operating
-points: nine scalar-u8-only, nine FP32 graph-traversal, and 24
-scalar-u8-plus-rerank points.
+0.9944 recall. The canonical TreeDB presentation uses two lines: nine FP32
+graph-traversal points and the 14 non-dominated scalar-u8-plus-FP32-rerank
+points. The campaign retains all 42 TreeDB operating points, including
+scalar-u8-only and dominated rerank screening cells, in the tables and CSV.
 
 ![Cohere Medium 1M QPS versus recall](treedb_vectordbbench_cohere1m_c6i_dense_qps_recall_2026-08-21.png)
 
@@ -12,7 +13,12 @@ The plot uses a linear QPS scale and includes all 49 points in the public
 VDBBench Cohere Medium 1M snapshot fetched on 2026-08-21. The exact plotted
 records are in the [companion CSV](treedb_vectordbbench_cohere1m_c6i_dense_points_2026-08-21.csv).
 
-## Full scalar-u8-only and FP32 sweeps
+Companion views use the same axes:
+
+- [public VDBBench data without TreeDB](vectordbbench_cohere1m_public_qps_recall_2026-08-21.png)
+- [TreeDB and public data excluding Zilliz Cloud](treedb_vectordbbench_cohere1m_self_hosted_focus_qps_recall_2026-08-21.png)
+
+## Canonical FP32 sweep and supporting scalar-u8-only data
 
 `exact` below is the adapter's name for FP32 HNSW graph traversal; it is not an
 exhaustive brute-force scan. Both sweeps used the same nine `efSearch` values.
@@ -35,7 +41,7 @@ scalar-u8 traversal advantage: at 0.9944 recall, `efSearch=800` with a 500-row
 rerank budget delivered 6,969.31 QPS versus 2,649.44 QPS for FP32 traversal at
 the same `efSearch` and recall, a 2.63x difference.
 
-## Selected scalar-u8 plus FP32-rerank points
+## Canonical scalar-u8 plus FP32-rerank curve
 
 These eight points are three-run medians. The range is the minimum and maximum
 QPS across the three runs; p99 is the median peak-concurrency p99 reported by
@@ -52,9 +58,11 @@ VDBBench.
 | 800 | 500 | 6,969.31 | 6,807.86-7,005.09 | 0.9944 | 5.73 ms |
 | 1000 | 700 | 5,519.70 | 5,508.22-5,609.22 | 0.9961 | 12.79 ms |
 
-The other 16 rerank cells are single-run budget-screening points. The scalar-u8
-and FP32 `efSearch=150` rows in the full sweeps are also three-run medians, so
-the campaign has 10 three-run-median configurations and 32 single-run cells. In
+The canonical graph connects all 14 non-dominated rerank points from the 24-cell
+rerank sweep. This table highlights the eight three-run medians; the other 16
+rerank cells are single-run budget-screening points. The scalar-u8 and FP32
+`efSearch=150` rows in the full sweeps are also three-run medians, so the
+campaign has 10 three-run-median configurations and 32 single-run cells. In
 total, the campaign retained 62 successful timed runs with no failed cells.
 
 ## Directional public comparison
