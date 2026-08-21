@@ -107,11 +107,36 @@ func TestColumnHNSWPreparedScalarU8RerankScratchReuse4227(t *testing.T) {
 		t.Fatalf("default rerank capacities scores/rows/dots=%d/%d/%d want >=%d", cap(scratch.scoreTileScores), cap(scratch.scoreTileRowIDs), cap(scratch.scoreTileDots), opts.EfSearch)
 	}
 
+	opts.TopK = 25
+	opts.EfSearch = 40
 	opts.QuantizedRerankCandidates = 1000
-	if _, stats, err := reader.SearchCosineScalarU8PreparedTraversal(pack, query, opts, &scratch); err != nil {
-		t.Fatalf("bounded rerank limit: %v", err)
-	} else if stats.QuantizedRerankCandidates != uint64(pack.Header.Rows) {
-		t.Fatalf("bounded rerank candidates=%d want rows=%d", stats.QuantizedRerankCandidates, pack.Header.Rows)
+	boundedResults, boundedStats, err := reader.SearchCosineScalarU8PreparedTraversal(pack, query, opts, &scratch)
+	if err != nil {
+		t.Fatalf("ef-bounded rerank: %v", err)
+	}
+	if len(boundedResults) != opts.TopK || boundedStats.QuantizedRerankCandidates != uint64(opts.EfSearch) || boundedStats.QuantizedRerankExactScoreCalls != uint64(opts.EfSearch) {
+		t.Fatalf("ef-bounded results=%d stats=%+v want topK=%d exact candidates=%d", len(boundedResults), boundedStats, opts.TopK, opts.EfSearch)
+	}
+	boundedWant := append([]columnVectorGraphNativeSearchResult(nil), boundedResults...)
+	for i := range boundedWant {
+		boundedWant[i].ID = append([]byte(nil), boundedWant[i].ID...)
+	}
+	boundedAllocs := testing.AllocsPerRun(100, func() {
+		got, stats, searchErr := reader.SearchCosineScalarU8PreparedTraversal(pack, query, opts, &scratch)
+		if searchErr != nil || stats.QuantizedRerankExactScoreCalls != uint64(opts.EfSearch) || len(got) != len(boundedWant) {
+			panic("ef-bounded rerank result/work counters changed")
+		}
+		for i := range boundedWant {
+			if !bytes.Equal(got[i].ID, boundedWant[i].ID) || got[i].Ordinal != boundedWant[i].Ordinal || got[i].Score != boundedWant[i].Score {
+				panic("ef-bounded rerank IDs/scores/ties changed")
+			}
+		}
+	})
+	if !collectionsRaceEnabled && boundedAllocs != 0 {
+		t.Fatalf("steady-state ef-bounded rerank allocs/run=%v want 0", boundedAllocs)
+	}
+	if cap(scratch.scoreTileScores) != opts.EfSearch || cap(scratch.scoreTileRowIDs) != opts.EfSearch || cap(scratch.scoreTileDots) != opts.EfSearch {
+		t.Fatalf("ef-bounded capacities scores/rows/dots=%d/%d/%d want %d", cap(scratch.scoreTileScores), cap(scratch.scoreTileRowIDs), cap(scratch.scoreTileDots), opts.EfSearch)
 	}
 }
 
