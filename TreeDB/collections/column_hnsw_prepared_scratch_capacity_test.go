@@ -115,6 +115,78 @@ func TestColumnHNSWPreparedScalarU8RerankScratchReuse4227(t *testing.T) {
 	}
 }
 
+func TestColumnHNSWPreparedScalarU8RawDotRerankScratchReuse4227(t *testing.T) {
+	reader, pack, query, quantizedIndexName := columnHNSWPreparedScalarU8RerankFixture4227(t)
+	const (
+		topK   = 100
+		ef     = 256
+		rerank = 200
+	)
+	var scratch columnVectorGraphNativeSearchScratch
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("query norm: %v", err)
+	}
+	scorer, err := reader.prepareScalarU8QuantizedScorer(columnVectorGraphNativeSearchQueryModeQuantizedRerank, quantizedIndexName, query, queryInvNorm, &scratch)
+	if err != nil {
+		t.Fatalf("prepare scalar-u8 scorer: %v", err)
+	}
+	scratch.preparedScalarU8Plane.scorer = scorer
+	scratch.preparedScalarU8Plane.ready = true
+	opts := columnHNSWPreparedTraversalOptions{
+		TopK:                                 topK,
+		EfSearch:                             ef,
+		ScoreTileCapacity:                    rerank,
+		StatsMode:                            columnVectorGraphNativeSearchStatsModeFullDiagnostics,
+		OmitResultMaterialization:            true,
+		SuppressOmittedResultMaterialization: true,
+	}
+	wantResults, wantStats, err := runColumnHNSWPreparedScalarU8RawDotRerank4227(pack, query, opts, rerank, &scratch)
+	if err != nil {
+		t.Fatalf("warm raw-dot rerank: %v", err)
+	}
+	want := append([]columnVectorGraphNativeSearchResult(nil), wantResults...)
+	for i := range want {
+		want[i].ID = append([]byte(nil), want[i].ID...)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		got, stats, searchErr := runColumnHNSWPreparedScalarU8RawDotRerank4227(pack, query, opts, rerank, &scratch)
+		if searchErr != nil {
+			panic(searchErr)
+		}
+		if len(got) != len(want) || stats.QuantizedScoreCalls != wantStats.QuantizedScoreCalls || stats.QuantizedRerankExactScoreCalls != wantStats.QuantizedRerankExactScoreCalls || stats.VisitedEdges != wantStats.VisitedEdges {
+			panic("raw-dot rerank result/work counters changed")
+		}
+		for i := range want {
+			if !bytes.Equal(got[i].ID, want[i].ID) || got[i].Ordinal != want[i].Ordinal || got[i].Score != want[i].Score {
+				panic("raw-dot rerank IDs/scores/ties changed")
+			}
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state raw-dot rerank allocs/run=%v want 0", allocs)
+	}
+	if cap(scratch.scoreTileScores) < rerank || cap(scratch.scoreTileRowIDs) < rerank || cap(scratch.scoreTileDots) < rerank {
+		t.Fatalf("raw-dot rerank capacities scores/rows/dots=%d/%d/%d want >=%d", cap(scratch.scoreTileScores), cap(scratch.scoreTileRowIDs), cap(scratch.scoreTileDots), rerank)
+	}
+}
+
+func runColumnHNSWPreparedScalarU8RawDotRerank4227(pack *columnHNSWSearchPackPreparedView, query []float32, opts columnHNSWPreparedTraversalOptions, rerank int, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+	_, stats, err := pack.searchCosinePreparedRawDotTraversal(query, opts, scratch, &scratch.preparedScalarU8Plane)
+	if err != nil {
+		return nil, stats, err
+	}
+	scratch.results = scratch.results[:0]
+	if err := pack.exactRerankPreparedTraversalRowIDCandidates(query, opts.TopK, rerank, columnVectorGraphScoreBatchModeDefault, scratch, &stats); err != nil {
+		return nil, stats, err
+	}
+	if err := pack.fetchTopSearchResults(scratch, &stats); err != nil {
+		return nil, stats, err
+	}
+	return scratch.results, stats, nil
+}
+
 func BenchmarkColumnHNSWPreparedScalarU8RerankScratchReuse4227(b *testing.B) {
 	reader, pack, query, quantizedIndexName := columnHNSWPreparedScalarU8RerankFixture4227(b)
 	opts := columnVectorGraphNativeSearchOptions{
