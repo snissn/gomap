@@ -2091,6 +2091,12 @@ writer/appender also emits deterministic zero prefix padding as needed so the
 absolute storage addresses (`asset_ref.offset + section/block payload offset`)
 satisfy the declared alignment; this segment prefix padding is outside the asset
 payload/checksum but is part of segment file size and appender offset accounting.
+Scalar-u8 vector-index `quantized_codes` images use 64-byte section alignment and
+64-byte segment placement so each fixed-width code row begins on a cache-line
+boundary. Other typed-column images retain the 8-byte default. Readers continue
+to accept legacy 8-byte images; physical asset rewrite preserves 64-byte
+placement when the source ref is 64-byte aligned, and reachability accounting
+recognizes the deterministic zero prefix inserted for either alignment.
 Old or manually constructed typed-column assets without a valid layout contract,
 or refs whose absolute offsets are misaligned, fail closed in certified/prepared
 paths. TreeDB is pre-alpha, so rebuilding old DB directories is preferred over
