@@ -83,7 +83,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosinePreparedRawDotTraversal(q
 	if opts.OmitResultMaterialization && !opts.SuppressOmittedResultMaterialization {
 		resultScratchK = retainedCandidateLimit
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit, degree, degree); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, resultScratchK, retainedCandidateLimit, opts.ScoreTileCapacity, degree, degree); err != nil {
 		return nil, *stats, fmt.Errorf("collections: hnsw_search_pack_v1 prepared raw-dot traversal scratch prepare: %w", err)
 	}
 	if err := scorePlane.prepareForHNSWPreparedTraversal(v, query, opts, scratch); err != nil {

@@ -213,6 +213,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosineScalarU8PreparedTravers
 	packOpts := columnHNSWPreparedTraversalOptions{
 		TopK:                                 opts.TopK,
 		EfSearch:                             opts.EfSearch,
+		ScoreTileCapacity:                    min(rerankCandidateLimit, efSearch),
 		RetainedCandidateLimit:               0,
 		ScoreBatchMode:                       opts.ScoreBatchMode,
 		StatsMode:                            opts.StatsMode,
