@@ -63,7 +63,10 @@ jobs:
 
       - name: Vet
         if: ${{ matrix.run_vet }}
-        run: go vet ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          go list ./... | grep -Ev '^github.com/snissn/gomap/TreeDB($|/)' | xargs go vet
 
       - name: Test
         shell: bash
@@ -72,17 +75,10 @@ jobs:
           shard_index="${{ matrix.test_shard_index }}"
           shard_count="${{ matrix.test_shard_count }}"
           package_file="$(mktemp)"
-          db_test_file="$(mktemp)"
-          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
-          go test ./TreeDB/db -list 'Test.*' | grep '^Test' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$db_test_file"
+          go list ./... | grep -Ev '^github.com/snissn/gomap/TreeDB($|/)' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
           if [ -s "$package_file" ]; then
             echo "root package shard=${shard_index}/${shard_count}"
             cat "$package_file"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -p 1 < "$package_file"
           fi
-          if [ -s "$db_test_file" ]; then
-            db_regex="^($(paste -sd'|' "$db_test_file"))$"
-            echo "TreeDB/db test shard=${shard_index}/${shard_count} regex=${db_regex}"
-            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -p 1 ./TreeDB/db -run "$db_regex"
-          fi
-          rm -f "$package_file" "$db_test_file"
+          rm -f "$package_file"

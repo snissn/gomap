@@ -1,3 +1,0 @@
-# Pinned to shard 0 because this root-package test dominated the previous
-# line-count shard on Windows and race runs.
-TestProfileFast_BulkRestoreMaintainsKeyValueParity

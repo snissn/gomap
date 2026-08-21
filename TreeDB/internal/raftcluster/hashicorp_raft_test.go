@@ -950,10 +950,10 @@ const (
 	// succeeding AppendEntries round trip, but only for restart catch-up.
 	hashicorpRaftTestRestartCatchUpTimeout = 10_240*time.Millisecond + hashicorpRaftTestCoordinationTimeout
 
-	// The controlled pre-reconnect setup may begin one coordination window
-	// after the replacement leader is observed, so it retains one additional
-	// existing coordination window while it reaches the required generation.
-	hashicorpRaftTestRestartBackoffSetupTimeout = hashicorpRaftTestRestartCatchUpTimeout + hashicorpRaftTestCoordinationTimeout
+	// Reaching the controlled generation is scheduling-sensitive on Windows,
+	// but remains a bounded, disconnected setup phase. Give it two catch-up
+	// windows; the post-reconnect correctness bound stays unchanged.
+	hashicorpRaftTestRestartBackoffSetupTimeout = 2 * hashicorpRaftTestRestartCatchUpTimeout
 
 	// After eleven failed ordinary AppendEntries RPCs, HashiCorp Raft's next
 	// retry is in its upstream generation that sleeps for more than five
