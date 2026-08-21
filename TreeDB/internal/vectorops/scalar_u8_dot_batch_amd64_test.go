@@ -195,26 +195,29 @@ func TestDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByteMaxSIMDDims(t *tes
 		dims = dotScalarU8CenteredIndexedAMD64MaxSIMDDims
 		rows = 5
 	)
-	queryCodes := make([]byte, dims)
-	for i := range queryCodes {
-		queryCodes[i] = 255
-	}
-	query, _, ok := PrepareScalarU8CenteredQuery(make([]ScalarU8CenteredCode, 0, dims), queryCodes, dims)
-	if !ok {
-		t.Fatal("max-dimension query rejected")
-	}
 	codes := make([]byte, rows*dims)
 	for row := 0; row < rows; row += 2 {
 		for i := row * dims; i < (row+1)*dims; i++ {
 			codes[i] = 255
 		}
 	}
+	rowSums := scalarU8DotBatchRowSums(codes, dims)
 	rowIDs := scalarU8DotBatchTestRowIDs(rows, rows)
-	got := make([]int64, rows)
-	want := make([]int64, rows)
-	dotScalarU8CenteredIndexedPreparedByte(got, codes, scalarU8DotBatchQueryHalf(query), scalarU8DotBatchRowSums(codes, dims), rowIDs, dims, rows, query.CenteredSum())
-	dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, rows)
-	assertInt64SliceExact(t, got, want)
+	for _, queryCode := range []byte{0, 255} {
+		queryCodes := make([]byte, dims)
+		for i := range queryCodes {
+			queryCodes[i] = queryCode
+		}
+		query, _, ok := PrepareScalarU8CenteredQuery(make([]ScalarU8CenteredCode, 0, dims), queryCodes, dims)
+		if !ok {
+			t.Fatalf("max-dimension query code=%d rejected", queryCode)
+		}
+		got := make([]int64, rows)
+		want := make([]int64, rows)
+		dotScalarU8CenteredIndexedPreparedByte(got, codes, scalarU8DotBatchQueryHalf(query), rowSums, rowIDs, dims, rows, query.CenteredSum())
+		dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, rows)
+		assertInt64SliceExact(t, got, want)
+	}
 }
 
 func BenchmarkDotScalarU8CenteredIndexedAMD64AVX512VNNIPreparedByte(b *testing.B) {
