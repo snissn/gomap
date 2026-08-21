@@ -18,6 +18,28 @@ Companion views use the same axes:
 - [public VDBBench data without TreeDB](vectordbbench_cohere1m_public_qps_recall_2026-08-21.png)
 - [TreeDB and public data excluding Zilliz Cloud](treedb_vectordbbench_cohere1m_self_hosted_focus_qps_recall_2026-08-21.png)
 
+## $1,000 monthly-cost latency/QPS view
+
+![Vector search latency and QPS at $1,000 monthly cost](treedb_vectordbbench_cohere1m_latency_qps_1000_2026-08-21.png)
+
+The TreeDB row is the three-run median for scalar-u8 traversal with FP32
+reranking at `efSearch=150` and a 150-row rerank budget: 33,749.90 maximum
+concurrent QPS, 1.0 ms serial p99, and 0.9390 recall@100. The public rows are
+the visible 1M entries from the VDBBench monthly-cost table fetched on
+2026-08-21. Recall varies by row, and the public systems were not rerun on the
+TreeDB hosts, so this is a directional reproduction rather than a matched-recall
+or same-hardware ranking.
+
+Machine-readable artifacts:
+
+- [latency/QPS plot data](treedb_vectordbbench_cohere1m_latency_qps_1000_2026-08-21.csv)
+- [all 62 retained TreeDB timed-run results](treedb_vectordbbench_cohere1m_c6i_dense_raw_results_2026-08-21.json)
+
+The raw-results file is a lossless array of the original VDBBench JSON
+documents for the timed campaign. It retains each task configuration, serial
+metrics, and all concurrency-stage QPS and latency arrays. Preflight and
+profile-only diagnostic runs remain in the evidence archive.
+
 ## Canonical FP32 sweep and supporting scalar-u8-only data
 
 `exact` below is the adapter's name for FP32 HNSW graph traversal; it is not an
@@ -161,6 +183,9 @@ Evidence archive:
 `s3://treedb-benchmark-assets-941641221830-us-west-1/cohere-medium-1m/c6i8xl-dense-curve-20260821/treedb-vdbbench-c6i8xl-dense-curve-20260821.tar.zst`
 
 SHA-256: `55bfa9969229765162f24a486b5c9824b5fec708dc3b2ef158b024271f11a9e6`
+
+Checked-in raw-results SHA-256:
+`2e59766a5c38141e446e7cee01d665b862a28e95cc81cde17d762af82806caa3`
 
 The archive contains commands, manifests, every retained and excluded result,
 host telemetry, profiles, traces, plot source, the public snapshot, reducer

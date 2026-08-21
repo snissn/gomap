@@ -33,6 +33,8 @@ hosts. The budgeted TreeDB server was 32 vCPUs and 64 GiB at exactly
 $1,000/month. The two canonical TreeDB curves are FP32 HNSW traversal and
 scalar-u8 traversal with FP32 reranking.
 
+![Vector search latency and QPS at $1,000 monthly cost](docs/benchmarks/treedb_vectordbbench_cohere1m_latency_qps_1000_2026-08-21.png)
+
 ![TreeDB and public VDBBench Cohere Medium 1M QPS versus recall](docs/benchmarks/treedb_vectordbbench_cohere1m_c6i_dense_qps_recall_2026-08-21.png)
 
 | TreeDB curve | about 0.98 recall | about 0.994 recall | highest measured recall |
