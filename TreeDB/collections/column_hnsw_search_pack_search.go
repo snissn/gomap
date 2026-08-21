@@ -180,7 +180,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextFast(ctx conte
 	if err != nil {
 		return nil, stats, err
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -475,7 +475,7 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineWithContextTrace(ctx cont
 	if err != nil {
 		return nil, stats, err
 	}
-	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0); err != nil {
+	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, efSearch, 0, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 search scratch prepare: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
