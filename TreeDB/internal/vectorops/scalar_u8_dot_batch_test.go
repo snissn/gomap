@@ -92,6 +92,49 @@ func TestDotScalarU8CenteredIndexedPrevalidatedParity(t *testing.T) {
 	assertInt64SliceExact(t, got, before)
 }
 
+func TestDotScalarU8CenteredIndexedPrevalidatedWithByteSumsParity(t *testing.T) {
+	const dims = 128
+	rowIDs := []uint32{12, 2, 9, 0, 7, 3, 15, 1, 6, 10, 4, 14, 5}
+	codes := scalarU8DotBatchTestCodes(16, dims)
+	baseQuery := scalarU8DotBatchTestQuery(t, dims, 73)
+	half := scalarU8DotBatchQueryHalf(baseQuery)
+	query, _, ok := PrepareScalarU8CenteredQueryFromCenteredWithHalf(baseQuery.values, half, dims, baseQuery.CenteredSum())
+	if !ok {
+		t.Fatal("prepared-byte query rejected")
+	}
+	rowSums := scalarU8DotBatchRowSums(codes, dims)
+	want := make([]int64, len(rowIDs))
+	dotScalarU8CenteredIndexedScalar(want, codes, query, rowIDs, dims, len(rowIDs))
+
+	for _, tc := range []struct {
+		name  string
+		query ScalarU8CenteredQuery
+		sums  []uint32
+	}{
+		{name: "prepared", query: query, sums: rowSums},
+		{name: "missing_half_falls_back", query: baseQuery, sums: rowSums},
+		{name: "short_sums_fall_back", query: query, sums: rowSums[:len(rowSums)-1]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make([]int64, len(rowIDs))
+			status := DotScalarU8CenteredIndexedPrevalidatedWithByteSums(got, codes, tc.sums, tc.query, rowIDs, dims)
+			if status.Invalid || status.Rows != len(rowIDs) {
+				t.Fatalf("status=%+v want valid rows=%d", status, len(rowIDs))
+			}
+			assertInt64SliceExact(t, got, want)
+		})
+	}
+
+	got := make([]int64, len(rowIDs))
+	allocs := testing.AllocsPerRun(1000, func() {
+		scalarU8DotBatchStatusSink = DotScalarU8CenteredIndexedPrevalidatedWithByteSums(got, codes, rowSums, query, rowIDs, dims)
+		scalarU8DotBatchIntSink += got[0]
+	})
+	if allocs != 0 {
+		t.Fatalf("prepared-byte dot allocs/run=%v want 0", allocs)
+	}
+}
+
 func TestDotScalarU8CenteredIndexedOptimizedStatusAndFallback(t *testing.T) {
 	t.Parallel()
 
@@ -367,6 +410,24 @@ func scalarU8DotBatchTestCodes(rows, dims int) []byte {
 		}
 	}
 	return codes
+}
+
+func scalarU8DotBatchQueryHalf(query ScalarU8CenteredQuery) []int8 {
+	out := make([]int8, query.Dims())
+	for i, value := range query.values {
+		out[i] = int8(value >> 1)
+	}
+	return out
+}
+
+func scalarU8DotBatchRowSums(codes []byte, dims int) []uint32 {
+	rowSums := make([]uint32, len(codes)/dims)
+	for row := range rowSums {
+		for _, code := range codes[row*dims : (row+1)*dims] {
+			rowSums[row] += uint32(code)
+		}
+	}
+	return rowSums
 }
 
 func scalarU8DotBatchTestRowIDs(rows, baseRows int) []uint32 {

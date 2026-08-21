@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 const (
@@ -102,18 +103,19 @@ func closeColumnVectorGraphQuantizedAssetLoadStatuses(statuses map[string]column
 }
 
 type columnVectorGraphQuantizedAssetLoadStatus struct {
-	Definition    QuantizedVectorIndexDefinition
-	Asset         columnVectorIndexStateAssetSnapshot
-	Prepared      *quantizedasset.Prepared
-	ScalarU8Alpha *columnVectorGraphScalarU8AlphaLookup
-	RabitQPlan    *rabitq.Plan
-	BRQPlan       *brq.Plan
-	Err           error
-	Health        columnVectorGraphQuantizedAssetHealth
-	OpenNanos     uint64
-	MappedBytes   uint64
-	HeapCopyBytes uint64
-	ActiveHandles int64
+	Definition       QuantizedVectorIndexDefinition
+	Asset            columnVectorIndexStateAssetSnapshot
+	Prepared         *quantizedasset.Prepared
+	ScalarU8Alpha    *columnVectorGraphScalarU8AlphaLookup
+	ScalarU8CodeSums []uint32
+	RabitQPlan       *rabitq.Plan
+	BRQPlan          *brq.Plan
+	Err              error
+	Health           columnVectorGraphQuantizedAssetHealth
+	OpenNanos        uint64
+	MappedBytes      uint64
+	HeapCopyBytes    uint64
+	ActiveHandles    int64
 
 	resource     *columnVectorGraphQuantizedAssetResource
 	ownsResource bool
@@ -1476,6 +1478,9 @@ func loadColumnVectorGraphQuantizedAssetsForReader(rootDir, collection string, c
 				} else {
 					status.ScalarU8Alpha = lookup
 				}
+				if q.Codec == QuantizedVectorCodecScalarU8 {
+					status.ScalarU8CodeSums = prepareColumnVectorGraphScalarU8CodeSums(prepared, def.Dimensions)
+				}
 				switch q.Codec {
 				case rabitq.CodecName:
 					plan, planErr := rabitq.NewPlan(def.Dimensions, rabitq.DefaultConfig())
@@ -1799,6 +1804,9 @@ func loadColumnVectorGraphQuantizedAssetResourceStatus(rootDir, collection strin
 		return status, status.Err
 	}
 	status.ScalarU8Alpha = lookup
+	if q.Codec == QuantizedVectorCodecScalarU8 {
+		status.ScalarU8CodeSums = prepareColumnVectorGraphScalarU8CodeSums(prepared, def.Dimensions)
+	}
 	stats := resource.manager.Stats()
 	status.ActiveHandles = stats.ActiveHandles
 	status.MappedBytes = uint64(stats.ActiveMappedBytes)
@@ -1918,6 +1926,27 @@ func validateColumnVectorGraphScalarU8PreparedAsset(def VectorIndexDefinition, q
 	}
 	_, err := columnVectorGraphScalarU8AlphaLookupFromPrepared(q, prepared)
 	return err
+}
+
+func prepareColumnVectorGraphScalarU8CodeSums(prepared *quantizedasset.Prepared, dims int) []uint32 {
+	if !vectorops.DotScalarU8CenteredIndexedPreparedByteEligible(dims) || prepared == nil {
+		return nil
+	}
+	rows, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
+	if !ok || rows.BytesPerRow() != dims {
+		return nil
+	}
+	codes, ok := rows.PayloadBytes()
+	if !ok || len(codes) != rows.Rows()*dims {
+		return nil
+	}
+	sums := make([]uint32, rows.Rows())
+	for row := range sums {
+		for _, code := range codes[row*dims : (row+1)*dims] {
+			sums[row] += uint32(code)
+		}
+	}
+	return sums
 }
 
 func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefinition, prepared *quantizedasset.Prepared) (*columnVectorGraphScalarU8AlphaLookup, error) {

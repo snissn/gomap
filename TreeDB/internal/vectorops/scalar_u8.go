@@ -15,7 +15,8 @@ type ScalarU8CenteredCode = int16
 // scratch is reused. The values slice is intentionally unexported so callers
 // cannot mutate cached query metadata through the query handle.
 type ScalarU8CenteredQuery struct {
-	values []ScalarU8CenteredCode
+	values     []ScalarU8CenteredCode
+	halfValues []int8
 
 	sum      int64
 	sumDims  int
@@ -85,6 +86,18 @@ func PrepareScalarU8CenteredQueryFromCentered(values []ScalarU8CenteredCode, dim
 		return ScalarU8CenteredQuery{}, values[:0], false
 	}
 	return ScalarU8CenteredQuery{values: values, sum: sum, sumDims: dims, sumValid: true}, values, true
+}
+
+// PrepareScalarU8CenteredQueryFromCenteredWithHalf is the prepared-byte VNNI
+// variant of PrepareScalarU8CenteredQueryFromCentered. The caller must provide
+// halfValues[i] == values[i]>>1, just as it must provide the exact sum metadata;
+// scalar_u8 centered codes are odd, so byte-dot kernels can recover the exact
+// centered score using one precomputed raw-code sum per row.
+func PrepareScalarU8CenteredQueryFromCenteredWithHalf(values []ScalarU8CenteredCode, halfValues []int8, dims int, sum int64) (query ScalarU8CenteredQuery, scratch []ScalarU8CenteredCode, ok bool) {
+	if dims <= 0 || len(values) != dims || len(halfValues) != dims {
+		return ScalarU8CenteredQuery{}, values[:0], false
+	}
+	return ScalarU8CenteredQuery{values: values, halfValues: halfValues, sum: sum, sumDims: dims, sumValid: true}, values, true
 }
 
 // ScalarU8CenteredDot computes the integer dot product between a centered query
