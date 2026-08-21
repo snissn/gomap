@@ -66,6 +66,9 @@ type ColumnPartImageOptions struct {
 	LayoutLogicalTypes  map[string]string
 	DictionaryOrder     map[string]bool
 	DictionaryCollation map[string]string
+	// SectionAlignment defaults to 8. Writers may request 64-byte section
+	// placement for direct SIMD views; readers continue accepting 8-byte images.
+	SectionAlignment int
 	// SectionCompression compresses eligible whole-image sections. It is
 	// intentionally limited to sections whose raw length can be recovered from
 	// existing manifest fields without a TCIM/TCS1 format change.
@@ -117,7 +120,11 @@ func BuildColumnPartImage(part *ColumnPart, opts ColumnPartImageOptions) (Column
 	if part == nil {
 		return ColumnPartImage{}, fmt.Errorf("typedcolumn: nil part")
 	}
-	builder := columnPartImageBuilder{part: part, opts: opts}
+	sectionAlignment, err := columnPartImageAlignment(opts.SectionAlignment)
+	if err != nil {
+		return ColumnPartImage{}, err
+	}
+	builder := columnPartImageBuilder{part: part, opts: opts, sectionAlignment: sectionAlignment}
 	return builder.build()
 }
 
@@ -381,9 +388,10 @@ func comparableGranuleMetadata(granule EncodedGranule) comparableEncodedGranuleM
 }
 
 type columnPartImageBuilder struct {
-	part     *ColumnPart
-	opts     ColumnPartImageOptions
-	sections []columnPartImageSectionData
+	part             *ColumnPart
+	opts             ColumnPartImageOptions
+	sectionAlignment int
+	sections         []columnPartImageSectionData
 }
 
 type columnPartImageSectionData struct {
@@ -462,9 +470,9 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 		if err != nil {
 			return nil, nil, err
 		}
-		offset := alignColumnPartImageOffset(len(manifest))
+		offset := alignColumnPartImageOffsetTo(len(manifest), b.sectionAlignment)
 		for i := range b.sections {
-			offset = alignColumnPartImageOffset(offset)
+			offset = alignColumnPartImageOffsetTo(offset, b.sectionAlignment)
 			b.sections[i].section.Offset = offset
 			b.sections[i].section.Length = b.sections[i].payloadLen()
 			sections[i] = b.sections[i].section
@@ -1450,8 +1458,23 @@ func (s columnPartImageSectionData) appendPayloadTo(dst []byte) []byte {
 }
 
 func alignColumnPartImageOffset(offset int) int {
-	mask := columnPartImageSectionAlignment - 1
+	return alignColumnPartImageOffsetTo(offset, columnPartImageSectionAlignment)
+}
+
+func alignColumnPartImageOffsetTo(offset, alignment int) int {
+	mask := alignment - 1
 	return (offset + mask) &^ mask
+}
+
+func columnPartImageAlignment(requested int) (int, error) {
+	switch requested {
+	case 0, columnPartImageSectionAlignment:
+		return columnPartImageSectionAlignment, nil
+	case 64:
+		return 64, nil
+	default:
+		return 0, fmt.Errorf("typedcolumn: unsupported section alignment %d", requested)
+	}
 }
 
 func durationNanos(d time.Duration) int64 {

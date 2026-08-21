@@ -528,6 +528,54 @@ func TestColumnAssetRewriteCopyStableAuthorityExactSyncCounts(t *testing.T) {
 	t.Logf("stable rewrite copy: cycles=%d segments_per_cycle=1 descriptors_per_cycle=2 content_syncs_per_cycle=1 namespace_syncs_per_cycle=1 descriptor_pin_high_water=2", cycles)
 }
 
+func TestColumnAssetRewritePreservesScalarU8Alignment4234(t *testing.T) {
+	requireStandaloneColumnProductionAuthorityTest(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	cfg := *col.Meta().Options.ColumnStore
+
+	appender, err := newNextColumnPhysicalAssetSegmentAppenderWithStableResources(d.ColumnAssetRootDir(), cfg, d.StableResourceIdentityPinRegistry())
+	if err != nil {
+		t.Fatalf("new source appender: %v", err)
+	}
+	seed, err := appender.appendKindWithAlignment([]byte("seed-payload!"), ColumnAssetKindTCS1PartImage, 7, 1, 0)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append seed: %v", err)
+	}
+	aligned, err := appender.appendKindWithAlignment([]byte("scalar-u8-codes"), ColumnAssetKindTCS1TypedColumnPart, 7, 2, columnVectorGraphScalarU8CodesAlignment)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append aligned ref: %v", err)
+	}
+	if err := appender.close(); err != nil {
+		t.Fatalf("close source appender: %v", err)
+	}
+	if appender.stableResources == nil {
+		t.Fatal("source appender returned no stable authority")
+	}
+	appender.stableResources.Release()
+	appender.stableResources = nil
+	if aligned.Offset%columnVectorGraphScalarU8CodesAlignment != 0 {
+		t.Fatalf("source offset=%d want %d-byte alignment", aligned.Offset, columnVectorGraphScalarU8CodesAlignment)
+	}
+
+	remap, err := col.copyColumnAssetRewriteRefs(context.Background(), cfg, []ColumnAssetRef{seed, aligned})
+	if err != nil {
+		t.Fatalf("copyColumnAssetRewriteRefs: %v", err)
+	}
+	defer remap.releaseStableResources()
+	rewritten, ok := remap.byOldRef[aligned]
+	if !ok {
+		t.Fatalf("aligned ref missing from remap: %+v", remap.byOldRef)
+	}
+	if rewritten.Offset%columnVectorGraphScalarU8CodesAlignment != 0 {
+		t.Fatalf("rewritten offset=%d want preserved %d-byte alignment", rewritten.Offset, columnVectorGraphScalarU8CodesAlignment)
+	}
+}
+
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	requireColumnAssetExactDestructiveGCTest(t)
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
