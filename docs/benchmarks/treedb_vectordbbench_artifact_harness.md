@@ -131,7 +131,8 @@ python3 scripts/treedb_vectordbbench_artifact.py \
 
 The generated VDBBench commands use unique index names derived from
 `--index-prefix` (or a timestamped default) and set `RESULTS_LOCAL_DIR` to
-`$OUT/vdbbench-results` plus `LOG_FILE` to `$OUT/vdbbench.log`. The exact row is
+`$OUT/vdbbench-results/exact` or `$OUT/vdbbench-results/scalar` plus `LOG_FILE`
+to `$OUT/vdbbench.log`. The exact row is
 `treedbcolumngraphexact`; the scalar row is `treedbscalaru8rerank` with
 `query_mode="quantized_rerank"`, `quantized_index_name="embedding.scalar_u8.fast"`,
 and `quantized_rerank_candidates=32`. TreeDB rows also receive

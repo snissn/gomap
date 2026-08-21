@@ -107,6 +107,16 @@ class VDBBenchBatchTest(unittest.TestCase):
         self.assertEqual(cli_override_args.num_per_batch, 500)
         self.assertEqual(override["NUM_PER_BATCH"], "250")
 
+    def test_vdbbench_rows_use_separate_result_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = harness.HarnessState(root=Path(tmp))
+            args = harness.parse_args([])
+            exact = harness.vdbbench_row_env(args, Path("/vdbbench"), Path("/gomap"), state, "exact")
+            scalar = harness.vdbbench_row_env(args, Path("/vdbbench"), Path("/gomap"), state, "scalar")
+
+        self.assertEqual(exact["RESULTS_LOCAL_DIR"], str(Path(tmp) / "vdbbench-results" / "exact"))
+        self.assertEqual(scalar["RESULTS_LOCAL_DIR"], str(Path(tmp) / "vdbbench-results" / "scalar"))
+
     def test_parse_args_rejects_nonpositive_batch_before_service_start(self) -> None:
         for value in ("0", "-1"):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):

@@ -702,10 +702,10 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
     return cmd
 
 
-def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState) -> dict[str, str]:
+def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState, row: str = "") -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
-    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results")
+    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
     return env
@@ -800,7 +800,6 @@ def run_vdbbench_rows(
         return
     if vectordbbench_dir is None or not vectordbbench_dir.exists():
         raise RuntimeError("--run-vdbbench requires VECTORDBBENCH_DIR or --vectordbbench-dir")
-    env = vdbbench_row_env(args, vectordbbench_dir, gomap_root, state)
     rows = [row.strip().lower() for row in args.rows.split(",") if row.strip()]
     row_specs = {
         "exact": ("treedbcolumngraphexact", f"{index_prefix}_exact_vdbbench"),
@@ -810,8 +809,10 @@ def run_vdbbench_rows(
         if row not in row_specs:
             raise ValueError(f"unknown TreeDB VDBBench row {row!r}; allowed: exact,scalar")
         command_name, index_name = row_specs[row]
+        env = vdbbench_row_env(args, vectordbbench_dir, gomap_root, state, row)
+        results_dir = state.root / "vdbbench-results" / row
         cmd = vdbbench_base_cmd(args, base_url, index_name, command_name)
-        before_results = vdbbench_result_files(state.root / "vdbbench-results")
+        before_results = vdbbench_result_files(results_dir)
         if row == "scalar":
             cmd.extend([
                 "--quantized-index-name",
@@ -833,13 +834,13 @@ def run_vdbbench_rows(
             "index_name": index_name,
             "command": record.command_string,
             "exit_code": record.exit_code,
-            "results_dir": "vdbbench-results",
+            "results_dir": str(results_dir.relative_to(state.root)),
             "log_file": "vdbbench.log",
             "num_per_batch": args.num_per_batch,
         }
         if not args.vdbbench_dry_run and not args.skip_load:
             row_record["load_metrics"] = capture_vdbbench_load_metrics(
-                state.root / "vdbbench-results", before_results, index_name, args.case_type, state.root
+                results_dir, before_results, index_name, args.case_type, state.root
             )
         state.vdbbench.append(row_record)
     if state.vdbbench:
