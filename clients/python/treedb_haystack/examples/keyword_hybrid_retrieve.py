@@ -8,9 +8,9 @@ Start the service first, for example:
       -addr 127.0.0.1:7120 \
       -profile command_wal_durable
 
-Keyword and hybrid metadata filters are intentionally not used here: the current
-TreeDB service fails those filters closed with `unsupported` until bounded scalar
-filter mapping is available for the keyword/hybrid routes.
+This example keeps filters out of the query to focus on ranking. Metadata filters
+are supported when fields are declared with `scalar_fields` at index creation;
+undeclared or unrepresentable filters fail closed rather than scanning locally.
 """
 
 from __future__ import annotations

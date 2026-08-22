@@ -72,10 +72,11 @@ make that visible instead of implying the optimized path was used.
 
 See also `cmd/treedb_vector_demo/README.md` and the pre-alpha
 [TreeDB Document Service API](TREEDB_DOCUMENT_SERVICE_API.md) for the
-Haystack-style HTTP/JSON contract. The document service's filtered dense search
-uses exact scoring as a correctness/MVP path; keyword and hybrid routes call the
-collection text/hybrid APIs and fail closed rather than scanning when required
-indexes are unavailable.
+Haystack-style HTTP/JSON contract. Declare metadata fields as scalar indexes
+when creating the service index; keyword and hybrid filters then use bounded
+allow-sets and fail closed on truncation. Dense search defaults to the
+`column_graph` `ann` route when available; use `route=exact` for filtered
+correctness checks. No route silently falls back to a full-document scan.
 
 `cmd/treedb_vector_demo` creates a fresh TreeDB directory, declares a collection,
 loads deterministic JSON fixtures, publishes embeddings as typed-column dense

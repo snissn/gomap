@@ -9,7 +9,11 @@ import (
 const (
 	// ContractVersion is returned by health and index metadata responses so
 	// clients can pin the pre-alpha schema they implement.
-	ContractVersion = "treedb-document-service/v1alpha1"
+	//
+	// v1alpha2 adds declaration-time scalar field schema (create-index
+	// scalar_fields), metadata filters on keyword/hybrid routes backed by
+	// bounded scalar allow-sets, and the dense route ann|exact selection.
+	ContractVersion = "treedb-document-service/v1alpha2"
 
 	defaultEmbeddingField    = "embedding"
 	defaultVectorIndexName   = "embedding"
@@ -60,6 +64,33 @@ type IndexCapabilities struct {
 	RabitQ1BitExperimental  bool `json:"rabitq_1bit_experimental"`
 }
 
+// ScalarFieldType selects the collection scalar index value type backing one
+// declared service meta field.
+type ScalarFieldType string
+
+const (
+	ScalarFieldString ScalarFieldType = "string"
+	ScalarFieldBool   ScalarFieldType = "bool"
+	ScalarFieldInt64  ScalarFieldType = "int64"
+	ScalarFieldDouble ScalarFieldType = "double"
+)
+
+// ScalarFieldDeclaration declares one Haystack meta field as scalar-indexed at
+// create-index time. Only declared fields can serve filtered keyword/hybrid
+// requests; filters against undeclared fields fail closed with typed errors.
+type ScalarFieldDeclaration struct {
+	Field     string          `json:"field"`
+	ValueType ScalarFieldType `json:"value_type,omitempty"`
+}
+
+// ScalarFieldInfo echoes one declared scalar field, including the stable
+// collection secondary index name that backs it.
+type ScalarFieldInfo struct {
+	Field     string          `json:"field"`
+	IndexName string          `json:"index_name"`
+	ValueType ScalarFieldType `json:"value_type"`
+}
+
 // QuantizedIndexInfo describes a declared quantized score plane attached to the
 // service vector index.
 type QuantizedIndexInfo struct {
@@ -79,6 +110,7 @@ type IndexInfo struct {
 	EmbeddingField       string                          `json:"embedding_field"`
 	VectorIndexName      string                          `json:"vector_index_name"`
 	VectorStrategy       collections.VectorIndexStrategy `json:"vector_strategy"`
+	ScalarFields         []ScalarFieldInfo               `json:"scalar_fields,omitempty"`
 	VectorM              int                             `json:"vector_m,omitempty"`
 	VectorEfConstruction int                             `json:"vector_ef_construction,omitempty"`
 	VectorEfSearch       int                             `json:"vector_ef_search,omitempty"`
@@ -107,6 +139,10 @@ type CreateIndexRequest struct {
 	Dimension          int                          `json:"dimension"`
 	Metric             Metric                       `json:"metric,omitempty"`
 	VectorIndexOptions *BenchmarkVectorIndexOptions `json:"vector_index_options,omitempty"`
+	// ScalarFields declares which meta fields are scalar-indexed for bounded
+	// filtered keyword/hybrid retrieval. Omitted fields keep the index
+	// filterless; filtered requests against undeclared fields fail closed.
+	ScalarFields []ScalarFieldDeclaration `json:"scalar_fields,omitempty"`
 }
 
 // UpsertDocumentsRequest writes or replaces service documents.
@@ -170,12 +206,16 @@ type FilterDocumentsResponse struct {
 	Truncated    bool       `json:"truncated,omitempty"`
 }
 
-// DenseVectorSearchRequest runs exact dense scoring over documents that match
-// Filter. QueryEmbedding must match the index dimension.
+// DenseVectorSearchRequest scores QueryEmbedding against the index. Route
+// selects ann (column_graph graph traversal; the default when a column_graph
+// vector index exists) or exact (bounded filtered scan). Filter requires the
+// exact route; ann with a filter fails closed.
 type DenseVectorSearchRequest struct {
 	ExpectedGeneration uint64    `json:"expected_generation,omitempty"`
 	QueryEmbedding     []float32 `json:"query_embedding"`
 	TopK               int       `json:"top_k"`
+	Route              Route     `json:"route,omitempty"`
+	EfSearch           int       `json:"ef_search,omitempty"`
 	Filter             *Filter   `json:"filter,omitempty"`
 	ReturnEmbedding    bool      `json:"return_embedding,omitempty"`
 }
@@ -184,9 +224,18 @@ type DenseVectorSearchResponse struct {
 	Index      IndexInfo  `json:"index"`
 	Documents  []Document `json:"documents"`
 	Metric     Metric     `json:"metric"`
+	Route      Route      `json:"route,omitempty"`
 	Exact      bool       `json:"exact"`
 	Candidates int        `json:"candidates"`
 }
+
+// Route selects the dense search execution path.
+type Route string
+
+const (
+	RouteAnn   Route = "ann"
+	RouteExact Route = "exact"
+)
 
 // ResetIndexRequest creates a missing benchmark index or clears an existing
 // compatible non-column_graph index when DropOld is true. Column_graph benchmark
@@ -327,6 +376,7 @@ type KeywordSearchStats struct {
 	DocumentsFetched          uint64 `json:"documents_fetched,omitempty"`
 	DocumentsMissing          uint64 `json:"documents_missing,omitempty"`
 	FullDocumentScanFallbacks uint64 `json:"full_document_scan_fallbacks,omitempty"`
+	ScalarPrefilterIDs        uint64 `json:"scalar_prefilter_ids,omitempty"`
 	PostingsScanNanos         uint64 `json:"postings_scan_nanos,omitempty"`
 	CandidateScoreNanos       uint64 `json:"candidate_score_nanos,omitempty"`
 	DocumentFetchNanos        uint64 `json:"document_fetch_nanos,omitempty"`

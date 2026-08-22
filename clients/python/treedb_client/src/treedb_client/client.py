@@ -40,9 +40,12 @@ from .models import (
     KeywordSearchResponse,
     OptimizeIndexResponse,
     ResetIndexResponse,
+    ScalarFieldDeclaration,
+    ScalarFieldDeclarationLike,
     UpsertDocumentsResponse,
 )
 
+ScalarFieldDeclarationsLike = Sequence[ScalarFieldDeclarationLike]
 DocumentLike = Union[Document, Mapping[str, Any]]
 VectorIndexOptionsLike = Union[BenchmarkVectorIndexOptions, Mapping[str, Any]]
 BINARY_VECTOR_SEARCH_F32LE_CONTENT_TYPE = "application/vnd.treedb.vector-search.f32le"
@@ -93,22 +96,24 @@ class TreeDBClient:
         dimension: int,
         metric: Optional[str] = "cosine",
         *,
+        scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
     ) -> IndexInfo:
         """Create or idempotently open a compatible document index."""
 
         request: dict[str, Any] = {"name": name, "dimension": dimension}
         _add_optional_non_empty_string(request, "metric", metric, "metric")
+        _add_scalar_fields(request, scalar_fields)
         _add_vector_index_options(request, vector_index_options)
         payload = self._request("POST", "/v1/indexes", request)
         return _index_from_envelope(payload)
-
     def ensure_index(
         self,
         name: str,
         dimension: int,
         metric: Optional[str] = "cosine",
         *,
+        scalar_fields: Optional[ScalarFieldDeclarationsLike] = None,
         vector_index_options: Optional[VectorIndexOptionsLike] = None,
     ) -> IndexInfo:
         """Ensure a compatible index exists.
@@ -117,7 +122,14 @@ class TreeDBClient:
         and returns `conflict` for incompatible schemas.
         """
 
-        return self.create_index(name, dimension, metric, vector_index_options=vector_index_options)
+        return self.create_index(
+            name,
+            dimension,
+            metric,
+            scalar_fields=scalar_fields,
+            vector_index_options=vector_index_options,
+        )
+
 
     def reset_index(
         self,
@@ -260,16 +272,36 @@ class TreeDBClient:
         top_k: int,
         filter: Optional[FilterLike] = None,
         *,
+        route: Optional[str] = None,
+        ef_search: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
     ) -> DenseVectorSearchResponse:
-        """Run exact dense-vector search through the TreeDB service."""
+        """Score a query embedding through the TreeDB dense search route.
 
+        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses the
+        column_graph vector index traversal (the service default when that
+        index exists and no filter is supplied); ``"exact"`` keeps the bounded
+        filtered scan. Filters require the exact route — the service rejects
+        filtered ANN requests with a typed error instead of downgrading.
+        Unsupported route values raise :class:`InvalidRequestError` locally;
+        the client never falls back between routes on its own.
+        """
+
+        if route is not None and route not in ("ann", "exact"):
+            raise InvalidRequestError("invalid_request", f"unsupported dense search route {route!r}; use 'ann' or 'exact'")
+        ef_search_value = None
+        if ef_search is not None:
+            ef_search_value = _validate_binary_int_query_param(ef_search, "ef_search", minimum=0)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k,
             "return_embedding": return_embedding,
         }
+        if route is not None:
+            request["route"] = route
+        if ef_search_value is not None:
+            request["ef_search"] = ef_search_value
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request)
@@ -354,9 +386,11 @@ class TreeDBClient:
     ) -> KeywordSearchResponse:
         """Run ranked keyword search through the TreeDB service.
 
-        Metadata filters are serialized and sent only when provided, but the
-        current service contract fails keyword filters closed with
-        `UnsupportedError`; the client never scans locally as a fallback.
+        Metadata filters are serialized and sent only when provided. Since
+        contract v1alpha2 the service serves filters that resolve to one
+        bounded scalar allow-set over an index's declared scalar fields
+        (create-index ``scalar_fields``); anything else fails closed with a
+        typed error. The client never scans locally as a fallback.
         """
 
         _validate_expected_generation(expected_generation)
@@ -392,8 +426,10 @@ class TreeDBClient:
         """Run TreeDB collection-native hybrid text/vector search.
 
         At least one of `query` or `query_embedding` must be supplied by the
-        caller/service. Metadata filters currently fail closed on the service
-        with `UnsupportedError`; there is no client-side text/vector fallback.
+        caller/service. Since contract v1alpha2, metadata filters that resolve
+        to one bounded scalar allow-set over declared scalar fields are served
+        via prefilter; other shapes fail closed with typed errors. There is no
+        client-side text/vector fallback.
         """
 
         if not query and query_embedding is None:
@@ -683,6 +719,29 @@ def _add_filter(request: dict[str, Any], filter_value: Optional[FilterLike]) -> 
     normalized = normalize_filter(filter_value)
     if normalized is not None:
         request["filter"] = normalized
+
+
+def _add_scalar_fields(request: dict[str, Any], fields: Optional[ScalarFieldDeclarationsLike]) -> None:
+    if fields is None:
+        return
+    if isinstance(fields, (str, bytes, bytearray)):
+        raise InvalidRequestError("invalid_request", "scalar_fields must be a sequence of declarations")
+    try:
+        declarations = list(fields)
+    except TypeError as exc:
+        raise InvalidRequestError("invalid_request", "scalar_fields must be a sequence of declarations") from exc
+    serialized: list[dict[str, Any]] = []
+    for i, declaration in enumerate(declarations):
+        try:
+            model = (
+                declaration
+                if isinstance(declaration, ScalarFieldDeclaration)
+                else ScalarFieldDeclaration.from_dict(declaration)
+            )
+            serialized.append(model.to_dict())
+        except (TypeError, ValueError) as exc:
+            raise InvalidRequestError("invalid_request", f"scalar_fields[{i}] is invalid: {exc}") from exc
+    request["scalar_fields"] = serialized
 
 
 def _add_vector_index_options(request: dict[str, Any], options: Optional[VectorIndexOptionsLike]) -> None:
