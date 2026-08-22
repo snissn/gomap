@@ -2464,6 +2464,27 @@ declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.
 
+### Native-runtime vector-index roots
+
+A `native_runtime` vector index is persisted in the catalog root
+`<collection>/vector-index/<index_name>`. Values are newline-terminated JSON.
+The root contains `meta`, `node/<20-digit-node-id>`,
+`edge/<20-digit-node-id>/<3-digit-layer>`, `tomb/<20-digit-node-id>`, and
+`doc/<document-id>` keys. Nodes and edges store the HNSW graph, tombstone keys
+mark deleted nodes, and document keys map the current document ID to its node.
+
+The `meta` value binds the graph to one collection document snapshot. Coverage
+version `2` stores `source_document_root_revision`,
+`source_document_overlay_revision`, `source_document_root_id`, and the ordered
+`source_document_overlay_root_ids`. The revisions are the catalog-entry
+revisions of the collection primary-root descriptor and primary-overlay-list
+descriptor. A load, status check, search, or save must reject the graph as
+`stale_document_root` unless the version and all four fields match the current
+document snapshot. Publishing only the vector-index root does not change these
+document revisions. A successful mutation that leaves vector values unchanged
+may publish a meta-only delta to advance coverage. Older coverage versions are
+not migrated in this pre-alpha format; the index must be rebuilt.
+
 Column-enabled collection metadata is stored inside the canonical collection
 metadata JSON under `options.column_store`. It is production-facing
 control-plane state, not a sidecar hint. Current normalized fields are:
@@ -2605,9 +2626,12 @@ bytes IndexName[IndexNameLen]
 The collection and index names must be non-empty. The command payload names the
 logical rebuild request only; it does not carry vector graph bytes, physical root
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
-collection vector-index rebuild path for the named index. For explicit
-`column_graph` indexes, that path rebuilds any legacy row graph asset only for
-compatibility, publishes inverse norms, HNSW adjacency, base row references,
+collection vector-index rebuild path for the named index. For `native_runtime`
+indexes, that path scans the canonical collection rows and publishes a complete
+`<collection>/vector-index/<index_name>` root in the native format described
+above. For explicit `column_graph` indexes, that path rebuilds any legacy row
+graph asset only for compatibility, publishes inverse norms, HNSW adjacency,
+base row references,
 returned document IDs, and declared quantized code score planes as vector-index
 state assets, and records vector-index control identity in the `TVIS` state
 record. Quantized assets use role `quantized_codes`; scalar_u8 assets use asset
