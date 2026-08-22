@@ -308,7 +308,7 @@ func ingestServiceOverheadDocs(col *collections.Collection, chunks []ragChunk) e
 // is divided back to one query. One final untimed call records the result count
 // for the sanity gate.
 func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, call func(ragQuery) (int, error)) ([]float64, int, error) {
-	const timingIterations = 32
+	const timingIterations = 256
 	for i := range cfg.Warmup {
 		q := corpus.Queries[i%len(corpus.Queries)]
 		if _, err := call(q); err != nil {
