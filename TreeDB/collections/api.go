@@ -3996,6 +3996,14 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.meta = baseMeta
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	registerEmptyRuntime := catalog.rootID(primaryRootName) == 0 && len(catalog.overlayRootIDs(primaryRootName)) == 0
+	var primaryRootRevision, primaryOverlayRevision uint64
+	if registerEmptyRuntime {
+		primaryRootRevision, primaryOverlayRevision, _, _, err = vectorIndexDocumentRootDescriptor(snap, catalog)
+		if err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+	}
 	schemaGeneration := snapshotCommitSeq(snap) + 1
 	if schemaGeneration == 0 {
 		schemaGeneration = 1
@@ -4030,6 +4038,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if registerEmptyRuntime {
 		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
+			runtime.recordSourceDocumentRoots(primaryRootRevision, primaryOverlayRevision, catalog.rootID(primaryRootName), catalog.overlayRootIDs(primaryRootName))
 			if _, err := c.installNativeVectorIndexCandidate(runtime, 0, nil, 0); err != nil {
 				return nil, err
 			}
@@ -10018,7 +10027,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if err == nil {
 		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
-	return resultIDs, err
+	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
@@ -10035,7 +10044,7 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if err == nil {
 		err = commitAmbiguousError("InsertBatchWithTemplateV1Encoder vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
-	return resultIDs, err
+	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // InsertBatchValidatedBSON inserts native BSON documents that the caller has
@@ -10049,7 +10058,7 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 	if err == nil {
 		err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
-	return resultIDs, err
+	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // PreflightCommandWALMutation checks collection-local command-WAL support for
@@ -10194,7 +10203,7 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 			err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 		}
 	}
-	return resultIDs, err
+	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // NativewireInsertBatchNoResultIDs executes an insert batch without cloning
@@ -10212,7 +10221,7 @@ func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, t
 			err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(ids))
 		}
 	}
-	return err
+	return c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
@@ -11753,7 +11762,7 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 			mutationLocked = false
 			err = commitAmbiguousError("DeleteDocument vector index maintenance", c.notifyVectorIndexesDelete([][]byte{documentID}))
 		}
-		return deleted, err
+		return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 	}
 	return false, collectionMutationRetryExhausted(lastErr)
 }
@@ -11818,7 +11827,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		mutationLocked = false
 		err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
 	}
-	return deleted, err
+	return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // DeleteBatchWithCommandWALIntent applies an already-appended collection delete
@@ -11876,7 +11885,7 @@ func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, comma
 		mutationLocked = false
 		err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
 	}
-	return deleted, err
+	return deleted, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func (c *Collection) deleteBatchWithCommandWALIntent(ids [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
@@ -12516,7 +12525,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 			},
 		}}, updateBatchModeAny, nil)
 		if err != nil {
-			return false, false, err
+			return false, false, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 		}
 		if len(results) != 1 {
 			return false, false, fmt.Errorf("collections: update result count %d for single command WAL update", len(results))
@@ -12524,7 +12533,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		if results[0].Modified {
 			err = commitAmbiguousError("Update vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
 		}
-		return results[0].Matched, results[0].Modified, err
+		return results[0].Matched, results[0].Modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 	}
 	var matched, modified bool
 	var err error
@@ -12542,7 +12551,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err == nil && modified {
 		err = commitAmbiguousError("Update vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
 	}
-	return matched, modified, err
+	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -12630,7 +12639,7 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 	if err == nil {
 		err = commitAmbiguousError("UpdateBatch vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
-	return results, err
+	return results, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexes applies UpdateBatch only when the
@@ -12645,7 +12654,7 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexes vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
-	return results, batched, err
+	return results, batched, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexChanges applies UpdateBatch only when no
@@ -12661,7 +12670,7 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBa
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
-	return results, batched, err
+	return results, batched, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // ReplaceBatchWithCommandWALIntent applies existing-only full-document
@@ -12704,7 +12713,7 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 		err = commitAmbiguousError("ReplaceBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 	}
 	matched, modified := 0, 0
 	for _, result := range results {

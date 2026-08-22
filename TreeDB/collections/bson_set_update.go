@@ -85,7 +85,7 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err == nil && modified {
 		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
 	}
-	return matched, modified, err
+	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func (c *Collection) validateBSONSetDocumentFormat() error {
@@ -150,7 +150,7 @@ func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []B
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
 	}
-	return results, batched, err
+	return results, batched, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // PrepareBSONSetUpdateBatchCommandWAL plans a BSON $set batch without applying
@@ -246,7 +246,7 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	if err == nil {
 		err = commitAmbiguousError("UpdateBSONSetBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(replacementItems, results))
 	}
-	return results, err
+	return results, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func validateBSONSetCommandWALDocumentsForItems(items []BSONSetUpdateBatchItem, docs []commitlog.CollectionDocument) error {

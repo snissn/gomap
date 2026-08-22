@@ -303,6 +303,13 @@ func TestCollectionVectorIndexNativeRootRejectsCommandWALReplayBeyondGraph(t *te
 	if loaded != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
 		t.Fatalf("stale native snapshot loaded=%v status=%+v", loaded != nil, status)
 	}
+	operational, err := reopenedCol.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("status stale native snapshot: %v", err)
+	}
+	if operational.NativeRootLoaded || !operational.RebuildNeeded || operational.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("stale native operational status=%+v", operational)
+	}
 	rebuilt, err := reopenedCol.ensureDeclaredNativeVectorIndexesLoaded()
 	if err != nil {
 		t.Fatalf("rebuild stale native snapshot: %v", err)
@@ -384,6 +391,127 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 		t.Fatalf("search live delta graph: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootUnchangedVectorPersistsDocumentCoverage(t *testing.T) {
+	dir := t.TempDir()
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0],"label":"before"}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		_ = d.Close()
+		t.Fatal("seed insert did not build native index")
+	}
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		_ = d.Close()
+		t.Fatalf("save seed graph: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close seed graph db: %v", err)
+	}
+
+	d = openCollectionCommandWALDB(t, dir)
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("reopen collection before descriptor-only update: %v", err)
+	}
+	loadedBeforeUpdate, status, err := col.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("load seed graph before descriptor-only update: %v", err)
+	}
+	if loadedBeforeUpdate == nil || !status.Loaded || loadedBeforeUpdate.nativeMutationSequence() != 0 {
+		_ = d.Close()
+		t.Fatalf("seed graph loaded=%v status=%+v mutation_seq=%d", loadedBeforeUpdate != nil, status, loadedBeforeUpdate.nativeMutationSequence())
+	}
+	if _, _, err := col.Update([]byte("a"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[1,0],"label":"after"}`), true, nil
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("update non-vector field: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close and persist descriptor-only delta: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open descriptor-only collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load descriptor-only graph: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.ExactFallbackReason != "" {
+		t.Fatalf("descriptor-only graph loaded=%v status=%+v", loaded != nil, status)
+	}
+	if stats := loaded.Stats(); stats.LiveANNFullRebuilds != 0 {
+		t.Fatalf("descriptor-only graph reopened through rebuild: %+v", stats)
+	}
+}
+
+func TestVectorIndexSnapshotDocumentRootsRejectsReusedIDsWithDifferentRevisions(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot: nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootRevision, overlayRevision, rootID, overlayRootIDs, err := vectorIndexDocumentRootDescriptor(snap, catalog)
+	if err != nil {
+		t.Fatalf("document root descriptor: %v", err)
+	}
+	meta := vectorIndexPersistMeta{
+		SourceDocumentRootsVersion:    vectorIndexDocumentRootsVersion,
+		SourceDocumentRootRevision:    rootRevision,
+		SourceDocumentOverlayRevision: overlayRevision,
+		SourceDocumentRootID:          rootID,
+		SourceDocumentOverlayRootIDs:  overlayRootIDs,
+	}
+	matched, err := vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
+	if err != nil || !matched {
+		t.Fatalf("matching descriptor matched=%v err=%v", matched, err)
+	}
+	meta.SourceDocumentRootRevision++
+	matched, err = vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
+	if err != nil || matched {
+		t.Fatalf("reused primary root ID matched=%v err=%v", matched, err)
+	}
+	meta.SourceDocumentRootRevision = rootRevision
+	meta.SourceDocumentOverlayRevision++
+	matched, err = vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
+	if err != nil || matched {
+		t.Fatalf("reused overlay root IDs matched=%v err=%v", matched, err)
+	}
 }
 
 func TestCollectionVectorIndexNativeRootMissingFallsBack(t *testing.T) {
@@ -1305,6 +1433,229 @@ func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(
 	}
 	if len(doc) == 0 {
 		t.Fatal("post-commit vector maintenance error lost committed document")
+	}
+}
+
+func TestCollectionVectorIndexNativeRootReconcileFailureCannotBlessPartialGraph(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		_ = d.Close()
+		t.Fatal("seed insert did not build native index")
+	}
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		_ = d.Close()
+		t.Fatalf("save seed graph: %v", err)
+	}
+	enteredPersist := make(chan struct{})
+	releasePersist := make(chan struct{})
+	var persistHookOnce sync.Once
+	restore := setNativeVectorIndexBeforeAutoPersistSaveHookForTest(func(name string) {
+		if name == def.Name {
+			persistHookOnce.Do(func() {
+				close(enteredPersist)
+				<-releasePersist
+			})
+		}
+	})
+	defer restore()
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- col.Flush() }()
+	<-enteredPersist
+	_, reconcileErr := col.InsertBatch(
+		[][]byte{[]byte("good"), []byte("bad")},
+		[][]byte{[]byte(`{"embedding":[0,1]}`), []byte(`{"embedding":[1,0,0]}`)},
+	)
+	close(releasePersist)
+	flushErr := <-flushDone
+	if !errors.Is(reconcileErr, ErrCommitAmbiguous) {
+		_ = d.Close()
+		t.Fatalf("partial reconcile insert err=%v want ErrCommitAmbiguous", reconcileErr)
+	}
+	if flushErr == nil {
+		_ = d.Close()
+		t.Fatal("concurrent flush blessed partial graph")
+	}
+	if index.hasValidSourceDocumentRoots() {
+		_ = d.Close()
+		t.Fatal("partial graph retained valid document coverage")
+	}
+	var searchBuffer VectorIndexSearchBuffer
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      1,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &searchBuffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || response.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		_ = d.Close()
+		t.Fatalf("partial graph search response=%+v err=%v", response, err)
+	}
+	if status, err := index.SaveNativeDeltaSnapshot(); err == nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		_ = d.Close()
+		t.Fatalf("partial graph save status=%+v err=%v", status, err)
+	}
+	operational, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("status partial graph: %v", err)
+	}
+	if operational.NativeRootLoaded || !operational.RebuildNeeded || operational.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		_ = d.Close()
+		t.Fatalf("partial graph operational status=%+v", operational)
+	}
+	col.UnregisterVectorIndex(def.Name)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close partial graph db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen partial graph db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open partial graph collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load partial graph snapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("partial graph snapshot loaded=%v status=%+v", loaded != nil, status)
+	}
+	if _, _, err := reopenedCol.Update([]byte("bad"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[1,1]}`), true, nil
+	}); err != nil {
+		t.Fatalf("repair invalid vector and rebuild: %v", err)
+	}
+	rebuilt := reopenedCol.registeredVectorIndex(def.Name)
+	if rebuilt == nil {
+		t.Fatal("repaired graph is nil")
+	}
+	if stats := rebuilt.Stats(); !rebuilt.hasValidSourceDocumentRoots() || stats.LiveANNFullRebuilds != 1 {
+		t.Fatalf("repaired graph stats=%+v", stats)
+	}
+	results, _, err := rebuilt.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search repaired graph: %v", err)
+	}
+	requireVectorResultIDs(t, results, "seed", "bad", "good")
+}
+
+type acceptedVectorMutationErrorForTest struct {
+	error
+}
+
+func (acceptedVectorMutationErrorForTest) CommitPublicationAccepted() bool { return true }
+
+func (e acceptedVectorMutationErrorForTest) Unwrap() error { return e.error }
+
+func TestCollectionVectorIndexAcceptedRowMutationInvalidatesCoverage(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		_ = d.Close()
+		t.Fatal("seed insert did not build native index")
+	}
+	if status, err := index.SaveNativeSnapshot(); err != nil || !status.Loaded {
+		_ = d.Close()
+		t.Fatalf("save seed graph status=%+v err=%v", status, err)
+	}
+
+	unlockCoverage := col.lockVectorIndexCoverageMutation()
+	_, err = col.insertBatch([][]byte{[]byte("accepted")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err == nil {
+		err = acceptedVectorMutationErrorForTest{error: errors.New("injected post-acceptance failure")}
+	}
+	err = col.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+	unlockCoverage()
+	if !backenddb.CommitPublicationAccepted(err) {
+		_ = d.Close()
+		t.Fatalf("mutation error=%v want accepted publication", err)
+	}
+	if doc, getErr := col.Get([]byte("accepted")); getErr != nil || len(doc) == 0 {
+		_ = d.Close()
+		t.Fatalf("accepted document missing doc=%q err=%v", doc, getErr)
+	}
+	if index.hasValidSourceDocumentRoots() {
+		_ = d.Close()
+		t.Fatal("accepted row mutation retained valid vector coverage")
+	}
+	var searchBuffer VectorIndexSearchBuffer
+	response, searchErr := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      1,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &searchBuffer)
+	if !errors.Is(searchErr, ErrVectorIndexSearchUnavailable) || response.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		_ = d.Close()
+		t.Fatalf("accepted mutation search response=%+v err=%v", response, searchErr)
+	}
+	if status, saveErr := index.SaveNativeDeltaSnapshot(); saveErr == nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		_ = d.Close()
+		t.Fatalf("accepted mutation save status=%+v err=%v", status, saveErr)
+	}
+
+	col.UnregisterVectorIndex(def.Name)
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load stale graph: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("accepted mutation graph loaded=%v status=%+v", loaded != nil, status)
 	}
 }
 
@@ -2403,6 +2754,7 @@ func TestCollectionVectorIndexNativeRootAdHocDirtyRuntimeDoesNotPinManagerHandle
 		t.Fatalf("new native vector index: %v", err)
 	}
 	native.setNativePersistent(true)
+	native.recordSourceDocumentRoots(0, 0, 0, nil)
 	native.recordPersistedSnapshot(10, 128, 0)
 	adHoc, err := newVectorIndex(col, VectorIndexOptions{
 		Name:       "scratch_embedding",

@@ -161,6 +161,15 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		status.RebuildNeeded = true
 		return status, nil
 	}
+	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if !matchesDocumentRoots {
+		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	probe, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return VectorIndexStatus{}, err

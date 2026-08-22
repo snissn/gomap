@@ -1366,6 +1366,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
 		if err != nil {
 			buffer.Reset()
+			response.Status.ExactFallbackReason = load.ExactFallbackReason
 			return response, err
 		}
 		if index == nil || !load.Loaded {
@@ -1392,6 +1393,8 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			response.Stats.SearchRouteNativeRuntime = 1
 			response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
 			response.Stats.CandidateRows = uint64(liveDocs)
+		} else if !index.hasValidSourceDocumentRoots() {
+			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}
 		publicationMu.RUnlock()
 		return response, err
@@ -1450,6 +1453,9 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	}
 	if catalog == nil {
 		return nil, VectorIndexLoadStatus{}, errCollectionNotFound
+	}
+	if !index.hasValidSourceDocumentRoots() {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
 	if !ok {
