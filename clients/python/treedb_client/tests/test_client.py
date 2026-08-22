@@ -38,7 +38,7 @@ SAMPLE_INDEX = {
     "dimension": 2,
     "metric": "cosine",
     "generation": 1,
-    "contract_version": "treedb-document-service/v1alpha1",
+    "contract_version": "treedb-document-service/v1alpha2",
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
     "vector_strategy": "column_graph",
@@ -876,6 +876,67 @@ class TreeDBClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(InvalidRequestError, "positive integer"):
             client.count_documents("docs", expected_generation=0)
+
+    def test_dense_search_route_serializes_and_parses(self) -> None:
+        route = "/v1/indexes/docs/search/vector"
+        response = {
+            "index": SAMPLE_INDEX,
+            "documents": [{"id": "doc-1", "content": "text", "score": 0.5}],
+            "metric": "cosine",
+            "exact": False,
+            "candidates": 10,
+            "route": "ann",
+        }
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            result = client.query_by_embedding("docs", [0.1, 0.2], 10, route="ann", ef_search=64)
+
+            self.assertEqual(result.route, "ann")
+            self.assertFalse(result.exact)
+            self.assertEqual(result.candidates, 10)
+            body = json_body(server.records[0])
+            self.assertEqual(body["route"], "ann")
+            self.assertEqual(body["ef_search"], 64)
+
+        # exact route omits nothing extra
+        with FixtureServer({("POST", route): (200, dict(response, exact=True, route=None), 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            result = client.query_by_embedding("docs", [0.1], 1, route="exact")
+            self.assertEqual(result.route, "")
+            self.assertTrue(result.exact)
+            self.assertEqual(json_body(server.records[0])["route"], "exact")
+
+    def test_dense_search_route_validation_before_http(self) -> None:
+        client = TreeDBClient("http://127.0.0.1:9", timeout=1)
+        with self.assertRaisesRegex(InvalidRequestError, "unsupported dense search route"):
+            client.query_by_embedding("docs", [0.1], 1, route="fast")
+        with self.assertRaisesRegex(InvalidRequestError, "ef_search"):
+            client.query_by_embedding("docs", [0.1], 1, route="ann", ef_search=-1)
+
+    def test_keyword_and_hybrid_filter_bodies_serialize(self) -> None:
+        routes = {
+            ("POST", "/v1/indexes/docs/search/keyword"): (
+                503,
+                {"error": {"code": "index_unavailable", "message": "filtered keyword search failed closed: scalar_filter_unbounded"}},
+                0,
+            ),
+            ("POST", "/v1/indexes/docs/search/hybrid"): (
+                503,
+                {"error": {"code": "index_unavailable", "message": "scalar_filter_unbounded"}},
+                0,
+            ),
+        }
+        with FixtureServer(routes) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            want_filter = {"field": "meta.tenant", "operator": "==", "value": "t1"}
+            self.assertEqual(len(server.records), 0)
+            with self.assertRaises(IndexUnavailableError):
+                client.search_keyword("docs", "refund", 1, filter=dict(want_filter))
+            self.assertEqual(json_body(server.records[-1])["filter"], want_filter)
+            with self.assertRaises(IndexUnavailableError):
+                client.search_hybrid("docs", query="refund", top_k=1, filter=dict(want_filter))
+            self.assertEqual(json_body(server.records[-1])["filter"], want_filter)
 
     def test_service_error_mapping(self) -> None:
         route = "/v1/indexes/missing/documents/count"

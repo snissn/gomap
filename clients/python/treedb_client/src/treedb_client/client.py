@@ -260,16 +260,35 @@ class TreeDBClient:
         top_k: int,
         filter: Optional[FilterLike] = None,
         *,
+        route: Optional[str] = None,
+        ef_search: Optional[int] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
     ) -> DenseVectorSearchResponse:
-        """Run exact dense-vector search through the TreeDB service."""
+        """Score a query embedding through the TreeDB dense search route.
 
+        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses the
+        column_graph vector index traversal (the service default when that
+        index exists and no filter is supplied); ``"exact"`` keeps the bounded
+        filtered scan. Filters require the exact route — the service rejects
+        filtered ANN requests with a typed error instead of downgrading.
+        Unsupported route values raise :class:`InvalidRequestError` locally;
+        the client never falls back between routes on its own.
+        """
+
+        if route is not None and route not in ("ann", "exact"):
+            raise InvalidRequestError("invalid_request", f"unsupported dense search route {route!r}; use 'ann' or 'exact'")
+        if ef_search is not None and ef_search < 0:
+            raise InvalidRequestError("invalid_request", "ef_search must be non-negative")
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
             "top_k": top_k,
             "return_embedding": return_embedding,
         }
+        if route is not None:
+            request["route"] = route
+        if ef_search is not None:
+            request["ef_search"] = ef_search
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "search", "vector"), request)
@@ -354,9 +373,11 @@ class TreeDBClient:
     ) -> KeywordSearchResponse:
         """Run ranked keyword search through the TreeDB service.
 
-        Metadata filters are serialized and sent only when provided, but the
-        current service contract fails keyword filters closed with
-        `UnsupportedError`; the client never scans locally as a fallback.
+        Metadata filters are serialized and sent only when provided. Since
+        contract v1alpha2 the service serves filters that resolve to one
+        bounded scalar allow-set over an index's declared scalar fields
+        (create-index ``scalar_fields``); anything else fails closed with a
+        typed error. The client never scans locally as a fallback.
         """
 
         _validate_expected_generation(expected_generation)
@@ -392,8 +413,10 @@ class TreeDBClient:
         """Run TreeDB collection-native hybrid text/vector search.
 
         At least one of `query` or `query_embedding` must be supplied by the
-        caller/service. Metadata filters currently fail closed on the service
-        with `UnsupportedError`; there is no client-side text/vector fallback.
+        caller/service. Since contract v1alpha2, metadata filters that resolve
+        to one bounded scalar allow-set over declared scalar fields are served
+        via prefilter; other shapes fail closed with typed errors. There is no
+        client-side text/vector fallback.
         """
 
         if not query and query_embedding is None:

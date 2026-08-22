@@ -42,7 +42,7 @@ def sample_index(name: str = "docs", dimension: int = 3, metric: str = "cosine")
         dimension=dimension,
         metric=metric,
         generation=1,
-        contract_version="treedb-document-service/v1alpha1",
+        contract_version="treedb-document-service/v1alpha2",
         embedding_field="embedding",
         vector_index_name="embedding",
         text_field="content",

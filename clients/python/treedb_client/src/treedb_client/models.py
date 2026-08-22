@@ -571,6 +571,9 @@ class DenseVectorSearchResponse:
     metric: str
     exact: bool
     candidates: int
+    # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
+    # legacy exact scan path.
+    route: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
@@ -581,6 +584,7 @@ class DenseVectorSearchResponse:
             metric=_as_str(data["metric"], "metric"),
             exact=_as_bool(data["exact"], "exact"),
             candidates=_as_int(data["candidates"], "candidates"),
+            route=_as_optional_str_default(data.get("route"), "vector search response.route"),
         )
 
 
@@ -801,6 +805,7 @@ class KeywordSearchStats:
     fail_closed_reason: str = ""
     unavailable: bool = False
     unavailable_reason: str = ""
+    scalar_prefilter_ids: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -823,6 +828,7 @@ class KeywordSearchStats:
             "fail_closed_reason",
             "unavailable",
             "unavailable_reason",
+            "scalar_prefilter_ids",
         ]
         return cls(
             query_terms=_as_optional_int_default(data.get("query_terms"), "keyword stats.query_terms"),
@@ -843,6 +849,7 @@ class KeywordSearchStats:
             fail_closed_reason=_as_optional_str_default(data.get("fail_closed_reason"), "keyword stats.fail_closed_reason"),
             unavailable=_as_optional_bool_default(data.get("unavailable"), "keyword stats.unavailable"),
             unavailable_reason=_as_optional_str_default(data.get("unavailable_reason"), "keyword stats.unavailable_reason"),
+            scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "keyword stats.scalar_prefilter_ids"),
             extra=_copy_extra(data, allowed),
         )
 
