@@ -4772,7 +4772,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
 		}
-		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
+		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.ExactFallbacks != 0 || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
 			t.Fatalf("native response=%+v diagnostics=%+v", got, got.Diagnostics())
 		}
 		return got
@@ -4867,6 +4867,17 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	}
 	if len(got.Results) != 2 {
 		t.Fatalf("results=%+v want TopK live results despite closer tombstones", got.Results)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+	_, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, EfSearch: 2, FetchMultiplier: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("ordinary Search: %v", err)
+	}
+	if trace.CandidatesExamined > 2 {
+		t.Fatalf("ordinary Search candidates=%d want configured bound 2", trace.CandidatesExamined)
 	}
 	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
 		IndexName: def.Name,

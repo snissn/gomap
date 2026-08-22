@@ -710,8 +710,9 @@ type VectorIndexSearchDiagnostics struct {
 // VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
 // the mutable ANN route rather than rebuilding or scanning exact documents.
 type VectorIndexSearchLiveANNDiagnostics struct {
-	Enabled      bool   `json:"enabled"`
-	FullRebuilds uint64 `json:"full_rebuilds"`
+	Enabled        bool   `json:"enabled"`
+	ExactFallbacks uint64 `json:"exact_fallbacks"`
+	FullRebuilds   uint64 `json:"full_rebuilds"`
 }
 
 // Diagnostics returns a compact route/status summary for the response.

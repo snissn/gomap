@@ -1921,6 +1921,17 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if limit < topK {
 		limit = topK
 	}
+	// This route cannot exact-fallback, so stale graph waypoints must not consume
+	// its live candidate budget. Ordinary Search keeps its configured bound and
+	// uses its existing exact-underfill fallback instead.
+	if limit < len(idx.nodes) {
+		stale := len(idx.nodes) - len(idx.currentNode)
+		if stale > len(idx.nodes)-limit {
+			limit = len(idx.nodes)
+		} else {
+			limit += stale
+		}
+	}
 	scratch := idx.getSearchScratch()
 	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, limit, scratch)
 	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
@@ -2281,17 +2292,6 @@ func cloneVectorSearchResultDocumentIDs(results []VectorSearchResult) {
 func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
-	}
-	// Tombstones remain graph waypoints but cannot satisfy the caller's live
-	// result limit. Widen the bounded candidate set so stale nodes do not evict
-	// live neighbors before the caller filters them.
-	if limit < len(idx.nodes) {
-		stale := len(idx.nodes) - len(idx.currentNode)
-		if stale > len(idx.nodes)-limit {
-			limit = len(idx.nodes)
-		} else {
-			limit += stale
-		}
 	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > 0; layer-- {

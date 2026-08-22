@@ -945,7 +945,7 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SearchBenchmarkVector: %v", err)
 		}
-		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
+		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.ExactFallbacks != 0 || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
 			t.Fatalf("native response=%+v", got)
 		}
 		return got
