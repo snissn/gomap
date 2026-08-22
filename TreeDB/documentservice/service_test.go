@@ -955,6 +955,12 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
 		t.Fatalf("insert results=%+v want a first", got.Results)
 	}
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions}); err != nil {
+		t.Fatalf("compatible CreateIndex: %v", err)
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
+		t.Fatalf("compatible create results=%+v want live handle preserved", got.Results)
+	}
 	upsert(Document{ID: "a", Embedding: []float32{-1, 0}})
 	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID == "a" {
 		t.Fatalf("update results=%+v want replacement excluded from old-vector top hit", got.Results)

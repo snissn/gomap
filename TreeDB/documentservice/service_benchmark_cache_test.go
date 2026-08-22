@@ -237,8 +237,8 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *te
 	if _, err := svc.ResetIndex(ctx, "native_reset", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
 		t.Fatalf("ResetIndex native existing: %v", err)
 	}
-	if got := svc.benchmarkSearchCacheSizeForTest(); got != 0 {
-		t.Fatalf("cache size after reset=%d want 0", got)
+	if got := svc.benchmarkSearchCacheSizeForTest(); got != 1 {
+		t.Fatalf("cache size after empty native reset=%d want live handle preserved", got)
 	}
 
 	createBenchmarkColumnGraphIndex(t, svc, "bench_close")
@@ -246,8 +246,8 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *te
 	if _, err := svc.OptimizeIndex(ctx, "bench_close", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex bench_close: %v", err)
 	}
-	if got := svc.benchmarkSearchCacheSizeForTest(); got != 1 {
-		t.Fatalf("cache size before close=%d want 1", got)
+	if got := svc.benchmarkSearchCacheSizeForTest(); got != 2 {
+		t.Fatalf("cache size before close=%d want native and column handles", got)
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatalf("Service.Close: %v", err)

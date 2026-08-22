@@ -194,8 +194,10 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 		}
 		return IndexInfo{}, wrapServiceError(CodeInternal, "create index failed", err)
 	}
-	if err := s.invalidateBenchmarkSearchCache(req.Name); err != nil {
-		return IndexInfo{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after create index failed", err)
+	if !alreadyExisted {
+		if err := s.invalidateBenchmarkSearchCache(req.Name); err != nil {
+			return IndexInfo{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after create index failed", err)
+		}
 	}
 	info, err := indexInfoFromMeta(*created)
 	if err != nil {
