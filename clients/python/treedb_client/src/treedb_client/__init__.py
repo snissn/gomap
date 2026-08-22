@@ -82,6 +82,7 @@ __all__ = [
     "OptimizeIndexResponse",
     "QuantizedIndexInfo",
     "ScalarFieldDeclaration",
+    "ScalarU8AlphaPolicy",
     "ScalarU8CalibrationConfig",
     "ResetIndexResponse",
     "TreeDBClient",

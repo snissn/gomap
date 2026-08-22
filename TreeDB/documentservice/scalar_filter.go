@@ -282,6 +282,9 @@ func mergeScalarPredicates(left *collections.HybridScalarFilter, leftField strin
 	}
 	switch {
 	case left.Value != nil && right.Value != nil:
+		if cmp, ok := compareScalarValues(left.Value, right.Value); ok && cmp == 0 {
+			return &collections.HybridScalarFilter{IndexName: left.IndexName, Value: left.Value}, nil
+		}
 		return nil, serviceError(CodeUnsupported, "conflicting equality conditions cannot be served as one bounded scalar allow-set")
 	case left.Value != nil:
 		if right.Range != nil {
@@ -330,6 +333,12 @@ func mergeScalarPredicates(left *collections.HybridScalarFilter, leftField strin
 			upperSet = true
 		}
 	}
+	if lowerSet && upperSet {
+		cmp, ok := compareScalarValues(merged.Range.Lower.Value, merged.Range.Upper.Value)
+		if !ok || cmp > 0 || (cmp == 0 && (!merged.Range.Lower.Inclusive || !merged.Range.Upper.Inclusive)) {
+			return nil, serviceError(CodeUnsupported, "contradictory range bounds cannot be served as one bounded scalar allow-set")
+		}
+	}
 	return merged, nil
 }
 
@@ -359,6 +368,18 @@ func scalarRangeContainsValue(rangeOpts *collections.IndexRangeOptions, value an
 }
 
 func compareScalarValues(left, right any) (int, bool) {
+	if leftInteger, ok := scalarInt64Value(left); ok {
+		if rightInteger, rightOK := scalarInt64Value(right); rightOK {
+			switch {
+			case leftInteger < rightInteger:
+				return -1, true
+			case leftInteger > rightInteger:
+				return 1, true
+			default:
+				return 0, true
+			}
+		}
+	}
 	if leftNumber, ok := numberAsFloat64(left); ok {
 		rightNumber, rightOK := numberAsFloat64(right)
 		if !rightOK {
@@ -385,6 +406,20 @@ func compareScalarValues(left, right any) (int, bool) {
 		return 1, true
 	default:
 		return 0, true
+	}
+}
+
+func scalarInt64Value(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case int64:
+		return typed, true
+	case int:
+		return int64(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		return parsed, err == nil
+	default:
+		return 0, false
 	}
 }
 

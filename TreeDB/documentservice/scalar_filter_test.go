@@ -93,6 +93,60 @@ func TestTranslateScalarFilterEqualityRangeOrderAndContradiction(t *testing.T) {
 	}
 }
 
+func TestTranslateScalarFilterRejectsContradictoryRangesAndKeepsInt64Exact(t *testing.T) {
+	cases := []struct {
+		name       string
+		conditions []Filter
+		wantError  bool
+	}{
+		{
+			name: "identical equality predicates",
+			conditions: []Filter{
+				{Field: "meta.priority", Operator: "==", Value: int64(2)},
+				{Field: "meta.priority", Operator: "==", Value: int64(2)},
+			},
+		},
+		{
+			name: "lower above upper",
+			conditions: []Filter{
+				{Field: "meta.priority", Operator: ">=", Value: int64(3)},
+				{Field: "meta.priority", Operator: "<=", Value: int64(2)},
+			},
+			wantError: true,
+		},
+		{
+			name: "equal exclusive bounds",
+			conditions: []Filter{
+				{Field: "meta.priority", Operator: ">", Value: int64(2)},
+				{Field: "meta.priority", Operator: "<=", Value: int64(2)},
+			},
+			wantError: true,
+		},
+		{
+			name: "int64 values beyond float precision",
+			conditions: []Filter{
+				{Field: "meta.priority", Operator: "==", Value: int64(9007199254740993)},
+				{Field: "meta.priority", Operator: "<=", Value: int64(9007199254740992)},
+			},
+			wantError: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := translateScalarFilter(&Filter{Operator: "AND", Conditions: tc.conditions}, testScalarFilterSchema())
+			if tc.wantError {
+				if ErrorCodeOf(err) != CodeUnsupported {
+					t.Fatalf("err=%v code=%s, want unsupported", err, ErrorCodeOf(err))
+				}
+				return
+			}
+			if err != nil || got == nil || got.Value != int64(2) {
+				t.Fatalf("got=%+v err=%v, want equality 2", got, err)
+			}
+		})
+	}
+}
+
 func TestNormalizeScalarFieldDeclarationValidatesDerivedIndexName(t *testing.T) {
 	_, err := normalizeScalarFieldDeclarations([]ScalarFieldDeclaration{{Field: "meta.bad/name"}})
 	if ErrorCodeOf(err) != CodeInvalidRequest {

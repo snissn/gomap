@@ -56,6 +56,7 @@ class FakeTreeDBClient:
     def __init__(self, *, index_name: str = "docs", dimension: int = 3, metric: str = "cosine") -> None:
         self.base_url = "http://fake-treedb"
         self.index_info = sample_index(index_name, dimension, metric)
+        self.documents: dict[str, Document] = {}
         self.ensure_calls: list[tuple[str, int, Optional[str]]] = []
         self.ensure_scalar_fields: list[Any] = []
         self.upsert_calls: list[list[str]] = []
@@ -75,6 +76,7 @@ class FakeTreeDBClient:
         *,
         scalar_fields: Optional[Sequence[Any]] = None,
     ) -> IndexInfo:
+        self.ensure_calls.append((name, dimension, metric))
         self.ensure_scalar_fields.append(
             None
             if scalar_fields is None
