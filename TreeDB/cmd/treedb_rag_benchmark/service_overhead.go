@@ -26,12 +26,14 @@ import (
 // between the two paths is the HTTP/JSON layer itself.
 
 const (
-	svcOverheadSchema      = "treedb_rag_service_overhead/v1"
-	svcOverheadCollection  = "svcparity"
-	svcOverheadTenantIndex = "meta_tenant"
-	svcOverheadVectorIndex = "embedding"
-	svcOverheadTextField   = "content"
-	svcOverheadEfSearch    = 64
+	svcOverheadSchema       = "treedb_rag_service_overhead/v1"
+	svcOverheadCollection   = "svcparity"
+	svcOverheadTenantIndex  = "meta_tenant"
+	svcOverheadVectorIndex  = "embedding"
+	svcOverheadTextField    = "content"
+	svcOverheadEfSearch     = 64
+	directTimingIterations  = 256
+	serviceTimingIterations = 1
 )
 
 type serviceOverheadConfig struct {
@@ -150,7 +152,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 
 	filterTenant := ragTenantNarrow
 
-	directHybridSamples, directHybridHits, err := timeServiceOverheadQueries(corpus, cfg, func(q ragQuery) (int, error) {
+	directHybridSamples, directHybridHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
 		resp, err := col.SearchHybrid(collections.HybridSearchOptions{
 			TopK:             cfg.TopK,
 			Text:             &collections.HybridTextQuery{IndexName: svcOverheadTextField, Query: q.Text, CandidateLimit: cfg.CandidateLimit},
@@ -168,7 +170,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	}
 	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("filtered_hybrid", "direct_collection_api", corpus, cfg, directHybridSamples, directHybridHits))
 
-	serviceHybridSamples, serviceHybridHits, err := timeServiceOverheadQueries(corpus, cfg, func(q ragQuery) (int, error) {
+	serviceHybridSamples, serviceHybridHits, err := timeServiceOverheadQueries(corpus, cfg, serviceTimingIterations, func(q ragQuery) (int, error) {
 		body := map[string]any{
 			"query":                  q.Text,
 			"query_embedding":        q.Embedding,
@@ -193,7 +195,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 
 	buffer := &collections.VectorIndexSearchBuffer{}
 	defer buffer.Reset()
-	directAnnSamples, directAnnHits, err := timeServiceOverheadQueries(corpus, cfg, func(q ragQuery) (int, error) {
+	directAnnSamples, directAnnHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
 		resp, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
 			IndexName: svcOverheadVectorIndex,
 			Query:     q.Embedding,
@@ -211,7 +213,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	}
 	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("ann_dense", "direct_collection_api", corpus, cfg, directAnnSamples, directAnnHits))
 
-	serviceAnnSamples, serviceAnnHits, err := timeServiceOverheadQueries(corpus, cfg, func(q ragQuery) (int, error) {
+	serviceAnnSamples, serviceAnnHits, err := timeServiceOverheadQueries(corpus, cfg, serviceTimingIterations, func(q ragQuery) (int, error) {
 		body := map[string]any{
 			"query_embedding": q.Embedding,
 			"top_k":           cfg.TopK,
@@ -303,12 +305,12 @@ func ingestServiceOverheadDocs(col *collections.Collection, chunks []ragChunk) e
 // timeServiceOverheadQueries mirrors the C1 measurement boundary: warmup
 // queries outside the timing window, then reps passes over the committed query
 // set with per-query wall timing around the retrieval call only. Each measured
-// sample batches a bounded number of identical calls so fast direct collection
-// queries remain above coarse Windows timer resolution; the reported duration
-// is divided back to one query. One final untimed call records the result count
-// for the sanity gate.
-func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, call func(ragQuery) (int, error)) ([]float64, int, error) {
-	const timingIterations = 256
+// sample batches a caller-selected bounded number of identical calls so fast
+// direct collection queries remain above coarse Windows timer resolution; the
+// reported duration is divided back to one query. HTTP service samples use one
+// call because network/JSON work is already above that resolution. One final
+// untimed call records the result count for the sanity gate.
+func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, timingIterations int, call func(ragQuery) (int, error)) ([]float64, int, error) {
 	for i := range cfg.Warmup {
 		q := corpus.Queries[i%len(corpus.Queries)]
 		if _, err := call(q); err != nil {
@@ -331,7 +333,7 @@ func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, ca
 			if hits > maxHits {
 				maxHits = hits
 			}
-			millis := time.Since(start).Seconds() * 1000.0 / timingIterations
+			millis := time.Since(start).Seconds() * 1000.0 / float64(timingIterations)
 			samples = append(samples, millis)
 		}
 	}
