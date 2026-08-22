@@ -292,13 +292,14 @@ type VectorIndex struct {
 	rebuildDeletedRatio float64
 	schemaGeneration    uint64
 
-	mu            sync.RWMutex
-	nodes         []vectorIndexNode
-	currentNode   map[string]int
-	entry         int
-	maxLevel      int
-	insertScratch vectorIndexSearchScratch
-	searchScratch sync.Pool
+	mu                  sync.RWMutex
+	nativePublicationMu sync.RWMutex
+	nodes               []vectorIndexNode
+	currentNode         map[string]int
+	entry               int
+	maxLevel            int
+	insertScratch       vectorIndexSearchScratch
+	searchScratch       sync.Pool
 	// parallelReciprocalLinks is enabled only by the untraced offline column
 	// graph builder. Incremental, traced, and partition builds stay serial.
 	parallelReciprocalLinks bool

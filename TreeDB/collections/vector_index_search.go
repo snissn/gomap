@@ -1412,6 +1412,11 @@ func (c *Collection) cachedVectorIndexDefinitionForSearch(name string) (VectorIn
 }
 
 func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if index == nil {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: "nil_index"}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: nil_index", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	index.nativePublicationMu.RLock()
+	defer index.nativePublicationMu.RUnlock()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed

@@ -195,6 +195,7 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 		defer resetCollectionRunTable(publishTable)
 	}
 	iter := publishTable.NewIterator(nil, nil)
+	idx.nativePublicationMu.Lock()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		// Native vector snapshots are full graph images. Publish a replacement
 		// root so keys removed by rebuild/shrink do not survive from prior roots.
@@ -204,6 +205,15 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
 	})
+	if err == nil && len(rootIDs) == 1 {
+		status.Loaded = true
+		status.RootID = rootIDs[0]
+		status.Epoch = rootIDs[0]
+		status.BytesDisk = bytesDisk
+		idx.setNativePersistent(true)
+		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	}
+	idx.nativePublicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {
@@ -212,12 +222,6 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	if len(rootIDs) != 1 {
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
-	status.Loaded = true
-	status.RootID = rootIDs[0]
-	status.Epoch = rootIDs[0]
-	status.BytesDisk = bytesDisk
-	idx.setNativePersistent(true)
-	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
@@ -328,6 +332,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		defer resetCollectionRunTable(publishTable)
 	}
 	iter := publishTable.NewIterator(nil, nil)
+	idx.nativePublicationMu.Lock()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
@@ -335,6 +340,15 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
 	})
+	if err == nil && len(rootIDs) == 1 {
+		status.Loaded = true
+		status.RootID = rootIDs[0]
+		status.Epoch = rootIDs[0]
+		status.BytesDisk = bytesDisk
+		idx.setNativePersistent(true)
+		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	}
+	idx.nativePublicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {
@@ -343,12 +357,6 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if len(rootIDs) != 1 {
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
-	status.Loaded = true
-	status.RootID = rootIDs[0]
-	status.Epoch = rootIDs[0]
-	status.BytesDisk = bytesDisk
-	idx.setNativePersistent(true)
-	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)

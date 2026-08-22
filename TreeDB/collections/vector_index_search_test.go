@@ -4818,6 +4818,68 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	}
 }
 
+func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+
+	index.nativePublicationMu.RLock()
+	publishDone := make(chan error, 1)
+	go func() {
+		_, err := index.SaveNativeDeltaSnapshot()
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		index.nativePublicationMu.RUnlock()
+		t.Fatalf("native publication crossed validation read lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	index.nativePublicationMu.RUnlock()
+	if err := <-publishDone; err != nil {
+		t.Fatalf("SaveNativeDeltaSnapshot: %v", err)
+	}
+
+	index.nativePublicationMu.Lock()
+	searchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		index.nativePublicationMu.Unlock()
+		t.Fatalf("native validation crossed publication write lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	index.nativePublicationMu.Unlock()
+	if err := <-searchDone; err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+}
+
 func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
