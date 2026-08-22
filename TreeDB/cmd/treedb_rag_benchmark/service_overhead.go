@@ -333,9 +333,6 @@ func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, ti
 				maxHits = hits
 			}
 			millis := time.Since(start).Seconds() * 1000.0 / float64(timingIterations)
-			if millis <= 0 {
-				millis = 0.001
-			}
 			samples = append(samples, millis)
 		}
 	}

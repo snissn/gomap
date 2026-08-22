@@ -44,6 +44,7 @@ class TreeDBDocumentStore:
         embedding_dimension: int = 768,
         similarity: str = "cosine",
         scalar_fields: Optional[Sequence[ScalarFieldDeclaration | Mapping[str, Any]]] = None,
+        dense_route: str = "exact",
         ensure_index: bool = True,
         recreate_index: bool = False,
         timeout: Optional[float] = 30.0,
@@ -56,6 +57,7 @@ class TreeDBDocumentStore:
         :param embedding_dimension: Dense embedding dimension for index creation/validation.
         :param similarity: TreeDB vector metric: `cosine`, `l2`, or `inner_product` (`dot_product` alias).
         :param scalar_fields: Declaration-time metadata scalar indexes to create with the service index.
+        :param dense_route: Dense route for Haystack embedding retrieval; defaults to exact for legacy correctness, or use `ann` for a column_graph traversal.
         :param return_embedding: Whether filter/search responses should include stored embeddings by default.
         :param ensure_index: Create/open a compatible service index during construction. If false, operations are lazy.
         :param recreate_index: Unsupported by the current TreeDB service because there is no safe drop/recreate route.
@@ -78,6 +80,7 @@ class TreeDBDocumentStore:
         self.index = index
         self.embedding_dimension = embedding_dimension
         self.scalar_fields = _normalize_scalar_fields(scalar_fields)
+        self.dense_route = _normalize_dense_route(dense_route)
         self.similarity = _normalize_similarity(similarity)
         self.return_embedding = bool(return_embedding)
         self.ensure_index = bool(ensure_index)
@@ -241,6 +244,7 @@ class TreeDBDocumentStore:
                 query_embedding=query_embedding,
                 top_k=top_k,
                 filter=prepared_filter,
+                route=self.dense_route,
                 return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
                 expected_generation=self._expected_generation(),
             ),
@@ -327,6 +331,7 @@ class TreeDBDocumentStore:
                 else [declaration.to_dict() for declaration in self.scalar_fields]
             ),
             similarity=self.similarity,
+            dense_route=self.dense_route,
             return_embedding=self.return_embedding,
             ensure_index=self.ensure_index,
             recreate_index=False,
@@ -557,6 +562,14 @@ def _normalize_scalar_fields(
         out.append(model)
     return out
 
+
+def _normalize_dense_route(route: str) -> str:
+    if not isinstance(route, str):
+        raise ValueError("dense_route must be 'ann' or 'exact'")
+    normalized = route.strip().lower()
+    if normalized not in {"ann", "exact"}:
+        raise ValueError("dense_route must be 'ann' or 'exact'")
+    return normalized
 
 def _normalize_similarity(similarity: str) -> str:
     normalized = similarity.strip().lower().replace("-", "_").replace(" ", "_")

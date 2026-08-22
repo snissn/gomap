@@ -179,6 +179,7 @@ class FakeTreeDBClient:
         top_k: int,
         filter: Optional[dict[str, Any]] = None,
         *,
+        route: Optional[str] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
     ) -> DenseVectorSearchResponse:
@@ -187,6 +188,7 @@ class FakeTreeDBClient:
                 "query_embedding": list(query_embedding),
                 "top_k": top_k,
                 "filter": deepcopy(filter),
+                "route": route,
                 "return_embedding": return_embedding,
                 "expected_generation": expected_generation,
             }
