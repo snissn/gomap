@@ -110,6 +110,7 @@ class HarnessState:
     commands: list[CommandRecord] = field(default_factory=list)
     skips: list[dict[str, str]] = field(default_factory=list)
     service_pid: int | None = None
+    service_binary: dict[str, Any] | None = None
     health: dict[str, Any] | None = None
     route_proof: dict[str, Any] | None = None
     vdbbench: list[dict[str, Any]] = field(default_factory=list)
@@ -855,11 +856,12 @@ def run_vdbbench_rows(
                 results_dir, before_results, index_name, args.case_type, state.root
             )
         state.vdbbench.append(row_record)
-        write_json(state.root / "vdbbench_load_metrics.json", {
-            "schema_version": "treedb-vectordbbench-load-metrics/v1",
-            "rows": state.vdbbench,
-            "note": "Durations and derived insert throughput are selected from the checksum-identified canonical VDBBench result JSON.",
-        })
+        if "load_metrics" in row_record:
+            write_json(state.root / "vdbbench_load_metrics.json", {
+                "schema_version": "treedb-vectordbbench-load-metrics/v1",
+                "rows": state.vdbbench,
+                "note": "Durations and derived insert throughput are selected from the checksum-identified canonical VDBBench result JSON.",
+            })
 
 
 def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
@@ -927,7 +929,6 @@ def write_manifest(
     service_command: list[str] | None,
 ) -> None:
     files, files_truncated = artifact_file_list(state.root)
-    service_binary = Path(service_command[0]) if service_command else None
     manifest = {
         "schema_version": ARTIFACT_SCHEMA,
         "generated_at": iso_now(),
@@ -941,7 +942,7 @@ def write_manifest(
             "data_dir": str(args.data_dir),
             "pid": state.service_pid,
             "command": service_command,
-            "binary": file_identity(service_binary) if service_binary else None,
+            "binary": state.service_binary,
             "health": state.health,
             "log": "service.log",
         },
@@ -1087,6 +1088,7 @@ def main(argv: list[str]) -> int:
     service_command: list[str] | None = None
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
+        state.service_binary = file_identity(service_bin)
         service_proc, health, service_command = start_service(
             state,
             gomap_root=gomap_root,

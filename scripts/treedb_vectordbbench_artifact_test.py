@@ -210,6 +210,24 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             sidecar = json.loads((root / "vdbbench_load_metrics.json").read_text(encoding="utf-8"))
             self.assertEqual([row["row"] for row in sidecar["rows"]], ["exact"])
 
+    def test_dry_run_does_not_write_load_metrics_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = harness.HarnessState(root=root)
+            args = harness.parse_args(["--run-vdbbench", "--vdbbench-dry-run", "--rows", "exact"])
+            record = mock.Mock(command_string="vdbbench exact --dry-run", exit_code=0)
+            with mock.patch.object(harness, "run_command", return_value=record):
+                harness.run_vdbbench_rows(
+                    state,
+                    args=args,
+                    gomap_root=root,
+                    vectordbbench_dir=root,
+                    base_url="http://127.0.0.1:1",
+                    index_prefix="test",
+                )
+
+            self.assertFalse((root / "vdbbench_load_metrics.json").exists())
+
     def test_capture_fails_closed_on_ambiguous_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -293,6 +311,25 @@ class ManifestFileListTest(unittest.TestCase):
 
             manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertIsNone(manifest["vdbbench_load_metrics"])
+
+    def test_manifest_uses_service_identity_captured_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            service = root / "service"
+            service.write_bytes(b"original")
+            identity = harness.file_identity(service)
+            state = harness.HarnessState(root=root, service_binary=identity)
+            service.write_bytes(b"replaced")
+
+            harness.write_manifest(
+                state,
+                args=harness.parse_args([]),
+                context={},
+                service_command=[str(service)],
+            )
+
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["service"]["binary"], identity)
 
 
 if __name__ == "__main__":
