@@ -21,6 +21,9 @@ var collectionSearchVectorIndexResponseBufferPool sync.Pool
 type VectorIndexSearchPath string
 
 const (
+	// VectorIndexSearchPathNativeRuntime searches the collection's persistent
+	// mutable native HNSW graph without fetching source documents.
+	VectorIndexSearchPathNativeRuntime VectorIndexSearchPath = "native_runtime"
 	// VectorIndexSearchPathColumnGraphNativeReader searches persisted column_graph
 	// state through the native reader. Current healthy indexes use TVIS/base
 	// typed-column sources; legacy physical graph rows are compatibility fallback
@@ -445,6 +448,10 @@ type VectorIndexSearchStats struct {
 
 	// SearchRouteColumnGraphPrepared reports that this search used the current prepared column_graph route.
 	SearchRouteColumnGraphPrepared uint64 `json:"search_route_column_graph_prepared,omitempty"`
+	// SearchRouteNativeRuntime reports that this search used the persistent mutable native HNSW graph.
+	SearchRouteNativeRuntime uint64 `json:"search_route_native_runtime,omitempty"`
+	// NativeRuntimeFullRebuilds reports automatic document-scan rebuilds retained by the selected live graph.
+	NativeRuntimeFullRebuilds uint64 `json:"native_runtime_full_rebuilds,omitempty"`
 	// SearchRouteColumnGraphFallback reports that this search used the column_graph compatibility/fallback route instead of the prepared route.
 	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
 	// SearchRouteHNSWSearchPack reports that this search used the exact FP32 hnsw_search_pack_v1 route.
@@ -615,6 +622,8 @@ type VectorIndexSearchRouteKind string
 const (
 	// VectorIndexSearchRouteUnknown reports that stats did not identify a search route.
 	VectorIndexSearchRouteUnknown VectorIndexSearchRouteKind = "unknown"
+	// VectorIndexSearchRouteNativeRuntime reports the persistent mutable native HNSW route.
+	VectorIndexSearchRouteNativeRuntime VectorIndexSearchRouteKind = "native_runtime"
 	// VectorIndexSearchRouteExactHNSWSearchPackV1 reports the exact FP32 hnsw_search_pack_v1 route.
 	VectorIndexSearchRouteExactHNSWSearchPackV1 VectorIndexSearchRouteKind = "exact_hnsw_search_pack_v1"
 	// VectorIndexSearchRouteQuantizedOnly reports the codec-generic quantized-only route.
@@ -695,6 +704,15 @@ type VectorIndexSearchDiagnostics struct {
 	HNSWSearchPackCacheMisses     uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
 	HNSWSearchPackCacheWaits      uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
 	HNSWSearchPackCacheBuilds     uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
+	LiveANN                       VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
+}
+
+// VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
+// the mutable ANN route rather than rebuilding or scanning exact documents.
+type VectorIndexSearchLiveANNDiagnostics struct {
+	Enabled        bool   `json:"enabled"`
+	ExactFallbacks uint64 `json:"exact_fallbacks"`
+	FullRebuilds   uint64 `json:"full_rebuilds"`
 }
 
 // Diagnostics returns a compact route/status summary for the response.
@@ -721,12 +739,18 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		HNSWSearchPackCacheMisses:     s.HNSWSearchPackCacheMisses,
 		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
 		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
+		LiveANN: VectorIndexSearchLiveANNDiagnostics{
+			Enabled:      s.SearchRouteNativeRuntime == 1,
+			FullRebuilds: s.NativeRuntimeFullRebuilds,
+		},
 	}
 }
 
 // RouteKind reports the low-cardinality route selected for this search.
 func (s VectorIndexSearchStats) RouteKind() VectorIndexSearchRouteKind {
 	switch {
+	case s.SearchRouteNativeRuntime > 0:
+		return VectorIndexSearchRouteNativeRuntime
 	case s.SearchRouteQuantizedOnly > 0:
 		return VectorIndexSearchRouteQuantizedOnly
 	case s.SearchRouteQuantizedRerank > 0:
@@ -1222,6 +1246,9 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
+	if def, ok := c.cachedVectorIndexDefinitionForSearch(opts.IndexName); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
 		buffer.Reset()
@@ -1294,6 +1321,117 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		return lastResponse, lastErr
 	}
 	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a healthy exact no-document hnsw_search_pack_v1 route; rebuild the vector index or use SearchVectorIndex for the response-owned convenience path", ErrVectorIndexSearchUnavailable, opts.IndexName)
+}
+
+func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	response := VectorIndexSearchResponse{
+		IndexName: def.Name,
+		Strategy:  def.Strategy,
+		Path:      VectorIndexSearchPathNativeRuntime,
+		Status: VectorIndexStatus{
+			Definition: def,
+			Name:       def.Name,
+			Strategy:   def.Strategy,
+			State:      VectorIndexStateNativeRuntime,
+			Reason:     VectorIndexReasonNativeRuntime,
+		},
+	}
+	if def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+		buffer.Reset()
+		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		buffer.Reset()
+		return response, err
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact {
+		buffer.Reset()
+		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
+	if err != nil {
+		buffer.Reset()
+		return response, err
+	}
+	if index == nil || !load.Loaded {
+		buffer.Reset()
+		response.Status.ExactFallbackReason = load.ExactFallbackReason
+		return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
+	}
+	results, err := index.searchGraphOnly(opts.Query, opts.TopK, opts.EfSearch)
+	if err != nil {
+		buffer.Reset()
+		return response, err
+	}
+	response.Results, err = copyNativeVectorSearchResultsToBuffer(results, buffer)
+	if err != nil {
+		return response, err
+	}
+	stats := index.Stats()
+	response.Status.Loaded = true
+	response.Status.Registered = true
+	response.Status.RootName = load.RootName
+	response.Status.RootID = load.RootID
+	response.Status.NativeRootLoaded = load.RootID != 0
+	response.Status.NativeRootBytes = load.BytesDisk
+	response.Status.Stats = stats
+	response.Status.RebuildNeeded = stats.RebuildNeeded
+	response.Stats.SearchRouteNativeRuntime = 1
+	response.Stats.NativeRuntimeFullRebuilds = stats.LiveANNFullRebuilds
+	response.Stats.CandidateRows = uint64(stats.LiveDocs)
+	return response, nil
+}
+
+func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if index := c.registeredVectorIndex(def.Name); index != nil {
+		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+	}
+	c.vectorIndexLoadMu.Lock()
+	defer c.vectorIndexLoadMu.Unlock()
+	if index := c.registeredVectorIndex(def.Name); index != nil {
+		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+	}
+	index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		return nil, status, err
+	}
+	return index, status, nil
+}
+
+func (c *Collection) cachedVectorIndexDefinitionForSearch(name string) (VectorIndexDefinition, bool) {
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if c.catalog == nil {
+		return VectorIndexDefinition{}, false
+	}
+	return findVectorIndex(c.catalog.meta.VectorIndexes, name)
+}
+
+func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return nil, VectorIndexLoadStatus{}, err
+	}
+	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
+	if !ok {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackMissingVectorIndexMetadata}, fmt.Errorf("%w: native_runtime vector index %q is not declared", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	if reason := index.validateNativeSnapshotDefinition(currentDef); reason != "" {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: reason}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: %s", ErrVectorIndexSearchUnavailable, def.Name, reason)
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+	rootID := catalog.rootID(rootName)
+	if rootID != index.nativeSnapshotBaseEpochForFullSave() {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleRuntimeIndex}, fmt.Errorf("%w: native_runtime vector index %q is stale", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	stats := index.Stats()
+	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: stats.Epoch, BytesDisk: stats.BytesDisk}, nil
 }
 
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {
@@ -2021,6 +2159,38 @@ func copyVectorIndexSearchResultsToBuffer(results []columnVectorGraphNativeSearc
 			Ordinal: result.Ordinal,
 			Score:   result.Score,
 		}
+	}
+	return buffer.results, nil
+}
+
+func copyNativeVectorSearchResultsToBuffer(results []VectorSearchResult, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	previousResults := buffer.results
+	if len(results) == 0 {
+		clear(previousResults)
+		buffer.resetView()
+		return nil, nil
+	}
+	idByteCount := 0
+	for _, result := range results {
+		var err error
+		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(result.DocumentID), math.MaxInt, "result id")
+		if err != nil {
+			buffer.Reset()
+			return nil, err
+		}
+	}
+	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
+	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	if len(previousResults) > len(results) {
+		clear(previousResults[len(results):])
+	}
+	idOffset := 0
+	for i, result := range results {
+		nextIDOffset := idOffset + len(result.DocumentID)
+		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		idOffset = nextIDOffset
+		copy(id, result.DocumentID)
+		buffer.results[i] = VectorIndexSearchResult{ID: id, Score: 1 - float64(result.Distance)}
 	}
 	return buffer.results, nil
 }

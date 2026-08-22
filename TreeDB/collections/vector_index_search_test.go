@@ -4719,6 +4719,167 @@ func TestSearchVectorIndexNativeRuntimeDoesNotFallbackToColumnGraphV4(t *testing
 	}
 }
 
+func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding_native",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+		Strategy:   VectorIndexStrategyNativeRuntime,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection fresh handle: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex empty: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	search := func(query []float32) VectorIndexSearchResponse {
+		t.Helper()
+		got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name,
+			Query:     query,
+			TopK:      2,
+			EfSearch:  8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil {
+			t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+		}
+		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.ExactFallbacks != 0 || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
+			t.Fatalf("native response=%+v diagnostics=%+v", got, got.Diagnostics())
+		}
+		return got
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || string(got.Results[0].ID) != "a" {
+		t.Fatalf("initial results=%+v want a first", got.Results)
+	}
+	if matched, err := col.Replace([]byte("a"), []byte(`{"embedding":[-1,0]}`)); err != nil || !matched {
+		t.Fatalf("Replace matched=%v err=%v", matched, err)
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || string(got.Results[0].ID) == "a" {
+		t.Fatalf("updated results=%+v want replacement excluded from old-vector top hit", got.Results)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if got := search([]float32{-1, 0}); len(got.Results) != 1 || string(got.Results[0].ID) != "b" {
+		t.Fatalf("deleted results=%+v want only b", got.Results)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var concurrentBuffer VectorIndexSearchBuffer
+			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &concurrentBuffer)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent native runtime search: %v", err)
+		}
+	}
+	if _, err := freshCol.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex fresh handle: %v", err)
+	}
+	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("stale native runtime search err=%v want unavailable", err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("SearchVectorIndexWithBuffer err=%v want unavailable", err)
+	}
+	if col.registeredVectorIndex(def.Name) != nil {
+		t.Fatal("missing-root search registered or rebuilt a native graph")
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 17)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var searchBuffer VectorIndexSearchBuffer
+			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &searchBuffer)
+			if err != nil && !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				errs <- err
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)})
+		errs <- err
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent first insert/search: %v", err)
+		}
+	}
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer after automatic rebuild: %v", err)
+	}
+	if got := response.Diagnostics().LiveANN.FullRebuilds; got != 1 {
+		t.Fatalf("live ANN full rebuilds=%d want 1", got)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

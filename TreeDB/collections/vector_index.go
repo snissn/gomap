@@ -259,6 +259,7 @@ type VectorIndexStats struct {
 	SnapshotDirty       bool
 	LastRebuildDuration time.Duration
 	RebuildNeeded       bool
+	LiveANNFullRebuilds uint64
 }
 
 // VectorIndexRecall reports ANN overlap with exact search for sampled queries.
@@ -312,6 +313,7 @@ type VectorIndex struct {
 	dirtyNodes             map[int]struct{}
 	dirtyDocs              map[string]struct{}
 	lastRebuildDuration    time.Duration
+	liveANNFullRebuilds    uint64
 	insertQuantScratch     []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
@@ -685,7 +687,6 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	if err != nil || catalog == nil {
 		return false, err
 	}
-	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, index.name)
 	if !ok {
@@ -835,9 +836,11 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
-			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+			index, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+			if err != nil {
 				return nil, err
 			}
+			index.markLiveANNFullRebuild()
 			if rebuilt == nil {
 				rebuilt = make(map[string]struct{}, 1)
 			}
@@ -3391,6 +3394,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		BytesDisk:           idx.persistedBytesDisk,
 		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
+		LiveANNFullRebuilds: idx.liveANNFullRebuilds,
 	}
 	var edges int
 	var vectorBytes int64
@@ -3414,6 +3418,12 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	stats.BytesMemory = vectorBytes + int64(edges)*int64(unsafe.Sizeof(vectorIndexNeighbor{})) + int64(stats.Nodes*32)
 	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
 	return stats
+}
+
+func (idx *VectorIndex) markLiveANNFullRebuild() {
+	idx.mu.Lock()
+	idx.liveANNFullRebuilds++
+	idx.mu.Unlock()
 }
 
 // CheckRecall compares indexed search with exact search for the supplied query

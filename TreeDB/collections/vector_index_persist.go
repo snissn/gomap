@@ -511,7 +511,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return nil, status, err
 	}
@@ -551,7 +551,6 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	status.Epoch = rootID
 	status.BytesDisk = bytesDisk
 	index.recordLoadedSnapshot(status.Epoch, bytesDisk)
-	c.meta = catalog.meta
 	c.RegisterVectorIndex(index)
 	return index, status, nil
 }

@@ -409,6 +409,7 @@ func metricFromCollection(metric collections.VectorMetric) (Metric, error) {
 
 func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch bool) IndexCapabilities {
 	columnGraph := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
+	nativeRuntime := vectorDef.Strategy == collections.VectorIndexStrategyNativeRuntime && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	quantized := columnGraph && len(vectorDef.QuantizedIndexes) > 0
 	quantizedRerank := columnGraph && quantizedIndexRerankCapabilityDeclared(vectorDef)
 	return IndexCapabilities{
@@ -421,7 +422,7 @@ func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch
 		HybridMetadataFilters:   false,
 		BenchmarkLifecycle:      true,
 		VectorIndexMaintenance:  true,
-		NoDocumentVectorSearch:  columnGraph,
+		NoDocumentVectorSearch:  columnGraph || nativeRuntime,
 		ColumnGraphVectorSearch: columnGraph,
 		ExactColumnGraphSearch:  columnGraph,
 		QuantizedVectorSearch:   quantized,

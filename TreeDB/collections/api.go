@@ -12486,7 +12486,10 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		if len(results) != 1 {
 			return false, false, fmt.Errorf("collections: update result count %d for single command WAL update", len(results))
 		}
-		return results[0].Matched, results[0].Modified, nil
+		if results[0].Modified {
+			err = commitAmbiguousError("Update vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
+		}
+		return results[0].Matched, results[0].Modified, err
 	}
 	var matched, modified bool
 	var err error

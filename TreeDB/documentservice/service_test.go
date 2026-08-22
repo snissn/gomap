@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -917,6 +918,75 @@ func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
 	count, err := svc.CountDocuments(ctx, "nativebench", CountDocumentsRequest{})
 	if err != nil || count.Count != 0 {
 		t.Fatalf("count after native reset=%+v err=%v", count, err)
+	}
+}
+
+func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	vectorOptions := &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if !info.Capabilities.NoDocumentVectorSearch {
+		t.Fatalf("capabilities=%+v want native no-document search", info.Capabilities)
+	}
+	upsert := func(docs ...Document) {
+		t.Helper()
+		if _, err := svc.UpsertDocuments(ctx, "native", UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("UpsertDocuments: %v: %v", err, errors.Unwrap(err))
+		}
+	}
+	search := func(query []float32) BenchmarkVectorSearchResponse {
+		t.Helper()
+		got, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 2, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+		if err != nil {
+			t.Fatalf("SearchBenchmarkVector: %v", err)
+		}
+		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.ExactFallbacks != 0 || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
+			t.Fatalf("native response=%+v", got)
+		}
+		return got
+	}
+
+	upsert(Document{ID: "a", Embedding: []float32{1, 0}}, Document{ID: "b", Embedding: []float32{0, 1}})
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
+		t.Fatalf("insert results=%+v want a first", got.Results)
+	}
+	upsert(Document{ID: "a", Embedding: []float32{-1, 0}})
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID == "a" {
+		t.Fatalf("update results=%+v want replacement excluded from old-vector top hit", got.Results)
+	}
+	if _, err := svc.DeleteDocuments(ctx, "native", DeleteDocumentsRequest{IDs: []string{"a"}}); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	if got := search([]float32{-1, 0}); len(got.Results) != 1 || got.Results[0].ID != "b" {
+		t.Fatalf("delete results=%+v want only b", got.Results)
+	}
+}
+
+func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	svc := New(collections.NewCollectionManager(db))
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native_optimize", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "native_optimize", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "native_optimize", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	response, err := svc.SearchBenchmarkVector(ctx, "native_optimize", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8})
+	if err != nil || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime {
+		t.Fatalf("SearchBenchmarkVector response=%+v err=%v", response, err)
 	}
 }
 

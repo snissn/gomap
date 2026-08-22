@@ -178,6 +178,32 @@ func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
 	}
 }
 
+func TestHTTPBenchmarkNativeRuntimeLiveRoute(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	postJSON(t, handler, "/v1/indexes/native/reset", ResetIndexRequest{
+		Dimension:          2,
+		DropOld:            true,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/native/documents/upsert", UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "a", Embedding: []float32{1, 0}}},
+		DeferVectorIndexRebuild: true,
+	}, http.StatusOK, nil)
+
+	var response BenchmarkVectorSearchResponse
+	postJSON(t, handler, "/v1/indexes/native/search/vector-index", BenchmarkVectorSearchRequest{
+		QueryEmbedding: []float32{1, 0},
+		TopK:           1,
+		EfSearch:       8,
+	}, http.StatusOK, &response)
+	if !response.NoDocuments || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !response.Diagnostics.LiveANN.Enabled || response.Diagnostics.LiveANN.ExactFallbacks != 0 || response.Diagnostics.LiveANN.FullRebuilds != 0 {
+		t.Fatalf("native benchmark response=%+v", response)
+	}
+}
+
 func TestHTTPBenchmarkVectorSearchCompactIDsParityTopK100(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
