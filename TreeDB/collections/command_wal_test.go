@@ -2910,6 +2910,16 @@ func TestCollectionCommandWALCreateCollectionReplayWithValueLogOuterLeaves(t *te
 	if got := reopened.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
 	}
+	if _, err := col.Insert([]byte("d1"), []byte(`{"content":"visible after replay","embedding":[1,0]}`)); err != nil {
+		t.Fatalf("Insert after replay reopen: %v", err)
+	}
+	search, err := col.SearchText(TextSearchOptions{IndexName: "content", Query: "visible", TopK: 1})
+	if err != nil {
+		t.Fatalf("SearchText after replay reopen: %v", err)
+	}
+	if len(search.Results) != 1 || string(search.Results[0].DocumentID) != "d1" || search.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("SearchText after replay reopen=%+v, want indexed d1", search)
+	}
 }
 
 func TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent(t *testing.T) {
