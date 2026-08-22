@@ -34,27 +34,31 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 
 Supported now:
 
-- create/open a document index;
+- create/open a document index, including declaration-time scalar fields for
+  bounded metadata filtering;
 - upsert Haystack-style documents;
 - delete by ID or metadata filter;
 - count/filter/list documents;
 - exact dense-vector search with metadata filters;
-- ranked keyword search over the declared `content` text index;
-- TreeDB collection-native hybrid search over text and/or vector sources;
+- dense `route=ann` search through the `column_graph` vector index when present,
+  with `route=exact` retained for filtered correctness checks;
+- ranked keyword search over the declared `content` text index, including
+  declared-field metadata filters;
+- TreeDB collection-native hybrid search over text and/or vector sources,
+  including declared-field metadata filters;
 - optional embedding echo in returned documents.
 
 Not supported now:
 
-- metadata filters on keyword/hybrid routes (they fail closed with
-  `unsupported`/HTTP 501);
 - client-side or service-side full-document scan fallbacks for keyword/hybrid;
 - silent vector-only/text-only downgrade when a requested source/index is
-  missing, stale, corrupt, or unavailable.
+  missing, stale, corrupt, or unavailable;
+- filtered `route=ann` dense requests (use the explicit `route=exact` path).
 
-Dense-vector search in this service is an **exact scoring correctness/MVP path**.
-It scans service documents that match the metadata filter and scores their stored
-embeddings. It is not the high-QPS `column_graph` ANN route documented in the
-TreeDB vector-search guides, and this contract makes no ANN throughput claim.
+Dense `route=ann` uses the `column_graph` graph traversal and returns exact
+scores for its bounded candidate set; `route=exact` scans only documents
+matching a bounded metadata filter. The service does not claim ANN behavior for
+indexes without a compatible `column_graph` vector index.
 
 ## Haystack document mapping
 
@@ -104,9 +108,19 @@ Request:
 {
   "name": "docs",
   "dimension": 768,
-  "metric": "cosine"
+  "metric": "cosine",
+  "scalar_fields": [
+    {"field": "repo", "value_type": "string"},
+    {"field": "start_line", "value_type": "int64"}
+  ]
 }
 ```
+
+`scalar_fields` is declaration-time schema. A field may be written as a bare
+metadata path (`repo`) or with the `meta.` prefix (`meta.repo`); the service
+normalizes both to `meta.<path>`. `id`, `content`, and `embedding` are reserved
+and cannot be declared. Supported `value_type` values are `string`, `bool`,
+`int64`, and `double` (omitted `value_type` defaults to `string`).
 
 `metric` defaults to `cosine`. Supported metrics are `cosine`, `l2`, and
 `inner_product`. Scores are always higher-is-better:
@@ -122,9 +136,11 @@ Service-created indexes declare these stable names:
 - document type: `treedb_document_service_v1`.
 
 Cosine indexes are created with the collection `column_graph` vector strategy so
-hybrid vector sources can use `Collection.SearchHybrid`. Non-cosine indexes keep
-exact dense scoring available, but hybrid vector capability is reported false
-until the collection vector path can serve that metric safely.
+hybrid vector sources and dense `route=ann` can use the collection graph. Non-
+cosine indexes keep exact dense scoring available, but hybrid vector capability
+is reported false until the collection vector path can serve that metric safely.
+Metadata filters on keyword/hybrid routes require fields declared in
+`scalar_fields`; undeclared or unbounded filters fail closed.
 
 Open/read index metadata:
 
@@ -140,8 +156,7 @@ Responses include:
     "name": "docs",
     "dimension": 768,
     "metric": "cosine",
-    "generation": 1,
-    "contract_version": "treedb-document-service/v1alpha1",
+    "contract_version": "treedb-document-service/v1alpha2",
     "embedding_field": "embedding",
     "vector_index_name": "embedding",
     "vector_strategy": "column_graph",
@@ -160,8 +175,8 @@ Responses include:
       "metadata_filters": true,
       "keyword_search": true,
       "hybrid_search": true,
-      "keyword_metadata_filters": false,
-      "hybrid_metadata_filters": false,
+      "keyword_metadata_filters": true,
+      "hybrid_metadata_filters": true,
       "benchmark_lifecycle": true,
       "vector_index_maintenance": true,
       "no_document_vector_search": true,
@@ -273,21 +288,22 @@ Boolean nodes use `conditions`:
 }
 ```
 
-Supported operators:
-
-- boolean: `AND`, `OR`, `NOT`;
-- comparison: `==`, `!=`, `>`, `>=`, `<`, `<=`;
-- membership: `in`, `not in`.
+Supported operators for the general document/filter routes are boolean `AND`,
+`OR`, `NOT`; comparisons `==`, `!=`, `>`, `>=`, `<`, `<=`; and membership `in`,
+`not in`.
 
 Fields may be `id`, `content`, `meta.<path>`, or a metadata path without the
 `meta.` prefix. Missing fields do not match any operator, including `!=` and
 `not in`, so filters fail closed rather than broadening result sets. Comparison
 operators require numeric or string operands. Membership values must be arrays.
-Unsupported operators fail with `invalid_request`; the service does not rewrite
-unsupported filters into broader scans. This filter AST is currently supported by
-document count/filter/delete and exact dense-vector search. Keyword and hybrid
-requests validate the shape and then fail closed with `unsupported` when any
-filter is supplied.
+For keyword and hybrid routes, only the bounded scalar-filter subset is
+representable: an undeclared field returns typed `invalid_request`, while an
+unsupported boolean/operator/field shape returns typed `unsupported`. The
+service never rewrites these requests into broader scans. If a declared
+scalar allow-set exceeds its lookup bound, the route fails closed with typed
+`index_unavailable` and `scalar_filter_unbounded`; no partial ranking or result
+is returned. The AST is also supported by document count/filter/delete and exact
+dense-vector search.
 
 
 ## Benchmark lifecycle and no-document vector-index search
@@ -437,6 +453,7 @@ POST /v1/indexes/{index}/search/vector
 ```json
 {
   "query_embedding": [0.1, 0.2, 0.3],
+  "route": "exact",
   "top_k": 10,
   "filter": {"field": "meta.repo", "operator": "==", "value": "snissn/gomap"},
   "return_embedding": false
@@ -448,6 +465,7 @@ Response:
 ```json
 {
   "metric": "cosine",
+  "route": "exact",
   "exact": true,
   "candidates": 42,
   "documents": [
@@ -461,7 +479,10 @@ Response:
 }
 ```
 
-Tie order is deterministic: higher score first, then document ID ascending. This route remains exact dense document scoring for TreeDB's Python and Haystack clients; it is not the `column_graph` ANN/no-document benchmark route.
+Omit `route` (or use `route=ann`) for the default `column_graph` traversal when
+the index supports it. ANN responses report `route=ann` and `exact=false`;
+filtered ANN requests fail closed instead of silently switching to a scan.
+Tie order is deterministic: higher score first, then document ID ascending.
 
 ## Keyword search
 
@@ -478,15 +499,20 @@ Request:
   "operator": "or",
   "candidate_limit": 1000,
   "max_postings_scanned": 100000,
+  "filter": {"field": "meta.repo", "operator": "==", "value": "snissn/gomap"},
   "return_embedding": false
 }
 ```
-
 `operator` is `or` (default) or `and`; explicit `AND`/`OR` in the query string is
 also understood by TreeDB text search. `candidate_limit` and
-`max_postings_scanned` are optional guardrails. If a guardrail is exceeded, the
-route fails closed with `index_unavailable` rather than returning incomplete
-rankings. Metadata `filter` is not supported here and returns `unsupported`.
+`max_postings_scanned` are optional guardrails for unfiltered keyword search.
+When a metadata `filter` is supplied, `max_postings_scanned` is rejected with
+typed `unsupported` rather than ignored, because the filtered route currently
+cannot propagate that guardrail. Other guardrail or scalar allow-set truncation
+fails closed with `index_unavailable`; no incomplete ranking is returned.
+`filter` is supported only for fields declared in `scalar_fields` at index
+creation. Undeclared fields return `invalid_request`, and unrepresentable
+operator/boolean shapes return `unsupported`.
 
 Response (abridged; the actual payload also includes the top-level `index`
 object shown in the index metadata section):
@@ -544,6 +570,7 @@ Request:
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
   "ef_search": 64,
+  "filter": {"field": "meta.repo", "operator": "==", "value": "snissn/gomap"},
   "fusion": {
     "method": "rrf",
     "rrf_k": 60,
@@ -559,7 +586,10 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
-Metadata `filter` is not supported here and returns `unsupported`.
+`filter` is supported for fields declared in `scalar_fields`; undeclared fields
+return `invalid_request`, while an unrepresentable boolean/operator/field shape
+returns `unsupported`. A declared scalar allow-set that exceeds its lookup bound
+returns `index_unavailable` with `scalar_filter_unbounded` and no partial results.
 
 Response (abridged; the actual payload also includes the top-level `index`
 object shown in the index metadata section):
@@ -618,7 +648,9 @@ Pre-alpha caveat: cosine service indexes attempt to refresh the `column_graph`
 vector index after insert-only upserts. Updates/deletes can currently leave the
 vector graph rebuild-needed in collection core; hybrid requests that need the
 vector source then fail closed until that core mutation/rebuild path is available.
-Keyword search and exact dense scoring continue to use their safe paths.
+Keyword and hybrid retrieval now use their bounded indexed-filter paths; exact
+dense scoring remains the explicit filtered correctness path. Any unavailable
+or stale source still fails closed.
 
 ## Error envelope
 

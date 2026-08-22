@@ -410,6 +410,37 @@ class BenchmarkVectorIndexOptions:
 
 
 @dataclass(frozen=True)
+class ScalarFieldDeclaration:
+    """Declaration-time metadata scalar index schema."""
+
+    field: str
+    value_type: str = "string"
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ScalarFieldDeclaration":
+        data = _as_mapping(data, "scalar field declaration")
+        _reject_unknown(data, ["field", "value_type"], "scalar field declaration")
+        return cls(
+            field=_as_str(data.get("field"), "scalar field declaration.field"),
+            value_type=_as_str(data.get("value_type", "string"), "scalar field declaration.value_type"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        field = _as_str(self.field, "scalar field declaration.field")
+        if not field.strip():
+            raise ValueError("scalar field declaration.field must not be empty")
+        value_type = _as_str(self.value_type, "scalar field declaration.value_type").strip().lower() or "string"
+        if value_type not in {"string", "bool", "int64", "double"}:
+            raise ValueError(
+                "scalar field declaration.value_type must be string, bool, int64, or double"
+            )
+        return {"field": field, "value_type": value_type}
+
+
+ScalarFieldDeclarationLike = ScalarFieldDeclaration | Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class IndexInfo:
     name: str
     dimension: int
@@ -571,6 +602,9 @@ class DenseVectorSearchResponse:
     metric: str
     exact: bool
     candidates: int
+    # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
+    # legacy exact scan path.
+    route: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
@@ -581,6 +615,7 @@ class DenseVectorSearchResponse:
             metric=_as_str(data["metric"], "metric"),
             exact=_as_bool(data["exact"], "exact"),
             candidates=_as_int(data["candidates"], "candidates"),
+            route=_as_optional_str_default(data.get("route"), "vector search response.route"),
         )
 
 
@@ -801,6 +836,7 @@ class KeywordSearchStats:
     fail_closed_reason: str = ""
     unavailable: bool = False
     unavailable_reason: str = ""
+    scalar_prefilter_ids: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -823,6 +859,7 @@ class KeywordSearchStats:
             "fail_closed_reason",
             "unavailable",
             "unavailable_reason",
+            "scalar_prefilter_ids",
         ]
         return cls(
             query_terms=_as_optional_int_default(data.get("query_terms"), "keyword stats.query_terms"),
@@ -843,6 +880,7 @@ class KeywordSearchStats:
             fail_closed_reason=_as_optional_str_default(data.get("fail_closed_reason"), "keyword stats.fail_closed_reason"),
             unavailable=_as_optional_bool_default(data.get("unavailable"), "keyword stats.unavailable"),
             unavailable_reason=_as_optional_str_default(data.get("unavailable_reason"), "keyword stats.unavailable_reason"),
+            scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "keyword stats.scalar_prefilter_ids"),
             extra=_copy_extra(data, allowed),
         )
 

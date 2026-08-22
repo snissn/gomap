@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -21,8 +22,7 @@ func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/indexes", bytes.NewBufferString(`{"name":"docs","dimension":2`))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/indexes", bytes.NewBufferString(`{"name":"docs","dimension":2`))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusBadRequest {
@@ -48,20 +48,22 @@ func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 		t.Fatalf("hybrid response=%+v", hybrid)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/keyword", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
+	// v1alpha2: filters against undeclared meta fields keep failing closed,
+	// with a typed invalid_request naming the missing scalar schema entry.
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/indexes/docs/search/keyword", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("keyword filter status=%d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("undeclared keyword filter status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
-	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/hybrid", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
+	req = httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/indexes/docs/search/hybrid", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("hybrid filter status=%d body=%s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("undeclared hybrid filter status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
 }
 
 func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
@@ -347,7 +349,7 @@ func TestHTTPBenchmarkVectorSearchAcceptsF32LEBase64Embedding(t *testing.T) {
 		{name: "multiple JSON values", body: `{"query_embedding_f32_le_b64":"` + encodeFloat32LEBase64ForTest([]float32{1, 0}) + `","top_k":1} {}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/v1/indexes/bench_b64/search/vector-index", bytes.NewBufferString(tc.body))
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/indexes/bench_b64/search/vector-index", bytes.NewBufferString(tc.body))
 			rr := httptest.NewRecorder()
 			handler.ServeHTTP(rr, req)
 			if rr.Code != http.StatusBadRequest {
@@ -436,7 +438,7 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any, wantSta
 	if err != nil {
 		t.Fatalf("marshal body: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(raw))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	if rr.Code != wantStatus {
@@ -451,13 +453,13 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any, wantSta
 
 func postBinaryVectorSearch(t *testing.T, handler http.Handler, path string, body []byte, contentType string, wantStatus int, out any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(body))
 	serveBinaryVectorSearchRequest(t, handler, req, path, contentType, wantStatus, out)
 }
 
 func postBinaryVectorSearchWithRawQuery(t *testing.T, handler http.Handler, path, rawQuery string, body []byte, contentType string, wantStatus int, out any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, bytes.NewReader(body))
 	req.URL.RawQuery = rawQuery
 	serveBinaryVectorSearchRequest(t, handler, req, path+"?"+rawQuery, contentType, wantStatus, out)
 }

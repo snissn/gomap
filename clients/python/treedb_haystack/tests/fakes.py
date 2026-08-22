@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import _support  # noqa: F401
 from treedb_client import (
@@ -42,7 +42,7 @@ def sample_index(name: str = "docs", dimension: int = 3, metric: str = "cosine")
         dimension=dimension,
         metric=metric,
         generation=1,
-        contract_version="treedb-document-service/v1alpha1",
+        contract_version="treedb-document-service/v1alpha2",
         embedding_field="embedding",
         vector_index_name="embedding",
         text_field="content",
@@ -58,6 +58,7 @@ class FakeTreeDBClient:
         self.index_info = sample_index(index_name, dimension, metric)
         self.documents: dict[str, Document] = {}
         self.ensure_calls: list[tuple[str, int, Optional[str]]] = []
+        self.ensure_scalar_fields: list[Any] = []
         self.upsert_calls: list[list[str]] = []
         self.filter_calls: list[dict[str, Any]] = []
         self.count_calls: list[dict[str, Any]] = []
@@ -67,8 +68,20 @@ class FakeTreeDBClient:
         self.keyword_calls: list[dict[str, Any]] = []
         self.hybrid_calls: list[dict[str, Any]] = []
 
-    def ensure_index(self, name: str, dimension: int, metric: Optional[str] = "cosine") -> IndexInfo:
+    def ensure_index(
+        self,
+        name: str,
+        dimension: int,
+        metric: Optional[str] = "cosine",
+        *,
+        scalar_fields: Optional[Sequence[Any]] = None,
+    ) -> IndexInfo:
         self.ensure_calls.append((name, dimension, metric))
+        self.ensure_scalar_fields.append(
+            None
+            if scalar_fields is None
+            else [item.to_dict() if hasattr(item, "to_dict") else deepcopy(item) for item in scalar_fields]
+        )
         return self.index_info
 
     def count_documents(
@@ -168,6 +181,7 @@ class FakeTreeDBClient:
         top_k: int,
         filter: Optional[dict[str, Any]] = None,
         *,
+        route: Optional[str] = None,
         return_embedding: bool = False,
         expected_generation: Optional[int] = None,
     ) -> DenseVectorSearchResponse:
@@ -176,6 +190,7 @@ class FakeTreeDBClient:
                 "query_embedding": list(query_embedding),
                 "top_k": top_k,
                 "filter": deepcopy(filter),
+                "route": route,
                 "return_embedding": return_embedding,
                 "expected_generation": expected_generation,
             }

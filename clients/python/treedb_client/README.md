@@ -8,19 +8,19 @@ Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_D
 
 ## Scope
 
-Supported by the base client:
-
 - `TreeDBClient(base_url, timeout=...)`
-- create/open/ensure index metadata
+- create/open/ensure index metadata, including declaration-time `scalar_fields`
 - upsert Haystack-shaped documents (`id`, `content`, `embedding`, `meta`)
 - delete by explicit IDs
 - delete by server-side metadata filter
 - count/filter/list documents
 - exact dense-vector search with optional metadata filters and embedding echo
+- `ann` dense-vector search through a compatible `column_graph` index; use
+  `route="exact"` for filtered correctness checks
 - benchmark lifecycle helpers for reset/create, vector-index optimize/rebuild, and fail-closed no-document vector-index search
 - explicit scalar_u8 + rerank benchmark request fields (`query_mode="quantized_rerank"`, quantized index name, rerank candidate count)
-- ranked keyword search over the service `content` text index
-- TreeDB-native hybrid text/vector search with deterministic RRF fusion options
+- ranked keyword search over the service `content` text index, including declared-field metadata filters
+- TreeDB-native hybrid text/vector search with declared-field metadata filters and deterministic RRF fusion options
 - typed dataclasses for documents, index metadata, benchmark vector options/responses, keyword/hybrid requests and responses, stats, plan/snapshot, fusion options, and errors
 - Haystack-style filter conversion/validation without a Haystack dependency
 
@@ -28,7 +28,7 @@ Not supported:
 
 - using benchmark no-document vector-index routes as Haystack/exact dense-search evidence
 - in-place `drop_old` reset for existing `column_graph` benchmark indexes; use a fresh data directory or unique index name
-- metadata filters on keyword/hybrid routes (the service fails them closed with `unsupported`/HTTP 501)
+- filtered `route="ann"` dense requests (the service fails closed; use `route="exact"`)
 - async client APIs
 - client-side scans or text/vector fallbacks to emulate unsupported TreeDB behavior
 
@@ -256,10 +256,12 @@ Unsupported operators and the top-level `embedding` field filter raise
 `meta.embedding.provider` are allowed. The client does not broaden unsupported
 filters into local document scans.
 
-This filter AST is supported by document count/filter/delete and exact dense
-vector search. Keyword and hybrid methods will serialize a valid filter if you
-provide one, but the current service contract rejects keyword/hybrid filters with
-`UnsupportedError` (`unsupported`/HTTP 501) after validating the filter shape.
+This filter AST is supported by document count/filter/delete, exact dense vector
+search, and filtered keyword/hybrid methods when the fields were declared in
+`scalar_fields` at index creation. The service compiles those filters into
+bounded scalar allow-sets and raises `IndexUnavailableError` with the typed
+`scalar_filter_unbounded` reason instead of returning partial results. The
+client never broadens a filter into a local scan.
 
 ## Error mapping
 
