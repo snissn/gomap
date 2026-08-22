@@ -335,6 +335,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
 	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 61, occurrences: 67},
+	// RAG benchmark harness (issue #4267) consumes the public compatibility
+	// configuration API for typed-column collection setup; no new legacy
+	// terminology introduced.
+	{path: "TreeDB/cmd/treedb_rag_benchmark/runner.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
 	{path: "TreeDB/collections/conditional_delete_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/collections/bson_set_update.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 22, occurrences: 24},
