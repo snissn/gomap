@@ -69,6 +69,11 @@ var columnVectorGraphCanonicalRowsTestHook struct {
 	hook func()
 }
 
+var columnVectorGraphRebuildBeforeBuildTestHook struct {
+	sync.RWMutex
+	hook func()
+}
+
 func setColumnVectorGraphCanonicalRowsTestHook(hook func()) func() {
 	columnVectorGraphCanonicalRowsTestHook.Lock()
 	previous := columnVectorGraphCanonicalRowsTestHook.hook
@@ -85,6 +90,27 @@ func runColumnVectorGraphCanonicalRowsTestHook() {
 	columnVectorGraphCanonicalRowsTestHook.RLock()
 	hook := columnVectorGraphCanonicalRowsTestHook.hook
 	columnVectorGraphCanonicalRowsTestHook.RUnlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+func setColumnVectorGraphRebuildBeforeBuildTestHook(hook func()) func() {
+	columnVectorGraphRebuildBeforeBuildTestHook.Lock()
+	previous := columnVectorGraphRebuildBeforeBuildTestHook.hook
+	columnVectorGraphRebuildBeforeBuildTestHook.hook = hook
+	columnVectorGraphRebuildBeforeBuildTestHook.Unlock()
+	return func() {
+		columnVectorGraphRebuildBeforeBuildTestHook.Lock()
+		columnVectorGraphRebuildBeforeBuildTestHook.hook = previous
+		columnVectorGraphRebuildBeforeBuildTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphRebuildBeforeBuildTestHook() {
+	columnVectorGraphRebuildBeforeBuildTestHook.RLock()
+	hook := columnVectorGraphRebuildBeforeBuildTestHook.hook
+	columnVectorGraphRebuildBeforeBuildTestHook.RUnlock()
 	if hook != nil {
 		hook()
 	}
@@ -134,48 +160,41 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, err
 	}
 
-	snap := c.db.AcquireSnapshot()
+	snap := c.db.AcquireStableSnapshot()
 	if snap == nil {
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
+	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	if catalog == nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, errCollectionNotFound
 	}
 	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	baseMeta := catalog.meta
 	c.meta = baseMeta
 	def, ok := findVectorIndex(baseMeta.VectorIndexes, name)
 	if !ok {
-		_ = snap.Close()
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
-		_ = snap.Close()
 		return c.finishRebuildVectorIndexNoopStatus(name, c.nativeVectorIndexRebuildStatus(def), nil, replay)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
-		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
-		_ = snap.Close()
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires JSON documents, got %q", name, baseMeta.Options.DocumentFormat)
 	}
 
 	state, ok := snap.StateToken()
 	if !ok {
-		_ = snap.Close()
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	baseCommitSeq := state.CommitSeq
@@ -184,7 +203,6 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	baseManifestRootID := catalog.rootID(rootName)
 	if baseManifestRootID == 0 {
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
-		_ = snap.Close()
 		if err != nil {
 			return VectorIndexStatus{}, err
 		}
@@ -194,27 +212,22 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires an initial physical column manifest root before rebuilding %d documents", name, len(rows))
 	}
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
-		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if err := validateColumnManifestIdentityAtRoot(snap, baseManifestRootID, *cfg.ActiveManifest); err != nil {
-		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseManifestRootID)
 	if err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	manifest, err := decodeColumnManifestSnapshotForScan(records)
 	if err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, baseMeta.Name, "column vector graph rebuild"); err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
@@ -222,16 +235,14 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
 	}
 	if err != nil {
-		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
 	if !usedTypedColumns {
 		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
-			_ = snap.Close()
 			return VectorIndexStatus{}, err
 		}
 	}
-	_ = snap.Close()
+	runColumnVectorGraphRebuildBeforeBuildTestHook()
 
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
 		return VectorIndexStatus{}, err
