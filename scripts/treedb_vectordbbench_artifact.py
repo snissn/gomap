@@ -752,6 +752,17 @@ def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[in
     return case_vector_count(case_type), "case_type suffix"
 
 
+def throughput_vector_count(metrics: dict[str, Any], expected: int) -> tuple[int, str]:
+    inserted = metrics.get("inserted_count")
+    if isinstance(inserted, bool) or not isinstance(inserted, int) or inserted < 0:
+        raise ValueError("canonical VDBBench result is missing non-negative inserted_count")
+    if inserted == 0:
+        return expected, "expected dataset size; VDBBench performance sentinel inserted_count=0"
+    if inserted != expected:
+        raise ValueError(f"canonical VDBBench inserted_count {inserted} != expected dataset size {expected}")
+    return inserted, "metrics.inserted_count"
+
+
 def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
     try:
         result = json.loads(path.read_text(encoding="utf-8"))
@@ -773,6 +784,7 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         raise ValueError(f"canonical VDBBench result {path} has load_duration != insert_duration + optimize_duration")
     task_config = matches[0].get("task_config") or {}
     vectors, vector_source = result_vector_count(task_config, case_type)
+    throughput_vectors, throughput_source = throughput_vector_count(metrics, vectors)
     return {
         "result_file": str(path.relative_to(artifact_root)),
         "result_sha256": sha256_file(path),
@@ -781,10 +793,13 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         "case_type": case_type,
         "vector_count": vectors,
         "vector_count_source": vector_source,
+        "inserted_count": metrics["inserted_count"],
+        "throughput_vector_count": throughput_vectors,
+        "throughput_vector_count_source": throughput_source,
         "insert_duration_seconds": insert,
         "offline_optimize_duration_seconds": optimize,
         "total_load_duration_seconds": load,
-        "insert_vectors_per_second": vectors / insert,
+        "insert_vectors_per_second": throughput_vectors / insert,
         "task_config": task_config,
         "task_config_sha256": hashlib.sha256(
             json.dumps(task_config, sort_keys=True, separators=(",", ":")).encode("utf-8")

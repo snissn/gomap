@@ -138,7 +138,7 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({"run_id": "run-1", "results": [{
                 "label": ":)",
-                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 5.0},
+                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 5.0, "inserted_count": 0},
                 "task_config": {"db_config": {"index_name": "idx"}},
             }]}), encoding="utf-8")
 
@@ -146,6 +146,8 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
 
         self.assertEqual(got["vector_count"], 50_000)
         self.assertEqual(got["insert_vectors_per_second"], 25_000)
+        self.assertEqual(got["throughput_vector_count"], 50_000)
+        self.assertIn("sentinel inserted_count=0", got["throughput_vector_count_source"])
         self.assertEqual(got["offline_optimize_duration_seconds"], 3.0)
         self.assertEqual(len(got["result_sha256"]), 64)
         self.assertEqual(got["task_config_sha256"], "04fa505555bec57a85ed8491a57562ac60212fd9ea34871a1f9893622e68d394")
@@ -187,6 +189,24 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             }]}), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "did not report success"):
+                harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
+    def test_canonical_result_rejects_partial_insert_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "label": ":)",
+                "metrics": {
+                    "insert_duration": 2.0,
+                    "optimize_duration": 3.0,
+                    "load_duration": 5.0,
+                    "inserted_count": 49_999,
+                },
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "inserted_count 49999 != expected"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
     def test_partial_multirow_run_preserves_completed_metrics(self) -> None:

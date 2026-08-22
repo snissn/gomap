@@ -156,10 +156,15 @@ For a completed load, the harness selects exactly one *new* canonical
 `result_*.json` matching that generated index name. It records the result path,
 SHA-256, run ID, task configuration and its canonical JSON SHA-256, insert
 duration, offline optimize duration, total load duration, and
-`vector_count / insert_duration` in
+`throughput_vector_count / insert_duration` in
 `vdbbench_load_metrics.json`. It fails closed if selection is ambiguous, a
 case is unsuccessful, a duration is absent/non-positive, the three durations
-disagree, or the case type does not end in a count suffix such as `50K` or `1M`.
+disagree, a positive reported `inserted_count` differs from the expected dataset
+size, or the case type does not end in a count suffix such as `50K` or `1M`.
+The current VDBBench performance result schema emits `inserted_count=0` as a
+sentinel after a successful full-dataset load; the artifact records whether its
+throughput numerator came from a positive reported count or that explicit
+full-dataset contract.
 The profile is deliberately full-load only: phase-specific pprof would require
 VDBBench orchestration not owned by this harness.
 
