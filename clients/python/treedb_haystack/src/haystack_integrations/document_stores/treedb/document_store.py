@@ -22,6 +22,8 @@ from treedb_client import (
     TreeDBClientError,
     normalize_filter,
 )
+from treedb_client import InvalidFilterError as TreeDBInvalidFilterError
+from treedb_client import InvalidRequestError as TreeDBInvalidRequestError
 
 FilterLike = Mapping[str, Any]
 _T = TypeVar("_T")
@@ -45,6 +47,7 @@ class TreeDBDocumentStore:
         similarity: str = "cosine",
         scalar_fields: Optional[Sequence[ScalarFieldDeclaration | Mapping[str, Any]]] = None,
         dense_route: str = "exact",
+        return_embedding: bool = False,
         ensure_index: bool = True,
         recreate_index: bool = False,
         timeout: Optional[float] = 30.0,

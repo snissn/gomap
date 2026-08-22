@@ -38,6 +38,7 @@ from .models import (
     IndexInfo,
     KeywordSearchRequest,
     KeywordSearchResponse,
+    KeywordSearchStats,
     OptimizeIndexResponse,
     QuantizedIndexInfo,
     ScalarFieldDeclaration,

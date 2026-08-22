@@ -407,10 +407,6 @@ func convertScalarFilterValue(field normalizedScalarField, value any) (any, erro
 		if !ok {
 			return nil, serviceErrorf(CodeInvalidRequest, "%s must be numeric", label)
 		}
-		float, err := number.Float64()
-		if err != nil || float != float64(int64(float)) {
-			return nil, serviceErrorf(CodeInvalidRequest, "%s must be an int64", label)
-		}
 		parsed, err := number.Int64()
 		if err != nil {
 			return nil, serviceErrorf(CodeInvalidRequest, "%s must be an int64", label)
