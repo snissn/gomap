@@ -137,6 +137,7 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             path = root / "vdbbench-results" / "TreeDB" / "result_test.json"
             path.parent.mkdir(parents=True)
             path.write_text(json.dumps({"run_id": "run-1", "results": [{
+                "label": ":)",
                 "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 5.0},
                 "task_config": {"db_config": {"index_name": "idx"}},
             }]}), encoding="utf-8")
@@ -153,6 +154,7 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             root = Path(tmp)
             path = root / "result_test.json"
             path.write_text(json.dumps({"results": [{
+                "label": ":)",
                 "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 0.0},
                 "task_config": {"db_config": {"index_name": "idx"}},
             }]}), encoding="utf-8")
@@ -165,12 +167,47 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             root = Path(tmp)
             path = root / "result_test.json"
             path.write_text(json.dumps({"results": [{
+                "label": ":)",
                 "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 6.0},
                 "task_config": {"db_config": {"index_name": "idx"}},
             }]}), encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "load_duration !="):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
+    def test_canonical_result_rejects_unsuccessful_case(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "label": ":(",
+                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 5.0},
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "did not report success"):
+                harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
+    def test_partial_multirow_run_preserves_completed_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = harness.HarnessState(root=root)
+            args = harness.parse_args(["--run-vdbbench"])
+            record = mock.Mock(command_string="vdbbench exact", exit_code=0)
+            with mock.patch.object(harness, "run_command", side_effect=[record, RuntimeError("second row failed")]), \
+                    mock.patch.object(harness, "capture_vdbbench_load_metrics", return_value={"insert_duration_seconds": 1.0}):
+                with self.assertRaisesRegex(RuntimeError, "second row failed"):
+                    harness.run_vdbbench_rows(
+                        state,
+                        args=args,
+                        gomap_root=root,
+                        vectordbbench_dir=root,
+                        base_url="http://127.0.0.1:1",
+                        index_prefix="test",
+                    )
+
+            sidecar = json.loads((root / "vdbbench_load_metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual([row["row"] for row in sidecar["rows"]], ["exact"])
 
     def test_capture_fails_closed_on_ambiguous_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,6 +275,16 @@ class ManifestFileListTest(unittest.TestCase):
 
         self.assertEqual(files, ["manifest.json"])
         self.assertFalse(truncated)
+
+    def test_manifest_does_not_reference_missing_metrics_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = harness.HarnessState(root=root, vdbbench=[{"row": "exact"}])
+
+            harness.write_manifest(state, args=harness.parse_args([]), context={}, service_command=None)
+
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertIsNone(manifest["vdbbench_load_metrics"])
 
 
 if __name__ == "__main__":

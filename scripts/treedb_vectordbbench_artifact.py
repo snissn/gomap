@@ -762,6 +762,8 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
     ]
     if len(matches) != 1:
         raise ValueError(f"canonical VDBBench result {path} has {len(matches)} entries for index {index_name!r}; expected one")
+    if matches[0].get("label") != ":)":
+        raise ValueError(f"canonical VDBBench result {path} did not report success")
     metrics = matches[0].get("metrics") or {}
     insert = positive_number(metrics.get("insert_duration"), "insert_duration")
     optimize = positive_number(metrics.get("optimize_duration"), "optimize_duration")
@@ -850,7 +852,6 @@ def run_vdbbench_rows(
                 results_dir, before_results, index_name, args.case_type, state.root
             )
         state.vdbbench.append(row_record)
-    if state.vdbbench:
         write_json(state.root / "vdbbench_load_metrics.json", {
             "schema_version": "treedb-vectordbbench-load-metrics/v1",
             "rows": state.vdbbench,
@@ -960,7 +961,7 @@ def write_manifest(
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
-        "vdbbench_load_metrics": "vdbbench_load_metrics.json" if state.vdbbench else None,
+        "vdbbench_load_metrics": "vdbbench_load_metrics.json" if (state.root / "vdbbench_load_metrics.json").exists() else None,
         "route_proof": "route_proof.json" if state.route_proof else None,
         "skips": state.skips,
         "files": files,
