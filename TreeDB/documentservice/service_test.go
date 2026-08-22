@@ -194,7 +194,7 @@ func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
 	if count.Count != 1 {
 		t.Fatalf("count=%d want 1", count.Count)
 	}
-	search, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, ReturnEmbedding: true})
+	search, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, ReturnEmbedding: true, Route: RouteExact})
 	if err != nil {
 		t.Fatalf("SearchDenseVector: %v", err)
 	}
@@ -431,10 +431,12 @@ func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
 		t.Fatalf("UpsertDocuments: %v", err)
 	}
 	filter := &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}
-	if _, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeUnsupported {
+	// v1alpha2: filters against undeclared meta fields fail closed with a
+	// typed invalid_request instead of the legacy blanket 501.
+	if _, err := svc.SearchKeyword(ctx, "docs", KeywordSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("keyword filter err=%v code=%s", err, ErrorCodeOf(err))
 	}
-	if _, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeUnsupported {
+	if _, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "refund", TopK: 1, Filter: filter}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("hybrid filter err=%v code=%s", err, ErrorCodeOf(err))
 	}
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund updated", Embedding: []float32{0, 1}, Meta: map[string]any{"repo": "gomap"}}}}); err != nil {
@@ -975,7 +977,7 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 	if len(exact.Results) != 1 || exact.Results[0].ID != "a" || exact.QueryMode != BenchmarkVectorQueryModeExact || exact.Diagnostics.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || !exact.NoDocuments {
 		t.Fatalf("exact search after missing quantized asset=%+v", exact)
 	}
-	dense, err := svc.SearchDenseVector(ctx, "bench", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
+	dense, err := svc.SearchDenseVector(ctx, "bench", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteExact})
 	if err != nil || !dense.Exact || len(dense.Documents) != 1 || dense.Documents[0].ID != "a" {
 		t.Fatalf("dense exact fallback contract changed dense=%+v err=%v", dense, err)
 	}

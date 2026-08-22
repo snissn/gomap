@@ -134,7 +134,7 @@ func assertHTTPCompactDocumentReads(t *testing.T, handler http.Handler, want []f
 	}
 
 	var searched DenseVectorSearchResponse
-	postJSON(t, handler, "/v1/indexes/docs/search/vector", DenseVectorSearchRequest{QueryEmbedding: want, TopK: 1, ReturnEmbedding: true}, http.StatusOK, &searched)
+	postJSON(t, handler, "/v1/indexes/docs/search/vector", DenseVectorSearchRequest{QueryEmbedding: want, TopK: 1, ReturnEmbedding: true, Route: RouteExact}, http.StatusOK, &searched)
 	if len(searched.Documents) != 1 || searched.Documents[0].ID != "compact" || !reflect.DeepEqual(searched.Documents[0].Embedding, want) {
 		t.Fatalf("searched documents=%+v", searched.Documents)
 	}

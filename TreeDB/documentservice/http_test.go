@@ -48,20 +48,16 @@ func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 		t.Fatalf("hybrid response=%+v", hybrid)
 	}
 
+	// v1alpha2: filters against undeclared meta fields keep failing closed,
+	// with a typed invalid_request naming the missing scalar schema entry.
 	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/keyword", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("keyword filter status=%d body=%s", rr.Code, rr.Body.String())
-	}
-	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
 	req = httptest.NewRequest(http.MethodPost, "/v1/indexes/docs/search/hybrid", bytes.NewBufferString(`{"query":"refund","top_k":1,"filter":{"field":"meta.repo","operator":"==","value":"gomap"}}`))
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusNotImplemented {
-		t.Fatalf("hybrid filter status=%d body=%s", rr.Code, rr.Body.String())
-	}
-	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeUnsupported)
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
 }
 
 func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {

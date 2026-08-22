@@ -155,6 +155,10 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if err != nil {
 		return IndexInfo{}, err
 	}
+	scalarDeclarations, err := normalizeScalarFieldDeclarations(req.ScalarFields)
+	if err != nil {
+		return IndexInfo{}, err
+	}
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
@@ -182,6 +186,17 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 			StorePositions:   true,
 			SchemaGeneration: 1,
 		}},
+	}
+	if len(scalarDeclarations) > 0 {
+		indexes := make([]collections.IndexDefinition, len(scalarDeclarations))
+		for i, declaration := range scalarDeclarations {
+			indexes[i] = collections.IndexDefinition{
+				Name:      declaration.indexName,
+				Field:     declaration.field,
+				ValueType: declaration.collectionTy,
+			}
+		}
+		meta.Indexes = indexes
 	}
 	created, err := s.manager.CreateCollection(meta)
 	if err != nil {
@@ -417,7 +432,11 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	return FilterDocumentsResponse{Index: info, Documents: docs, MatchedCount: matched, Truncated: truncated}, nil
 }
 
-// SearchDenseVector runs exact dense scoring with optional metadata filters.
+// SearchDenseVector scores QueryEmbedding over the index. Route=ann uses the
+// column_graph vector index traversal (default when that index exists and no
+// filter is supplied); route=exact keeps the bounded filtered document scan.
+// Route selection is deterministic and echoed in the response; there is no
+// silent downgrade.
 func (s *Service) SearchDenseVector(ctx context.Context, index string, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -428,6 +447,16 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	}
 	if err := validateEmbedding("query_embedding", req.QueryEmbedding, info.Dimension, info.Metric); err != nil {
 		return DenseVectorSearchResponse{}, err
+	}
+	route, err := resolveDenseSearchRoute(req, info)
+	if err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
+	if req.EfSearch < 0 {
+		return DenseVectorSearchResponse{}, serviceError(CodeInvalidRequest, "ef_search must be non-negative")
+	}
+	if route == RouteAnn {
+		return s.searchDenseVectorAnn(ctx, col, info, req)
 	}
 	if err := req.Filter.Validate(); err != nil {
 		return DenseVectorSearchResponse{}, err
@@ -473,7 +502,33 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 	if docs == nil {
 		docs = []Document{}
 	}
-	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Exact: true, Candidates: candidateCount}, nil
+	return DenseVectorSearchResponse{Index: info, Documents: docs, Metric: info.Metric, Route: RouteExact, Exact: true, Candidates: candidateCount}, nil
+}
+
+// resolveDenseSearchRoute applies the deterministic route defaulting rules:
+// explicit route values are validated; an omitted route selects ann when the
+// index declares a column_graph vector index and no filter is present, and
+// exact otherwise (filtered retrieval and non-column_graph indexes).
+func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
+	switch req.Route {
+	case "":
+		if req.Filter != nil {
+			return RouteExact, nil
+		}
+		if info.Capabilities.ColumnGraphVectorSearch {
+			return RouteAnn, nil
+		}
+		return RouteExact, nil
+	case RouteExact:
+		return RouteExact, nil
+	case RouteAnn:
+		if req.Filter != nil {
+			return "", serviceError(CodeInvalidRequest, "dense route \"ann\" cannot apply metadata filters; use route \"exact\" for filtered dense retrieval")
+		}
+		return RouteAnn, nil
+	default:
+		return "", serviceErrorf(CodeInvalidRequest, "unsupported dense search route %q; use \"ann\" or \"exact\"", req.Route)
+	}
 }
 
 // ResetIndex creates a missing benchmark index or clears an existing compatible
@@ -700,7 +755,7 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 		if err := req.Filter.Validate(); err != nil {
 			return KeywordSearchResponse{}, err
 		}
-		return KeywordSearchResponse{}, serviceError(CodeUnsupported, "metadata filters are not supported for keyword search yet; the service will not scan documents as a fallback")
+		return s.searchKeywordWithScalarFilter(ctx, col, info, req, operator)
 	}
 
 	textResponse, err := col.SearchText(collections.TextSearchOptions{
@@ -740,11 +795,10 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
 	}
-	if req.Filter != nil {
-		if err := req.Filter.Validate(); err != nil {
-			return HybridSearchResponse{}, err
-		}
-		return HybridSearchResponse{}, serviceError(CodeUnsupported, "metadata filters are not supported for hybrid search yet; the service will not scan documents as a fallback")
+	schema := newScalarSchema(info.ScalarFields)
+	scalarFilter, err := translateScalarFilter(req.Filter, schema)
+	if err != nil {
+		return HybridSearchResponse{}, err
 	}
 
 	hasText := strings.TrimSpace(req.Query) != ""
@@ -756,6 +810,7 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	opts := collections.HybridSearchOptions{
 		TopK:                 req.TopK,
 		Fusion:               req.Fusion,
+		ScalarFilter:         scalarFilter,
 		IncludeDocuments:     true,
 		DocumentFetchOptions: serviceDocumentFetchOptions(req.ReturnEmbedding),
 	}
@@ -791,7 +846,7 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	response.Snapshot = hybridResponse.Snapshot
 	response.Stats = hybridResponse.Stats
 	if err != nil {
-		return response, mapHybridSearchError(err)
+		return response, mappedHybridSearchError("hybrid search", err, hybridResponse.Stats)
 	}
 	docs, err := documentsFromHybridSearchResults(hybridResponse.Results, hybridResponse.Plan, req.ReturnEmbedding)
 	if err != nil {
@@ -984,6 +1039,10 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 		generation = 1
 	}
 	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
+	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
+	capabilities := indexCapabilities(vectorDef, hybridSearch)
+	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
+	capabilities.HybridMetadataFilters = len(scalarFields) > 0
 	return IndexInfo{
 		Name:                 meta.Name,
 		Dimension:            vectorDef.Dimensions,
@@ -997,10 +1056,11 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 		VectorEfConstruction: vectorDef.EfConstruction,
 		VectorEfSearch:       vectorDef.EfSearch,
 		QuantizedIndexes:     quantizedIndexInfos(vectorDef),
+		ScalarFields:         scalarFields,
 		TextField:            defaultTextField,
 		TextIndexName:        textDef.Name,
 		DocumentType:         defaultCollectionDocType,
-		Capabilities:         indexCapabilities(vectorDef, hybridSearch),
+		Capabilities:         capabilities,
 	}, nil
 }
 
