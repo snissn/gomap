@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +16,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -2545,6 +2548,122 @@ func TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {
 	}
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("reopen AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionPinsIndexNamespaceThroughPublish(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on Windows")
+	}
+	dir := t.TempDir()
+	seed, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open seed DB: %v", err)
+	}
+	value := bytes.Repeat([]byte("x"), 128)
+	for i := range 4096 {
+		key := []byte(fmt.Sprintf("seed/%06d", i))
+		if err := seed.Set(key, value); err != nil {
+			_ = seed.Close()
+			t.Fatalf("Set seed key %d: %v", i, err)
+		}
+	}
+	if err := seed.Checkpoint(); err != nil {
+		_ = seed.Close()
+		t.Fatalf("Checkpoint seed DB: %v", err)
+	}
+	for i := range 4096 {
+		if err := seed.Delete([]byte(fmt.Sprintf("seed/%06d", i))); err != nil {
+			_ = seed.Close()
+			t.Fatalf("Delete seed key %d: %v", i, err)
+		}
+	}
+	if err := seed.Checkpoint(); err != nil {
+		_ = seed.Close()
+		t.Fatalf("Checkpoint deleted seed DB: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("Close seed DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+
+	d := openCollectionCommandWALDB(t, dir)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	blocked := make(chan struct{})
+	release := make(chan struct{})
+	var blockedOnce atomic.Bool
+	var releaseOnce sync.Once
+	releaseCreate := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseCreate()
+	testBeforeCreateCollectionPublishHook.installMu.Lock()
+	testBeforeCreateCollectionPublishHook.ptr.Store(&testCreateCollectionPublishHook{fn: func(got CollectionMeta) {
+		if got.Name != "docs" || !blockedOnce.CompareAndSwap(false, true) {
+			return
+		}
+		close(blocked)
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+	}})
+	hookInstalled := true
+	uninstallHook := func() {
+		if !hookInstalled {
+			return
+		}
+		testBeforeCreateCollectionPublishHook.ptr.Store(nil)
+		testBeforeCreateCollectionPublishHook.installMu.Unlock()
+		hookInstalled = false
+	}
+	defer uninstallHook()
+
+	createDone := make(chan error, 1)
+	go func() {
+		_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{
+			Name: "docs",
+			TextIndexes: []TextIndexDefinition{{
+				Name:    "lexical",
+				Version: TextIndexVersionV2,
+				Fields:  []TextIndexField{{Field: "body"}},
+			}},
+		})
+		createDone <- err
+	}()
+	select {
+	case <-blocked:
+	case <-ctx.Done():
+		releaseCreate()
+		_ = d.Close()
+		t.Fatalf("wait for CreateCollection publication hook: %v", ctx.Err())
+	}
+
+	vacuumErr := d.VacuumIndexOnline(ctx)
+	releaseCreate()
+	var createErr error
+	select {
+	case createErr = <-createDone:
+	case <-ctx.Done():
+		_ = d.Close()
+		t.Fatalf("wait for CreateCollection after vacuum: %v", ctx.Err())
+	}
+	uninstallHook()
+	var postCreateVacuumErr error
+	if errors.Is(vacuumErr, rootpublication.ErrResourcePinned) && createErr == nil {
+		postCreateVacuumErr = d.VacuumIndexOnline(ctx)
+	}
+	closeErr := d.Close()
+	reopened, reopenErr := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if reopenErr == nil {
+		defer func() { _ = reopened.Close() }()
+	}
+	if !errors.Is(vacuumErr, rootpublication.ErrResourcePinned) || createErr != nil || postCreateVacuumErr != nil || closeErr != nil || reopenErr != nil {
+		t.Fatalf("create/vacuum publication boundary: vacuum=%v want ErrResourcePinned; create=%v post-create-vacuum=%v close=%v reopen=%v", vacuumErr, createErr, postCreateVacuumErr, closeErr, reopenErr)
+	}
+	if _, err := NewCollectionManager(reopened).OpenCollection("docs"); err != nil {
+		t.Fatalf("OpenCollection after reopen: %v", err)
 	}
 }
 
