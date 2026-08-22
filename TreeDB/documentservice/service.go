@@ -270,6 +270,9 @@ func (s *Service) OpenIndex(ctx context.Context, name string) (IndexInfo, error)
 
 // UpsertDocuments writes or replaces documents in index.
 func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertDocumentsRequest) (UpsertDocumentsResponse, error) {
+	if s == nil {
+		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -371,6 +374,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 
 // DeleteDocuments deletes explicit IDs or documents matching a filter.
 func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteDocumentsRequest) (DeleteDocumentsResponse, error) {
+	if s == nil {
+		return DeleteDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 

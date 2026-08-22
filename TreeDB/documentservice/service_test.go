@@ -15,6 +15,17 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
+	var svc *Service
+	ctx := context.Background()
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("UpsertDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
