@@ -265,6 +265,60 @@ func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error)
 	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
 }
 
+func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, expectedRoot uint64, replaceCurrent *VectorIndex, replaceMutationSeq uint64) (*VectorIndex, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if candidate == nil {
+		return nil, errors.New("collections: vector index is nil")
+	}
+	runNativeVectorIndexBeforeInstallHookForTest(candidate.name)
+	publicationMu := candidate.nativePublicationLock()
+	publicationMu.Lock()
+	defer publicationMu.Unlock()
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, candidate.name)
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
+	}
+	activeRoot := catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name))
+	current := c.registeredVectorIndex(def.Name)
+	replaceCurrentUnchanged := current != nil && current == replaceCurrent && current.nativeMutationSequence() == replaceMutationSeq && activeRoot == expectedRoot
+	if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == activeRoot {
+		if !replaceCurrentUnchanged {
+			return current, nil
+		}
+	}
+	if reason := candidate.validateNativeSnapshotDefinition(def); reason != "" {
+		return nil, fmt.Errorf("%w: index %q candidate metadata changed: %s", errVectorIndexStaleNativeRoot, def.Name, reason)
+	}
+	if activeRoot != expectedRoot {
+		return nil, fmt.Errorf("%w: index %q candidate root %d current root %d", errVectorIndexStaleNativeRoot, def.Name, expectedRoot, activeRoot)
+	}
+	if current != nil && current.needsNativeAutoPersist() && !replaceCurrentUnchanged {
+		return nil, fmt.Errorf("%w: refusing to replace dirty registered index %q", errVectorIndexStaleNativeRoot, def.Name)
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	c.RegisterVectorIndex(candidate)
+	return candidate, nil
+}
+
 // SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
 // index as a collection-root delta. It is used by live write maintenance; full
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
@@ -580,37 +634,20 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	if index.validateNativeSnapshotDefinition(def) != "" {
+		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+		return nil, status, nil
+	}
 	status.RootID = rootID
 	index.recordLoadedSnapshot(rootID, bytesDisk)
-	for {
-		current := c.registeredVectorIndex(def.Name)
-		publicationMu := index.nativePublicationLock()
-		if current != nil {
-			publicationMu = current.nativePublicationLock()
-		}
-		publicationMu.Lock()
-		if c.registeredVectorIndex(def.Name) != current {
-			publicationMu.Unlock()
-			continue
-		}
-		if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == rootID {
-			status.Loaded = true
-			status.Epoch, status.BytesDisk, _, _, _ = current.nativeSearchState()
-			publicationMu.Unlock()
-			return current, status, nil
-		}
-		if current != nil && current.needsNativeAutoPersist() {
-			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-			publicationMu.Unlock()
-			return nil, status, fmt.Errorf("%w: refusing to replace dirty registered index %q", errVectorIndexStaleNativeRoot, def.Name)
-		}
-		c.RegisterVectorIndex(index)
-		publicationMu.Unlock()
-		status.Loaded = true
-		status.Epoch = rootID
-		status.BytesDisk = bytesDisk
-		return index, status, nil
+	installed, err := c.installNativeVectorIndexCandidate(index, rootID, nil, 0)
+	if err != nil {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return nil, status, err
 	}
+	status.Loaded = true
+	status.Epoch, status.BytesDisk, _, _, _ = installed.nativeSearchState()
+	return installed, status, nil
 }
 
 func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {

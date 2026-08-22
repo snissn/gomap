@@ -550,6 +550,168 @@ func TestCollectionVectorIndexNativeRootMissingGraphBuildsRuntimeOnWrite(t *test
 	requireVectorResultIDs(t, results, "a")
 }
 
+func TestCollectionVectorIndexNativeRootDelayedLoadKeepsNewerPublishedGraph(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	seed, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open seed collection: %v", err)
+	}
+	if _, err := seed.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	current := seed.registeredVectorIndex(def.Name)
+	first, err := current.SaveNativeSnapshot()
+	if err != nil || !first.Loaded {
+		t.Fatalf("save first root: status=%+v err=%v", first, err)
+	}
+
+	loader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open loader collection: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var hookMu sync.Mutex
+	hookUsed := false
+	restore := setNativeVectorIndexBeforeInstallHookForTest(func(name string) {
+		if name != def.Name {
+			return
+		}
+		hookMu.Lock()
+		firstCall := !hookUsed
+		hookUsed = true
+		hookMu.Unlock()
+		if firstCall {
+			close(entered)
+			<-release
+		}
+	})
+	defer restore()
+	type loadResult struct {
+		index  *VectorIndex
+		status VectorIndexLoadStatus
+		err    error
+	}
+	loaded := make(chan loadResult, 1)
+	go func() {
+		index, status, err := loader.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		loaded <- loadResult{index: index, status: status, err: err}
+	}()
+	<-entered
+
+	if _, err := seed.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert before second root: %v", err)
+	}
+	second, err := current.SaveNativeDeltaSnapshot()
+	if err != nil || !second.Loaded || second.RootID == first.RootID {
+		t.Fatalf("save second root: first=%+v second=%+v err=%v", first, second, err)
+	}
+	close(release)
+	result := <-loaded
+	if result.err != nil || result.index != current || !result.status.Loaded || result.status.Epoch != second.RootID {
+		t.Fatalf("delayed load replaced newer graph: current=%p loaded=%p status=%+v err=%v", current, result.index, result.status, result.err)
+	}
+	got, _, err := result.index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search newer graph: %v", err)
+	}
+	requireVectorResultIDs(t, got, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootDelayedEmptyBuildKeepsFirstMutation(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close before race: %v", err)
+	}
+
+	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr = NewCollectionManager(d)
+	builder, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open builder collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer collection: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var hookMu sync.Mutex
+	hookUsed := false
+	restore := setNativeVectorIndexBeforeInstallHookForTest(func(name string) {
+		if name != def.Name {
+			return
+		}
+		hookMu.Lock()
+		firstCall := !hookUsed
+		hookUsed = true
+		hookMu.Unlock()
+		if firstCall {
+			close(entered)
+			<-release
+		}
+	})
+	defer restore()
+	built := make(chan struct {
+		index *VectorIndex
+		err   error
+	}, 1)
+	go func() {
+		index, err := builder.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+		built <- struct {
+			index *VectorIndex
+			err   error
+		}{index: index, err: err}
+	}()
+	<-entered
+	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert first mutation: %v", err)
+	}
+	current := writer.registeredVectorIndex(def.Name)
+	if current == nil || !current.needsNativeAutoPersist() {
+		t.Fatalf("first mutation did not install a dirty graph: current=%p", current)
+	}
+	close(release)
+	result := <-built
+	if result.err != nil || result.index != current || builder.registeredVectorIndex(def.Name) != current {
+		t.Fatalf("delayed empty build replaced dirty graph: current=%p built=%p registered=%p err=%v", current, result.index, builder.registeredVectorIndex(def.Name), result.err)
+	}
+	got, _, err := result.index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search first mutation: %v", err)
+	}
+	requireVectorResultIDs(t, got, "a")
+}
+
 func TestCollectionVectorIndexNativeRootStaleRuntimeRefreshesAfterRecreate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

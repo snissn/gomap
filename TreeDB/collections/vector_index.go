@@ -54,6 +54,32 @@ const (
 
 var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")
 
+var nativeVectorIndexBeforeInstallHookForTest struct {
+	mu sync.Mutex
+	fn func(string)
+}
+
+func setNativeVectorIndexBeforeInstallHookForTest(fn func(string)) func() {
+	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+	previous := nativeVectorIndexBeforeInstallHookForTest.fn
+	nativeVectorIndexBeforeInstallHookForTest.fn = fn
+	nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	return func() {
+		nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+		nativeVectorIndexBeforeInstallHookForTest.fn = previous
+		nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	}
+}
+
+func runNativeVectorIndexBeforeInstallHookForTest(name string) {
+	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+	fn := nativeVectorIndexBeforeInstallHookForTest.fn
+	nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	if fn != nil {
+		fn(name)
+	}
+}
+
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
 // collection row remains canonical; float32 indexes can rerank directly from the
 // indexed vector copy, while compressed indexes rerank from canonical rows.
@@ -505,14 +531,21 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return nil, err
 		}
 	}
-	nativePersistent := collectionMetaDeclaresVectorIndex(c.meta, index.name)
+	nativeDef, nativePersistent := findVectorIndex(c.meta.VectorIndexes, index.name)
+	var replaceCurrent *VectorIndex
+	var replaceMutationSeq uint64
 	index.setNativePersistent(nativePersistent)
 	if nativePersistent {
+		index.recordNativeDefinition(nativeDef)
 		baseEpoch, err := c.currentNativeVectorIndexRootID(index.name)
 		if err != nil {
 			return nil, err
 		}
 		index.recordFullSnapshotBaseEpoch(baseEpoch)
+		if register {
+			replaceCurrent = c.registeredVectorIndex(index.name)
+			replaceMutationSeq = replaceCurrent.nativeMutationSequence()
+		}
 	}
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
@@ -537,7 +570,14 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 		return nil, err
 	}
 	if register {
-		c.RegisterVectorIndex(index)
+		if nativePersistent {
+			index, err = c.installNativeVectorIndexCandidate(index, index.nativeSnapshotBaseEpochForFullSave(), replaceCurrent, replaceMutationSeq)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			c.RegisterVectorIndex(index)
+		}
 		if c.manager != nil && index.needsNativeAutoPersist() {
 			c.manager.registerCollectionHandle(c)
 		}
@@ -3650,6 +3690,15 @@ func (idx *VectorIndex) nativeSearchState() (epoch uint64, bytesDisk int64, live
 	deletedDocs := len(idx.nodes) - liveDocs
 	rebuildNeeded = deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio
 	return idx.persistedEpoch, idx.persistedBytesDisk, liveDocs, rebuildNeeded, idx.liveANNFullRebuilds
+}
+
+func (idx *VectorIndex) nativeMutationSequence() uint64 {
+	if idx == nil {
+		return 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.mutationSeq
 }
 
 func (idx *VectorIndex) markLiveANNFullRebuild() {

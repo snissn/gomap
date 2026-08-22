@@ -4028,7 +4028,13 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if registerEmptyRuntime {
-		c.RegisterVectorIndex(runtime)
+		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
+			if _, err := c.installNativeVectorIndexCandidate(runtime, 0, nil, 0); err != nil {
+				return nil, err
+			}
+		} else {
+			c.RegisterVectorIndex(runtime)
+		}
 	}
 	return newMeta.copy(), nil
 }
