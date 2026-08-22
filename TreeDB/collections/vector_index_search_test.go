@@ -4897,6 +4897,9 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	if got := buffer.nativeSearchScratch.explorationLimit; got != 32 {
 		t.Fatalf("wide efSearch exploration limit=%d want bounded 32 for 4 live / 66 stale / M=4", got)
 	}
+	if got := buffer.nativeSearchScratch.explored; got > buffer.nativeSearchScratch.explorationLimit {
+		t.Fatalf("wide efSearch explored=%d limit=%d want bounded total scoring", got, buffer.nativeSearchScratch.explorationLimit)
+	}
 	zero, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
 		IndexName: def.Name,
 		Query:     []float32{1, 0},

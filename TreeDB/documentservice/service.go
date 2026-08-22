@@ -132,6 +132,15 @@ func serviceClosedError() error {
 
 // CreateIndex creates or opens a compatible document service index.
 func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
+	if s == nil {
+		return IndexInfo{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.createIndexLocked(ctx, req)
+}
+
+func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
 	if err := ctxErr(ctx); err != nil {
 		return IndexInfo{}, err
 	}
@@ -203,12 +212,18 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	if !alreadyExisted && info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
+	if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
+		s.benchmarkSearchCacheMu.RLock()
+		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
+		s.benchmarkSearchCacheMu.RUnlock()
+		if cached {
+			return info, nil
+		}
 		col, _, err := s.openIndex(ctx, req.Name, 0)
 		if err != nil {
 			return IndexInfo{}, err
 		}
-		if _, err := col.BuildVectorIndex(collections.VectorIndexOptions{
+		opts := collections.VectorIndexOptions{
 			Name:           info.VectorIndexName,
 			Field:          info.EmbeddingField,
 			Metric:         collectionMetric,
@@ -217,11 +232,30 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 			EfConstruction: info.VectorEfConstruction,
 			EfSearch:       info.VectorEfSearch,
 			Encoding:       collections.VectorIndexEncodingFloat32,
-		}); err != nil {
-			return IndexInfo{}, mapCollectionMaintenanceError("initialize native vector index", err)
 		}
-		if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
-			return IndexInfo{}, wrapServiceError(CodeInternal, "prime native vector search cache after create index failed", err)
+		index, load, err := col.LoadNativeVectorIndexSnapshot(opts)
+		if err != nil {
+			return IndexInfo{}, mapCollectionMaintenanceError("load native vector index", err)
+		}
+		if index == nil && !load.Loaded && load.RootName != "" && load.RootID == 0 {
+			empty := true
+			if _, err := col.ScanDocumentsFunc(1, func(collections.DocumentRecord) (bool, error) {
+				empty = false
+				return false, nil
+			}); err != nil {
+				return IndexInfo{}, mapCollectionMaintenanceError("inspect native vector index", err)
+			}
+			if empty {
+				index, err = col.BuildVectorIndex(opts)
+				if err != nil {
+					return IndexInfo{}, mapCollectionMaintenanceError("initialize native vector index", err)
+				}
+			}
+		}
+		if index != nil {
+			if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
+				return IndexInfo{}, wrapServiceError(CodeInternal, "prime native vector search cache after create index failed", err)
+			}
 		}
 	}
 	return info, nil
@@ -528,7 +562,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		if ErrorCodeOf(err) != CodeIndexNotFound {
 			return ResetIndexResponse{}, err
 		}
-		info, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
+		info, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
 		if err != nil {
 			return ResetIndexResponse{}, err
 		}
@@ -546,7 +580,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if existingInfo.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
 		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
 	}
-	if _, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
+	if _, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
 		return ResetIndexResponse{}, err
 	}
 

@@ -976,6 +976,48 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 	}
 }
 
+func TestServiceBenchmarkNativeRuntimeCompatibleCreateAfterEmptyReopen(t *testing.T) {
+	dir := t.TempDir()
+	open := func() (*Service, *backenddb.DB) {
+		t.Helper()
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		return New(collections.NewCollectionManager(db)), db
+	}
+	ctx := context.Background()
+	req := CreateIndexRequest{Name: "native_empty", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+
+	svc, db := open()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("initial CreateIndex: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close initial service: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close initial db: %v", err)
+	}
+
+	svc, db = open()
+	defer db.Close()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("compatible CreateIndex after reopen: %v", err)
+	}
+	empty, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8})
+	if err != nil || len(empty.Results) != 0 || empty.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || empty.Diagnostics.LiveANN.FullRebuilds != 0 {
+		t.Fatalf("empty native search response=%+v err=%v", empty, err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("first UpsertDocuments after reopen: %v", err)
+	}
+	got, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8})
+	if err != nil || len(got.Results) != 1 || got.Results[0].ID != "a" || got.Diagnostics.LiveANN.FullRebuilds != 0 {
+		t.Fatalf("native search after first upsert response=%+v err=%v", got, err)
+	}
+}
+
 func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {

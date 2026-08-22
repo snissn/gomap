@@ -2462,6 +2462,7 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
 	visited[entryPoint] = mark
+	scratch.explored = 1
 	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
 	queue := scratch.queue[:0]
 	queue.push(entry)
@@ -2471,6 +2472,7 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 	if currentOnly && !idx.nodes[entryPoint].deleted {
 		liveBest.pushBounded(entry, limit)
 	}
+search:
 	for len(queue) > 0 {
 		current := queue.pop()
 		if len(best) >= explorationLimit && vectorIndexCandidateWorse(current, best[0]) {
@@ -2484,8 +2486,12 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
+			if currentOnly && scratch.explored >= explorationLimit {
+				break search
+			}
 			visited[neighborID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
+			scratch.explored++
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -3357,6 +3363,7 @@ type vectorIndexSearchScratch struct {
 	visitedEpochs    []uint32
 	visitedEpoch     uint32
 	explorationLimit int
+	explored         int
 	queue            vectorIndexMinCandidateHeap
 	best             vectorIndexMaxCandidateHeap
 	liveBest         vectorIndexMaxCandidateHeap
