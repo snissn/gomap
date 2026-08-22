@@ -1885,6 +1885,103 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	scratch := idx.getSearchScratch()
+	defer idx.putSearchScratch(scratch)
+	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, scratch)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
+	for _, candidate := range candidates {
+		if len(results) >= topK {
+			break
+		}
+		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
+			continue
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		results = append(results, VectorSearchResult{
+			DocumentID: node.documentID,
+			Distance:   candidate.distance,
+		})
+	}
+	cloneVectorSearchResultDocumentIDs(results)
+	return results, nil
+}
+
+func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	if idx == nil {
+		return nil, errors.New("collections: vector index is nil")
+	}
+	if buffer == nil {
+		return nil, errors.New("collections: nil vector index search buffer")
+	}
+	buffer.Reset()
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
+	if err != nil {
+		return nil, err
+	}
+	resultCount := 0
+	idByteCount := 0
+	for _, candidate := range candidates {
+		if resultCount >= topK {
+			break
+		}
+		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
+			continue
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(node.documentID), math.MaxInt, "result id")
+		if err != nil {
+			return nil, err
+		}
+		resultCount++
+	}
+	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
+	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	resultIndex := 0
+	idOffset := 0
+	for _, candidate := range candidates {
+		if resultIndex >= resultCount {
+			break
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		nextIDOffset := idOffset + len(node.documentID)
+		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		copy(id, node.documentID)
+		buffer.results[resultIndex] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
+		resultIndex++
+		idOffset = nextIDOffset
+	}
+	return buffer.results, nil
+}
+
+func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, efSearch int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
 	if topK <= 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
 	}
@@ -1909,8 +2006,6 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 		}
 		prepared = &preparedQuery
 	}
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
 		return nil, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), idx.dimensions)
 	}
@@ -1921,43 +2016,7 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if limit < topK {
 		limit = topK
 	}
-	// This route cannot exact-fallback, so stale graph waypoints must not consume
-	// its live candidate budget. Ordinary Search keeps its configured bound and
-	// uses its existing exact-underfill fallback instead.
-	if limit < len(idx.nodes) {
-		stale := len(idx.nodes) - len(idx.currentNode)
-		if stale > len(idx.nodes)-limit {
-			limit = len(idx.nodes)
-		} else {
-			limit += stale
-		}
-	}
-	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, limit, scratch)
-	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
-	for _, candidate := range candidates {
-		if len(results) >= topK {
-			break
-		}
-		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
-			continue
-		}
-		node := idx.nodes[candidate.nodeID]
-		if node.deleted {
-			continue
-		}
-		currentNodeID, ok := idx.currentNode[string(node.documentID)]
-		if !ok || currentNodeID != candidate.nodeID {
-			continue
-		}
-		results = append(results, VectorSearchResult{
-			DocumentID: node.documentID,
-			Distance:   candidate.distance,
-		})
-	}
-	idx.putSearchScratch(scratch)
-	cloneVectorSearchResultDocumentIDs(results)
-	return results, nil
+	return idx.searchCurrentCandidatesLocked(query, queryNorm, prepared, limit, scratch), nil
 }
 
 func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
@@ -2300,6 +2359,17 @@ func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared
 	return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
 }
 
+func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
+		return nil
+	}
+	entryPoint := idx.entry
+	for layer := idx.maxLevel; layer > 0; layer-- {
+		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
+	}
+	return idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
+}
+
 func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int) int {
 	if entryPoint < 0 {
 		return entryPoint
@@ -2341,6 +2411,14 @@ func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
 }
 
 func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, layer, scratch, false)
+}
+
+func (idx *VectorIndex) searchLayerCurrentWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, layer, scratch, true)
+}
+
+func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
 	}
@@ -2357,7 +2435,9 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 	queue := scratch.queue[:0]
 	queue.push(entry)
 	best := scratch.best[:0]
-	best.pushBounded(entry, limit)
+	if !currentOnly || !idx.nodes[entryPoint].deleted {
+		best.pushBounded(entry, limit)
+	}
 	for len(queue) > 0 {
 		current := queue.pop()
 		if len(best) >= limit && vectorIndexCandidateWorse(current, best[0]) {
@@ -2377,8 +2457,11 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 				continue
 			}
 			candidate := vectorIndexCandidate{nodeID: neighborID, distance: distance}
-			if len(best) < limit || vectorIndexCandidateLess(candidate, best[0]) {
-				queue.push(candidate)
+			if len(best) >= limit && !vectorIndexCandidateLess(candidate, best[0]) {
+				continue
+			}
+			queue.push(candidate)
+			if !currentOnly || !idx.nodes[neighborID].deleted {
 				best.pushBounded(candidate, limit)
 			}
 		}
@@ -3429,6 +3512,18 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	stats.BytesMemory = vectorBytes + int64(edges)*int64(unsafe.Sizeof(vectorIndexNeighbor{})) + int64(stats.Nodes*32)
 	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
 	return stats
+}
+
+func (idx *VectorIndex) nativeSearchState() (epoch uint64, bytesDisk int64, liveDocs int, rebuildNeeded bool, fullRebuilds uint64) {
+	if idx == nil {
+		return 0, 0, 0, false, 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	liveDocs = len(idx.currentNode)
+	deletedDocs := len(idx.nodes) - liveDocs
+	rebuildNeeded = deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio
+	return idx.persistedEpoch, idx.persistedBytesDisk, liveDocs, rebuildNeeded, idx.liveANNFullRebuilds
 }
 
 func (idx *VectorIndex) markLiveANNFullRebuild() {

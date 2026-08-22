@@ -4853,6 +4853,16 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 			t.Fatalf("Replace %s matched=%v err=%v", id, matched, err)
 		}
 	}
+	for range 16 {
+		for _, id := range []string{"a", "b"} {
+			for _, document := range [][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[-0.99,-0.01]}`)} {
+				matched, err := col.Replace([]byte(id), document)
+				if err != nil || !matched {
+					t.Fatalf("churn Replace %s matched=%v err=%v", id, matched, err)
+				}
+			}
+		}
+	}
 
 	var buffer VectorIndexSearchBuffer
 	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
@@ -4867,6 +4877,12 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	}
 	if len(got.Results) != 2 {
 		t.Fatalf("results=%+v want TopK live results despite closer tombstones", got.Results)
+	}
+	if got.Stats.CandidateRows != 4 || !got.Status.RebuildNeeded {
+		t.Fatalf("native search state candidate_rows=%d rebuild_needed=%v want 4,true", got.Stats.CandidateRows, got.Status.RebuildNeeded)
+	}
+	if candidates := len(buffer.nativeSearchScratch.out); candidates > 2 {
+		t.Fatalf("native live candidate heap=%d want efSearch bound 2", candidates)
 	}
 	index := col.registeredVectorIndex(def.Name)
 	if index == nil {
@@ -4888,6 +4904,50 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	}, &buffer)
 	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(buffer.results) != 0 {
 		t.Fatalf("work-accounting err=%v buffered_results=%d want fail-closed reset", err, len(buffer.results))
+	}
+}
+
+func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 4})
+	if err != nil {
+		t.Fatalf("newVectorIndex: %v", err)
+	}
+	index.mu.Lock()
+	for i, vector := range [][]float32{{1, 0}, {0.9, 0.1}, {0, 1}, {-1, 0}} {
+		if err := index.insertVectorLocked([]byte{byte('a' + i)}, vector); err != nil {
+			index.mu.Unlock()
+			t.Fatalf("insertVectorLocked: %v", err)
+		}
+	}
+	index.mu.Unlock()
+
+	query := []float32{1, 0}
+	var buffer VectorIndexSearchBuffer
+	if _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
+		t.Fatalf("warm searchGraphOnlyWithBuffer: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "native-search-with-buffer") {
+		return
+	}
+	var sink int
+	allocs := testing.AllocsPerRun(1000, func() {
+		results, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(results) != 2 {
+			panic("unexpected native buffered result count")
+		}
+		sink += len(results) + len(results[0].ID)
+	})
+	if allocs != 0 {
+		t.Fatalf("native searchGraphOnlyWithBuffer steady-state allocs=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
 	}
 }
 

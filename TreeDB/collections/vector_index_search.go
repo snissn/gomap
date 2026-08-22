@@ -836,9 +836,10 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
-	results       []VectorIndexSearchResult
-	idBytes       []byte
-	searchScratch columnVectorGraphNativeSearchScratch
+	results             []VectorIndexSearchResult
+	idBytes             []byte
+	searchScratch       columnVectorGraphNativeSearchScratch
+	nativeSearchScratch vectorIndexSearchScratch
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -1363,27 +1364,21 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		response.Status.ExactFallbackReason = load.ExactFallbackReason
 		return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
 	}
-	results, err := index.searchGraphOnly(opts.Query, opts.TopK, opts.EfSearch)
-	if err != nil {
-		buffer.Reset()
-		return response, err
-	}
-	response.Results, err = copyNativeVectorSearchResultsToBuffer(results, buffer)
+	response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
 	if err != nil {
 		return response, err
 	}
-	stats := index.Stats()
+	_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
 	response.Status.Loaded = true
 	response.Status.Registered = true
 	response.Status.RootName = load.RootName
 	response.Status.RootID = load.RootID
 	response.Status.NativeRootLoaded = load.RootID != 0
 	response.Status.NativeRootBytes = load.BytesDisk
-	response.Status.Stats = stats
-	response.Status.RebuildNeeded = stats.RebuildNeeded
+	response.Status.RebuildNeeded = rebuildNeeded
 	response.Stats.SearchRouteNativeRuntime = 1
-	response.Stats.NativeRuntimeFullRebuilds = stats.LiveANNFullRebuilds
-	response.Stats.CandidateRows = uint64(stats.LiveDocs)
+	response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
+	response.Stats.CandidateRows = uint64(liveDocs)
 	return response, nil
 }
 
@@ -1437,8 +1432,8 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	if rootID != index.nativeSnapshotBaseEpochForFullSave() {
 		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleRuntimeIndex}, fmt.Errorf("%w: native_runtime vector index %q is stale", ErrVectorIndexSearchUnavailable, def.Name)
 	}
-	stats := index.Stats()
-	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: stats.Epoch, BytesDisk: stats.BytesDisk}, nil
+	epoch, bytesDisk, _, _, _ := index.nativeSearchState()
+	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
 }
 
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {
@@ -2166,38 +2161,6 @@ func copyVectorIndexSearchResultsToBuffer(results []columnVectorGraphNativeSearc
 			Ordinal: result.Ordinal,
 			Score:   result.Score,
 		}
-	}
-	return buffer.results, nil
-}
-
-func copyNativeVectorSearchResultsToBuffer(results []VectorSearchResult, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
-	previousResults := buffer.results
-	if len(results) == 0 {
-		clear(previousResults)
-		buffer.resetView()
-		return nil, nil
-	}
-	idByteCount := 0
-	for _, result := range results {
-		var err error
-		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(result.DocumentID), math.MaxInt, "result id")
-		if err != nil {
-			buffer.Reset()
-			return nil, err
-		}
-	}
-	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
-	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
-	if len(previousResults) > len(results) {
-		clear(previousResults[len(results):])
-	}
-	idOffset := 0
-	for i, result := range results {
-		nextIDOffset := idOffset + len(result.DocumentID)
-		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
-		idOffset = nextIDOffset
-		copy(id, result.DocumentID)
-		buffer.results[i] = VectorIndexSearchResult{ID: id, Score: 1 - float64(result.Distance)}
 	}
 	return buffer.results, nil
 }
