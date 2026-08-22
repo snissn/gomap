@@ -24,6 +24,7 @@ from treedb_client import (
     IndexUnavailableError,
     InvalidRequestError,
     QuantizedIndexInfo,
+    ScalarFieldDeclaration,
     TreeDBClient,
     TreeDBConfigError,
     TreeDBProtocolError,
@@ -431,6 +432,26 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(info.name, "docs")
             self.assertEqual(json_body(server.records[0]), {"name": "docs", "dimension": 2, "metric": "cosine"})
             self.assertEqual(server.records[0]["headers"]["Content-Type"], "application/json")
+
+    def test_create_index_serializes_scalar_field_declarations(self) -> None:
+        with FixtureServer({("POST", "/v1/indexes"): (200, {"index": SAMPLE_INDEX}, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+            client.create_index(
+                "docs",
+                2,
+                scalar_fields=[
+                    ScalarFieldDeclaration("meta.repo"),
+                    {"field": "priority", "value_type": "int64"},
+                ],
+            )
+            self.assertEqual(
+                json_body(server.records[0])["scalar_fields"],
+                [
+                    {"field": "meta.repo", "value_type": "string"},
+                    {"field": "priority", "value_type": "int64"},
+                ],
+            )
+
 
     def test_malformed_index_response_maps_to_protocol_error(self) -> None:
         malformed_index = dict(SAMPLE_INDEX)
@@ -899,7 +920,6 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["route"], "ann")
             self.assertEqual(body["ef_search"], 64)
 
-        # exact route omits nothing extra
         with FixtureServer({("POST", route): (200, dict(response, exact=True, route=None), 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
             result = client.query_by_embedding("docs", [0.1], 1, route="exact")
@@ -911,8 +931,9 @@ class TreeDBClientTests(unittest.TestCase):
         client = TreeDBClient("http://127.0.0.1:9", timeout=1)
         with self.assertRaisesRegex(InvalidRequestError, "unsupported dense search route"):
             client.query_by_embedding("docs", [0.1], 1, route="fast")
-        with self.assertRaisesRegex(InvalidRequestError, "ef_search"):
-            client.query_by_embedding("docs", [0.1], 1, route="ann", ef_search=-1)
+        for value in (-1, True, 1.5, "64"):
+            with self.subTest(ef_search=value), self.assertRaisesRegex(InvalidRequestError, "ef_search"):
+                client.query_by_embedding("docs", [0.1], 1, route="ann", ef_search=value)
 
     def test_keyword_and_hybrid_filter_bodies_serialize(self) -> None:
         routes = {

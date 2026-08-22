@@ -410,6 +410,37 @@ class BenchmarkVectorIndexOptions:
 
 
 @dataclass(frozen=True)
+class ScalarFieldDeclaration:
+    """Declaration-time metadata scalar index schema."""
+
+    field: str
+    value_type: str = "string"
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ScalarFieldDeclaration":
+        data = _as_mapping(data, "scalar field declaration")
+        _reject_unknown(data, ["field", "value_type"], "scalar field declaration")
+        return cls(
+            field=_as_str(data.get("field"), "scalar field declaration.field"),
+            value_type=_as_str(data.get("value_type", "string"), "scalar field declaration.value_type"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        field = _as_str(self.field, "scalar field declaration.field")
+        if not field.strip():
+            raise ValueError("scalar field declaration.field must not be empty")
+        value_type = _as_str(self.value_type, "scalar field declaration.value_type").strip().lower() or "string"
+        if value_type not in {"string", "bool", "int64", "double"}:
+            raise ValueError(
+                "scalar field declaration.value_type must be string, bool, int64, or double"
+            )
+        return {"field": field, "value_type": value_type}
+
+
+ScalarFieldDeclarationLike = ScalarFieldDeclaration | Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class IndexInfo:
     name: str
     dimension: int

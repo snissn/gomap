@@ -3,6 +3,7 @@ package documentservice
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -40,6 +41,9 @@ func normalizeScalarFieldDeclarations(declarations []ScalarFieldDeclaration) ([]
 			return nil, serviceErrorf(CodeInvalidRequest, "scalar_fields[%d].field %q is a reserved document field; declare meta fields only", i, declaration.Field)
 		}
 		path = strings.TrimPrefix(path, scalarFieldPrefix)
+		if path == "id" || path == "content" || path == "embedding" {
+			return nil, serviceErrorf(CodeInvalidRequest, "scalar_fields[%d].field %q is a reserved document field; declare meta fields only", i, declaration.Field)
+		}
 		if strings.TrimSpace(path) == "" || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
 			return nil, serviceErrorf(CodeInvalidRequest, "scalar_fields[%d].field %q is not a valid meta path", i, declaration.Field)
 		}
@@ -54,6 +58,9 @@ func normalizeScalarFieldDeclarations(declarations []ScalarFieldDeclaration) ([]
 		}
 		field := scalarFieldPrefix + path
 		indexName := "meta_" + strings.ReplaceAll(path, ".", "_")
+		if err := collections.ValidateIndexName(indexName); err != nil {
+			return nil, serviceErrorf(CodeInvalidRequest, "scalar_fields[%d].field %q derives invalid index name %q: %v", i, declaration.Field, indexName, err)
+		}
 		if _, ok := byField[field]; ok {
 			return nil, serviceErrorf(CodeInvalidRequest, "scalar_fields[%d] declares meta field %q more than once", i, field)
 		}
@@ -277,61 +284,108 @@ func mergeScalarPredicates(left *collections.HybridScalarFilter, leftField strin
 	case left.Value != nil && right.Value != nil:
 		return nil, serviceError(CodeUnsupported, "conflicting equality conditions cannot be served as one bounded scalar allow-set")
 	case left.Value != nil:
-		if right.Range != nil && rangeExcludesValue(right.Range, left.Value) {
-			return nil, serviceError(CodeUnsupported, "equality condition contradicts range condition")
+		if right.Range != nil {
+			contains, known := scalarRangeContainsValue(right.Range, left.Value)
+			if !known {
+				return nil, serviceError(CodeUnsupported, "equality and range conditions cannot be safely merged for this scalar type")
+			}
+			if !contains {
+				return nil, serviceError(CodeUnsupported, "equality condition contradicts range condition")
+			}
 		}
 		return &collections.HybridScalarFilter{IndexName: left.IndexName, Value: left.Value}, nil
 	case right.Value != nil:
+		if left.Range != nil {
+			contains, known := scalarRangeContainsValue(left.Range, right.Value)
+			if !known {
+				return nil, serviceError(CodeUnsupported, "equality and range conditions cannot be safely merged for this scalar type")
+			}
+			if !contains {
+				return nil, serviceError(CodeUnsupported, "equality condition contradicts range condition")
+			}
+		}
 		return &collections.HybridScalarFilter{IndexName: left.IndexName, Value: right.Value}, nil
 	}
 	merged := &collections.HybridScalarFilter{IndexName: left.IndexName, Range: &collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
 	}}
+	lowerSet, upperSet := false, false
 	for _, source := range []*collections.HybridScalarFilter{left, right} {
 		if source.Range == nil {
 			continue
 		}
-		if source.Range.Lower.Value != nil || source.Range.Lower.Unbounded {
-			if merged.Range.Lower.Value != nil || merged.Range.Lower.Unbounded {
+		if !source.Range.Lower.Unbounded {
+			if lowerSet {
 				return nil, serviceError(CodeUnsupported, "multiple lower bounds cannot be served as one bounded scalar allow-set")
 			}
 			merged.Range.Lower = source.Range.Lower
+			lowerSet = true
 		}
-		if source.Range.Upper.Value != nil || source.Range.Upper.Unbounded {
-			if merged.Range.Upper.Value != nil || merged.Range.Upper.Unbounded {
+		if !source.Range.Upper.Unbounded {
+			if upperSet {
 				return nil, serviceError(CodeUnsupported, "multiple upper bounds cannot be served as one bounded scalar allow-set")
 			}
 			merged.Range.Upper = source.Range.Upper
+			upperSet = true
 		}
 	}
 	return merged, nil
 }
 
-// rangeExcludesValue conservatively reports whether an already-compiled range
-// bound provably excludes an equality value. When uncertain it reports false;
-// the executor still intersects both predicates through candidate filtering.
-func rangeExcludesValue(rangeOpts *collections.IndexRangeOptions, value any) bool {
-	left, leftOk := numberAsFloat64(value)
-	right, rightOk := numberAsFloat64(rangeOpts.Lower.Value)
-	if leftOk && rightOk {
-		if rangeOpts.Lower.Inclusive && left < right {
-			return true
+func scalarRangeContainsValue(rangeOpts *collections.IndexRangeOptions, value any) (bool, bool) {
+	if rangeOpts == nil {
+		return true, true
+	}
+	if !rangeOpts.Lower.Unbounded {
+		cmp, ok := compareScalarValues(value, rangeOpts.Lower.Value)
+		if !ok {
+			return false, false
 		}
-		if !rangeOpts.Lower.Inclusive && left <= right {
-			return true
+		if cmp < 0 || (cmp == 0 && !rangeOpts.Lower.Inclusive) {
+			return false, true
 		}
 	}
-	right, rightOk = numberAsFloat64(rangeOpts.Upper.Value)
-	if leftOk && rightOk {
-		if rangeOpts.Upper.Inclusive && left > right {
-			return true
+	if !rangeOpts.Upper.Unbounded {
+		cmp, ok := compareScalarValues(value, rangeOpts.Upper.Value)
+		if !ok {
+			return false, false
 		}
-		if !rangeOpts.Upper.Inclusive && left >= right {
-			return true
+		if cmp > 0 || (cmp == 0 && !rangeOpts.Upper.Inclusive) {
+			return false, true
 		}
 	}
-	return false
+	return true, true
+}
+
+func compareScalarValues(left, right any) (int, bool) {
+	if leftNumber, ok := numberAsFloat64(left); ok {
+		rightNumber, rightOK := numberAsFloat64(right)
+		if !rightOK {
+			return 0, false
+		}
+		switch {
+		case leftNumber < rightNumber:
+			return -1, true
+		case leftNumber > rightNumber:
+			return 1, true
+		default:
+			return 0, true
+		}
+	}
+	leftString, leftOK := left.(string)
+	rightString, rightOK := right.(string)
+	if !leftOK || !rightOK {
+		return 0, false
+	}
+	switch {
+	case leftString < rightString:
+		return -1, true
+	case leftString > rightString:
+		return 1, true
+	default:
+		return 0, true
+	}
 }
 
 func convertScalarFilterValue(field normalizedScalarField, value any) (any, error) {
@@ -357,7 +411,11 @@ func convertScalarFilterValue(field normalizedScalarField, value any) (any, erro
 		if err != nil || float != float64(int64(float)) {
 			return nil, serviceErrorf(CodeInvalidRequest, "%s must be an int64", label)
 		}
-		return number.Int64()
+		parsed, err := number.Int64()
+		if err != nil {
+			return nil, serviceErrorf(CodeInvalidRequest, "%s must be an int64", label)
+		}
+		return parsed, nil
 	case ScalarFieldDouble:
 		number, ok := scalarValueAsNumber(value)
 		if !ok {
@@ -396,7 +454,7 @@ func scalarValueAsNumber(value any) (json.Number, bool) {
 	case int:
 		return json.Number(fmt.Sprintf("%d", typed)), true
 	case float64:
-		return json.Number(fmt.Sprintf("%v", typed)), true
+		return json.Number(strconv.FormatFloat(typed, 'f', -1, 64)), true
 	default:
 		return "", false
 	}

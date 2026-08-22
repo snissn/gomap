@@ -510,7 +510,7 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 // index declares a column_graph vector index and no filter is present, and
 // exact otherwise (filtered retrieval and non-column_graph indexes).
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
-	switch req.Route {
+	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
 		if req.Filter != nil {
 			return RouteExact, nil
@@ -755,6 +755,9 @@ func (s *Service) SearchKeyword(ctx context.Context, index string, req KeywordSe
 		if err := req.Filter.Validate(); err != nil {
 			return KeywordSearchResponse{}, err
 		}
+		if req.MaxPostingsScanned > 0 {
+			return KeywordSearchResponse{}, serviceError(CodeUnsupported, "max_postings_scanned with metadata filters is unsupported; the filtered route fails closed rather than ignoring the guardrail")
+		}
 		return s.searchKeywordWithScalarFilter(ctx, col, info, req, operator)
 	}
 
@@ -796,6 +799,11 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
 	}
 	schema := newScalarSchema(info.ScalarFields)
+	if req.Filter != nil {
+		if err := req.Filter.Validate(); err != nil {
+			return HybridSearchResponse{}, err
+		}
+	}
 	scalarFilter, err := translateScalarFilter(req.Filter, schema)
 	if err != nil {
 		return HybridSearchResponse{}, err

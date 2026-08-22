@@ -2,6 +2,7 @@ package documentservice
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -124,25 +125,21 @@ func filteredKeywordMeta(textIndex string, rank int, text *collections.HybridSou
 }
 
 func sortedSetStrings(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
 	out := make([]string, 0, len(set))
 	for value := range set {
 		out = append(out, value)
 	}
-	if len(out) == 0 {
-		return nil
-	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	sort.Strings(out)
 	return out
 }
 
 // searchDenseVectorAnn serves the dense route=ann path through the
-// column_graph vector index (lossless exact scoring over the graph's
-// approximate candidate set). It never scans documents and rejects filters:
-// filtered dense retrieval stays on the exact route.
+// column_graph vector index. It materializes each hit from the same search
+// snapshot rather than performing a later point read that could observe a
+// concurrent update or deletion.
 func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	if !info.Capabilities.ColumnGraphVectorSearch {
 		return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense route \"ann\" requires a cosine column_graph vector index; use route \"exact\" for this index")
@@ -150,29 +147,24 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 	if err := ctxErr(ctx); err != nil {
 		return DenseVectorSearchResponse{}, err
 	}
-	buffer := &collections.VectorIndexSearchBuffer{}
-	defer buffer.Reset()
-	search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
-		IndexName: defaultVectorIndexName,
-		Query:     append([]float32(nil), req.QueryEmbedding...),
-		QueryMode: collections.VectorIndexQueryModeExact,
-		TopK:      req.TopK,
-		EfSearch:  req.EfSearch,
-	}, buffer)
+	search, err := col.SearchVectorIndex(collections.VectorIndexSearchOptions{
+		IndexName:            defaultVectorIndexName,
+		Query:                append([]float32(nil), req.QueryEmbedding...),
+		QueryMode:            collections.VectorIndexQueryModeExact,
+		TopK:                 req.TopK,
+		EfSearch:             req.EfSearch,
+		IncludeDocuments:     true,
+		DocumentFetchOptions: serviceDocumentFetchOptions(req.ReturnEmbedding),
+	})
 	if err != nil {
 		return DenseVectorSearchResponse{}, mapVectorIndexSearchError("ann vector search", err)
 	}
 	docs := make([]Document, 0, len(search.Results))
 	for _, result := range search.Results {
-		id := []byte(string(result.ID))
-		raw, err := col.Get(id)
-		if err != nil {
-			return DenseVectorSearchResponse{}, wrapServiceError(CodeInternal, "fetch ann result document failed", err)
+		if len(result.Document) == 0 {
+			return DenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "ann vector result %q was not materialized in the search snapshot", string(result.ID))
 		}
-		if raw == nil {
-			return DenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "ann vector result %q was not found in primary storage", string(id))
-		}
-		doc, err := decodeStoredDocument(id, raw)
+		doc, err := decodeStoredDocument(result.ID, result.Document)
 		if err != nil {
 			return DenseVectorSearchResponse{}, err
 		}

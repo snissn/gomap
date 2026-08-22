@@ -116,6 +116,12 @@ Request:
 }
 ```
 
+`scalar_fields` is declaration-time schema. A field may be written as a bare
+metadata path (`repo`) or with the `meta.` prefix (`meta.repo`); the service
+normalizes both to `meta.<path>`. `id`, `content`, and `embedding` are reserved
+and cannot be declared. Supported `value_type` values are `string`, `bool`,
+`int64`, and `double` (omitted `value_type` defaults to `string`).
+
 `metric` defaults to `cosine`. Supported metrics are `cosine`, `l2`, and
 `inner_product`. Scores are always higher-is-better:
 
@@ -282,21 +288,20 @@ Boolean nodes use `conditions`:
 }
 ```
 
-Supported operators:
-
-- boolean: `AND`, `OR`, `NOT`;
-- comparison: `==`, `!=`, `>`, `>=`, `<`, `<=`;
-- membership: `in`, `not in`.
+Supported operators for the general document/filter routes are boolean `AND`,
+`OR`, `NOT`; comparisons `==`, `!=`, `>`, `>=`, `<`, `<=`; and membership `in`,
+`not in`.
 
 Fields may be `id`, `content`, `meta.<path>`, or a metadata path without the
 `meta.` prefix. Missing fields do not match any operator, including `!=` and
 `not in`, so filters fail closed rather than broadening result sets. Comparison
 operators require numeric or string operands. Membership values must be arrays.
-Unsupported operators fail with `invalid_request`; the service does not rewrite
-unsupported filters into broader scans. Keyword/hybrid filters are compiled into
-bounded scalar allow-sets using fields declared at index creation. An undeclared
-field, an unsupported shape, or a truncated allow-set fails closed with a typed
-`index_unavailable` error carrying `scalar_filter_unbounded`; no partial ranking
+For keyword and hybrid routes, only the bounded scalar-filter subset is
+representable: an undeclared field returns typed `invalid_request`, while an
+unsupported boolean/operator/field shape returns typed `unsupported`. The
+service never rewrites these requests into broader scans. If a declared
+scalar allow-set exceeds its lookup bound, the route fails closed with typed
+`index_unavailable` and `scalar_filter_unbounded`; no partial ranking or result
 is returned. The AST is also supported by document count/filter/delete and exact
 dense-vector search.
 
@@ -498,14 +503,16 @@ Request:
   "return_embedding": false
 }
 ```
-
 `operator` is `or` (default) or `and`; explicit `AND`/`OR` in the query string is
 also understood by TreeDB text search. `candidate_limit` and
-`max_postings_scanned` are optional guardrails. If a guardrail is exceeded, the
-route fails closed with `index_unavailable` rather than returning incomplete
-rankings. `filter` is supported only for fields declared in `scalar_fields` at
-index creation; bounded allow-set truncation returns
-`scalar_filter_unbounded` and no partial ranking.
+`max_postings_scanned` are optional guardrails for unfiltered keyword search.
+When a metadata `filter` is supplied, `max_postings_scanned` is rejected with
+typed `unsupported` rather than ignored, because the filtered route currently
+cannot propagate that guardrail. Other guardrail or scalar allow-set truncation
+fails closed with `index_unavailable`; no incomplete ranking is returned.
+`filter` is supported only for fields declared in `scalar_fields` at index
+creation. Undeclared fields return `invalid_request`, and unrepresentable
+operator/boolean shapes return `unsupported`.
 
 Response (abridged; the actual payload also includes the top-level `index`
 object shown in the index metadata section):
@@ -579,8 +586,9 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
-`filter` is supported for fields declared in `scalar_fields`; the service
-translates it into a bounded scalar allow-set. Truncation or an undeclared field
+`filter` is supported for fields declared in `scalar_fields`; undeclared fields
+return `invalid_request`, while an unrepresentable boolean/operator/field shape
+returns `unsupported`. A declared scalar allow-set that exceeds its lookup bound
 returns `index_unavailable` with `scalar_filter_unbounded` and no partial results.
 
 Response (abridged; the actual payload also includes the top-level `index`

@@ -137,12 +137,14 @@ Boolean filters use `conditions`. Supported operators are `AND`, `OR`, `NOT`,
 closed through the base `treedb-client`; this package does not broaden them into
 local scans.
 
-Metadata filters are currently supported by document count/filter/delete and
-exact dense-vector retrieval. If filters are supplied to `TreeDBKeywordRetriever`
-or `TreeDBHybridRetriever`, Haystack `FilterPolicy` is still honored and the
-filter is sent to TreeDB, but the current TreeDB keyword/hybrid routes fail
-closed with `unsupported` until TreeDB exposes bounded scalar filter mapping for
-those routes. The retrievers do not fetch and filter documents client-side.
+Metadata filters are supported by document count/filter/delete, exact dense-vector
+retrieval, and keyword/hybrid retrieval when their fields were declared in
+`TreeDBDocumentStore(..., scalar_fields=[...])` (or when the service index was
+created with `scalar_fields`). The service compiles those filters into bounded
+scalar allow-sets and fails closed on truncation with `index_unavailable` and
+`scalar_filter_unbounded`; undeclared fields return `invalid_request` and
+unrepresentable shapes return `unsupported`. The retrievers never fetch and
+filter documents client-side.
 
 ## Duplicate and filter policies
 

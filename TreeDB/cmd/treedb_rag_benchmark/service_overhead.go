@@ -192,17 +192,16 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		return nil, fmt.Errorf("service filtered hybrid row: %w", err)
 	}
 	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("filtered_hybrid", "http_service", corpus, cfg, serviceHybridSamples, serviceHybridHits))
-
-	buffer := &collections.VectorIndexSearchBuffer{}
-	defer buffer.Reset()
 	directAnnSamples, directAnnHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
-		resp, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
-			IndexName: svcOverheadVectorIndex,
-			Query:     q.Embedding,
-			QueryMode: collections.VectorIndexQueryModeExact,
-			TopK:      cfg.TopK,
-			EfSearch:  svcOverheadEfSearch,
-		}, buffer)
+		resp, err := col.SearchVectorIndex(collections.VectorIndexSearchOptions{
+			IndexName:            svcOverheadVectorIndex,
+			Query:                q.Embedding,
+			QueryMode:            collections.VectorIndexQueryModeExact,
+			TopK:                 cfg.TopK,
+			EfSearch:             svcOverheadEfSearch,
+			IncludeDocuments:     true,
+			DocumentFetchOptions: collections.DocumentFetchOptions{},
+		})
 		if err != nil {
 			return 0, err
 		}
@@ -334,6 +333,9 @@ func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, ti
 				maxHits = hits
 			}
 			millis := time.Since(start).Seconds() * 1000.0 / float64(timingIterations)
+			if millis <= 0 {
+				millis = 0.001
+			}
 			samples = append(samples, millis)
 		}
 	}
@@ -368,7 +370,14 @@ func postServiceOverheadJSON(client *http.Client, url string, body any, out any)
 	if err != nil {
 		return err
 	}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(raw))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

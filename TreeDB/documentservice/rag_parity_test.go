@@ -1,6 +1,7 @@
 package documentservice
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,10 +15,9 @@ import (
 // service request/response schema itself is what is under test: filtered
 // keyword/hybrid retrieval, the dense route ann|exact selection, fail-closed
 // scalar truncation, and declaration-time scalar field schema echo.
-
 func ragParityPost(t *testing.T, handler *Handler, path string, body string) (int, map[string]any) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	var payload map[string]any
@@ -29,13 +29,46 @@ func ragParityPost(t *testing.T, handler *Handler, path string, body string) (in
 
 func ragParityError(t *testing.T, payload map[string]any) (string, string) {
 	t.Helper()
-	errObj, ok := payload["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("response is not an error envelope: %#v", payload)
-	}
-	code, _ := errObj["code"].(string)
-	message, _ := errObj["message"].(string)
+	errObj := ragParityObjectValue(t, payload["error"], "error")
+	code := ragParityStringValue(t, errObj["code"], "error.code")
+	message := ragParityStringValue(t, errObj["message"], "error.message")
 	return code, message
+}
+
+func ragParityObjectValue(t *testing.T, value any, label string) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s is not an object: %#v", label, value)
+	}
+	return object
+}
+
+func ragParityArrayValue(t *testing.T, value any, label string) []any {
+	t.Helper()
+	array, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s is not an array: %#v", label, value)
+	}
+	return array
+}
+
+func ragParityStringValue(t *testing.T, value any, label string) string {
+	t.Helper()
+	text, ok := value.(string)
+	if !ok {
+		t.Fatalf("%s is not a string: %#v", label, value)
+	}
+	return text
+}
+
+func ragParityNumberValue(t *testing.T, value any, label string) float64 {
+	t.Helper()
+	number, ok := value.(float64)
+	if !ok {
+		t.Fatalf("%s is not a number: %#v", label, value)
+	}
+	return number
 }
 
 func ragParityCreateIndex(t *testing.T, handler *Handler, name string) {
@@ -45,18 +78,18 @@ func ragParityCreateIndex(t *testing.T, handler *Handler, name string) {
 	if status != http.StatusOK {
 		t.Fatalf("create index status=%d body=%s", status, mustJSON(payload))
 	}
-	info := payload["index"].(map[string]any)
+	info := ragParityObjectValue(t, payload["index"], "index")
 	if got := info["contract_version"]; got != ContractVersion {
 		t.Fatalf("contract_version=%v want %s", got, ContractVersion)
 	}
-	fields := info["scalar_fields"].([]any)
+	fields := ragParityArrayValue(t, info["scalar_fields"], "scalar_fields")
 	if len(fields) != 2 {
 		t.Fatalf("scalar_fields=%#v want 2 declared entries", fields)
 	}
 	byField := map[string]map[string]any{}
-	for _, raw := range fields {
-		entry := raw.(map[string]any)
-		byField[entry["field"].(string)] = entry
+	for i, raw := range fields {
+		entry := ragParityObjectValue(t, raw, fmt.Sprintf("scalar_fields[%d]", i))
+		byField[ragParityStringValue(t, entry["field"], fmt.Sprintf("scalar_fields[%d].field", i))] = entry
 	}
 	first := byField["meta.tenant"]
 	if first == nil || first["index_name"] != "meta_tenant" || first["value_type"] != "string" {
@@ -65,7 +98,7 @@ func ragParityCreateIndex(t *testing.T, handler *Handler, name string) {
 	if second := byField["meta.priority"]; second == nil || second["value_type"] != "int64" {
 		t.Fatalf("meta.priority scalar entry missing: %#v", second)
 	}
-	caps := info["capabilities"].(map[string]any)
+	caps := ragParityObjectValue(t, info["capabilities"], "capabilities")
 	if caps["keyword_metadata_filters"] != true || caps["hybrid_metadata_filters"] != true {
 		t.Fatalf("capabilities=%#v want keyword/hybrid metadata filters declared", caps)
 	}
@@ -105,16 +138,16 @@ func TestHTTPFilteredKeywordSearchReturnsOnlyMatchingTenantDocs(t *testing.T) {
 		code, message := ragParityError(t, payload)
 		t.Fatalf("filtered keyword search status=%d code=%s message=%q", status, code, message)
 	}
-	docs := payload["documents"].([]any)
+	docs := ragParityArrayValue(t, payload["documents"], "keyword documents")
 	if len(docs) != 1 {
 		t.Fatalf("filtered keyword documents=%s want only t2 refund doc", mustJSON(docs))
 	}
-	doc := docs[0].(map[string]any)
+	doc := ragParityObjectValue(t, docs[0], "keyword document")
 	if doc["id"] != "t2-a" {
 		t.Fatalf("filtered keyword hit id=%v want t2-a", doc["id"])
 	}
-	stats := payload["stats"].(map[string]any)
-	if stats["scalar_prefilter_ids"].(float64) < 1 {
+	stats := ragParityObjectValue(t, payload["stats"], "keyword stats")
+	if ragParityNumberValue(t, stats["scalar_prefilter_ids"], "scalar_prefilter_ids") < 1 {
 		t.Fatalf("stats=%s want bounded scalar allow-set counters", mustJSON(stats))
 	}
 }
@@ -132,18 +165,18 @@ func TestHTTPFilteredHybridSearchReturnsOnlyMatchingTenantDocs(t *testing.T) {
 		code, message := ragParityError(t, payload)
 		t.Fatalf("filtered hybrid search status=%d code=%s message=%q", status, code, message)
 	}
-	docs := payload["documents"].([]any)
+	docs := ragParityArrayValue(t, payload["documents"], "hybrid documents")
 	if len(docs) == 0 {
 		t.Fatalf("filtered hybrid documents empty")
 	}
-	for _, raw := range docs {
-		doc := raw.(map[string]any)
-		meta := doc["meta"].(map[string]any)
+	for i, raw := range docs {
+		doc := ragParityObjectValue(t, raw, fmt.Sprintf("hybrid document[%d]", i))
+		meta := ragParityObjectValue(t, doc["meta"], fmt.Sprintf("hybrid document[%d].meta", i))
 		if meta["tenant"] != "t1" {
 			t.Fatalf("filtered hybrid leaked document %v tenant=%v", doc["id"], meta["tenant"])
 		}
 	}
-	plan := payload["plan"].(map[string]any)
+	plan := ragParityObjectValue(t, payload["plan"], "hybrid plan")
 	if plan["scalar_filter_strategy"] != "prefilter" {
 		t.Fatalf("plan=%s want prefilter strategy", mustJSON(plan))
 	}
@@ -162,8 +195,8 @@ func TestHTTPFilteredKeywordRangeFilterBoundedAllowSet(t *testing.T) {
 		code, message := ragParityError(t, payload)
 		t.Fatalf("range-filtered keyword status=%d code=%s message=%q", status, code, message)
 	}
-	docs := payload["documents"].([]any)
-	if len(docs) != 1 || docs[0].(map[string]any)["id"] != "t2-a" {
+	docs := ragParityArrayValue(t, payload["documents"], "range-filtered documents")
+	if len(docs) != 1 || ragParityObjectValue(t, docs[0], "range-filtered document")["id"] != "t2-a" {
 		t.Fatalf("range-filtered documents=%s want t2-a only", mustJSON(docs))
 	}
 }
@@ -234,7 +267,8 @@ func TestHTTPScalarTruncationFailsClosedNeverPartial(t *testing.T) {
 	defer db.Close()
 	handler := NewHandler(svc)
 	ragParityCreateIndex(t, handler, "docs")
-
+	// The collection scalar allow-set lookup is bounded at 4096 IDs; keep this
+	// fixture above that bound so the broad tenant filter must fail closed.
 	const bulkCount = 4200
 	docs := make([]Document, 0, bulkCount+2)
 	for i := 0; i < bulkCount; i++ {
@@ -266,7 +300,7 @@ func TestHTTPScalarTruncationFailsClosedNeverPartial(t *testing.T) {
 		code, message := ragParityError(t, payload)
 		t.Fatalf("selective filtered keyword status=%d code=%s message=%q", status, code, message)
 	}
-	if docs := payload["documents"].([]any); len(docs) != 2 {
+	if docs := ragParityArrayValue(t, payload["documents"], "selective filtered documents"); len(docs) != 2 {
 		t.Fatalf("selective filtered documents=%s want rare-1 and rare-2", mustJSON(docs))
 	}
 
@@ -338,25 +372,27 @@ func TestHTTPDenseAnnRouteParityWithExactRoute(t *testing.T) {
 		t.Fatalf("ann route echo=%s", mustJSON(annPayload))
 	}
 
-	exactDocs := exactPayload["documents"].([]any)
-	annDocs := annPayload["documents"].([]any)
+	exactDocs := ragParityArrayValue(t, exactPayload["documents"], "exact documents")
+	annDocs := ragParityArrayValue(t, annPayload["documents"], "ann documents")
 	if len(annDocs) == 0 {
 		t.Fatalf("ann route returned no documents")
 	}
 	annScores := map[string]float64{}
-	for _, raw := range annDocs {
-		doc := raw.(map[string]any)
-		annScores[doc["id"].(string)] = doc["score"].(float64)
+	for i, raw := range annDocs {
+		doc := ragParityObjectValue(t, raw, fmt.Sprintf("ann document[%d]", i))
+		id := ragParityStringValue(t, doc["id"], fmt.Sprintf("ann document[%d].id", i))
+		annScores[id] = ragParityNumberValue(t, doc["score"], fmt.Sprintf("ann document[%d].score", i))
 	}
-	for _, raw := range exactDocs {
-		doc := raw.(map[string]any)
-		id := doc["id"].(string)
-		score, ok := annScores[id]
+	for i, raw := range exactDocs {
+		doc := ragParityObjectValue(t, raw, fmt.Sprintf("exact document[%d]", i))
+		id := ragParityStringValue(t, doc["id"], fmt.Sprintf("exact document[%d].id", i))
+		score := ragParityNumberValue(t, doc["score"], fmt.Sprintf("exact document[%d].score", i))
+		annScore, ok := annScores[id]
 		if !ok {
 			t.Fatalf("exact result %s missing from ann candidates at ef_search=64", id)
 		}
-		if math.Abs(score-doc["score"].(float64)) > 1e-6 {
-			t.Fatalf("score mismatch for %s: exact=%f ann=%f", id, doc["score"].(float64), score)
+		if math.Abs(annScore-score) > 1e-6 {
+			t.Fatalf("score mismatch for %s: exact=%f ann=%f", id, score, annScore)
 		}
 	}
 }

@@ -3,8 +3,8 @@
 
 This example stores code chunks with repository/path/symbol/line metadata and
 retrieves them with dense embeddings plus a service-side metadata filter.
-Keyword/hybrid metadata filters currently fail closed in the TreeDB service, so
-this metadata-filter example intentionally uses embedding retrieval.
+Metadata filters are declared at index creation and executed by TreeDB; this
+example uses dense retrieval to keep the code-search path focused.
 """
 
 from __future__ import annotations

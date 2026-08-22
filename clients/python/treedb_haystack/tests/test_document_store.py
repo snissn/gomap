@@ -20,13 +20,19 @@ from haystack_integrations.document_stores.treedb import (
 )
 
 
-def make_store(*, return_embedding: bool = False, ensure_index: bool = True) -> tuple[TreeDBDocumentStore, FakeTreeDBClient]:
+def make_store(
+    *,
+    return_embedding: bool = False,
+    ensure_index: bool = True,
+    scalar_fields: list[dict[str, str]] | None = None,
+) -> tuple[TreeDBDocumentStore, FakeTreeDBClient]:
     client = FakeTreeDBClient()
     store = TreeDBDocumentStore(
         base_url="http://fake-treedb",
         index="docs",
         embedding_dimension=3,
         similarity="cosine",
+        scalar_fields=scalar_fields,
         return_embedding=return_embedding,
         ensure_index=ensure_index,
         client=client,  # type: ignore[arg-type]
@@ -37,6 +43,22 @@ def make_store(*, return_embedding: bool = False, ensure_index: bool = True) -> 
 def haystack_doc(doc_id: str, embedding: list[float], **meta: object) -> HaystackDocument:
     return HaystackDocument(id=doc_id, content=f"content {doc_id}", embedding=embedding, meta=dict(meta))
 
+
+def test_scalar_fields_are_forwarded_and_serialized() -> None:
+    store, client = make_store(
+        scalar_fields=[{"field": "meta.repo"}, {"field": "priority", "value_type": "int64"}],
+    )
+    assert client.ensure_scalar_fields == [
+        [
+            {"field": "meta.repo", "value_type": "string"},
+            {"field": "priority", "value_type": "int64"},
+        ]
+    ]
+    restored = TreeDBDocumentStore.from_dict(store.to_dict())
+    assert restored.to_dict()["init_parameters"]["scalar_fields"] == [
+        {"field": "meta.repo", "value_type": "string"},
+        {"field": "priority", "value_type": "int64"},
+    ]
 
 def test_constructor_ensures_index_and_count_write_filter_delete_round_trip() -> None:
     store, client = make_store(return_embedding=True)
