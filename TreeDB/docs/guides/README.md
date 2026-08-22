@@ -14,6 +14,9 @@ directories when moving between branches.
 - [Document chunking](document-chunking.md) — deterministic fixed-window and
   recursive chunkers, the `<parentID>#<ordinal>` child linkage convention, and
   re-chunk lifecycle semantics through `IngestChunkedDocument`.
+- [Document embedding](document-embedding.md) — the pluggable embedder seam,
+  the deterministic reference `hashing` embedder with committed parity
+  fixtures, and the ingest-time dimension gate over vector index definitions.
 - [Collections quickstart](collections-quickstart.md) — choose document-only,
   typed-row, typed-column, or hybrid layouts; insert fixture data; point-get;
   run a typed-column int64 aggregate; checkpoint/reopen when durability matters.
