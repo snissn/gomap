@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -182,7 +183,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
-		return c.finishRebuildVectorIndexNoopStatus(name, c.nativeVectorIndexRebuildStatus(def), nil, replay)
+		return c.rebuildNativeVectorIndexPrepared(def, catalog, replay)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
@@ -317,6 +318,47 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return c.columnGraphVectorIndexStatus(def.Name)
+}
+
+func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+	start := time.Now()
+	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	index.setNativePersistent(true)
+	index.recordFullSnapshotBaseEpoch(catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name)))
+	native, err := index.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	index.recordNativeDefinition(def)
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
+	}
+	duration := collectionObservedElapsedSince(start)
+	index.mu.Lock()
+	index.lastRebuildDuration = duration
+	index.mu.Unlock()
+	stats := index.Stats()
+	stats.BytesDisk = native.BytesDisk
+	return VectorIndexStatus{
+		Definition:          def,
+		Name:                def.Name,
+		Strategy:            def.Strategy,
+		State:               VectorIndexStateNativeRuntime,
+		Reason:              VectorIndexReasonNativeRuntime,
+		Loaded:              native.Loaded,
+		RootName:            collectionVectorIndexRootName(catalog.meta.Name, def.Name),
+		RootID:              native.RootID,
+		NativeRootLoaded:    native.Loaded,
+		NativeRootBytes:     native.BytesDisk,
+		ExactFallbackReason: native.ExactFallbackReason,
+		Registered:          true,
+		Stats:               stats,
+		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
+		Duration:            duration,
+	}, nil
 }
 
 // columnVectorGraphRowsFromTypedColumnCatalogSnapshot is the narrow rebuild

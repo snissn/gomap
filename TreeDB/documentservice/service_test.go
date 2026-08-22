@@ -1113,8 +1113,39 @@ func TestServiceBenchmarkNativeRuntimeConcurrentFirstMutationsShareHandle(t *tes
 	}
 }
 
+func TestServicesShareNativeRuntimeMutationsThroughManager(t *testing.T) {
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	manager := collections.NewCollectionManager(db)
+	first := New(manager)
+	second := New(manager)
+	ctx := context.Background()
+	req := CreateIndexRequest{Name: "native_shared", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+	if _, err := first.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("first CreateIndex: %v", err)
+	}
+	if _, err := second.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("second compatible CreateIndex: %v", err)
+	}
+	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("first UpsertDocuments: %v", err)
+	}
+	if _, err := second.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "b", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("second UpsertDocuments: %v", err)
+	}
+	for name, service := range map[string]*Service{"first": first, "second": second} {
+		got, err := service.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+		if err != nil || len(got.Results) != 2 {
+			t.Fatalf("%s SearchBenchmarkVector results=%+v err=%v", name, got.Results, err)
+		}
+	}
+}
+
 func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1127,8 +1158,12 @@ func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
 	if _, err := svc.UpsertDocuments(ctx, "native_optimize", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("UpsertDocuments: %v", err)
 	}
-	if _, err := svc.OptimizeIndex(ctx, "native_optimize", OptimizeIndexRequest{}); err != nil {
+	optimized, err := svc.OptimizeIndex(ctx, "native_optimize", OptimizeIndexRequest{})
+	if err != nil {
 		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	if !optimized.Status.Loaded || optimized.Status.RootID == 0 || optimized.Status.RebuildNeeded {
+		t.Fatalf("OptimizeIndex status=%+v want published clean native root", optimized.Status)
 	}
 	response, err := svc.SearchBenchmarkVector(ctx, "native_optimize", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
 	if err != nil || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime {

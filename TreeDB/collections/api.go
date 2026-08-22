@@ -1397,6 +1397,10 @@ type collectionWriteDomain struct {
 	primaryCacheCollection   string
 	primaryCacheDirty        bool
 	primaryIDIndex           *bufferedUniqueValueIndex
+	nativeVectorIndexLoadMu  sync.Mutex
+	nativeVectorIndexesMu    sync.RWMutex
+	nativeVectorIndexes      map[string]*VectorIndex
+	nativeVectorPublishMu    sync.RWMutex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
 	primaryRunIndex             *bufferedPrimaryRunIndex

@@ -1388,10 +1388,14 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
-		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+		if current := c.registeredVectorIndex(def.Name); err != nil && current != nil && current != index {
+			return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
+		}
+		return validated, status, err
 	}
-	c.vectorIndexLoadMu.Lock()
-	defer c.vectorIndexLoadMu.Unlock()
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 	}
@@ -1415,8 +1419,9 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	if index == nil {
 		return nil, VectorIndexLoadStatus{ExactFallbackReason: "nil_index"}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: nil_index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
-	index.nativePublicationMu.RLock()
-	defer index.nativePublicationMu.RUnlock()
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
+	defer publicationMu.RUnlock()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed

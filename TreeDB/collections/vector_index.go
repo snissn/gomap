@@ -631,16 +631,24 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	index.collection = c
+	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
+		index.recordNativeDefinition(def)
+		if c.writeDomain != nil {
+			c.writeDomain.nativeVectorIndexesMu.Lock()
+			if c.writeDomain.nativeVectorIndexes == nil {
+				c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
+			}
+			c.writeDomain.nativeVectorIndexes[index.name] = index
+			c.writeDomain.nativeVectorIndexesMu.Unlock()
+			return
+		}
+	}
+	index.setNativePersistent(false)
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
-	}
-	index.collection = c
-	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
-		index.recordNativeDefinition(def)
-	} else {
-		index.setNativePersistent(false)
 	}
 	c.vectorIndexes[index.name] = index
 }
@@ -649,18 +657,14 @@ func (c *Collection) isRegisteredVectorIndex(index *VectorIndex) bool {
 	if c == nil || index == nil {
 		return false
 	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	return c.vectorIndexes[index.name] == index
+	return c.registeredVectorIndex(index.name) == index
 }
 
 func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	if c == nil || index == nil {
 		return false
 	}
-	c.vectorIndexesMu.RLock()
-	registered := c.vectorIndexes[index.name]
-	c.vectorIndexesMu.RUnlock()
+	registered := c.registeredVectorIndex(index.name)
 	if registered == index {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(index)
 		return err == nil && stale
@@ -712,16 +716,21 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexesMu.Lock()
+		delete(c.writeDomain.nativeVectorIndexes, name)
+		c.writeDomain.nativeVectorIndexesMu.Unlock()
+	}
 	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
-	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
+	c.vectorIndexesMu.Unlock()
+	if !c.hasNativePersistentVectorIndex() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 }
 
-func (c *Collection) hasNativePersistentVectorIndexLocked() bool {
-	for _, index := range c.vectorIndexes {
+func (c *Collection) hasNativePersistentVectorIndex() bool {
+	for _, index := range c.registeredVectorIndexes() {
 		if index != nil && index.isNativePersistent() {
 			return true
 		}
@@ -733,26 +742,51 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	if c == nil {
 		return nil
 	}
+	var out []*VectorIndex
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexesMu.RLock()
+		out = make([]*VectorIndex, 0, len(c.writeDomain.nativeVectorIndexes))
+		for _, index := range c.writeDomain.nativeVectorIndexes {
+			out = append(out, index)
+		}
+		c.writeDomain.nativeVectorIndexesMu.RUnlock()
+	}
 	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
 	if len(c.vectorIndexes) == 0 {
-		return nil
+		c.vectorIndexesMu.RUnlock()
+		return out
 	}
-	out := make([]*VectorIndex, 0, len(c.vectorIndexes))
-	for _, index := range c.vectorIndexes {
-		out = append(out, index)
+	sharedNames := make(map[string]struct{}, len(out))
+	for _, index := range out {
+		sharedNames[index.name] = struct{}{}
 	}
+	for name, index := range c.vectorIndexes {
+		if _, shared := sharedNames[name]; !shared {
+			out = append(out, index)
+		}
+	}
+	c.vectorIndexesMu.RUnlock()
 	return out
 }
 
 func (c *Collection) hasRegisteredVectorIndex(name string) bool {
-	if c == nil || name == "" {
-		return false
+	return c != nil && name != "" && c.registeredVectorIndex(name) != nil
+}
+
+func (c *Collection) lockNativeVectorIndexLoad() func() {
+	if c != nil && c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexLoadMu.Lock()
+		return c.writeDomain.nativeVectorIndexLoadMu.Unlock
 	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	_, ok := c.vectorIndexes[name]
-	return ok
+	c.vectorIndexLoadMu.Lock()
+	return c.vectorIndexLoadMu.Unlock
+}
+
+func (idx *VectorIndex) nativePublicationLock() *sync.RWMutex {
+	if idx != nil && idx.collection != nil && idx.collection.writeDomain != nil {
+		return &idx.collection.writeDomain.nativeVectorPublishMu
+	}
+	return &idx.nativePublicationMu
 }
 
 func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struct{}, error) {
@@ -777,8 +811,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}
-	c.vectorIndexLoadMu.Lock()
-	defer c.vectorIndexLoadMu.Unlock()
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}

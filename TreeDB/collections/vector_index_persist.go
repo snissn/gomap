@@ -17,7 +17,6 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -135,6 +134,10 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
 // already acquired the collection mutation barrier and flushed buffered writes.
 func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -194,16 +197,27 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
 	iter := publishTable.NewIterator(nil, nil)
-	idx.nativePublicationMu.Lock()
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	publicationMu := idx.nativePublicationLock()
+	publicationMu.Lock()
+	newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn([]backenddb.OrderedRootDeltaPublishInput{{
 		// Native vector snapshots are full graph images. Publish a replacement
 		// root so keys removed by rebuild/shrink do not survive from prior roots.
 		BaseRoot:      0,
 		Iter:          iter,
 		StoragePolicy: policy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	}}, columnWritePublishInput{
+		meta:             catalog.meta,
+		baseCommitSeq:    baseCommitSeq,
+		baseSystemRoot:   baseSystemRoot,
+		rootNames:        []string{rootName},
+		baseRootIDs:      baseRootIDs,
+		commandWALIntent: intent,
 	})
 	if err == nil && len(rootIDs) == 1 {
 		status.Loaded = true
@@ -212,8 +226,9 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 		status.BytesDisk = bytesDisk
 		idx.setNativePersistent(true)
 		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+		c.RegisterVectorIndex(idx)
 	}
-	idx.nativePublicationMu.Unlock()
+	publicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {
@@ -331,14 +346,25 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, nil)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
 	iter := publishTable.NewIterator(nil, nil)
-	idx.nativePublicationMu.Lock()
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	publicationMu := idx.nativePublicationLock()
+	publicationMu.Lock()
+	newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
 		StoragePolicy: policy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	}}, columnWritePublishInput{
+		meta:             catalog.meta,
+		baseCommitSeq:    baseCommitSeq,
+		baseSystemRoot:   baseSystemRoot,
+		rootNames:        []string{rootName},
+		baseRootIDs:      baseRootIDs,
+		commandWALIntent: intent,
 	})
 	if err == nil && len(rootIDs) == 1 {
 		status.Loaded = true
@@ -348,7 +374,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		idx.setNativePersistent(true)
 		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	}
-	idx.nativePublicationMu.Unlock()
+	publicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {

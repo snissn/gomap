@@ -4813,8 +4813,11 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	if _, err := freshCol.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex fresh handle: %v", err)
 	}
-	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
-		t.Fatalf("stale native runtime search err=%v want unavailable", err)
+	if col.registeredVectorIndex(def.Name) != freshCol.registeredVectorIndex(def.Name) {
+		t.Fatal("collection handles did not converge on the replacement native graph")
+	}
+	if got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "b" {
+		t.Fatalf("native runtime search after cross-handle rebuild results=%+v err=%v", got.Results, err)
 	}
 }
 
@@ -4844,7 +4847,8 @@ func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T
 		t.Fatal("registered native vector index is nil")
 	}
 
-	index.nativePublicationMu.RLock()
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
 	publishDone := make(chan error, 1)
 	go func() {
 		_, err := index.SaveNativeDeltaSnapshot()
@@ -4852,16 +4856,16 @@ func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T
 	}()
 	select {
 	case err := <-publishDone:
-		index.nativePublicationMu.RUnlock()
+		publicationMu.RUnlock()
 		t.Fatalf("native publication crossed validation read lock: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	index.nativePublicationMu.RUnlock()
+	publicationMu.RUnlock()
 	if err := <-publishDone; err != nil {
 		t.Fatalf("SaveNativeDeltaSnapshot: %v", err)
 	}
 
-	index.nativePublicationMu.Lock()
+	publicationMu.Lock()
 	searchDone := make(chan error, 1)
 	go func() {
 		var buffer VectorIndexSearchBuffer
@@ -4870,11 +4874,11 @@ func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T
 	}()
 	select {
 	case err := <-searchDone:
-		index.nativePublicationMu.Unlock()
+		publicationMu.Unlock()
 		t.Fatalf("native validation crossed publication write lock: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	index.nativePublicationMu.Unlock()
+	publicationMu.Unlock()
 	if err := <-searchDone; err != nil {
 		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
 	}
