@@ -17,6 +17,9 @@ func openChunkingTestCollection(t *testing.T) (string, *backenddb.DB, *Collectio
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	// Close before TempDir cleanup: Windows cannot unlink files that are
+	// still open, which fails the test harness with a stale index.db handle.
+	t.Cleanup(func() { _ = d.Close() })
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
