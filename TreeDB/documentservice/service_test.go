@@ -153,6 +153,40 @@ func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 	}
 }
 
+func TestServiceUpsertDocumentsFreshExistingAndMixedCounts(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	fresh, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "a-first", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "b-first", Embedding: []float32{0, 1}},
+	}})
+	if err != nil || fresh.Inserted != 2 || fresh.Updated != 0 {
+		t.Fatalf("fresh upsert=%+v err=%v", fresh, err)
+	}
+	existing, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "a-second", Embedding: []float32{0, 1}},
+		{ID: "b", Content: "b-second", Embedding: []float32{1, 0}},
+	}})
+	if err != nil || existing.Inserted != 0 || existing.Updated != 2 {
+		t.Fatalf("existing upsert=%+v err=%v", existing, err)
+	}
+	mixed, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "a", Content: "a-third", Embedding: []float32{1, 0}},
+		{ID: "c", Content: "c-first", Embedding: []float32{0, 1}},
+	}})
+	if err != nil || mixed.Inserted != 1 || mixed.Updated != 1 {
+		t.Fatalf("mixed upsert=%+v err=%v", mixed, err)
+	}
+	listed, err := svc.FilterDocuments(ctx, "docs", FilterDocumentsRequest{ReturnEmbedding: true})
+	if err != nil || len(listed.Documents) != 3 || listed.Documents[0].Content != "a-third" || listed.Documents[1].Content != "b-second" || listed.Documents[2].Content != "c-first" {
+		t.Fatalf("documents after upserts=%+v err=%v", listed, err)
+	}
+}
+
 func TestServiceConcurrentSameIDUpsertsSucceed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

@@ -222,26 +222,15 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	ids := make([]string, 0, len(prepared))
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
-	inserts := make([]preparedDocument, 0, len(prepared))
-	updates := make([]preparedDocument, 0)
 	for _, doc := range prepared {
 		if err := ctxErr(ctx); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
 		ids = append(ids, doc.id)
-		current, err := col.Get([]byte(doc.id))
-		if err != nil {
-			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "read before upsert failed", err)
-		}
-		if current == nil {
-			insertIDs = append(insertIDs, []byte(doc.id))
-			insertDocs = append(insertDocs, doc.raw)
-			inserts = append(inserts, doc)
-			continue
-		}
-		updates = append(updates, doc)
+		insertIDs = append(insertIDs, []byte(doc.id))
+		insertDocs = append(insertDocs, doc.raw)
 	}
-	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+	if !req.DeferVectorIndexRebuild {
 		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -252,11 +241,10 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
 		} else if collections.IsDuplicateKeyError(err) {
-			// Upsert is a service contract, while Collection.InsertBatch is an
-			// insert-only primitive. If another request inserts one of these IDs
-			// between the read preflight and InsertBatch, fall back per item to
-			// replace-or-insert semantics instead of leaking ErrDocumentExists.
-			for _, doc := range inserts {
+			// A duplicate means this was not an all-new batch. InsertBatch leaves
+			// ordinary pre-commit failures atomic, so recover each document through
+			// the existing bounded replace-or-insert upsert contract.
+			for _, doc := range prepared {
 				wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, true)
 				if err != nil {
 					return UpsertDocumentsResponse{}, err
@@ -270,18 +258,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			}
 		} else {
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "insert documents failed", err)
-		}
-	}
-	for _, doc := range updates {
-		wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, false)
-		if err != nil {
-			return UpsertDocumentsResponse{}, err
-		}
-		if wasInserted {
-			inserted++
-		}
-		if wasUpdated {
-			updated++
 		}
 	}
 	var rebuildErr error
