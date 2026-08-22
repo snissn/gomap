@@ -606,7 +606,11 @@ func TestCollectionVectorIndexNativeRootDelayedLoadKeepsNewerPublishedGraph(t *t
 		index, status, err := loader.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 		loaded <- loadResult{index: index, status: status, err: err}
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("native install hook was not reached")
+	}
 
 	if _, err := seed.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
 		t.Fatalf("insert before second root: %v", err)
@@ -692,7 +696,11 @@ func TestCollectionVectorIndexNativeRootDelayedEmptyBuildKeepsFirstMutation(t *t
 			err   error
 		}{index: index, err: err}
 	}()
-	<-entered
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("native install hook was not reached")
+	}
 	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
 		t.Fatalf("insert first mutation: %v", err)
 	}

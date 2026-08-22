@@ -1343,7 +1343,11 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 	}
 	if opts.StatsMode == VectorIndexSearchStatsModeDefault || opts.StatsMode == VectorIndexSearchStatsModeFullDiagnostics {
 		buffer.Reset()
-		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=full_diagnostics", "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
+		mode := string(opts.StatsMode)
+		if mode == "" {
+			mode = "default"
+		}
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode="+mode, "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
 	}
 	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
 		buffer.Reset()
@@ -1400,8 +1404,10 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
-		if current := c.registeredVectorIndex(def.Name); err != nil && current != nil && current != index {
-			return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
+		if err != nil {
+			if current := c.registeredVectorIndex(def.Name); current != nil && current != index {
+				return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
+			}
 		}
 		return validated, status, err
 	}

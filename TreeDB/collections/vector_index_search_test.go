@@ -5094,6 +5094,15 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 		Query:     []float32{1, 0},
 		TopK:      2,
 		EfSearch:  2,
+	}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "StatsMode=default") || len(buffer.results) != 0 {
+		t.Fatalf("default stats-mode err=%v buffered_results=%d want accurately named fail-closed reset", err, len(buffer.results))
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
 		StatsMode: VectorIndexSearchStatsModeWorkAccounting,
 	}, &buffer)
 	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(buffer.results) != 0 {

@@ -24,6 +24,12 @@ func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
 	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
 		t.Fatalf("DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
 	}
+	if _, err := svc.ResetIndex(ctx, "docs", ResetIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("ResetIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
 }
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
@@ -1036,7 +1042,7 @@ func TestServiceBenchmarkNativeRuntimeConcurrentFirstMutationsShareHandle(t *tes
 	dir := t.TempDir()
 	open := func() (*Service, *backenddb.DB) {
 		t.Helper()
-		db, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+		db, err := backenddb.Open(testBackendOptions(dir))
 		if err != nil {
 			t.Fatalf("open db: %v", err)
 		}

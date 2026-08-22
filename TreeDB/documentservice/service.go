@@ -556,6 +556,9 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 // VectorDBBench needs. Managed benchmark runs should use a fresh data directory;
 // external shared services should use a unique index name per run.
 func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRequest) (ResetIndexResponse, error) {
+	if s == nil {
+		return ResetIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	if err := ctxErr(ctx); err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -617,6 +620,9 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	if s == nil {
+		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
