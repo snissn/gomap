@@ -467,7 +467,7 @@ func TestCollectionVectorIndexNativeRootUnchangedVectorPersistsDocumentCoverage(
 	}
 }
 
-func TestVectorIndexSnapshotDocumentRootsRejectsReusedIDsWithDifferentRevisions(t *testing.T) {
+func TestVectorIndexSnapshotRejectsDifferentDocumentGeneration(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -486,31 +486,22 @@ func TestVectorIndexSnapshotDocumentRootsRejectsReusedIDsWithDifferentRevisions(
 	if err != nil {
 		t.Fatalf("load catalog: %v", err)
 	}
-	rootRevision, overlayRevision, rootID, overlayRootIDs, err := vectorIndexDocumentRootDescriptor(snap, catalog)
+	generation, err := vectorIndexDocumentGeneration(snap, catalog)
 	if err != nil {
-		t.Fatalf("document root descriptor: %v", err)
+		t.Fatalf("document generation: %v", err)
 	}
 	meta := vectorIndexPersistMeta{
-		SourceDocumentRootsVersion:    vectorIndexDocumentRootsVersion,
-		SourceDocumentRootRevision:    rootRevision,
-		SourceDocumentOverlayRevision: overlayRevision,
-		SourceDocumentRootID:          rootID,
-		SourceDocumentOverlayRootIDs:  overlayRootIDs,
+		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
+		SourceDocumentGeneration:        generation,
 	}
 	matched, err := vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
 	if err != nil || !matched {
-		t.Fatalf("matching descriptor matched=%v err=%v", matched, err)
+		t.Fatalf("matching generation matched=%v err=%v", matched, err)
 	}
-	meta.SourceDocumentRootRevision++
+	meta.SourceDocumentGeneration++
 	matched, err = vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
 	if err != nil || matched {
-		t.Fatalf("reused primary root ID matched=%v err=%v", matched, err)
-	}
-	meta.SourceDocumentRootRevision = rootRevision
-	meta.SourceDocumentOverlayRevision++
-	matched, err = vectorIndexSnapshotMatchesDocumentRoots(meta, catalog, snap)
-	if err != nil || matched {
-		t.Fatalf("reused overlay root IDs matched=%v err=%v", matched, err)
+		t.Fatalf("different generation matched=%v err=%v", matched, err)
 	}
 }
 
@@ -2754,7 +2745,7 @@ func TestCollectionVectorIndexNativeRootAdHocDirtyRuntimeDoesNotPinManagerHandle
 		t.Fatalf("new native vector index: %v", err)
 	}
 	native.setNativePersistent(true)
-	native.recordSourceDocumentRoots(0, 0, 0, nil)
+	native.recordSourceDocumentGeneration(0)
 	native.recordPersistedSnapshot(10, 128, 0)
 	adHoc, err := newVectorIndex(col, VectorIndexOptions{
 		Name:       "scratch_embedding",

@@ -313,9 +313,10 @@ func IsDuplicateKeyError(err error) bool {
 }
 
 const (
-	systemCollectionMetaPrefix        = "collections/meta/"
-	systemCollectionRootPrefix        = "collections/root/"
-	systemCollectionRootOverlayPrefix = "collections/root-overlay/"
+	systemCollectionMetaPrefix               = "collections/meta/"
+	systemCollectionRootPrefix               = "collections/root/"
+	systemCollectionRootOverlayPrefix        = "collections/root-overlay/"
+	systemCollectionDocumentGenerationPrefix = "collections/document-generation/"
 )
 
 func backendRootStoragePolicy(policy RootStoragePolicy) (backenddb.OrderedRootStoragePolicy, error) {
@@ -3996,9 +3997,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.meta = baseMeta
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	registerEmptyRuntime := catalog.rootID(primaryRootName) == 0 && len(catalog.overlayRootIDs(primaryRootName)) == 0
-	var primaryRootRevision, primaryOverlayRevision uint64
+	var sourceDocumentGeneration uint64
 	if registerEmptyRuntime {
-		primaryRootRevision, primaryOverlayRevision, _, _, err = vectorIndexDocumentRootDescriptor(snap, catalog)
+		sourceDocumentGeneration, err = vectorIndexDocumentGeneration(snap, catalog)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
@@ -4038,7 +4039,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if registerEmptyRuntime {
 		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
-			runtime.recordSourceDocumentRoots(primaryRootRevision, primaryOverlayRevision, catalog.rootID(primaryRootName), catalog.overlayRootIDs(primaryRootName))
+			runtime.recordSourceDocumentGeneration(sourceDocumentGeneration)
 			if _, err := c.installNativeVectorIndexCandidate(runtime, 0, nil, 0); err != nil {
 				return nil, err
 			}
@@ -19616,6 +19617,9 @@ func (c *Collection) buildRootDescriptorSystemIterator(rootNames []string, baseR
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
+	if err := c.addDocumentMutationGenerationUpdate(updates, c.meta, rootNames); err != nil {
+		return nil, err
+	}
 	return buildSystemTargetIterator(current, updates)
 }
 
@@ -19644,6 +19648,9 @@ func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta Collecti
 	for i, rootName := range rootNames {
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
+	if err := c.addDocumentMutationGenerationUpdate(updates, meta, rootNames); err != nil {
+		return nil, err
+	}
 	return buildSystemDeltaIterator(updates)
 }
 
@@ -19663,7 +19670,29 @@ func (c *Collection) buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta C
 		overlays := overlayDescriptorRootsAfterDelta(existing, rootIDs[i])
 		updates[systemCollectionRootOverlayKey(rootName)] = encodeRootIDList(overlays)
 	}
+	if err := c.addDocumentMutationGenerationUpdate(updates, meta, rootNames); err != nil {
+		return nil, err
+	}
 	return buildSystemDeltaIterator(updates)
+}
+
+func (c *Collection) addDocumentMutationGenerationUpdate(updates map[string][]byte, meta CollectionMeta, rootNames []string) error {
+	primaryRootName := collectionPrimaryRootName(meta.Name)
+	for _, rootName := range rootNames {
+		if rootName != primaryRootName {
+			continue
+		}
+		state, ok := c.db.StateToken()
+		if !ok {
+			return backenddb.ErrClosed
+		}
+		if state.CommitSeq == ^uint64(0) {
+			return errors.New("collections: document generation exhausted")
+		}
+		updates[systemCollectionDocumentGenerationKey(meta.Name)] = encodeRootID(state.CommitSeq + 1)
+		break
+	}
+	return nil
 }
 
 func (c *Collection) buildRootOverlayCompactionSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -23625,6 +23654,10 @@ func systemCollectionRootKey(rootName string) string {
 
 func systemCollectionRootOverlayKey(rootName string) string {
 	return systemCollectionRootOverlayPrefix + rootName
+}
+
+func systemCollectionDocumentGenerationKey(collection string) string {
+	return systemCollectionDocumentGenerationPrefix + collection
 }
 
 func encodeRootID(rootID uint64) []byte {

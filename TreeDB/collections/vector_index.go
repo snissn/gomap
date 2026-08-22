@@ -357,23 +357,20 @@ type VectorIndex struct {
 	// graph builder. Incremental, traced, and partition builds stay serial.
 	parallelReciprocalLinks bool
 
-	mutationSeq                   uint64
-	sourceDocumentRootsValid      bool
-	sourceDocumentRootRevision    uint64
-	sourceDocumentOverlayRevision uint64
-	sourceDocumentRootID          uint64
-	sourceDocumentOverlayRootIDs  []uint64
-	persistedEpoch                uint64
-	fullSnapshotBaseEpoch         uint64
-	persistedBytesDisk            int64
-	persistedSnapshotDirty        bool
-	nativePersistent              bool
-	dirtyMeta                     bool
-	dirtyNodes                    map[int]struct{}
-	dirtyDocs                     map[string]struct{}
-	lastRebuildDuration           time.Duration
-	liveANNFullRebuilds           uint64
-	insertQuantScratch            []int8
+	mutationSeq              uint64
+	sourceDocumentRootsValid bool
+	sourceDocumentGeneration uint64
+	persistedEpoch           uint64
+	fullSnapshotBaseEpoch    uint64
+	persistedBytesDisk       int64
+	persistedSnapshotDirty   bool
+	nativePersistent         bool
+	dirtyMeta                bool
+	dirtyNodes               map[int]struct{}
+	dirtyDocs                map[string]struct{}
+	lastRebuildDuration      time.Duration
+	liveANNFullRebuilds      uint64
+	insertQuantScratch       []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
 	constructionTrace        *vectorIndexConstructionTraceV1
@@ -563,7 +560,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return nil, err
 		}
 	}
-	sourceDocumentRootRevision, sourceDocumentOverlayRevision, sourceDocumentRootID, sourceDocumentOverlayRootIDs, err := c.currentVectorIndexDocumentRoots()
+	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
 		return nil, err
 	}
@@ -606,14 +603,14 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if err != nil {
 		return nil, err
 	}
-	currentDocumentRootRevision, currentDocumentOverlayRevision, currentDocumentRootID, currentDocumentOverlayRootIDs, err := c.currentVectorIndexDocumentRoots()
+	currentDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
 		return nil, err
 	}
-	if currentDocumentRootRevision != sourceDocumentRootRevision || currentDocumentOverlayRevision != sourceDocumentOverlayRevision || currentDocumentRootID != sourceDocumentRootID || !slices.Equal(currentDocumentOverlayRootIDs, sourceDocumentOverlayRootIDs) {
+	if currentDocumentGeneration != sourceDocumentGeneration {
 		return nil, ErrConcurrentMutation
 	}
-	index.recordSourceDocumentRoots(sourceDocumentRootRevision, sourceDocumentOverlayRevision, sourceDocumentRootID, sourceDocumentOverlayRootIDs)
+	index.recordSourceDocumentGeneration(sourceDocumentGeneration)
 	if liveANNFullRebuild {
 		index.markLiveANNFullRebuild()
 	}
@@ -633,57 +630,40 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	return index, nil
 }
 
-func (c *Collection) currentVectorIndexDocumentRoots() (uint64, uint64, uint64, []uint64, error) {
+func (c *Collection) currentVectorIndexDocumentGeneration() (uint64, error) {
 	if c == nil {
-		return 0, 0, 0, nil, errCollectionNil
+		return 0, errCollectionNil
 	}
 	if c.db == nil {
-		return 0, 0, 0, nil, errCollectionDBNil
+		return 0, errCollectionDBNil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return 0, 0, 0, nil, backenddb.ErrClosed
+		return 0, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return 0, 0, 0, nil, err
+		return 0, err
 	}
 	if catalog == nil {
-		return 0, 0, 0, nil, errCollectionNotFound
+		return 0, errCollectionNotFound
 	}
-	return vectorIndexDocumentRootDescriptor(snap, catalog)
+	return vectorIndexDocumentGeneration(snap, catalog)
 }
 
-func vectorIndexDocumentRootDescriptor(snap *backenddb.Snapshot, catalog *collectionCatalog) (uint64, uint64, uint64, []uint64, error) {
+func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collectionCatalog) (uint64, error) {
 	if snap == nil || catalog == nil {
-		return 0, 0, 0, nil, errCollectionNotFound
+		return 0, errCollectionNotFound
 	}
-	rootName := collectionPrimaryRootName(catalog.meta.Name)
-	rootRevision, err := vectorIndexSystemDescriptorRevision(snap, systemCollectionRootKey(rootName))
-	if err != nil {
-		return 0, 0, 0, nil, err
-	}
-	overlayRevision, err := vectorIndexSystemDescriptorRevision(snap, systemCollectionRootOverlayKey(rootName))
-	if err != nil {
-		return 0, 0, 0, nil, err
-	}
-	return rootRevision, overlayRevision, catalog.rootID(rootName), slices.Clone(catalog.overlayRootIDs(rootName)), nil
-}
-
-func vectorIndexSystemDescriptorRevision(snap *backenddb.Snapshot, key string) (uint64, error) {
-	state, ok := snap.StateToken()
-	if !ok || state.SystemRootPageID == 0 {
-		return 0, nil
-	}
-	entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte(key))
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return 0, nil
-	}
+	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(catalog.meta.Name))
 	if err != nil {
 		return 0, err
 	}
-	return uint64(entry.Revision), nil
+	if !ok {
+		return 0, nil
+	}
+	return decodeRootID(raw)
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
@@ -1130,13 +1110,13 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 			}
 		}
 	}
-	rootRevision, overlayRevision, rootID, overlayRootIDs, err := c.currentVectorIndexDocumentRoots()
+	documentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverage()
 		return err
 	}
 	for _, index := range indexes {
-		index.recordSourceDocumentRoots(rootRevision, overlayRevision, rootID, overlayRootIDs)
+		index.recordSourceDocumentGeneration(documentGeneration)
 	}
 	return nil
 }
@@ -1761,17 +1741,14 @@ func (idx *VectorIndex) recordFullSnapshotBaseEpoch(epoch uint64) {
 	idx.mu.Unlock()
 }
 
-func (idx *VectorIndex) recordSourceDocumentRoots(rootRevision, overlayRevision, rootID uint64, overlayRootIDs []uint64) {
+func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 	if idx == nil {
 		return
 	}
 	idx.mu.Lock()
-	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentRootRevision != rootRevision || idx.sourceDocumentOverlayRevision != overlayRevision || idx.sourceDocumentRootID != rootID || !slices.Equal(idx.sourceDocumentOverlayRootIDs, overlayRootIDs)
+	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
 	idx.sourceDocumentRootsValid = true
-	idx.sourceDocumentRootRevision = rootRevision
-	idx.sourceDocumentOverlayRevision = overlayRevision
-	idx.sourceDocumentRootID = rootID
-	idx.sourceDocumentOverlayRootIDs = slices.Clone(overlayRootIDs)
+	idx.sourceDocumentGeneration = generation
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
@@ -4131,10 +4108,7 @@ func (idx *VectorIndex) Rebuild() error {
 	entry := rebuilt.entry
 	maxLevel := rebuilt.maxLevel
 	dimensions := rebuilt.dimensions
-	sourceDocumentRootRevision := rebuilt.sourceDocumentRootRevision
-	sourceDocumentOverlayRevision := rebuilt.sourceDocumentOverlayRevision
-	sourceDocumentRootID := rebuilt.sourceDocumentRootID
-	sourceDocumentOverlayRootIDs := slices.Clone(rebuilt.sourceDocumentOverlayRootIDs)
+	sourceDocumentGeneration := rebuilt.sourceDocumentGeneration
 	sourceDocumentRootsValid := rebuilt.sourceDocumentRootsValid
 	rebuilt.mu.RUnlock()
 
@@ -4144,10 +4118,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
-	idx.sourceDocumentRootRevision = sourceDocumentRootRevision
-	idx.sourceDocumentOverlayRevision = sourceDocumentOverlayRevision
-	idx.sourceDocumentRootID = sourceDocumentRootID
-	idx.sourceDocumentOverlayRootIDs = sourceDocumentOverlayRootIDs
+	idx.sourceDocumentGeneration = sourceDocumentGeneration
 	idx.sourceDocumentRootsValid = sourceDocumentRootsValid
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()

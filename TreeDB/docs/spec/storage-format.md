@@ -2474,16 +2474,20 @@ The root contains `meta`, `node/<20-digit-node-id>`,
 mark deleted nodes, and document keys map the current document ID to its node.
 
 The `meta` value binds the graph to one collection document snapshot. Coverage
-version `2` stores `source_document_root_revision`,
-`source_document_overlay_revision`, `source_document_root_id`, and the ordered
-`source_document_overlay_root_ids`. The revisions are the catalog-entry
-revisions of the collection primary-root descriptor and primary-overlay-list
-descriptor. A load, status check, search, or save must reject the graph as
-`stale_document_root` unless the version and all four fields match the current
-document snapshot. Publishing only the vector-index root does not change these
-document revisions. A successful mutation that leaves vector values unchanged
-may publish a meta-only delta to advance coverage. Older coverage versions are
-not migrated in this pre-alpha format; the index must be rebuilt.
+version `3` stores `source_document_generation_version` and
+`source_document_generation`. The generation is the value of the collection
+system key `collections/document-generation/<collection>`. A successful
+document mutation advances that key atomically with its primary-root or
+primary-overlay descriptor. Physical root remapping during checkpoint,
+compaction, or vacuum and vector-index-only publication do not advance it.
+
+Load and status checks reject persisted metadata as `stale_document_root`
+unless the coverage version and generation match the current collection.
+Search and save reject a runtime whose in-memory coverage was invalidated.
+Under the coverage barrier, save may advance coverage after successful graph
+maintenance, including by publishing a meta-only delta when document metadata
+changed but vector values did not. Older coverage versions are not migrated in
+this pre-alpha format; the index must be rebuilt.
 
 Column-enabled collection metadata is stored inside the canonical collection
 metadata JSON under `options.column_store`. It is production-facing
