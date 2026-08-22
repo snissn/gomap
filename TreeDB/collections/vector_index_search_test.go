@@ -5057,6 +5057,69 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexWithBufferNativeRuntimeSteadyStateAllocations(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native runtime is nil")
+	}
+	if _, err := index.SaveNativeDeltaSnapshot(); err != nil {
+		t.Fatalf("no-work SaveNativeDeltaSnapshot: %v", err)
+	}
+	state, ok := d.StateToken()
+	if !ok || !index.coversSourceDocumentState(state) {
+		t.Fatal("native runtime did not preserve its exact post-write DB state across a no-work save")
+	}
+
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "native-runtime-search-with-buffer") {
+		return
+	}
+	var sink int
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(got.Results) != 1 {
+			panic("unexpected native runtime result count")
+		}
+		sink += len(got.Results) + len(got.Results[0].ID)
+	})
+	if allocs != 0 {
+		t.Fatalf("native runtime SearchVectorIndexWithBuffer steady-state allocs=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
+	}
+}
+
 func TestSearchVectorIndexWithBufferRefreshesNativeRouteAcrossHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

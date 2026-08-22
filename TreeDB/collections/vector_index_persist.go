@@ -110,11 +110,11 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadS
 	} else if stale {
 		return staleStatus, nil
 	}
-	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	sourceDocumentGeneration, sourceDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
 		return status, err
 	}
-	idx.recordSourceDocumentGeneration(sourceDocumentGeneration)
+	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
 	return idx.saveNativeSnapshotPrepared()
 }
 
@@ -259,6 +259,11 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if generation, valid := idx.sourceDocumentCoverage(); valid {
+		if state, ok := c.db.StateToken(); ok && state.SystemRootPageID == newSystemRoot {
+			idx.recordSourceDocumentState(generation, state)
+		}
+	}
 	return status, nil
 }
 
@@ -375,6 +380,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		return nil, fmt.Errorf("%w: index %q changed during install", errVectorIndexStaleNativeRoot, candidate.name)
 	}
 	postGeneration, err := vectorIndexDocumentGeneration(postInstall, postCatalog)
+	postState, stateOK := postInstall.StateToken()
 	_ = postInstall.Close()
 	if err != nil {
 		rollback()
@@ -384,7 +390,11 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		rollback()
 		return nil, fmt.Errorf("%w: index %q candidate generation %d current generation %d", errVectorIndexStaleDocumentGeneration, candidate.name, candidateGeneration, postGeneration)
 	}
-	candidate.recordSourceDocumentGeneration(candidateGeneration)
+	if !stateOK {
+		rollback()
+		return nil, backenddb.ErrClosed
+	}
+	candidate.recordSourceDocumentState(candidateGeneration, postState)
 	return candidate, nil
 }
 
@@ -419,11 +429,11 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	} else if stale {
 		return staleStatus, nil
 	}
-	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	sourceDocumentGeneration, sourceDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
 		return status, err
 	}
-	idx.recordSourceDocumentGeneration(sourceDocumentGeneration)
+	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
 
 	pin := c.db.AcquireSnapshot()
 	if pin == nil {
@@ -516,6 +526,11 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if generation, valid := idx.sourceDocumentCoverage(); valid {
+		if state, ok := c.db.StateToken(); ok && state.SystemRootPageID == newSystemRoot {
+			idx.recordSourceDocumentState(generation, state)
+		}
+	}
 	return status, nil
 }
 

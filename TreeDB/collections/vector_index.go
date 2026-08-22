@@ -334,6 +334,7 @@ type VectorIndex struct {
 	collection *Collection
 
 	name                string
+	nativeRootName      string
 	field               string
 	fieldPath           []string
 	metric              VectorMetric
@@ -360,6 +361,8 @@ type VectorIndex struct {
 	mutationSeq              uint64
 	sourceDocumentRootsValid bool
 	sourceDocumentGeneration uint64
+	sourceDocumentState      backenddb.StateToken
+	sourceDocumentStateValid bool
 	persistedEpoch           uint64
 	fullSnapshotBaseEpoch    uint64
 	persistedBytesDisk       int64
@@ -603,14 +606,14 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if err != nil {
 		return nil, err
 	}
-	currentDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	currentDocumentGeneration, currentDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
 	if err != nil {
 		return nil, err
 	}
 	if currentDocumentGeneration != sourceDocumentGeneration {
 		return nil, ErrConcurrentMutation
 	}
-	index.recordSourceDocumentGeneration(sourceDocumentGeneration)
+	index.recordSourceDocumentState(sourceDocumentGeneration, currentDocumentState)
 	if liveANNFullRebuild {
 		index.markLiveANNFullRebuild()
 	}
@@ -639,25 +642,38 @@ func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLocked()
 }
 
 func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLockState(writeDomainLocked bool) (uint64, error) {
+	generation, _, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked)
+	return generation, err
+}
+
+func (c *Collection) currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked bool) (uint64, backenddb.StateToken, error) {
 	if c == nil {
-		return 0, errCollectionNil
+		return 0, backenddb.StateToken{}, errCollectionNil
 	}
 	if c.db == nil {
-		return 0, errCollectionDBNil
+		return 0, backenddb.StateToken{}, errCollectionDBNil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return 0, backenddb.ErrClosed
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshotWithWriteDomainLockState(snap, writeDomainLocked)
 	if err != nil {
-		return 0, err
+		return 0, backenddb.StateToken{}, err
 	}
 	if catalog == nil {
-		return 0, errCollectionNotFound
+		return 0, backenddb.StateToken{}, errCollectionNotFound
 	}
-	return vectorIndexDocumentGeneration(snap, catalog)
+	generation, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	return generation, state, nil
 }
 
 func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collectionCatalog) (uint64, error) {
@@ -715,9 +731,14 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	if rebuildRatio > 1 {
 		return nil, errors.New("collections: vector index rebuild deleted ratio cannot exceed 1")
 	}
+	var nativeRootName string
+	if c != nil {
+		nativeRootName = collectionVectorIndexRootName(c.collectionName(), opts.Name)
+	}
 	return &VectorIndex{
 		collection:          c,
 		name:                opts.Name,
+		nativeRootName:      nativeRootName,
 		field:               opts.Field,
 		fieldPath:           fieldPath,
 		metric:              metric,
@@ -1168,10 +1189,10 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		if domain.nativeVectorActive == 0 {
 			indexes := c.registeredVectorIndexes()
 			if len(indexes) != 0 {
-				if generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLocked(); err == nil {
+				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
 					for _, index := range indexes {
 						if index.hasValidSourceDocumentRoots() {
-							index.recordSourceDocumentGeneration(generation)
+							index.recordSourceDocumentState(generation, state)
 						}
 					}
 				}
@@ -1204,14 +1225,14 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		return errCollectionNil
 	}
 	if c.writeDomain == nil {
-		generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(writeDomainLocked)
+		generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked)
 		if err != nil {
 			c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 			return err
 		}
 		for _, index := range indexes {
 			if c.isRegisteredVectorIndex(index) {
-				index.recordSourceDocumentGeneration(generation)
+				index.recordSourceDocumentState(generation, state)
 			}
 		}
 		return nil
@@ -1227,14 +1248,14 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	if domain.nativeVectorActive > 1 {
 		return nil
 	}
-	generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLocked()
+	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 		return err
 	}
 	for _, index := range indexes {
 		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
-			index.recordSourceDocumentGeneration(generation)
+			index.recordSourceDocumentState(generation, state)
 		}
 	}
 	return nil
@@ -1866,6 +1887,23 @@ func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
 	idx.sourceDocumentRootsValid = true
 	idx.sourceDocumentGeneration = generation
+	idx.sourceDocumentStateValid = false
+	if changed && idx.nativePersistent {
+		idx.dirtyMeta = true
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
+	idx.sourceDocumentRootsValid = true
+	idx.sourceDocumentGeneration = generation
+	idx.sourceDocumentState = state
+	idx.sourceDocumentStateValid = true
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
@@ -1878,6 +1916,7 @@ func (idx *VectorIndex) invalidateSourceDocumentRoots() {
 	}
 	idx.mu.Lock()
 	idx.sourceDocumentRootsValid = false
+	idx.sourceDocumentStateValid = false
 	idx.mu.Unlock()
 }
 
@@ -1897,6 +1936,16 @@ func (idx *VectorIndex) coversSourceDocumentGeneration(generation uint64) bool {
 	}
 	idx.mu.RLock()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) coversSourceDocumentState(state backenddb.StateToken) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state
 	idx.mu.RUnlock()
 	return covers
 }
@@ -4247,6 +4296,8 @@ func (idx *VectorIndex) Rebuild() error {
 	dimensions := rebuilt.dimensions
 	sourceDocumentGeneration := rebuilt.sourceDocumentGeneration
 	sourceDocumentRootsValid := rebuilt.sourceDocumentRootsValid
+	sourceDocumentState := rebuilt.sourceDocumentState
+	sourceDocumentStateValid := rebuilt.sourceDocumentStateValid
 	rebuilt.mu.RUnlock()
 
 	idx.mu.Lock()
@@ -4257,6 +4308,8 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.dimensions = dimensions
 	idx.sourceDocumentGeneration = sourceDocumentGeneration
 	idx.sourceDocumentRootsValid = sourceDocumentRootsValid
+	idx.sourceDocumentState = sourceDocumentState
+	idx.sourceDocumentStateValid = sourceDocumentStateValid
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
 	idx.requireFullNativeSnapshotLocked()

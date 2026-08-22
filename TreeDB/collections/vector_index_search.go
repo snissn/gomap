@@ -1449,14 +1449,25 @@ func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (Ve
 	if c == nil || c.db == nil {
 		return VectorIndexDefinition{}, false, false
 	}
-	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
-	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
-	if c.catalog == nil || systemRoot == 0 || c.catalogSystemRoot != systemRoot || (c.catalogCommitSeq != commitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+	state, ok := c.db.StateToken()
+	if !ok {
 		return VectorIndexDefinition{}, false, false
 	}
+	def, _, found, current := c.cachedVectorIndexForState(name, "", state)
+	return def, found, current
+}
+
+func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if c.catalog == nil || state.SystemRootPageID == 0 || c.catalogSystemRoot != state.SystemRootPageID || (c.catalogCommitSeq != state.CommitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+		return VectorIndexDefinition{}, 0, false, false
+	}
 	def, ok := findVectorIndex(c.catalog.meta.VectorIndexes, name)
-	return def, ok, true
+	if !ok {
+		return VectorIndexDefinition{}, 0, false, true
+	}
+	return def, c.catalog.rootID(rootName), true, true
 }
 
 func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
@@ -1466,11 +1477,23 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	publicationMu := index.nativePublicationLock()
 	publicationMu.RLock()
 	defer publicationMu.RUnlock()
+	rootName := index.nativeRootName
+	if state, ok := c.db.StateToken(); ok && rootName != "" && index.coversSourceDocumentState(state) {
+		currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, rootName, state)
+		if current && found && index.validateNativeSnapshotDefinition(currentDef) == "" && rootID == index.nativeSnapshotBaseEpochForFullSave() {
+			epoch, bytesDisk, _, _, _ := index.nativeSearchState()
+			return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
+		}
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
+	state, ok := snap.StateToken()
+	if !ok {
+		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
+	}
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return nil, VectorIndexLoadStatus{}, err
@@ -1492,11 +1515,12 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	if reason := index.validateNativeSnapshotDefinition(currentDef); reason != "" {
 		return nil, VectorIndexLoadStatus{ExactFallbackReason: reason}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: %s", ErrVectorIndexSearchUnavailable, def.Name, reason)
 	}
-	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+	rootName = collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	rootID := catalog.rootID(rootName)
 	if rootID != index.nativeSnapshotBaseEpochForFullSave() {
 		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleRuntimeIndex}, fmt.Errorf("%w: native_runtime vector index %q is stale", ErrVectorIndexSearchUnavailable, def.Name)
 	}
+	index.recordSourceDocumentState(documentGeneration, state)
 	epoch, bytesDisk, _, _, _ := index.nativeSearchState()
 	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
 }
