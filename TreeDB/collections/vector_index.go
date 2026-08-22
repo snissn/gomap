@@ -512,10 +512,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
-	return c.buildVectorIndexPrepared(opts, register, true)
+	return c.buildVectorIndexPrepared(opts, register, true, false)
 }
 
-func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered bool) (*VectorIndex, error) {
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -569,6 +569,9 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if liveANNFullRebuild {
+		index.markLiveANNFullRebuild()
 	}
 	if register {
 		if nativePersistent {
@@ -673,7 +676,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		return
 	}
 	index.collection = c
-	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
+	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
 		index.recordNativeDefinition(def)
 		if c.writeDomain != nil {
 			c.writeDomain.nativeVectorIndexesMu.Lock()
@@ -713,10 +716,10 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	if registered != nil {
 		return true
 	}
-	if index.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, index.name) {
+	if index.isNativePersistent() || collectionMetaDeclaresNativeVectorIndex(c.meta, index.name) {
 		return true
 	}
-	declared, err := c.refreshVectorIndexDeclaration(index.name)
+	declared, err := c.refreshNativeVectorIndexDeclaration(index.name)
 	return err == nil && declared
 }
 
@@ -735,7 +738,7 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	}
 	c.rememberCatalog(snap, catalog)
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, index.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return index.isNativePersistent(), nil
 	}
 	wasNativePersistent := index.isNativePersistent()
@@ -912,11 +915,10 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
-			index, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
 			if err != nil {
 				return nil, err
 			}
-			index.markLiveANNFullRebuild()
 			if rebuilt == nil {
 				rebuilt = make(map[string]struct{}, 1)
 			}
@@ -1086,8 +1088,8 @@ func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) erro
 	if c == nil || index == nil || !index.needsNativeAutoPersist() {
 		return nil
 	}
-	if !collectionMetaDeclaresVectorIndex(c.meta, index.name) {
-		declared, err := c.refreshVectorIndexDeclaration(index.name)
+	if !collectionMetaDeclaresNativeVectorIndex(c.meta, index.name) {
+		declared, err := c.refreshNativeVectorIndexDeclaration(index.name)
 		if err != nil || !declared {
 			return err
 		}
@@ -1106,7 +1108,7 @@ func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) erro
 	return err
 }
 
-func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
+func (c *Collection) refreshNativeVectorIndexDeclaration(name string) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -1124,7 +1126,7 @@ func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
-	return collectionMetaDeclaresVectorIndex(catalog.meta, name), nil
+	return collectionMetaDeclaresNativeVectorIndex(catalog.meta, name), nil
 }
 
 func (c *Collection) persistDirtyNativeVectorIndexes() error {
@@ -1142,7 +1144,7 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 
 func (c *Collection) hasDirtyNativeVectorIndex() bool {
 	for _, index := range c.registeredVectorIndexes() {
-		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresVectorIndex(c.meta, index.name)) {
+		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresNativeVectorIndex(c.meta, index.name)) {
 			continue
 		}
 		if index.needsNativeAutoPersist() {
@@ -1152,12 +1154,12 @@ func (c *Collection) hasDirtyNativeVectorIndex() bool {
 	return false
 }
 
-func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
+func collectionMetaDeclaresNativeVectorIndex(meta CollectionMeta, name string) bool {
 	if name == "" {
 		return false
 	}
-	_, ok := findVectorIndex(meta.VectorIndexes, name)
-	return ok
+	def, ok := findVectorIndex(meta.VectorIndexes, name)
+	return ok && vectorIndexDefinitionUsesNativeRuntime(def)
 }
 
 // InsertDocument adds or replaces one committed collection document in the

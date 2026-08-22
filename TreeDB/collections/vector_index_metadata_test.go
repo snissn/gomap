@@ -252,6 +252,15 @@ func TestBuildVectorIndexDeclaredColumnGraphKeepsCompatibilityV2A(t *testing.T) 
 	if col.registeredVectorIndex(def.Name) != index {
 		t.Fatal("declared column graph build did not retain the compatible in-memory registration")
 	}
+	if index.isNativePersistent() {
+		t.Fatal("declared column graph was promoted to the native persistent runtime")
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert after column graph compatibility build: %v", err)
+	}
+	if col.registeredVectorIndex(def.Name) != index || index.isNativePersistent() {
+		t.Fatal("column graph compatibility registration moved into the native registry after mutation")
+	}
 }
 
 func TestNativeRuntimeVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T) {

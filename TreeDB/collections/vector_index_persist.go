@@ -119,11 +119,11 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 		}
 		return status, false, nil
 	}
-	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
+	if idx.isNativePersistent() || collectionMetaDeclaresNativeVectorIndex(c.meta, idx.name) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, true, nil
 	}
-	declared, err := c.refreshVectorIndexDeclaration(idx.name)
+	declared, err := c.refreshNativeVectorIndexDeclaration(idx.name)
 	if err != nil || !declared {
 		return status, false, nil
 	}
@@ -163,7 +163,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -363,7 +363,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -647,6 +647,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	status.Loaded = true
 	status.Epoch, status.BytesDisk, _, _, _ = installed.nativeSearchState()
+	status.RootID = status.Epoch
 	return installed, status, nil
 }
 

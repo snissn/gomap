@@ -617,7 +617,7 @@ func TestCollectionVectorIndexNativeRootDelayedLoadKeepsNewerPublishedGraph(t *t
 	}
 	close(release)
 	result := <-loaded
-	if result.err != nil || result.index != current || !result.status.Loaded || result.status.Epoch != second.RootID {
+	if result.err != nil || result.index != current || !result.status.Loaded || result.status.Epoch != second.RootID || result.status.RootID != second.RootID {
 		t.Fatalf("delayed load replaced newer graph: current=%p loaded=%p status=%+v err=%v", current, result.index, result.status, result.err)
 	}
 	got, _, err := result.index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})

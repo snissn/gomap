@@ -322,7 +322,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 
 func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	start := time.Now()
-	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
+	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false, false)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}

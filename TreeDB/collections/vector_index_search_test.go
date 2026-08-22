@@ -5190,7 +5190,11 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 			defer wg.Done()
 			<-start
 			var searchBuffer VectorIndexSearchBuffer
-			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
+			response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
+			if err == nil && response.Diagnostics().LiveANN.FullRebuilds != 1 {
+				errs <- fmt.Errorf("successful search observed live ANN full rebuilds=%d want 1", response.Diagnostics().LiveANN.FullRebuilds)
+				return
+			}
 			if err != nil && !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 				errs <- err
 			}
