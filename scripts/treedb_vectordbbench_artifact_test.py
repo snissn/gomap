@@ -190,6 +190,16 @@ class HarnessOrderTest(unittest.TestCase):
 
 
 class ManifestFileListTest(unittest.TestCase):
+    def test_file_identity_records_size_and_checksum(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "service"
+            path.write_bytes(b"treedb")
+
+            got = harness.file_identity(path)
+
+        self.assertEqual(got["bytes"], 6)
+        self.assertEqual(len(got["sha256"]), 64)
+
     def test_artifact_file_list_skips_treedb_data(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

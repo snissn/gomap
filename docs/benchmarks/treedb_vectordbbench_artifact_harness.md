@@ -23,7 +23,8 @@ python3 scripts/treedb_vectordbbench_artifact.py \
 Expected primary files:
 
 - `manifest.json` — artifact schema, commands, gomap/vectordbbench commits when
-  available, Python/Go/OS context, service command, health response, skips.
+  available, Python/Go/OS context, service command and binary SHA-256, health
+  response, skips.
 - `route_proof.json` — stable sidecar proving exact/scalar TreeDB routes and
   counters.
 - `health.json` — `GET /v1/health` response.

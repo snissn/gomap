@@ -723,6 +723,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def file_identity(path: Path) -> dict[str, Any]:
+    return {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+
+
 def positive_number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
         raise ValueError(f"canonical VDBBench result is missing positive {name}")
@@ -916,6 +920,7 @@ def write_manifest(
     service_command: list[str] | None,
 ) -> None:
     files, files_truncated = artifact_file_list(state.root)
+    service_binary = Path(service_command[0]) if service_command else None
     manifest = {
         "schema_version": ARTIFACT_SCHEMA,
         "generated_at": iso_now(),
@@ -929,6 +934,7 @@ def write_manifest(
             "data_dir": str(args.data_dir),
             "pid": state.service_pid,
             "command": service_command,
+            "binary": file_identity(service_binary) if service_binary else None,
             "health": state.health,
             "log": "service.log",
         },
