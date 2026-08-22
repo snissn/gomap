@@ -938,13 +938,25 @@ func vectorIndexDefinitionUsesNativeRuntime(def VectorIndexDefinition) bool {
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
+	return c.reconcileVectorIndexes(documentIDs)
+}
+
+func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
+	return c.reconcileVectorIndexes(documentIDs)
+}
+
+func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	unlockMutation := c.lockVectorIndexMutation()
+	defer unlockMutation()
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
 	if err != nil {
 		return err
 	}
+	unlockPublication := c.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
@@ -968,30 +980,24 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	return nil
 }
 
-func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
-	if len(documentIDs) == 0 {
-		return nil
+func (c *Collection) lockVectorIndexMutation() func() {
+	if c == nil {
+		return func() {}
 	}
-	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
-	if err != nil {
-		return err
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorMutationMu.Lock()
+		return c.writeDomain.nativeVectorMutationMu.Unlock
 	}
-	indexes := c.registeredVectorIndexes()
-	if len(indexes) == 0 {
-		return nil
+	c.vectorIndexMutationMu.Lock()
+	return c.vectorIndexMutationMu.Unlock
+}
+
+func (c *Collection) lockNativeVectorIndexPublicationRead() func() {
+	if c != nil && c.writeDomain != nil {
+		c.writeDomain.nativeVectorPublishMu.RLock()
+		return c.writeDomain.nativeVectorPublishMu.RUnlock
 	}
-	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
-		c.manager.registerCollectionHandle(c)
-	}
-	for _, index := range indexes {
-		if _, ok := rebuilt[index.name]; ok {
-			continue
-		}
-		for _, documentID := range documentIDs {
-			index.TombstoneDocumentID(documentID)
-		}
-	}
-	return nil
+	return func() {}
 }
 
 func vectorIndexListHasNativePersistent(indexes []*VectorIndex) bool {

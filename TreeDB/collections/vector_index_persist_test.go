@@ -2833,8 +2833,8 @@ func TestCollectionVectorIndexNativeRootRebuildRejectsRegisteredStaleRoot(t *tes
 	if rebuild.RootID == 0 || rebuild.RootID == seed.RootID || rebuild.Stats.LiveDocs != 3 {
 		t.Fatalf("unexpected fresh rebuild=%+v seed=%+v", rebuild, seed)
 	}
-	if current := staleCol.registeredVectorIndex(def.Name); current != stale {
-		t.Fatalf("stale collection no longer has original registered index current=%p stale=%p", current, stale)
+	if current := staleCol.registeredVectorIndex(def.Name); current == nil || current == stale || current != freshCol.registeredVectorIndex(def.Name) {
+		t.Fatalf("collection handles did not converge on replacement index current=%p stale=%p fresh=%p", current, stale, freshCol.registeredVectorIndex(def.Name))
 	}
 
 	if err := stale.Rebuild(); !errors.Is(err, errVectorIndexStaleRuntime) {
@@ -3050,7 +3050,7 @@ func TestCollectionVectorIndexNativeEmptyRootMaintainsInsertedDocuments(t *testi
 	requireVectorResultIDs(t, results, "a")
 }
 
-func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T) {
+func TestCollectionVectorIndexNativeDeltaSharesPersistedRootAcrossHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -3107,6 +3107,10 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	} else if !statusB.Loaded || statusB.RootID != seedStatus.RootID {
 		t.Fatalf("handle B load status=%+v seed=%+v", statusB, seedStatus)
 	}
+	sharedIndex := handleA.registeredVectorIndex(def.Name)
+	if sharedIndex == nil || sharedIndex != handleB.registeredVectorIndex(def.Name) {
+		t.Fatalf("handles do not share loaded vector index A=%p B=%p", sharedIndex, handleB.registeredVectorIndex(def.Name))
+	}
 
 	if _, err := handleA.InsertBatch(
 		[][]byte{[]byte("c")},
@@ -3117,17 +3121,15 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	if err := handleA.Flush(); err != nil {
 		t.Fatalf("flush handle A: %v", err)
 	}
-	if _, statusA2, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+	_, statusA2, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
 		t.Fatalf("reload handle A vector index: %v", err)
 	} else if !statusA2.Loaded || statusA2.RootID == seedStatus.RootID {
 		t.Fatalf("handle A did not advance persisted root status=%+v seed=%+v", statusA2, seedStatus)
 	}
-	staleIndex := handleB.registeredVectorIndex(def.Name)
-	if staleIndex == nil {
-		t.Fatal("handle B did not keep loaded vector index registered")
-	}
-	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
-		t.Fatalf("stale full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
+	sharedIndex = handleA.registeredVectorIndex(def.Name)
+	if sharedIndex == nil || sharedIndex != handleB.registeredVectorIndex(def.Name) {
+		t.Fatalf("handles did not converge after reload A=%p B=%p", sharedIndex, handleB.registeredVectorIndex(def.Name))
 	}
 
 	if _, err := handleB.InsertBatch(
@@ -3136,8 +3138,8 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	); err != nil {
 		t.Fatalf("insert through handle B: %v", err)
 	}
-	if err := handleB.Flush(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
-		t.Fatalf("flush stale dirty handle B err=%v, want %v", err, errVectorIndexStaleNativeRoot)
+	if err := handleB.Flush(); err != nil {
+		t.Fatalf("flush handle B: %v", err)
 	}
 	loaded, status, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
@@ -3146,14 +3148,17 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	if loaded == nil || !status.Loaded {
 		t.Fatalf("graph did not load after stale rejection loaded=%v status=%+v", loaded != nil, status)
 	}
-	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if status.RootID == statusA2.RootID {
+		t.Fatalf("handle B flush did not advance shared root status=%+v previous=%+v", status, statusA2)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 4, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search graph after stale rejection: %v", err)
 	}
-	requireVectorResultIDs(t, results, "a", "c", "b")
+	requireVectorResultIDs(t, results, "a", "c", "d", "b")
 }
 
-func TestCollectionVectorIndexNativeFullSaveRejectsPreRootRegisteredHandle(t *testing.T) {
+func TestCollectionVectorIndexNativeFullSaveIgnoresSupersededPreRootHandle(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -3215,8 +3220,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsPreRootRegisteredHandle(t *te
 		t.Fatalf("fresh save status=%+v", freshStatus)
 	}
 
-	if staleStatus, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
-		t.Fatalf("stale pre-root full snapshot save status=%+v err=%v, want dirty stale runtime rejection", staleStatus, err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("superseded pre-root full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
 	}
 	loaded, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
@@ -3232,7 +3237,7 @@ func TestCollectionVectorIndexNativeFullSaveRejectsPreRootRegisteredHandle(t *te
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
-func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedPreRoot(t *testing.T) {
+func TestCollectionVectorIndexNativeFullSaveIgnoresDroppedRecreatedPreRoot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -3292,8 +3297,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedPreRoot(t *te
 		t.Fatalf("recreated vector index status=%+v want missing graph root", status)
 	}
 
-	if staleStatus, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
-		t.Fatalf("stale dropped/recreated pre-root save status=%+v err=%v, want dirty stale runtime rejection", staleStatus, err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale dropped/recreated pre-root save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
 	}
 	freshIndex, err := freshCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
@@ -3362,6 +3367,10 @@ func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedRoot(t *testi
 	} else if !status.Loaded || status.RootID != seedStatus.RootID {
 		t.Fatalf("stale load status=%+v seed=%+v", status, seedStatus)
 	}
+	staleIndex := staleCol.registeredVectorIndex(def.Name)
+	if staleIndex == nil {
+		t.Fatal("stale collection did not load vector index")
+	}
 
 	freshCol, err := mgr.OpenCollection("docs")
 	if err != nil {
@@ -3379,9 +3388,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedRoot(t *testi
 		t.Fatalf("recreated vector index status=%+v want missing graph root", status)
 	}
 
-	staleIndex := staleCol.registeredVectorIndex(def.Name)
-	if staleIndex == nil {
-		t.Fatal("stale collection did not keep loaded vector index registered")
+	if current := staleCol.registeredVectorIndex(def.Name); current != nil {
+		t.Fatalf("drop/recreate did not clear shared registered index current=%p", current)
 	}
 	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
 		t.Fatalf("stale full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)

@@ -415,6 +415,7 @@ type Collection struct {
 	documentScanStatsMu        sync.RWMutex
 	lastDocumentScanStats      CollectionDocumentScanStats
 	vectorIndexLoadMu          sync.Mutex
+	vectorIndexMutationMu      sync.Mutex
 	vectorIndexesMu            sync.RWMutex
 	vectorIndexes              map[string]*VectorIndex
 	vectorPreparedSearchMu     sync.Mutex
@@ -1398,6 +1399,7 @@ type collectionWriteDomain struct {
 	primaryCacheDirty        bool
 	primaryIDIndex           *bufferedUniqueValueIndex
 	nativeVectorIndexLoadMu  sync.Mutex
+	nativeVectorMutationMu   sync.Mutex
 	nativeVectorIndexesMu    sync.RWMutex
 	nativeVectorIndexes      map[string]*VectorIndex
 	nativeVectorPublishMu    sync.RWMutex

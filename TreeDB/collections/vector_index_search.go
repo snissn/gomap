@@ -1358,32 +1358,43 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		buffer.Reset()
 		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
 	}
-	index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
-	if err != nil {
-		buffer.Reset()
+	for attempt := 0; attempt < 2; attempt++ {
+		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
+		if err != nil {
+			buffer.Reset()
+			return response, err
+		}
+		if index == nil || !load.Loaded {
+			buffer.Reset()
+			response.Status.ExactFallbackReason = load.ExactFallbackReason
+			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
+		}
+		publicationMu := index.nativePublicationLock()
+		publicationMu.RLock()
+		if c.registeredVectorIndex(def.Name) != index {
+			publicationMu.RUnlock()
+			continue
+		}
+		response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		if err == nil {
+			_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
+			response.Status.Loaded = true
+			response.Status.Registered = true
+			response.Status.RootName = load.RootName
+			response.Status.RootID = load.RootID
+			response.Status.NativeRootLoaded = load.RootID != 0
+			response.Status.NativeRootBytes = load.BytesDisk
+			response.Status.RebuildNeeded = rebuildNeeded
+			response.Stats.SearchRouteNativeRuntime = 1
+			response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
+			response.Stats.CandidateRows = uint64(liveDocs)
+		}
+		publicationMu.RUnlock()
 		return response, err
 	}
-	if index == nil || !load.Loaded {
-		buffer.Reset()
-		response.Status.ExactFallbackReason = load.ExactFallbackReason
-		return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
-	}
-	response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
-	if err != nil {
-		return response, err
-	}
-	_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
-	response.Status.Loaded = true
-	response.Status.Registered = true
-	response.Status.RootName = load.RootName
-	response.Status.RootID = load.RootID
-	response.Status.NativeRootLoaded = load.RootID != 0
-	response.Status.NativeRootBytes = load.BytesDisk
-	response.Status.RebuildNeeded = rebuildNeeded
-	response.Stats.SearchRouteNativeRuntime = 1
-	response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
-	response.Stats.CandidateRows = uint64(liveDocs)
-	return response, nil
+	buffer.Reset()
+	response.Status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+	return response, fmt.Errorf("%w: native_runtime vector index %q changed during search validation", ErrVectorIndexSearchUnavailable, def.Name)
 }
 
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {

@@ -4821,6 +4821,50 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	}
 }
 
+func TestNativeRuntimeDelayedCrossHandleDeleteReconcilesCurrentDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	first, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection first: %v", err)
+	}
+	second, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection second: %v", err)
+	}
+	if _, err := first.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("initial InsertBatch: %v", err)
+	}
+	if deleted, err := first.DeleteDocument([]byte("a")); err != nil || !deleted {
+		t.Fatalf("DeleteDocument deleted=%v err=%v", deleted, err)
+	}
+	if _, err := second.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("replacement InsertBatch: %v", err)
+	}
+	if err := first.notifyVectorIndexesDelete([][]byte{[]byte("a")}); err != nil {
+		t.Fatalf("delayed delete reconciliation: %v", err)
+	}
+	if first.registeredVectorIndex(def.Name) != second.registeredVectorIndex(def.Name) {
+		t.Fatal("collection handles do not share the native graph")
+	}
+	var buffer VectorIndexSearchBuffer
+	got, err := second.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" {
+		t.Fatalf("search after delayed delete results=%+v err=%v", got.Results, err)
+	}
+}
+
 func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
