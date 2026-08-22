@@ -1642,6 +1642,81 @@ type acceptedVectorMutationErrorForTest struct {
 	error
 }
 
+func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	c, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := c.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := c.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("seed insert did not build native index")
+	}
+	before, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("generation before overlap: %v", err)
+	}
+
+	unlockFirst := c.lockVectorIndexCoverageMutation()
+	firstLocked := true
+	defer func() {
+		if firstLocked {
+			unlockFirst()
+		}
+	}()
+	unlockSecond := c.lockVectorIndexCoverageMutation()
+	secondLocked := true
+	defer func() {
+		if secondLocked {
+			unlockSecond()
+		}
+	}()
+	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("publish first overlapping mutation: %v", err)
+	}
+	secondIDs, err := c.insertBatch([][]byte{[]byte("overlap-second")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("publish second overlapping mutation: %v", err)
+	}
+	if err := c.reconcileVectorIndexes(firstIDs); err != nil {
+		t.Fatalf("reconcile first overlapping mutation: %v", err)
+	}
+	if err := c.reconcileVectorIndexes(secondIDs); err != nil {
+		t.Fatalf("reconcile second overlapping mutation: %v", err)
+	}
+	after, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("generation after overlap: %v", err)
+	}
+	if after == before || index.coversSourceDocumentGeneration(after) {
+		t.Fatalf("overlapping reconciliation advanced coverage from %d to %d", before, after)
+	}
+
+	unlockFirst()
+	firstLocked = false
+	if index.coversSourceDocumentGeneration(after) {
+		t.Fatalf("coverage advanced before the final overlapping mutation completed")
+	}
+	unlockSecond()
+	secondLocked = false
+	if !index.coversSourceDocumentGeneration(after) {
+		t.Fatalf("final overlapping mutation did not cover generation %d", after)
+	}
+}
+
 func (acceptedVectorMutationErrorForTest) CommitPublicationAccepted() bool { return true }
 
 func (e acceptedVectorMutationErrorForTest) Unwrap() error { return e.error }

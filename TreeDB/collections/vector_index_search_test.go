@@ -3810,6 +3810,59 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexWithBufferRefreshesNativeCoverageAfterBufferedFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"kind":"vector","embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("insert did not remain buffered before search")
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" {
+		t.Fatalf("SearchVectorIndexWithBuffer results=%+v err=%v", got.Results, err)
+	}
+	if pending := mgr.StatsSnapshot().PendingDocuments; pending != 0 {
+		t.Fatalf("PendingDocuments=%d want 0 after search", pending)
+	}
+	generation, err := col.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("currentVectorIndexDocumentGeneration: %v", err)
+	}
+	if index := col.registeredVectorIndex(def.Name); index == nil || !index.coversSourceDocumentGeneration(generation) {
+		t.Fatalf("native runtime does not cover flushed generation %d", generation)
+	}
+}
+
 func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
