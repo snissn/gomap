@@ -23,7 +23,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Ironbird Attribution](TREEDB_IRONBIRD_ATTRIBUTION.md)**: TreeDB lifecycle counters, Ironbird phase boundaries, and non-ABCI accounting contract for low-fanout benchmark rows.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
 - **[Typed-Storage Guides](../TreeDB/docs/guides/README.md)**: Collection layout quickstarts, typed-storage benchmark/profile guide, and vector typed-column guidance.
-- **[Document Service API](TREEDB_DOCUMENT_SERVICE_API.md)**: Pre-alpha Haystack-style HTTP/JSON contract for documents, metadata filters, and exact dense-vector search.
+- **[Document Service API](TREEDB_DOCUMENT_SERVICE_API.md)**: Pre-alpha Haystack-style HTTP/JSON contract for documents, declaration-time metadata filters, filtered keyword/hybrid retrieval, and `ann`/`exact` dense-vector routes.
 - **[Python Document Service Client](../clients/python/treedb_client/README.md)**: Haystack-free sync Python client for the document service.
 - **[TreeDB Haystack Integration](../clients/python/treedb_haystack/README.md)**: DocumentStore/retriever package and runnable examples for Haystack pipelines.
 

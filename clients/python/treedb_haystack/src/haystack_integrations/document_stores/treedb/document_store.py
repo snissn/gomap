@@ -14,8 +14,14 @@ from haystack.dataclasses import Document as HaystackDocument
 from haystack.document_stores.errors import DocumentStoreError, DuplicateDocumentError
 from haystack.document_stores.types import DuplicatePolicy
 from haystack.errors import FilterError
-from treedb_client import Document as TreeDBDocument
-from treedb_client import IndexInfo, TreeDBClient, TreeDBClientError, normalize_filter
+from treedb_client import (
+    Document as TreeDBDocument,
+    IndexInfo,
+    ScalarFieldDeclaration,
+    TreeDBClient,
+    TreeDBClientError,
+    normalize_filter,
+)
 from treedb_client import InvalidFilterError as TreeDBInvalidFilterError
 from treedb_client import InvalidRequestError as TreeDBInvalidRequestError
 
@@ -39,6 +45,8 @@ class TreeDBDocumentStore:
         index: str = "docs",
         embedding_dimension: int = 768,
         similarity: str = "cosine",
+        scalar_fields: Optional[Sequence[ScalarFieldDeclaration | Mapping[str, Any]]] = None,
+        dense_route: str = "exact",
         return_embedding: bool = False,
         ensure_index: bool = True,
         recreate_index: bool = False,
@@ -51,6 +59,8 @@ class TreeDBDocumentStore:
         :param index: TreeDB document-service index name.
         :param embedding_dimension: Dense embedding dimension for index creation/validation.
         :param similarity: TreeDB vector metric: `cosine`, `l2`, or `inner_product` (`dot_product` alias).
+        :param scalar_fields: Declaration-time metadata scalar indexes to create with the service index.
+        :param dense_route: Dense route for Haystack embedding retrieval; defaults to exact for legacy correctness, or use `ann` for a column_graph traversal.
         :param return_embedding: Whether filter/search responses should include stored embeddings by default.
         :param ensure_index: Create/open a compatible service index during construction. If false, operations are lazy.
         :param recreate_index: Unsupported by the current TreeDB service because there is no safe drop/recreate route.
@@ -72,6 +82,8 @@ class TreeDBDocumentStore:
 
         self.index = index
         self.embedding_dimension = embedding_dimension
+        self.scalar_fields = _normalize_scalar_fields(scalar_fields)
+        self.dense_route = _normalize_dense_route(dense_route)
         self.similarity = _normalize_similarity(similarity)
         self.return_embedding = bool(return_embedding)
         self.ensure_index = bool(ensure_index)
@@ -85,7 +97,12 @@ class TreeDBDocumentStore:
         if self.ensure_index:
             self.index_info = self._client_call(
                 "ensure index",
-                lambda: self.client.ensure_index(self.index, self.embedding_dimension, self.similarity),
+                lambda: self.client.ensure_index(
+                    self.index,
+                    self.embedding_dimension,
+                    self.similarity,
+                    scalar_fields=self.scalar_fields,
+                ),
             )
             self._validate_index_info(self.index_info)
 
@@ -230,6 +247,7 @@ class TreeDBDocumentStore:
                 query_embedding=query_embedding,
                 top_k=top_k,
                 filter=prepared_filter,
+                route=self.dense_route,
                 return_embedding=self.return_embedding if return_embedding is None else bool(return_embedding),
                 expected_generation=self._expected_generation(),
             ),
@@ -310,7 +328,13 @@ class TreeDBDocumentStore:
             base_url=self.base_url,
             index=self.index,
             embedding_dimension=self.embedding_dimension,
+            scalar_fields=(
+                None
+                if self.scalar_fields is None
+                else [declaration.to_dict() for declaration in self.scalar_fields]
+            ),
             similarity=self.similarity,
+            dense_route=self.dense_route,
             return_embedding=self.return_embedding,
             ensure_index=self.ensure_index,
             recreate_index=False,
@@ -515,6 +539,40 @@ def _looks_like_filter_error(exc: TreeDBInvalidRequestError) -> bool:
     message = str(exc).lower()
     return any(token in message for token in ("filter", "operator", "conditions", "field is required"))
 
+
+def _normalize_scalar_fields(
+    fields: Optional[Sequence[ScalarFieldDeclaration | Mapping[str, Any]]],
+) -> Optional[list[ScalarFieldDeclaration]]:
+    if fields is None:
+        return None
+    if isinstance(fields, (str, bytes, bytearray)):
+        raise ValueError("scalar_fields must be a sequence of declarations")
+    try:
+        declarations = list(fields)
+    except TypeError as exc:
+        raise ValueError("scalar_fields must be a sequence of declarations") from exc
+    out: list[ScalarFieldDeclaration] = []
+    for i, declaration in enumerate(declarations):
+        try:
+            model = (
+                declaration
+                if isinstance(declaration, ScalarFieldDeclaration)
+                else ScalarFieldDeclaration.from_dict(declaration)
+            )
+            model.to_dict()
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"scalar_fields[{i}] is invalid: {exc}") from exc
+        out.append(model)
+    return out
+
+
+def _normalize_dense_route(route: str) -> str:
+    if not isinstance(route, str):
+        raise ValueError("dense_route must be 'ann' or 'exact'")
+    normalized = route.strip().lower()
+    if normalized not in {"ann", "exact"}:
+        raise ValueError("dense_route must be 'ann' or 'exact'")
+    return normalized
 
 def _normalize_similarity(similarity: str) -> str:
     normalized = similarity.strip().lower().replace("-", "_").replace(" ", "_")

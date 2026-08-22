@@ -51,6 +51,7 @@ def test_run_top_k_and_return_embedding_override() -> None:
     assert result["documents"][0].embedding == [1.0, 0.0, 0.0]
     assert client.query_calls[-1]["top_k"] == 2
     assert client.query_calls[-1]["return_embedding"] is True
+    assert client.query_calls[-1]["route"] == "exact"
 
 
 def test_run_filters_and_top_k_override() -> None:
