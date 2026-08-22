@@ -261,6 +261,22 @@ func TestColumnVectorGraphTypedColumnVectorNonColumnPartOwnerUsesGraphVectors178
 	}
 }
 
+func TestColumnVectorGraphTypedColumnVectorFieldUsesDocumentPath(t *testing.T) {
+	cfg := columnGraphTypedColumnVectorStoreConfig1782(3)
+	for i := range cfg.Columns {
+		if cfg.Columns[i].Name == "embedding" {
+			cfg.Columns[i].Path = "backup"
+		}
+	}
+	normalized, err := normalizeColumnStoreConfig("docs", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	if _, _, ok, err := columnVectorGraphTypedColumnVectorField(*normalized, "embedding", 3); err != nil || ok {
+		t.Fatalf("columnVectorGraphTypedColumnVectorField ok=%v err=%v want no name-only match", ok, err)
+	}
+}
+
 func TestColumnVectorGraphTypedColumnVectorTruncatedRefFailsClosed1782(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

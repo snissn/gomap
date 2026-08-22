@@ -270,7 +270,7 @@ func columnVectorGraphTypedColumnVectorField(cfg ColumnStoreConfig, fieldPath st
 		return TypedStorageField{}, typedColumnAdapterColumn{}, false, err
 	}
 	for i, field := range fields {
-		if field.Path != fieldPath && field.Name != fieldPath {
+		if field.Path != fieldPath {
 			continue
 		}
 		column := columns[i]
