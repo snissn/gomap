@@ -179,6 +179,15 @@ class HarnessOrderTest(unittest.TestCase):
 
         self.assertLess(source.index("run_vdbbench_rows("), source.index("run_route_proof_smoke("))
 
+    def test_route_proof_can_be_skipped_for_measurement_only_runs(self) -> None:
+        args = harness.parse_args(["--run-vdbbench", "--skip-route-proof"])
+
+        self.assertTrue(args.skip_route_proof)
+
+    def test_route_proof_skip_requires_vdbbench(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            harness.parse_args(["--skip-route-proof"])
+
 
 class ManifestFileListTest(unittest.TestCase):
     def test_artifact_file_list_skips_treedb_data(self) -> None:

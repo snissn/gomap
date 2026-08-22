@@ -129,6 +129,10 @@ python3 scripts/treedb_vectordbbench_artifact.py \
   --rerank-candidates 32
 ```
 
+Use `--skip-route-proof` only for measurement repetitions when an independently
+captured route-proof artifact already gates the same binary and configuration.
+This keeps the timed database limited to the VDBBench collection.
+
 The generated VDBBench commands use unique index names derived from
 `--index-prefix` (or a timestamped default) and set `RESULTS_LOCAL_DIR` to
 `$OUT/vdbbench-results/exact` or `$OUT/vdbbench-results/scalar` plus `LOG_FILE`
@@ -182,6 +186,7 @@ Most flags also have environment equivalents:
 | `TREEDB_VDBBENCH_SMOKE_DIMENSION` | route-proof vector dimensions | `2` |
 | `TREEDB_VDBBENCH_SMOKE_DOCUMENTS` | route-proof document count | `4` |
 | `TREEDB_VDBBENCH_SMOKE_TOP_K` | route-proof topK | `2` |
+| `TREEDB_VDBBENCH_SKIP_ROUTE_PROOF` | omit route proof from measurement-only repetitions | `false` |
 | `TREEDB_VDBBENCH_EXTRA_ARGS` | appended to each VDBBench row command | unset |
 | `TREEDB_VDBBENCH_USE_UV` | `auto`, `on`, or `off` for VDBBench Python commands | `auto` |
 | `TREEDB_VDBBENCH_TEST_CMD` | override VDBBench test command | auto `uv run ... python -m pytest ...` or `python -m pytest ...` |

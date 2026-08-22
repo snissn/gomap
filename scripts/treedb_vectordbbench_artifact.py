@@ -863,7 +863,7 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
         "",
         f"- generated_at: `{iso_now()}`",
         f"- manifest: `manifest.json`",
-        f"- route proof: `route_proof.json`",
+        f"- route proof: `{'skipped' if args.skip_route_proof else 'route_proof.json'}`",
         f"- service log: `service.log`",
         f"- data dir: `{args.data_dir}`",
         f"- VDBBench load batch: `{args.num_per_batch}` documents",
@@ -933,7 +933,7 @@ def write_manifest(
             "log": "service.log",
         },
         "harness": {
-            "mode": "vdbbench+smoke" if args.run_vdbbench else "smoke",
+            "mode": "vdbbench" if args.skip_route_proof else ("vdbbench+smoke" if args.run_vdbbench else "smoke"),
             "rows": args.rows,
             "case_type": args.case_type,
             "k": args.k,
@@ -996,9 +996,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--smoke-dimension", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DIMENSION", "2")))
     parser.add_argument("--smoke-documents", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DOCUMENTS", "4")))
     parser.add_argument("--smoke-top-k", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_TOP_K", "2")))
+    parser.add_argument("--skip-route-proof", action="store_true", default=env_flag("TREEDB_VDBBENCH_SKIP_ROUTE_PROOF", False), help="skip the independent route-proof smoke")
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
+    if args.skip_route_proof and not args.run_vdbbench:
+        parser.error("skip-route-proof requires run-vdbbench")
     try:
         validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
     except ValueError as exc:
@@ -1087,24 +1090,28 @@ def main(argv: list[str]) -> int:
             base_url=args.base_url,
             index_prefix=args.index_prefix,
         )
-        run_route_proof_smoke(
-            state,
-            base_url=args.base_url,
-            index_prefix=args.index_prefix,
-            m=args.m,
-            ef_construction=args.ef_construction,
-            ef_search=args.ef_search,
-            quantized_index_name=args.quantized_index_name,
-            rerank_candidates=args.rerank_candidates,
-            smoke_dimension=args.smoke_dimension,
-            smoke_documents_count=args.smoke_documents,
-            smoke_top_k=args.smoke_top_k,
-        )
+        if args.skip_route_proof:
+            add_skip(state, "route_proof", "skip-route-proof requested")
+        else:
+            run_route_proof_smoke(
+                state,
+                base_url=args.base_url,
+                index_prefix=args.index_prefix,
+                m=args.m,
+                ef_construction=args.ef_construction,
+                ef_search=args.ef_search,
+                quantized_index_name=args.quantized_index_name,
+                rerank_candidates=args.rerank_candidates,
+                smoke_dimension=args.smoke_dimension,
+                smoke_documents_count=args.smoke_documents,
+                smoke_top_k=args.smoke_top_k,
+            )
         write_readme(state, args)
         write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"artifact_root={args.out}")
         print(f"manifest={args.out / 'manifest.json'}")
-        print(f"route_proof={args.out / 'route_proof.json'}")
+        if not args.skip_route_proof:
+            print(f"route_proof={args.out / 'route_proof.json'}")
         return 0
     except Exception as exc:  # noqa: BLE001 - write failure artifact before exiting
         error = {"error": str(exc), "traceback": traceback.format_exc(), "generated_at": iso_now()}
