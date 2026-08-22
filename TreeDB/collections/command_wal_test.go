@@ -2838,6 +2838,80 @@ func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *tes
 	}
 }
 
+func TestCollectionCommandWALCreateCollectionReplayWithValueLogOuterLeaves(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{
+		RequiredFeatures:           []string{backenddb.RequiredFeatureCommandWALV1},
+		IndexOuterLeavesInValueLog: true,
+	}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	meta := CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:             "embedding",
+			Field:            "embedding",
+			Metric:           VectorMetricCosine,
+			Dimensions:       2,
+			M:                16,
+			EfConstruction:   300,
+			EfSearch:         100,
+			Encoding:         VectorIndexEncodingFloat32,
+			Strategy:         VectorIndexStrategyNativeRuntime,
+			SchemaGeneration: 1,
+		}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:             "content",
+			Version:          TextIndexVersionV2,
+			Fields:           []TextIndexField{{Field: "content"}},
+			Analyzer:         TextAnalyzerSimple,
+			StorePositions:   true,
+			SchemaGeneration: 1,
+		}},
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, meta))
+
+	opts := backenddb.Options{
+		Dir:                        dir,
+		CommandWAL:                 true,
+		Durability:                 backenddb.DurabilityDurable,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	replay, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open durable outer-leaf DB after catalog-create replay: %v", err)
+	}
+	if got := replay.State().AppliedCommandLSN; got != 1 {
+		_ = replay.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if err := replay.Close(); err != nil {
+		t.Fatalf("Close replayed DB: %v", err)
+	}
+
+	reopened, err := backenddb.Open(opts)
+	if err != nil {
+		t.Fatalf("Reopen after catalog-create replay: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	col, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after replay reopen: %v", err)
+	}
+	status, err := col.TextIndexStatus("content")
+	if err != nil {
+		t.Fatalf("TextIndexStatus after replay reopen: %v", err)
+	}
+	if status.Version != TextIndexVersionV2 || !status.Ready || !status.Readable || !status.Writable || status.FailClosed {
+		t.Fatalf("text-v2 status after replay reopen=%+v, want ready/readable/writable", status)
+	}
+	if got := reopened.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent(t *testing.T) {
 	meta := CollectionMeta{
 		Name: "users",
