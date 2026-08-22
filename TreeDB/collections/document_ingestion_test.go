@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -390,6 +391,44 @@ func TestIngestSourcesEmbedFailureTaxonomy(t *testing.T) {
 	// Result reports only fully committed sources.
 	if len(res.Ingested) != n {
 		t.Fatalf("res.Ingested=%d want %d (only pre-failure sources)", len(res.Ingested), n)
+	}
+}
+
+type serialGuardEmbedder struct {
+	dims       int
+	active     atomic.Int32
+	concurrent atomic.Bool
+}
+
+func (e *serialGuardEmbedder) Dimensions() int { return e.dims }
+
+func (e *serialGuardEmbedder) EmbedBatch(_ context.Context, texts [][]byte) ([][]float32, error) {
+	if e.active.Add(1) != 1 {
+		e.concurrent.Store(true)
+	}
+	defer e.active.Add(-1)
+	time.Sleep(time.Millisecond)
+	return makeVectors(len(texts), e.dims), nil
+}
+
+const ingestSerialGuardProvider = "ingest-test-serial-guard"
+
+func TestIngestSourcesSerializesSharedEmbedder(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 16)
+	emb := &serialGuardEmbedder{dims: 16}
+	if err := embedding.DefaultRegistry().Register(ingestSerialGuardProvider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("register serial guard embedder: %v", err)
+	}
+	cfg := ingestTestCfg(16)
+	cfg.Embedding.Provider = ingestSerialGuardProvider
+	cfg.Concurrency = 8
+	if _, err := col.IngestSources(context.Background(), ingestTestSources(16), cfg); err != nil {
+		t.Fatalf("IngestSources: %v", err)
+	}
+	if emb.concurrent.Load() {
+		t.Fatal("shared embedder observed concurrent EmbedBatch calls")
 	}
 }
 
@@ -793,7 +832,10 @@ func TestAttachVectorsToChildrenNestedJSONPath(t *testing.T) {
 		id:       []byte("parent#0"),
 		document: []byte(`{"body":"chunk","payload":{"source":"raw"}}`),
 	}}
-	docs := attachVectorsToChildren(children, [][]float32{{1, 2, 3}}, "payload.embedding")
+	docs, err := attachVectorsToChildren(children, [][]float32{{1, 2, 3}}, "payload.embedding")
+	if err != nil {
+		t.Fatalf("attach vectors: %v", err)
+	}
 	var doc map[string]any
 	if err := json.Unmarshal(docs[0], &doc); err != nil {
 		t.Fatalf("unmarshal attached child: %v", err)
@@ -831,6 +873,84 @@ func TestIngestSourcesRejectsTextFieldVectorFieldCollision(t *testing.T) {
 	}
 	if raw, _ := col.Get([]byte("collision")); len(raw) != 0 {
 		t.Fatal("collision rejection mutated the collection")
+	}
+}
+
+func TestIngestSourcesRejectsAncestorTextVectorPaths(t *testing.T) {
+	tests := []struct {
+		name       string
+		textField  string
+		vectorPath string
+	}{
+		{name: "text parent", textField: "payload", vectorPath: "payload.embedding"},
+		{name: "vector parent", textField: "payload.embedding", vectorPath: "payload"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, col := openIngestTestCollection(t, 8)
+			col.meta.VectorIndexes[0].Field = tc.vectorPath
+			cfg := ingestTestCfg(8)
+			cfg.TextField = tc.textField
+			res, err := col.IngestSources(context.Background(), []SourceDocument{{
+				ID:     []byte("ancestor-collision"),
+				Fields: map[string]any{"body": "must not be indexed"},
+			}}, cfg)
+			if err == nil {
+				t.Fatal("ancestor TextField/vector field overlap accepted")
+			}
+			var ingestErr *IngestError
+			if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+				t.Fatalf("err=%v want chunk-stage IngestError", err)
+			}
+			if len(res.Ingested) != 0 {
+				t.Fatalf("overlap rejection returned ingested outcomes: %+v", res.Ingested)
+			}
+			if raw, _ := col.Get([]byte("ancestor-collision")); len(raw) != 0 {
+				t.Fatal("overlap rejection mutated the collection")
+			}
+		})
+	}
+}
+
+func TestIngestSourcesRejectsParentChildNamespaceCollision(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 8)
+	cfg := ingestTestCfg(8)
+	sources := []SourceDocument{
+		ingestTestSource("doc", 0),
+		ingestTestSource("doc#0", 1),
+	}
+	res, err := col.IngestSources(context.Background(), sources, cfg)
+	if err == nil {
+		t.Fatal("parent/child namespace collision accepted")
+	}
+	var ingestErr *IngestError
+	if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+		t.Fatalf("err=%v want chunk-stage IngestError", err)
+	}
+	if !strings.Contains(err.Error(), "doc#0") {
+		t.Fatalf("err=%v missing colliding ID", err)
+	}
+	if len(res.Ingested) != 0 {
+		t.Fatalf("collision rejection returned ingested outcomes: %+v", res.Ingested)
+	}
+	for _, id := range []string{"doc", "doc#0"} {
+		if raw, _ := col.Get([]byte(id)); len(raw) != 0 {
+			t.Fatalf("collision rejection mutated %q", id)
+		}
+	}
+}
+
+func TestAttachVectorsToChildrenPropagatesNestedPathError(t *testing.T) {
+	children := []chunkChild{{
+		id:       []byte("parent#0"),
+		document: []byte(`{"body":"chunk","payload":"raw"}`),
+	}}
+	docs, err := attachVectorsToChildren(children, [][]float32{{1, 2, 3}}, "payload.embedding")
+	if err == nil || !strings.Contains(err.Error(), "non-object ancestor") {
+		t.Fatalf("err=%v want nested path attachment error", err)
+	}
+	if docs != nil {
+		t.Fatalf("docs=%v want nil on attachment error", docs)
 	}
 }
 

@@ -279,11 +279,45 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 	}
 	vectorField := def.Field
-	if cfg.textField() == vectorField {
+	textPath, err := parseVectorFieldPath(cfg.textField())
+	if err != nil {
 		return result, &IngestError{
 			Stage:       IngestStageChunk,
 			SourceIndex: 0,
-			Err:         fmt.Errorf("collections: ingest TextField %q cannot equal vector index field %q", cfg.textField(), vectorField),
+			Err:         fmt.Errorf("collections: invalid ingest TextField %q: %w", cfg.textField(), err),
+		}
+	}
+	vectorPath, err := parseVectorFieldPath(vectorField)
+	if err != nil {
+		return result, &IngestError{
+			Stage:       IngestStageEmbed,
+			SourceIndex: 0,
+			Err:         fmt.Errorf("collections: invalid vector index field %q: %w", vectorField, err),
+		}
+	}
+	overlap := len(textPath) <= len(vectorPath)
+	if overlap {
+		for i := range textPath {
+			if textPath[i] != vectorPath[i] {
+				overlap = false
+				break
+			}
+		}
+	}
+	if !overlap && len(vectorPath) <= len(textPath) {
+		overlap = true
+		for i := range vectorPath {
+			if vectorPath[i] != textPath[i] {
+				overlap = false
+				break
+			}
+		}
+	}
+	if overlap {
+		return result, &IngestError{
+			Stage:       IngestStageChunk,
+			SourceIndex: 0,
+			Err:         fmt.Errorf("collections: ingest TextField %q overlaps vector index field %q", cfg.textField(), vectorField),
 		}
 	}
 
@@ -325,6 +359,34 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			return result, &IngestError{SourceID: append([]byte(nil), sd.ID...), SourceIndex: i, Stage: IngestStageChunk, Err: err}
 		}
 	}
+	namespace := make(map[string]string)
+	for i := range plans {
+		plan := &plans[i]
+		addID := func(id []byte, kind string) *IngestError {
+			key := string(id)
+			if previous, exists := namespace[key]; exists {
+				return &IngestError{
+					SourceID:    append([]byte(nil), plan.parentID...),
+					SourceIndex: i,
+					Stage:       IngestStageChunk,
+					Err:         fmt.Errorf("collections: %s ID %q collides with %s", kind, id, previous),
+				}
+			}
+			namespace[key] = fmt.Sprintf("%s from source %q", kind, plan.parentID)
+			return nil
+		}
+		if collision := addID(plan.parentID, "source parent"); collision != nil {
+			result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
+			return result, collision
+		}
+		for _, child := range plan.children {
+			if collision := addID(child.id, "planned child"); collision != nil {
+				result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
+				return result, collision
+			}
+		}
+	}
+
 	result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
 
 	if len(plans) == 0 {
@@ -346,6 +408,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		mu         sync.Mutex // guards firstErr, committed, outcomes, and stage counters
 		progressMu sync.Mutex // serializes user callbacks without holding mu
 		mutationMu sync.Mutex // collection mutation/index internals are not concurrent
+		embedMu    sync.Mutex // one public embedder instance may not be concurrency-safe
 		firstErr   error
 		next       atomic.Int64
 		outcomes   = make([]SourceIngestOutcome, len(plans))
@@ -372,7 +435,9 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			}
 		}
 		embedStart := time.Now()
+		embedMu.Lock()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, vectorField)
+		embedMu.Unlock()
 		mu.Lock()
 		result.EmbedNanos += time.Since(embedStart).Nanoseconds()
 		mu.Unlock()
@@ -390,7 +455,10 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
 		}
-		childDocs := attachVectorsToChildren(plan.children, vectors, vectorField)
+		childDocs, attachErr := attachVectorsToChildren(plan.children, vectors, vectorField)
+		if attachErr != nil {
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: attachErr}
+		}
 
 		indexStart := time.Now()
 		// Fault injection is deliberately before either mutation boundary. This
@@ -618,27 +686,32 @@ func setIngestJSONRawPath(doc map[string]json.RawMessage, path []string, value j
 
 // attachVectorsToChildren re-encodes each planned child document with its
 // embedded vector under the vector index's target field.
-func attachVectorsToChildren(children []chunkChild, vectors [][]float32, vectorField string) [][]byte {
+func attachVectorsToChildren(children []chunkChild, vectors [][]float32, vectorField string) ([][]byte, error) {
+	fieldPath, err := parseVectorFieldPath(vectorField)
+	if err != nil {
+		return nil, err
+	}
 	docs := make([][]byte, len(children))
-	fieldPath, pathErr := parseVectorFieldPath(vectorField)
 	for i, ch := range children {
 		var doc map[string]json.RawMessage
 		if err := json.Unmarshal(ch.document, &doc); err != nil {
-			// Plans validated their own documents; this cannot fail.
-			docs[i] = ch.document
-			continue
+			return nil, fmt.Errorf("collections: decode child %q for vector attachment: %w", ch.id, err)
 		}
-		if pathErr == nil && i < len(vectors) && vectors[i] != nil {
-			raw, err := json.Marshal(vectors[i])
-			if err == nil {
-				_ = setIngestJSONRawPath(doc, fieldPath, raw)
-			}
+		if i >= len(vectors) || vectors[i] == nil {
+			return nil, fmt.Errorf("collections: missing vector for child %q", ch.id)
 		}
-		if encoded, err := json.Marshal(doc); err == nil {
-			docs[i] = encoded
-		} else {
-			docs[i] = ch.document
+		raw, err := json.Marshal(vectors[i])
+		if err != nil {
+			return nil, fmt.Errorf("collections: encode vector for child %q: %w", ch.id, err)
 		}
+		if err := setIngestJSONRawPath(doc, fieldPath, raw); err != nil {
+			return nil, fmt.Errorf("collections: attach vector to child %q: %w", ch.id, err)
+		}
+		encoded, err := json.Marshal(doc)
+		if err != nil {
+			return nil, fmt.Errorf("collections: encode child %q with vector: %w", ch.id, err)
+		}
+		docs[i] = encoded
 	}
-	return docs
+	return docs, nil
 }
