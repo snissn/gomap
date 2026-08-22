@@ -4909,7 +4909,7 @@ func (c *Collection) flushBufferedNoIndex() error {
 		domain.mu.Unlock()
 		return nil
 	}
-	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
+	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
 	err := c.flushBufferedNoIndexLocked(domain)
 	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 	domain.mu.Unlock()
@@ -4946,7 +4946,7 @@ func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublis
 		if hasBufferedIndexedRootRuns(domain) {
 			domain.observeIndexedFlushForcedDrain()
 		}
-		publishedPrimary := hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
+		publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
 		err := c.flushBufferedWritesLockedWithRawPublishState(domain, rawPublishLocked)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		domain.mu.Unlock()
