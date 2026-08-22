@@ -353,7 +353,7 @@ func TestColumnVectorGraphTypedColumnVectorMultiplePhysicalPartsFailsClosed1782(
 	}
 	physicalRefs = append(append([]columnManifestAssetRefForScan(nil), physicalRefs[0]), physicalRefs[0])
 	locations, rowsByGeneration, err := col.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
-	if !errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) || !strings.Contains(err.Error(), "multiple physical row parts") {
+	if err == nil || !errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) || !strings.Contains(err.Error(), "multiple physical row parts") {
 		t.Fatalf("locations=%v rowsByGeneration=%v err=%v want multipart fail-closed error", locations, rowsByGeneration, err)
 	}
 }
