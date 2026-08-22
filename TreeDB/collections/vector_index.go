@@ -1982,7 +1982,7 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 }
 
 func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, efSearch int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
-	if topK <= 0 {
+	if topK < 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
 	}
 	if len(query) == 0 {
@@ -2008,6 +2008,9 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, e
 	}
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
 		return nil, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), idx.dimensions)
+	}
+	if topK == 0 {
+		return nil, nil
 	}
 	limit := efSearch
 	if limit <= 0 {

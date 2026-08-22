@@ -4884,6 +4884,26 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	if candidates := len(buffer.nativeSearchScratch.out); candidates > 2 {
 		t.Fatalf("native live candidate heap=%d want efSearch bound 2", candidates)
 	}
+	zero, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      0,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(zero.Results) != 0 || zero.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime {
+		t.Fatalf("zero TopK response=%+v err=%v want empty native route", zero, err)
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1},
+		TopK:      0,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err == nil || len(buffer.results) != 0 {
+		t.Fatalf("zero TopK invalid query err=%v buffered_results=%d want validation error and reset", err, len(buffer.results))
+	}
 	index := col.registeredVectorIndex(def.Name)
 	if index == nil {
 		t.Fatal("registered native vector index is nil")
