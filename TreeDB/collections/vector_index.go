@@ -2012,6 +2012,10 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, e
 	if topK == 0 {
 		return nil, nil
 	}
+	liveDocs := len(idx.currentNode)
+	if liveDocs == 0 {
+		return nil, nil
+	}
 	limit := efSearch
 	if limit <= 0 {
 		limit = idx.efSearch
@@ -2019,7 +2023,14 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, e
 	if limit < topK {
 		limit = topK
 	}
-	return idx.searchCurrentCandidatesLocked(query, queryNorm, prepared, limit, scratch), nil
+	if limit > liveDocs {
+		limit = liveDocs
+	}
+	candidates := idx.searchCurrentCandidatesLocked(query, queryNorm, prepared, limit, scratch)
+	if target := minInt(topK, liveDocs); len(candidates) < target {
+		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
+	}
+	return candidates, nil
 }
 
 func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
@@ -2370,7 +2381,23 @@ func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNorm
 	for layer := idx.maxLevel; layer > 0; layer-- {
 		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
 	}
-	return idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
+	stale := len(idx.nodes) - len(idx.currentNode)
+	if stale == 0 {
+		return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
+	}
+	explorationLimit := limit
+	if stale > 0 && explorationLimit < len(idx.nodes) {
+		// Tombstones remain waypoints, but historical churn must not turn a
+		// bounded ANN query into an O(nodes) traversal. Permit at most one
+		// layer-0 neighbor fanout of stale waypoints per live candidate.
+		degree := maxInt(1, idx.maxNeighborsForLayer(0))
+		maxExtra := math.MaxInt
+		if degree > 1 && limit <= math.MaxInt/(degree-1) {
+			maxExtra = limit * (degree - 1)
+		}
+		explorationLimit += minInt(stale, minInt(maxExtra, len(idx.nodes)-explorationLimit))
+	}
+	return idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, 0, scratch)
 }
 
 func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int) int {
@@ -2414,14 +2441,14 @@ func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
 }
 
 func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
-	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, layer, scratch, false)
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false)
 }
 
-func (idx *VectorIndex) searchLayerCurrentWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
-	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, layer, scratch, true)
+func (idx *VectorIndex) searchLayerCurrentWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, layer, scratch, true)
 }
 
-func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool) []vectorIndexCandidate {
+func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
 	}
@@ -2432,18 +2459,21 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 	if scratch == nil {
 		scratch = &vectorIndexSearchScratch{}
 	}
+	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
 	visited[entryPoint] = mark
 	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
 	queue := scratch.queue[:0]
 	queue.push(entry)
 	best := scratch.best[:0]
-	if !currentOnly || !idx.nodes[entryPoint].deleted {
-		best.pushBounded(entry, limit)
+	best.pushBounded(entry, explorationLimit)
+	liveBest := scratch.liveBest[:0]
+	if currentOnly && !idx.nodes[entryPoint].deleted {
+		liveBest.pushBounded(entry, limit)
 	}
 	for len(queue) > 0 {
 		current := queue.pop()
-		if len(best) >= limit && vectorIndexCandidateWorse(current, best[0]) {
+		if len(best) >= explorationLimit && vectorIndexCandidateWorse(current, best[0]) {
 			break
 		}
 		if current.nodeID < 0 || current.nodeID >= len(idx.nodes) {
@@ -2460,18 +2490,25 @@ func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryN
 				continue
 			}
 			candidate := vectorIndexCandidate{nodeID: neighborID, distance: distance}
-			if len(best) >= limit && !vectorIndexCandidateLess(candidate, best[0]) {
+			if len(best) >= explorationLimit && !vectorIndexCandidateLess(candidate, best[0]) {
 				continue
 			}
 			queue.push(candidate)
-			if !currentOnly || !idx.nodes[neighborID].deleted {
-				best.pushBounded(candidate, limit)
+			best.pushBounded(candidate, explorationLimit)
+			if currentOnly && !idx.nodes[neighborID].deleted {
+				liveBest.pushBounded(candidate, limit)
 			}
 		}
 	}
 	scratch.queue = queue[:0]
 	scratch.best = best[:0]
-	out := append(scratch.out[:0], best...)
+	scratch.liveBest = liveBest[:0]
+	out := scratch.out[:0]
+	if currentOnly {
+		out = append(out, liveBest...)
+	} else {
+		out = append(out, best...)
+	}
 	scratch.out = out
 	sortVectorIndexCandidates(out)
 	return out
@@ -3317,11 +3354,13 @@ type vectorIndexCandidate struct {
 }
 
 type vectorIndexSearchScratch struct {
-	visitedEpochs []uint32
-	visitedEpoch  uint32
-	queue         vectorIndexMinCandidateHeap
-	best          vectorIndexMaxCandidateHeap
-	out           []vectorIndexCandidate
+	visitedEpochs    []uint32
+	visitedEpoch     uint32
+	explorationLimit int
+	queue            vectorIndexMinCandidateHeap
+	best             vectorIndexMaxCandidateHeap
+	liveBest         vectorIndexMaxCandidateHeap
+	out              []vectorIndexCandidate
 }
 
 func (scratch *vectorIndexSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {

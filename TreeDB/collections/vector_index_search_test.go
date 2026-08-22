@@ -4884,6 +4884,19 @@ func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *te
 	if candidates := len(buffer.nativeSearchScratch.out); candidates > 2 {
 		t.Fatalf("native live candidate heap=%d want efSearch bound 2", candidates)
 	}
+	wide, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  100,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(wide.Results) != 2 {
+		t.Fatalf("wide efSearch response=%+v err=%v want two live results", wide, err)
+	}
+	if got := buffer.nativeSearchScratch.explorationLimit; got != 32 {
+		t.Fatalf("wide efSearch exploration limit=%d want bounded 32 for 4 live / 66 stale / M=4", got)
+	}
 	zero, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
 		IndexName: def.Name,
 		Query:     []float32{1, 0},
