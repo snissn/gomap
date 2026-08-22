@@ -270,6 +270,9 @@ func (s *Service) OpenIndex(ctx context.Context, name string) (IndexInfo, error)
 
 // UpsertDocuments writes or replaces documents in index.
 func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertDocumentsRequest) (UpsertDocumentsResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -281,8 +284,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	ids := make([]string, 0, len(prepared))
 	compactEmbeddings := 0
@@ -370,6 +371,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 
 // DeleteDocuments deletes explicit IDs or documents matching a filter.
 func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteDocumentsRequest) (DeleteDocumentsResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return DeleteDocumentsResponse{}, err
@@ -377,8 +381,6 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	var ids []string
 	if len(req.IDs) > 0 {

@@ -1263,6 +1263,52 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 	}
 }
 
+func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          2,
+		EfSearch:   1,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	const staleNodes = 10
+	index.nodes = make([]vectorIndexNode, staleNodes+1)
+	for i := 0; i < staleNodes; i++ {
+		index.nodes[i] = vectorIndexNode{
+			documentID: []byte(fmt.Sprintf("stale-%02d", i)),
+			vector:     []float32{float32(i + 1), float32(staleNodes - i)},
+			level:      1,
+			deleted:    true,
+			neighbors:  make([][]vectorIndexNeighbor, 2),
+		}
+		if i+1 < staleNodes {
+			index.nodes[i].neighbors[1] = []vectorIndexNeighbor{{nodeID: i + 1}}
+		}
+		index.nodes[i].cacheVectorNorms()
+	}
+	index.nodes[staleNodes] = vectorIndexNode{documentID: []byte("live"), vector: []float32{1, 0}, neighbors: make([][]vectorIndexNeighbor, 1)}
+	index.nodes[staleNodes].cacheVectorNorms()
+	index.currentNode = map[string]int{"live": staleNodes}
+	index.entry = 0
+	index.maxLevel = 1
+
+	query := []float32{1, 0}
+	queryNorm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, queryNorm)
+	if err != nil {
+		t.Fatalf("prepare query: %v", err)
+	}
+	var scratch vectorIndexSearchScratch
+	_ = index.searchCurrentCandidatesLocked(query, queryNorm, &prepared, 1, &scratch)
+	if scratch.explorationLimit != 4 || scratch.explored != scratch.explorationLimit {
+		t.Fatalf("upper-layer bounded scoring explored=%d limit=%d want all score calls capped and counted", scratch.explored, scratch.explorationLimit)
+	}
+}
+
 func TestVectorIndexSearchScratchVisitedEpochsGrowGeometrically(t *testing.T) {
 	var scratch vectorIndexSearchScratch
 

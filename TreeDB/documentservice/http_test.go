@@ -198,6 +198,7 @@ func TestHTTPBenchmarkNativeRuntimeLiveRoute(t *testing.T) {
 		QueryEmbedding: []float32{1, 0},
 		TopK:           1,
 		EfSearch:       8,
+		StatsMode:      collections.VectorIndexSearchStatsModeProduction,
 	}, http.StatusOK, &response)
 	if !response.NoDocuments || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !response.Diagnostics.LiveANN.Enabled || response.Diagnostics.LiveANN.ExactFallbacks != 0 || response.Diagnostics.LiveANN.FullRebuilds != 0 {
 		t.Fatalf("native benchmark response=%+v", response)

@@ -2377,12 +2377,12 @@ func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNorm
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
 	}
-	entryPoint := idx.entry
-	for layer := idx.maxLevel; layer > 0; layer-- {
-		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
-	}
 	stale := len(idx.nodes) - len(idx.currentNode)
 	if stale == 0 {
+		entryPoint := idx.entry
+		for layer := idx.maxLevel; layer > 0; layer-- {
+			entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
+		}
 		return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
 	}
 	explorationLimit := limit
@@ -2397,7 +2397,43 @@ func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNorm
 		}
 		explorationLimit += minInt(stale, minInt(maxExtra, len(idx.nodes)-explorationLimit))
 	}
-	return idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, 0, scratch)
+	entryPoint := idx.entry
+	upperExplored := 0
+	// Keep at least the requested live-candidate budget for layer 0. Upper
+	// layers share only the bounded stale-waypoint allowance.
+	upperLimit := explorationLimit - limit
+	for layer := idx.maxLevel; layer > 0 && upperExplored < upperLimit; layer-- {
+		entryPoint = idx.greedyNearestAtLayerBoundedLocked(query, queryNormSquared, prepared, entryPoint, layer, upperLimit, &upperExplored)
+	}
+	result := idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit-upperExplored, 0, scratch)
+	scratch.explored += upperExplored
+	scratch.explorationLimit = explorationLimit
+	return result
+}
+
+func (idx *VectorIndex) greedyNearestAtLayerBoundedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint, layer, scoreLimit int, scored *int) int {
+	if entryPoint < 0 || scored == nil || *scored >= scoreLimit {
+		return entryPoint
+	}
+	best := entryPoint
+	bestDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, best)
+	(*scored)++
+	for changed := true; changed; {
+		changed = false
+		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
+			if *scored >= scoreLimit {
+				return best
+			}
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighbor.nodeID)
+			(*scored)++
+			if distance < bestDistance {
+				best = neighbor.nodeID
+				bestDistance = distance
+				changed = true
+			}
+		}
+	}
+	return best
 }
 
 func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int) int {

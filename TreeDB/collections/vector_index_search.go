@@ -1341,6 +1341,10 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		buffer.Reset()
 		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)
 	}
+	if opts.StatsMode == VectorIndexSearchStatsModeDefault || opts.StatsMode == VectorIndexSearchStatsModeFullDiagnostics {
+		buffer.Reset()
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=full_diagnostics", "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
+	}
 	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
 		buffer.Reset()
 		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=work_accounting", "native_runtime work-accounting counters are not implemented; use production/minimal mode with CPU profiles")

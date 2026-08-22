@@ -4799,7 +4799,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var concurrentBuffer VectorIndexSearchBuffer
-			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &concurrentBuffer)
+			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &concurrentBuffer)
 			errs <- err
 		}()
 	}
@@ -4813,7 +4813,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	if _, err := freshCol.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex fresh handle: %v", err)
 	}
-	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 		t.Fatalf("stale native runtime search err=%v want unavailable", err)
 	}
 }
@@ -5016,7 +5016,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 		t.Fatalf("OpenCollection: %v", err)
 	}
 	var buffer VectorIndexSearchBuffer
-	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer)
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 		t.Fatalf("SearchVectorIndexWithBuffer err=%v want unavailable", err)
 	}
@@ -5032,7 +5032,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 			defer wg.Done()
 			<-start
 			var searchBuffer VectorIndexSearchBuffer
-			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &searchBuffer)
+			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
 			if err != nil && !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 				errs <- err
 			}
@@ -5053,7 +5053,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 			t.Fatalf("concurrent first insert/search: %v", err)
 		}
 	}
-	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer)
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 	if err != nil {
 		t.Fatalf("SearchVectorIndexWithBuffer after automatic rebuild: %v", err)
 	}
