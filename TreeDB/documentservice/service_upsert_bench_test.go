@@ -27,3 +27,30 @@ func BenchmarkServiceUpsertDocumentsFreshBatch(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkServiceUpsertDocumentsCohereFreshBatch matches the H-A service
+// boundary: a fresh 1,000-document, 768-dimension batch with command-WAL and
+// deferred vector rebuild.
+func BenchmarkServiceUpsertDocumentsCohereFreshBatch(b *testing.B) {
+	svc, db := newTestService(b)
+	defer db.Close()
+	if _, err := svc.CreateIndex(context.Background(), CreateIndexRequest{Name: "docs", Dimension: 768}); err != nil {
+		b.Fatal(err)
+	}
+	const batchSize = 1000
+	embedding := make([]float32, 768)
+	for i := range embedding {
+		embedding[i] = float32(i+1) / 768
+	}
+	docs := make([]Document, batchSize)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		for i := range docs {
+			docs[i] = Document{ID: fmt.Sprintf("%08d-%04d", n, i), Embedding: embedding}
+		}
+		if _, err := svc.UpsertDocuments(context.Background(), "docs", UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
