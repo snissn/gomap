@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -23,6 +24,21 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
 	store.durabilityCounters = counters
 	defer store.Close()
+	var creates, renames, contentSyncs, namespaceSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceCreate:
+			creates++
+		case event.Namespace == durabilitycut.NamespaceRename:
+			renames++
+		case event.Point == durabilitycut.AfterDependencyFileSync:
+			contentSyncs++
+		case event.Point == durabilitycut.AfterNewFileDirectorySync:
+			namespaceSyncs++
+		}
+		return nil
+	})
+	defer restore()
 
 	manifest := newLeafGenerationManifest(10)
 	token, err := store.Replace(manifest)
@@ -54,6 +70,9 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	}
 	if got := counters.NamespaceSyncs.Load(); got != 1 {
 		t.Fatalf("namespace syncs=%d want exactly 1", got)
+	}
+	if creates != 2 || renames != 1 || contentSyncs != 2 || namespaceSyncs != 2 {
+		t.Fatalf("durability observations create=%d rename=%d content-sync=%d namespace-sync=%d want 2,1,2,2", creates, renames, contentSyncs, namespaceSyncs)
 	}
 	if got := registry.PinCount(token.Identity()); got != 1 {
 		t.Fatalf("pin count=%d want 1", got)
