@@ -42,76 +42,7 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // operational maintenance call: collection writes wait while the rebuild scans
 // and publishes so the replacement graph cannot miss committed mutations.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
-	start := time.Now()
-	if c == nil {
-		return VectorIndexStatus{}, errCollectionNil
-	}
-	if c.db == nil {
-		return VectorIndexStatus{}, errCollectionDBNil
-	}
-	defForStrategy, err := c.declaredVectorIndexDefinition(name)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	if defForStrategy.Strategy == VectorIndexStrategyColumnGraph || c.db.CommandWALEnabled() {
-		return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
-	}
-	// Rebuild publishes a full replacement graph root. Hold the same mutation
-	// barrier used by writes across the primary scan and root publish so no
-	// committed write can be skipped by the clean replacement snapshot.
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return VectorIndexStatus{}, err
-	}
-	def, err := c.declaredVectorIndexDefinitionPrepared(name)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	index.setNativePersistent(true)
-	baseEpoch, err := c.currentNativeVectorIndexRootID(def.Name)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	index.recordFullSnapshotBaseEpoch(baseEpoch)
-	native, err := index.saveNativeSnapshotPrepared()
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	c.RegisterVectorIndex(index)
-	index.recordNativeDefinition(def)
-	if c.manager != nil && index.isNativePersistent() {
-		c.manager.registerCollectionHandle(c)
-	}
-	duration := collectionObservedElapsedSince(start)
-	index.mu.Lock()
-	index.lastRebuildDuration = duration
-	index.mu.Unlock()
-
-	stats := index.Stats()
-	stats.BytesDisk = native.BytesDisk
-	status := VectorIndexStatus{
-		Definition:          def,
-		Name:                def.Name,
-		Strategy:            def.Strategy,
-		State:               VectorIndexStateNativeRuntime,
-		Reason:              VectorIndexReasonNativeRuntime,
-		Loaded:              native.Loaded,
-		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
-		RootID:              native.RootID,
-		NativeRootLoaded:    native.Loaded,
-		NativeRootBytes:     native.BytesDisk,
-		ExactFallbackReason: native.ExactFallbackReason,
-		Registered:          true,
-		Stats:               stats,
-		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
-		Duration:            duration,
-	}
-	return status, nil
+	return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
 }
 
 func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefinition, error) {
@@ -230,6 +161,15 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		status.RebuildNeeded = true
 		return status, nil
 	}
+	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if !matchesDocumentRoots {
+		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	probe, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -263,6 +203,14 @@ func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint6
 func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
 	if c == nil {
 		return nil
+	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexesMu.RLock()
+		index := c.writeDomain.nativeVectorIndexes[name]
+		c.writeDomain.nativeVectorIndexesMu.RUnlock()
+		if index != nil {
+			return index
+		}
 	}
 	c.vectorIndexesMu.RLock()
 	defer c.vectorIndexesMu.RUnlock()

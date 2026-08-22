@@ -1500,19 +1500,21 @@ func testColumnGraphRetentionRecordsV2A(tb testing.TB) ([]columnManifestRecord, 
 	return records, def, identity
 }
 
-func TestColumnGraphRebuildVectorIndexNoopPublishesCommandWALV2A(t *testing.T) {
+func TestRebuildVectorIndexPublishesCommandWALV2A(t *testing.T) {
 	tests := []struct {
-		name          string
-		strategy      VectorIndexStrategy
-		wantState     VectorIndexState
-		wantReason    VectorIndexReason
-		rebuildNeeded bool
+		name           string
+		strategy       VectorIndexStrategy
+		wantState      VectorIndexState
+		wantReason     VectorIndexReason
+		rebuildNeeded  bool
+		wantNativeRoot bool
 	}{
 		{
-			name:       "native_strategy",
-			strategy:   VectorIndexStrategyNativeRuntime,
-			wantState:  VectorIndexStateNativeRuntime,
-			wantReason: VectorIndexReasonNativeRuntime,
+			name:           "native_strategy",
+			strategy:       VectorIndexStrategyNativeRuntime,
+			wantState:      VectorIndexStateNativeRuntime,
+			wantReason:     VectorIndexReasonNativeRuntime,
+			wantNativeRoot: true,
 		},
 		{
 			name:          "column_graph_physical_support_missing",
@@ -1557,12 +1559,15 @@ func TestColumnGraphRebuildVectorIndexNoopPublishesCommandWALV2A(t *testing.T) {
 			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
 				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
 			}
+			if tt.wantNativeRoot && (!status.Loaded || status.RootID == 0 || !status.NativeRootLoaded) {
+				t.Fatalf("native rebuild status=%+v want published root", status)
+			}
 			if got := d.State().AppliedCommandLSN; got <= baseLSN {
-				t.Fatalf("AppliedCommandLSN after no-op rebuild=%d want > %d", got, baseLSN)
+				t.Fatalf("AppliedCommandLSN after rebuild=%d want > %d", got, baseLSN)
 			}
 			frames := collectionCommandWALFrames(t, dir)
 			if len(frames) != framesBefore+1 {
-				t.Fatalf("command WAL frames after no-op rebuild=%d want %d", len(frames), framesBefore+1)
+				t.Fatalf("command WAL frames after rebuild=%d want %d", len(frames), framesBefore+1)
 			}
 			frame := frames[len(frames)-1]
 			if frame.Kind != commitlog.CommandKindCollectionRebuildVectorIndex || frame.PayloadFormat != commitlog.PayloadFormatCollectionRebuildVectorIndexV1 {
@@ -1624,20 +1629,21 @@ func TestColumnGraphRebuildVectorIndexCommandWALReplayV2A(t *testing.T) {
 	}
 }
 
-func TestColumnGraphRebuildVectorIndexCommandWALReplayNoopAdvancesLSNV2A(t *testing.T) {
+func TestRebuildVectorIndexCommandWALReplayAdvancesLSNV2A(t *testing.T) {
 	tests := []struct {
-		name          string
-		strategy      VectorIndexStrategy
-		wantState     VectorIndexState
-		wantReason    VectorIndexReason
-		rebuildNeeded bool
+		name           string
+		strategy       VectorIndexStrategy
+		wantState      VectorIndexState
+		wantReason     VectorIndexReason
+		rebuildNeeded  bool
+		wantNativeRoot bool
 	}{
 		{
-			name:          "native_strategy",
-			strategy:      VectorIndexStrategyNativeRuntime,
-			wantState:     VectorIndexStateNativeRuntime,
-			wantReason:    VectorIndexReasonNativeRuntime,
-			rebuildNeeded: true,
+			name:           "native_strategy",
+			strategy:       VectorIndexStrategyNativeRuntime,
+			wantState:      VectorIndexStateNativeRuntime,
+			wantReason:     VectorIndexReasonNativeRuntime,
+			wantNativeRoot: true,
 		},
 		{
 			name:          "column_graph_physical_support_missing",
@@ -1675,7 +1681,7 @@ func TestColumnGraphRebuildVectorIndexCommandWALReplayNoopAdvancesLSNV2A(t *test
 			reopened := openCollectionCommandWALDB(t, dir)
 			defer func() { _ = reopened.Close() }()
 			if got := reopened.State().AppliedCommandLSN; got != 1 {
-				t.Fatalf("AppliedCommandLSN after rebuild no-op replay=%d want 1", got)
+				t.Fatalf("AppliedCommandLSN after rebuild replay=%d want 1", got)
 			}
 			col, err := NewCollectionManager(reopened).OpenCollection("docs")
 			if err != nil {
@@ -1687,6 +1693,9 @@ func TestColumnGraphRebuildVectorIndexCommandWALReplayNoopAdvancesLSNV2A(t *test
 			}
 			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
 				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
+			}
+			if tt.wantNativeRoot && (status.RootID == 0 || !status.NativeRootLoaded) {
+				t.Fatalf("native replay status=%+v want published root", status)
 			}
 		})
 	}

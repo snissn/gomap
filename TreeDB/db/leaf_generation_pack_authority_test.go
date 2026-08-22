@@ -550,11 +550,19 @@ func TestLeafGenerationPackTargetProbePreservesTwoParentSyncContract(t *testing.
 	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
 	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
 	var beforeSyncs, afterSyncs int
+	counting := false
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase == leafGenerationPackAfterManifestPreparation {
+			counting = true
+		}
+		return nil
+	})
+	defer unregister()
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Point == durabilitycut.BeforeNewFileDirectorySync {
+		if counting && event.Point == durabilitycut.BeforeNewFileDirectorySync {
 			beforeSyncs++
 		}
-		if event.Point == durabilitycut.AfterNewFileDirectorySync {
+		if counting && event.Point == durabilitycut.AfterNewFileDirectorySync {
 			afterSyncs++
 		}
 		return nil

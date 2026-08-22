@@ -2,16 +2,35 @@ package documentservice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestServiceNilMutationReceiverFailsClosed(t *testing.T) {
+	var svc *Service
+	ctx := context.Background()
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("UpsertDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.DeleteDocuments(ctx, "docs", DeleteDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("DeleteDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.ResetIndex(ctx, "docs", ResetIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("ResetIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("OptimizeIndex err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
 
 func TestServiceSchemaValidationAndUnsupportedFilterErrors(t *testing.T) {
 	svc, db := newTestService(t)
@@ -919,6 +938,250 @@ func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
 	count, err := svc.CountDocuments(ctx, "nativebench", CountDocumentsRequest{})
 	if err != nil || count.Count != 0 {
 		t.Fatalf("count after native reset=%+v err=%v", count, err)
+	}
+}
+
+func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	vectorOptions := &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if !info.Capabilities.NoDocumentVectorSearch {
+		t.Fatalf("capabilities=%+v want native no-document search", info.Capabilities)
+	}
+	upsert := func(docs ...Document) {
+		t.Helper()
+		if _, err := svc.UpsertDocuments(ctx, "native", UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("UpsertDocuments: %v: %v", err, errors.Unwrap(err))
+		}
+	}
+	search := func(query []float32) BenchmarkVectorSearchResponse {
+		t.Helper()
+		got, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 2, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+		if err != nil {
+			t.Fatalf("SearchBenchmarkVector: %v", err)
+		}
+		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.ExactFallbacks != 0 || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
+			t.Fatalf("native response=%+v", got)
+		}
+		return got
+	}
+
+	upsert(Document{ID: "a", Embedding: []float32{1, 0}}, Document{ID: "b", Embedding: []float32{0, 1}})
+	for _, mode := range []collections.VectorIndexSearchStatsMode{collections.VectorIndexSearchStatsModeDefault, collections.VectorIndexSearchStatsModeFullDiagnostics, collections.VectorIndexSearchStatsModeWorkAccounting} {
+		if _, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: mode}); ErrorCodeOf(err) != CodeIndexUnavailable {
+			t.Fatalf("native stats mode %q err=%v code=%s want unavailable until instrumented", mode, err, ErrorCodeOf(err))
+		}
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
+		t.Fatalf("insert results=%+v want a first", got.Results)
+	}
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions}); err != nil {
+		t.Fatalf("compatible CreateIndex: %v", err)
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
+		t.Fatalf("compatible create results=%+v want live handle preserved", got.Results)
+	}
+	upsert(Document{ID: "a", Embedding: []float32{-1, 0}})
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID == "a" {
+		t.Fatalf("update results=%+v want replacement excluded from old-vector top hit", got.Results)
+	}
+	if _, err := svc.DeleteDocuments(ctx, "native", DeleteDocumentsRequest{IDs: []string{"a"}}); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	if got := search([]float32{-1, 0}); len(got.Results) != 1 || got.Results[0].ID != "b" {
+		t.Fatalf("delete results=%+v want only b", got.Results)
+	}
+}
+
+func TestServiceBenchmarkNativeRuntimeCompatibleCreateAfterEmptyReopen(t *testing.T) {
+	dir := t.TempDir()
+	open := func() (*Service, *backenddb.DB) {
+		t.Helper()
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		return New(collections.NewCollectionManager(db)), db
+	}
+	ctx := context.Background()
+	req := CreateIndexRequest{Name: "native_empty", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+
+	svc, db := open()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("initial CreateIndex: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close initial service: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close initial db: %v", err)
+	}
+
+	svc, db = open()
+	defer db.Close()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("compatible CreateIndex after reopen: %v", err)
+	}
+	empty, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+	if err != nil || len(empty.Results) != 0 || empty.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || empty.Diagnostics.LiveANN.FullRebuilds != 0 {
+		t.Fatalf("empty native search response=%+v err=%v", empty, err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("first UpsertDocuments after reopen: %v", err)
+	}
+	got, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+	if err != nil || len(got.Results) != 1 || got.Results[0].ID != "a" || got.Diagnostics.LiveANN.FullRebuilds != 0 {
+		t.Fatalf("native search after first upsert response=%+v err=%v", got, err)
+	}
+}
+
+func TestServiceBenchmarkNativeRuntimeConcurrentFirstMutationsShareHandle(t *testing.T) {
+	dir := t.TempDir()
+	open := func() (*Service, *backenddb.DB) {
+		t.Helper()
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		return New(collections.NewCollectionManager(db)), db
+	}
+	ctx := context.Background()
+	req := CreateIndexRequest{Name: "native_concurrent", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+	svc, db := open()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close initial service: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close initial db: %v", err)
+	}
+
+	svc, db = open()
+	defer db.Close()
+	if _, err := svc.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("compatible CreateIndex after reopen: %v", err)
+	}
+	if err := svc.invalidateBenchmarkSearchCache(req.Name); err != nil {
+		t.Fatalf("invalidate native cache before concurrent mutations: %v", err)
+	}
+	const workers = 16
+	svc.writeMu.Lock()
+	ready := make(chan struct{}, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			_, err := svc.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{
+				ID:        fmt.Sprintf("doc-%02d", i),
+				Embedding: []float32{1, float32(i + 1)},
+			}}, DeferVectorIndexRebuild: true})
+			errs <- err
+		}()
+	}
+	for range workers {
+		<-ready
+	}
+	time.Sleep(50 * time.Millisecond)
+	svc.writeMu.Unlock()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent upsert: %v", err)
+		}
+	}
+	svc.benchmarkSearchCacheMu.RLock()
+	entry := svc.benchmarkSearchCache[req.Name]
+	if entry == nil || entry.collection == nil {
+		svc.benchmarkSearchCacheMu.RUnlock()
+		t.Fatal("concurrent mutations did not prime native cache")
+	}
+	var buffer collections.VectorIndexSearchBuffer
+	got, err := entry.collection.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
+		IndexName: defaultVectorIndexName,
+		Query:     []float32{1, 1},
+		TopK:      workers,
+		EfSearch:  workers * 2,
+		StatsMode: collections.VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	svc.benchmarkSearchCacheMu.RUnlock()
+	if err != nil || len(got.Results) != workers {
+		t.Fatalf("native search after concurrent first mutations results=%d err=%v want %d", len(got.Results), err, workers)
+	}
+}
+
+func TestServicesShareNativeRuntimeMutationsThroughManager(t *testing.T) {
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	manager := collections.NewCollectionManager(db)
+	first := New(manager)
+	second := New(manager)
+	ctx := context.Background()
+	req := CreateIndexRequest{Name: "native_shared", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+	if _, err := first.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("first CreateIndex: %v", err)
+	}
+	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("first UpsertDocuments: %v", err)
+	}
+	if _, err := first.OptimizeIndex(ctx, req.Name, OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("persist initial native graph: %v", err)
+	}
+	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "b", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("dirty first native graph: %v", err)
+	}
+	if _, err := second.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("second compatible CreateIndex: %v", err)
+	}
+	if _, err := second.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{-1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("second UpsertDocuments: %v", err)
+	}
+	for name, service := range map[string]*Service{"first": first, "second": second} {
+		got, err := service.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+		if err != nil || len(got.Results) != 3 {
+			t.Fatalf("%s SearchBenchmarkVector results=%+v err=%v", name, got.Results, err)
+		}
+	}
+}
+
+func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
+	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	svc := New(collections.NewCollectionManager(db))
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native_optimize", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "native_optimize", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	optimized, err := svc.OptimizeIndex(ctx, "native_optimize", OptimizeIndexRequest{})
+	if err != nil {
+		t.Fatalf("OptimizeIndex: %v", err)
+	}
+	if !optimized.Status.Loaded || optimized.Status.RootID == 0 || optimized.Status.RebuildNeeded {
+		t.Fatalf("OptimizeIndex status=%+v want published clean native root", optimized.Status)
+	}
+	response, err := svc.SearchBenchmarkVector(ctx, "native_optimize", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+	if err != nil || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime {
+		t.Fatalf("SearchBenchmarkVector response=%+v err=%v", response, err)
 	}
 }
 

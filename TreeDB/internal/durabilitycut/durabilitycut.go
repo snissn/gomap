@@ -4,6 +4,7 @@
 package durabilitycut
 
 import (
+	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -85,6 +86,14 @@ type Event struct {
 	// child contract; keeping both paths explicit prevents a durability model
 	// from mistaking the child-handle flush for a sync of the child's contents.
 	CreatedDirectory string
+	// StablePath and StableParent retain the exact handles used by operations
+	// whose production authority is intentionally independent of Path. They are
+	// consumed synchronously by deterministic tests and must not be retained by
+	// observers after Observe returns.
+	StablePath    *os.File
+	StableParent  *os.File
+	StableOldName string
+	StableNewName string
 }
 
 // EmitNamespace avoids constructing a namespace event on the
@@ -100,6 +109,20 @@ func EmitNamespace(operation NamespaceOperation, resource Resource, root, oldPat
 		Namespace: operation,
 		OldPath:   oldPath,
 		NewPath:   newPath,
+	})
+}
+
+// EmitStableNamespace reports a namespace mutation performed relative to an
+// already-open parent. The ordinary paths remain diagnostic; StableParent is
+// the authority when the diagnostic path has been rebound.
+func EmitStableNamespace(operation NamespaceOperation, resource Resource, root, oldPath, newPath string, parent, path *os.File, oldName, newName string) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{
+		Resource: resource, Root: root, Namespace: operation, OldPath: oldPath, NewPath: newPath,
+		StablePath: path, StableParent: parent, StableOldName: oldName, StableNewName: newName,
 	})
 }
 
@@ -136,6 +159,16 @@ func EmitPath(point Point, resource Resource, root, path string) error {
 		return nil
 	}
 	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path})
+}
+
+// EmitStablePath reports a persistence boundary through an exact open handle.
+// Path remains diagnostic and may no longer resolve to the retained object.
+func EmitStablePath(point Point, resource Resource, root, path string, stable *os.File) error {
+	h := installed.Load()
+	if h == nil || h.observe == nil {
+		return nil
+	}
+	return h.observe(Event{Point: point, Resource: resource, Root: root, Path: path, StablePath: stable})
 }
 
 // EmitCreatedDirectoryPath records the physical persistence handle together

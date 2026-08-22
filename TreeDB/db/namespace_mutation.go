@@ -26,6 +26,13 @@ func observeNamespaceMutation(operation durabilitycut.NamespaceOperation, resour
 	return nil
 }
 
+func observeStableNamespaceMutation(operation durabilitycut.NamespaceOperation, resource durabilitycut.Resource, root, oldPath, newPath string, parent, path *os.File, oldName, newName string) error {
+	if err := durabilitycut.EmitStableNamespace(operation, resource, root, oldPath, newPath, parent, path, oldName, newName); err != nil {
+		return errors.Join(err, ErrRecoveryRequired)
+	}
+	return nil
+}
+
 func removePersistentFile(root, path string, resource durabilitycut.Resource) (bool, error) {
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {

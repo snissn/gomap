@@ -382,7 +382,7 @@ func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlo
 	if err != nil {
 		return err
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err

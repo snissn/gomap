@@ -39,6 +39,7 @@ const (
 	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
 	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
 	vectorIndexFallbackStaleRuntimeIndex          = "stale_runtime_index_ignored"
+	vectorIndexFallbackStaleDocumentRoot          = "stale_document_root"
 	vectorIndexFallbackMetaMismatch               = "meta_mismatch"
 	vectorIndexFallbackInvalidEncoding            = "invalid_encoding"
 	vectorIndexFallbackMetaEncodingMismatch       = "meta_encoding_mismatch"
@@ -53,6 +54,58 @@ const (
 )
 
 var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")
+
+var nativeVectorIndexBeforeInstallHookForTest struct {
+	mu sync.Mutex
+	fn func(string)
+}
+
+var nativeVectorIndexBeforeAutoPersistSaveHookForTest struct {
+	mu sync.Mutex
+	fn func(string)
+}
+
+func setNativeVectorIndexBeforeInstallHookForTest(fn func(string)) func() {
+	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+	previous := nativeVectorIndexBeforeInstallHookForTest.fn
+	nativeVectorIndexBeforeInstallHookForTest.fn = fn
+	nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	return func() {
+		nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+		nativeVectorIndexBeforeInstallHookForTest.fn = previous
+		nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	}
+}
+
+func runNativeVectorIndexBeforeInstallHookForTest(name string) {
+	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
+	fn := nativeVectorIndexBeforeInstallHookForTest.fn
+	nativeVectorIndexBeforeInstallHookForTest.mu.Unlock()
+	if fn != nil {
+		fn(name)
+	}
+}
+
+func setNativeVectorIndexBeforeAutoPersistSaveHookForTest(fn func(string)) func() {
+	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Lock()
+	previous := nativeVectorIndexBeforeAutoPersistSaveHookForTest.fn
+	nativeVectorIndexBeforeAutoPersistSaveHookForTest.fn = fn
+	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Unlock()
+	return func() {
+		nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Lock()
+		nativeVectorIndexBeforeAutoPersistSaveHookForTest.fn = previous
+		nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Unlock()
+	}
+}
+
+func runNativeVectorIndexBeforeAutoPersistSaveHookForTest(name string) {
+	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Lock()
+	fn := nativeVectorIndexBeforeAutoPersistSaveHookForTest.fn
+	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Unlock()
+	if fn != nil {
+		fn(name)
+	}
+}
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
 // collection row remains canonical; float32 indexes can rerank directly from the
@@ -259,6 +312,7 @@ type VectorIndexStats struct {
 	SnapshotDirty       bool
 	LastRebuildDuration time.Duration
 	RebuildNeeded       bool
+	LiveANNFullRebuilds uint64
 }
 
 // VectorIndexRecall reports ANN overlap with exact search for sampled queries.
@@ -280,6 +334,7 @@ type VectorIndex struct {
 	collection *Collection
 
 	name                string
+	nativeRootName      string
 	field               string
 	fieldPath           []string
 	metric              VectorMetric
@@ -291,28 +346,34 @@ type VectorIndex struct {
 	rebuildDeletedRatio float64
 	schemaGeneration    uint64
 
-	mu            sync.RWMutex
-	nodes         []vectorIndexNode
-	currentNode   map[string]int
-	entry         int
-	maxLevel      int
-	insertScratch vectorIndexSearchScratch
-	searchScratch sync.Pool
+	mu                  sync.RWMutex
+	nativePublicationMu sync.RWMutex
+	nodes               []vectorIndexNode
+	currentNode         map[string]int
+	entry               int
+	maxLevel            int
+	insertScratch       vectorIndexSearchScratch
+	searchScratch       sync.Pool
 	// parallelReciprocalLinks is enabled only by the untraced offline column
 	// graph builder. Incremental, traced, and partition builds stay serial.
 	parallelReciprocalLinks bool
 
-	mutationSeq            uint64
-	persistedEpoch         uint64
-	fullSnapshotBaseEpoch  uint64
-	persistedBytesDisk     int64
-	persistedSnapshotDirty bool
-	nativePersistent       bool
-	dirtyMeta              bool
-	dirtyNodes             map[int]struct{}
-	dirtyDocs              map[string]struct{}
-	lastRebuildDuration    time.Duration
-	insertQuantScratch     []int8
+	mutationSeq              uint64
+	sourceDocumentRootsValid bool
+	sourceDocumentGeneration uint64
+	sourceDocumentState      backenddb.StateToken
+	sourceDocumentStateValid bool
+	persistedEpoch           uint64
+	fullSnapshotBaseEpoch    uint64
+	persistedBytesDisk       int64
+	persistedSnapshotDirty   bool
+	nativePersistent         bool
+	dirtyMeta                bool
+	dirtyNodes               map[int]struct{}
+	dirtyDocs                map[string]struct{}
+	lastRebuildDuration      time.Duration
+	liveANNFullRebuilds      uint64
+	insertQuantScratch       []int8
 	// constructionTrace is an offline-only nullable sink installed by the
 	// partition-pack diagnostic builder. Normal collection indexes never set it.
 	constructionTrace        *vectorIndexConstructionTraceV1
@@ -483,10 +544,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
-	return c.buildVectorIndexPrepared(opts, register, true)
+	return c.buildVectorIndexPrepared(opts, register, true, false)
 }
 
-func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered bool) (*VectorIndex, error) {
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -502,14 +563,26 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return nil, err
 		}
 	}
-	nativePersistent := collectionMetaDeclaresVectorIndex(c.meta, index.name)
+	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		return nil, err
+	}
+	nativeDef, declared := findVectorIndex(c.meta.VectorIndexes, index.name)
+	nativePersistent := declared && vectorIndexDefinitionUsesNativeRuntime(nativeDef)
+	var replaceCurrent *VectorIndex
+	var replaceMutationSeq uint64
 	index.setNativePersistent(nativePersistent)
 	if nativePersistent {
+		index.recordNativeDefinition(nativeDef)
 		baseEpoch, err := c.currentNativeVectorIndexRootID(index.name)
 		if err != nil {
 			return nil, err
 		}
 		index.recordFullSnapshotBaseEpoch(baseEpoch)
+		if register {
+			replaceCurrent = c.registeredVectorIndex(index.name)
+			replaceMutationSeq = replaceCurrent.nativeMutationSequence()
+		}
 	}
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
@@ -533,13 +606,88 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if err != nil {
 		return nil, err
 	}
+	currentDocumentGeneration, currentDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
+		return nil, err
+	}
+	if currentDocumentGeneration != sourceDocumentGeneration {
+		return nil, ErrConcurrentMutation
+	}
+	index.recordSourceDocumentState(sourceDocumentGeneration, currentDocumentState)
+	if liveANNFullRebuild {
+		index.markLiveANNFullRebuild()
+	}
 	if register {
-		c.RegisterVectorIndex(index)
+		if nativePersistent {
+			index, err = c.installNativeVectorIndexCandidate(index, index.nativeSnapshotBaseEpochForFullSave(), replaceCurrent, replaceMutationSeq)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			c.RegisterVectorIndex(index)
+		}
 		if c.manager != nil && index.needsNativeAutoPersist() {
 			c.manager.registerCollectionHandle(c)
 		}
 	}
 	return index, nil
+}
+
+func (c *Collection) currentVectorIndexDocumentGeneration() (uint64, error) {
+	return c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(false)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLocked() (uint64, error) {
+	return c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(true)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLockState(writeDomainLocked bool) (uint64, error) {
+	generation, _, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked)
+	return generation, err
+}
+
+func (c *Collection) currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked bool) (uint64, backenddb.StateToken, error) {
+	if c == nil {
+		return 0, backenddb.StateToken{}, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, backenddb.StateToken{}, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshotWithWriteDomainLockState(snap, writeDomainLocked)
+	if err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	if catalog == nil {
+		return 0, backenddb.StateToken{}, errCollectionNotFound
+	}
+	generation, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return 0, backenddb.StateToken{}, err
+	}
+	state, ok := snap.StateToken()
+	if !ok {
+		return 0, backenddb.StateToken{}, backenddb.ErrClosed
+	}
+	return generation, state, nil
+}
+
+func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collectionCatalog) (uint64, error) {
+	if snap == nil || catalog == nil {
+		return 0, errCollectionNotFound
+	}
+	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(catalog.meta.Name))
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, nil
+	}
+	return decodeRootID(raw)
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
@@ -583,9 +731,14 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	if rebuildRatio > 1 {
 		return nil, errors.New("collections: vector index rebuild deleted ratio cannot exceed 1")
 	}
+	var nativeRootName string
+	if c != nil {
+		nativeRootName = collectionVectorIndexRootName(c.collectionName(), opts.Name)
+	}
 	return &VectorIndex{
 		collection:          c,
 		name:                opts.Name,
+		nativeRootName:      nativeRootName,
 		field:               opts.Field,
 		fieldPath:           fieldPath,
 		metric:              metric,
@@ -628,16 +781,24 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	index.collection = c
+	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+		index.recordNativeDefinition(def)
+		if c.writeDomain != nil {
+			c.writeDomain.nativeVectorIndexesMu.Lock()
+			if c.writeDomain.nativeVectorIndexes == nil {
+				c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
+			}
+			c.writeDomain.nativeVectorIndexes[index.name] = index
+			c.writeDomain.nativeVectorIndexesMu.Unlock()
+			return
+		}
+	}
+	index.setNativePersistent(false)
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
-	}
-	index.collection = c
-	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
-		index.recordNativeDefinition(def)
-	} else {
-		index.setNativePersistent(false)
 	}
 	c.vectorIndexes[index.name] = index
 }
@@ -646,18 +807,14 @@ func (c *Collection) isRegisteredVectorIndex(index *VectorIndex) bool {
 	if c == nil || index == nil {
 		return false
 	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	return c.vectorIndexes[index.name] == index
+	return c.registeredVectorIndex(index.name) == index
 }
 
 func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	if c == nil || index == nil {
 		return false
 	}
-	c.vectorIndexesMu.RLock()
-	registered := c.vectorIndexes[index.name]
-	c.vectorIndexesMu.RUnlock()
+	registered := c.registeredVectorIndex(index.name)
 	if registered == index {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(index)
 		return err == nil && stale
@@ -665,10 +822,10 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	if registered != nil {
 		return true
 	}
-	if index.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, index.name) {
+	if index.isNativePersistent() || collectionMetaDeclaresNativeVectorIndex(c.meta, index.name) {
 		return true
 	}
-	declared, err := c.refreshVectorIndexDeclaration(index.name)
+	declared, err := c.refreshNativeVectorIndexDeclaration(index.name)
 	return err == nil && declared
 }
 
@@ -685,10 +842,9 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	if err != nil || catalog == nil {
 		return false, err
 	}
-	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, index.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return index.isNativePersistent(), nil
 	}
 	wasNativePersistent := index.isNativePersistent()
@@ -710,16 +866,21 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexesMu.Lock()
+		delete(c.writeDomain.nativeVectorIndexes, name)
+		c.writeDomain.nativeVectorIndexesMu.Unlock()
+	}
 	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
-	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
+	c.vectorIndexesMu.Unlock()
+	if !c.hasNativePersistentVectorIndex() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 }
 
-func (c *Collection) hasNativePersistentVectorIndexLocked() bool {
-	for _, index := range c.vectorIndexes {
+func (c *Collection) hasNativePersistentVectorIndex() bool {
+	for _, index := range c.registeredVectorIndexes() {
 		if index != nil && index.isNativePersistent() {
 			return true
 		}
@@ -731,26 +892,51 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	if c == nil {
 		return nil
 	}
+	var out []*VectorIndex
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexesMu.RLock()
+		out = make([]*VectorIndex, 0, len(c.writeDomain.nativeVectorIndexes))
+		for _, index := range c.writeDomain.nativeVectorIndexes {
+			out = append(out, index)
+		}
+		c.writeDomain.nativeVectorIndexesMu.RUnlock()
+	}
 	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
 	if len(c.vectorIndexes) == 0 {
-		return nil
+		c.vectorIndexesMu.RUnlock()
+		return out
 	}
-	out := make([]*VectorIndex, 0, len(c.vectorIndexes))
-	for _, index := range c.vectorIndexes {
-		out = append(out, index)
+	sharedNames := make(map[string]struct{}, len(out))
+	for _, index := range out {
+		sharedNames[index.name] = struct{}{}
 	}
+	for name, index := range c.vectorIndexes {
+		if _, shared := sharedNames[name]; !shared {
+			out = append(out, index)
+		}
+	}
+	c.vectorIndexesMu.RUnlock()
 	return out
 }
 
 func (c *Collection) hasRegisteredVectorIndex(name string) bool {
-	if c == nil || name == "" {
-		return false
+	return c != nil && name != "" && c.registeredVectorIndex(name) != nil
+}
+
+func (c *Collection) lockNativeVectorIndexLoad() func() {
+	if c != nil && c.writeDomain != nil {
+		c.writeDomain.nativeVectorIndexLoadMu.Lock()
+		return c.writeDomain.nativeVectorIndexLoadMu.Unlock
 	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	_, ok := c.vectorIndexes[name]
-	return ok
+	c.vectorIndexLoadMu.Lock()
+	return c.vectorIndexLoadMu.Unlock
+}
+
+func (idx *VectorIndex) nativePublicationLock() *sync.RWMutex {
+	if idx != nil && idx.collection != nil && idx.collection.writeDomain != nil {
+		return &idx.collection.writeDomain.nativeVectorPublishMu
+	}
+	return &idx.nativePublicationMu
 }
 
 func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struct{}, error) {
@@ -775,8 +961,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}
-	c.vectorIndexLoadMu.Lock()
-	defer c.vectorIndexLoadMu.Unlock()
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}
@@ -822,8 +1008,19 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if index := c.registeredVectorIndex(def.Name); index != nil {
-			if index.validateNativeSnapshotDefinition(def) == "" {
+			if index.validateNativeSnapshotDefinition(def) == "" && index.hasValidSourceDocumentRoots() {
 				index.setNativePersistent(true)
+				continue
+			}
+			if !index.hasValidSourceDocumentRoots() {
+				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+				if err != nil {
+					return nil, err
+				}
+				if rebuilt == nil {
+					rebuilt = make(map[string]struct{}, 1)
+				}
+				rebuilt[def.Name] = struct{}{}
 				continue
 			}
 		}
@@ -835,7 +1032,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
-			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+			if err != nil {
 				return nil, err
 			}
 			if rebuilt == nil {
@@ -880,7 +1078,7 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	for _, def := range nativeDefs {
 		declared[def.Name] = struct{}{}
 		index := c.registeredVectorIndex(def.Name)
-		if index == nil || !index.isNativePersistent() || index.validateNativeSnapshotDefinition(def) != "" {
+		if index == nil || !index.isNativePersistent() || !index.hasValidSourceDocumentRoots() || index.validateNativeSnapshotDefinition(def) != "" {
 			return false
 		}
 	}
@@ -900,13 +1098,26 @@ func vectorIndexDefinitionUsesNativeRuntime(def VectorIndexDefinition) bool {
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
+	return c.reconcileVectorIndexes(documentIDs)
+}
+
+func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
+	return c.reconcileVectorIndexes(documentIDs)
+}
+
+func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	unlockMutation := c.lockVectorIndexMutation()
+	defer unlockMutation()
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
 	if err != nil {
+		c.invalidateRegisteredVectorIndexDocumentCoverage()
 		return err
 	}
+	unlockPublication := c.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
@@ -923,37 +1134,178 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 				continue
 			}
 			if err := index.InsertDocument(documentID); err != nil {
+				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 				return err
 			}
+		}
+	}
+	return c.recordReconciledVectorIndexCoverage(indexes)
+}
+
+func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverage() {
+	unlockPublication := c.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
+	c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+}
+
+func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverageLocked() {
+	for _, index := range c.registeredVectorIndexes() {
+		index.invalidateSourceDocumentRoots()
+	}
+}
+
+func (c *Collection) invalidateVectorIndexCoverageOnAcceptedMutation(err error) error {
+	if backenddb.CommitPublicationAccepted(err) {
+		c.invalidateRegisteredVectorIndexDocumentCoverage()
+	}
+	return err
+}
+
+func (c *Collection) lockVectorIndexMutation() func() {
+	if c == nil {
+		return func() {}
+	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorMutationMu.Lock()
+		return c.writeDomain.nativeVectorMutationMu.Unlock
+	}
+	c.vectorIndexMutationMu.Lock()
+	return c.vectorIndexMutationMu.Unlock
+}
+
+func (c *Collection) lockVectorIndexCoverageMutation() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	domain := c.writeDomain
+	domain.nativeVectorCoverageMu.RLock()
+	domain.nativeVectorActiveMu.Lock()
+	domain.nativeVectorActive++
+	domain.nativeVectorActiveMu.Unlock()
+	return func() {
+		domain.mu.RLock()
+		domain.nativeVectorActiveMu.Lock()
+		domain.nativeVectorActive--
+		if domain.nativeVectorActive == 0 {
+			indexes := c.registeredVectorIndexes()
+			if len(indexes) != 0 {
+				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
+					for _, index := range indexes {
+						if index.hasValidSourceDocumentRoots() {
+							index.recordSourceDocumentState(generation, state)
+						}
+					}
+				}
+			}
+		}
+		domain.nativeVectorCoverageMu.RUnlock()
+		domain.nativeVectorActiveMu.Unlock()
+		domain.mu.RUnlock()
+	}
+}
+
+func (c *Collection) lockVectorIndexCoveragePersistence() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	c.writeDomain.nativeVectorCoverageMu.Lock()
+	return c.writeDomain.nativeVectorCoverageMu.Unlock
+}
+
+func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex) error {
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, false)
+}
+
+func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLocked(indexes []*VectorIndex) error {
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, true)
+}
+
+func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes []*VectorIndex, writeDomainLocked bool) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.writeDomain == nil {
+		generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(writeDomainLocked)
+		if err != nil {
+			c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+			return err
+		}
+		for _, index := range indexes {
+			if c.isRegisteredVectorIndex(index) {
+				index.recordSourceDocumentState(generation, state)
+			}
+		}
+		return nil
+	}
+
+	domain := c.writeDomain
+	if !writeDomainLocked {
+		domain.mu.RLock()
+		defer domain.mu.RUnlock()
+	}
+	domain.nativeVectorActiveMu.Lock()
+	defer domain.nativeVectorActiveMu.Unlock()
+	if domain.nativeVectorActive > 1 {
+		return nil
+	}
+	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
+	if err != nil {
+		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+		return err
+	}
+	for _, index := range indexes {
+		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
+			index.recordSourceDocumentState(generation, state)
 		}
 	}
 	return nil
 }
 
-func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
-	if len(documentIDs) == 0 {
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublish() error {
+	return c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(false)
+}
+
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked() error {
+	return c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(true)
+}
+
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(writeDomainLocked bool) error {
+	if c == nil || c.writeDomain == nil {
 		return nil
-	}
-	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
-	if err != nil {
-		return err
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
 	}
-	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
-		c.manager.registerCollectionHandle(c)
+	domain := c.writeDomain
+	domain.nativeVectorActiveMu.Lock()
+	active := domain.nativeVectorActive != 0
+	domain.nativeVectorActiveMu.Unlock()
+	if active {
+		return nil
 	}
-	for _, index := range indexes {
-		if _, ok := rebuilt[index.name]; ok {
-			continue
-		}
-		for _, documentID := range documentIDs {
-			index.TombstoneDocumentID(documentID)
-		}
+
+	if !domain.nativeVectorCoverageMu.TryLock() {
+		// The holder is either a public mutation, whose final unlock certifies
+		// coverage, or persistence, whose locked flush does the same.
+		return nil
 	}
-	return nil
+	defer domain.nativeVectorCoverageMu.Unlock()
+	domain.nativeVectorActiveMu.Lock()
+	active = domain.nativeVectorActive != 0
+	domain.nativeVectorActiveMu.Unlock()
+	if active {
+		return nil
+	}
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, writeDomainLocked)
+}
+
+func (c *Collection) lockNativeVectorIndexPublicationRead() func() {
+	if c != nil && c.writeDomain != nil {
+		c.writeDomain.nativeVectorPublishMu.RLock()
+		return c.writeDomain.nativeVectorPublishMu.RUnlock
+	}
+	return func() {}
 }
 
 func vectorIndexListHasNativePersistent(indexes []*VectorIndex) bool {
@@ -998,30 +1350,34 @@ func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdate
 }
 
 func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
-	if c == nil || index == nil || !index.needsNativeAutoPersist() {
+	if c == nil || index == nil {
 		return nil
 	}
-	if !collectionMetaDeclaresVectorIndex(c.meta, index.name) {
-		declared, err := c.refreshVectorIndexDeclaration(index.name)
-		if err != nil || !declared {
-			return err
-		}
-	}
-	if !index.isNativePersistent() || !index.hasNativePersistedSnapshot() {
-		_, err := index.SaveNativeSnapshot()
+	if index.isNativePersistent() {
+		runNativeVectorIndexBeforeAutoPersistSaveHookForTest(index.name)
+		_, err := index.SaveNativeDeltaSnapshot()
 		if errors.Is(err, errVectorIndexNotDeclared) {
 			return nil
 		}
 		return err
 	}
-	_, err := index.SaveNativeDeltaSnapshot()
+	if !index.needsNativeAutoPersist() {
+		return nil
+	}
+	if !collectionMetaDeclaresNativeVectorIndex(c.meta, index.name) {
+		declared, err := c.refreshNativeVectorIndexDeclaration(index.name)
+		if err != nil || !declared {
+			return err
+		}
+	}
+	_, err := index.SaveNativeSnapshot()
 	if errors.Is(err, errVectorIndexNotDeclared) {
 		return nil
 	}
 	return err
 }
 
-func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
+func (c *Collection) refreshNativeVectorIndexDeclaration(name string) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -1039,7 +1395,7 @@ func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
-	return collectionMetaDeclaresVectorIndex(catalog.meta, name), nil
+	return collectionMetaDeclaresNativeVectorIndex(catalog.meta, name), nil
 }
 
 func (c *Collection) persistDirtyNativeVectorIndexes() error {
@@ -1057,7 +1413,7 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 
 func (c *Collection) hasDirtyNativeVectorIndex() bool {
 	for _, index := range c.registeredVectorIndexes() {
-		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresVectorIndex(c.meta, index.name)) {
+		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresNativeVectorIndex(c.meta, index.name)) {
 			continue
 		}
 		if index.needsNativeAutoPersist() {
@@ -1067,12 +1423,12 @@ func (c *Collection) hasDirtyNativeVectorIndex() bool {
 	return false
 }
 
-func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
+func collectionMetaDeclaresNativeVectorIndex(meta CollectionMeta, name string) bool {
 	if name == "" {
 		return false
 	}
-	_, ok := findVectorIndex(meta.VectorIndexes, name)
-	return ok
+	def, ok := findVectorIndex(meta.VectorIndexes, name)
+	return ok && vectorIndexDefinitionUsesNativeRuntime(def)
 }
 
 // InsertDocument adds or replaces one committed collection document in the
@@ -1502,15 +1858,6 @@ func (idx *VectorIndex) isNativePersistent() bool {
 	return idx.nativePersistent
 }
 
-func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
-	if idx == nil {
-		return false
-	}
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return idx.persistedEpoch != 0
-}
-
 func (idx *VectorIndex) nativeSnapshotBaseEpochForFullSave() uint64 {
 	if idx == nil {
 		return 0
@@ -1530,6 +1877,87 @@ func (idx *VectorIndex) recordFullSnapshotBaseEpoch(epoch uint64) {
 	idx.mu.Lock()
 	idx.fullSnapshotBaseEpoch = epoch
 	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
+	idx.sourceDocumentRootsValid = true
+	idx.sourceDocumentGeneration = generation
+	idx.sourceDocumentStateValid = false
+	if changed && idx.nativePersistent {
+		idx.dirtyMeta = true
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
+	idx.sourceDocumentRootsValid = true
+	idx.sourceDocumentGeneration = generation
+	idx.sourceDocumentState = state
+	idx.sourceDocumentStateValid = true
+	if changed && idx.nativePersistent {
+		idx.dirtyMeta = true
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) invalidateSourceDocumentRoots() {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.sourceDocumentRootsValid = false
+	idx.sourceDocumentStateValid = false
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) hasValidSourceDocumentRoots() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	valid := idx.sourceDocumentRootsValid
+	idx.mu.RUnlock()
+	return valid
+}
+
+func (idx *VectorIndex) coversSourceDocumentGeneration(generation uint64) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) coversSourceDocumentState(state backenddb.StateToken) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) sourceDocumentCoverage() (uint64, bool) {
+	if idx == nil {
+		return 0, false
+	}
+	idx.mu.RLock()
+	generation, valid := idx.sourceDocumentGeneration, idx.sourceDocumentRootsValid
+	idx.mu.RUnlock()
+	return generation, valid
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {
@@ -1730,6 +2158,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		prepared = &preparedQuery
 	}
 	idx.mu.RLock()
+	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
+		idx.mu.RUnlock()
+		return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
+	}
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
 		dims := idx.dimensions
 		idx.mu.RUnlock()
@@ -1797,6 +2229,10 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		trace.Strategy = "ann_postfilter"
 	}
 	idx.mu.RLock()
+	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
+		idx.mu.RUnlock()
+		return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
+	}
 	scratch := idx.getSearchScratch()
 	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
 	trace.CandidatesExamined = len(candidates)
@@ -1882,7 +2318,107 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
-	if topK <= 0 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	scratch := idx.getSearchScratch()
+	defer idx.putSearchScratch(scratch)
+	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, scratch)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
+	for _, candidate := range candidates {
+		if len(results) >= topK {
+			break
+		}
+		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
+			continue
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		results = append(results, VectorSearchResult{
+			DocumentID: node.documentID,
+			Distance:   candidate.distance,
+		})
+	}
+	cloneVectorSearchResultDocumentIDs(results)
+	return results, nil
+}
+
+func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	if idx == nil {
+		return nil, errors.New("collections: vector index is nil")
+	}
+	if buffer == nil {
+		return nil, errors.New("collections: nil vector index search buffer")
+	}
+	buffer.Reset()
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
+	if err != nil {
+		return nil, err
+	}
+	resultCount := 0
+	idByteCount := 0
+	for _, candidate := range candidates {
+		if resultCount >= topK {
+			break
+		}
+		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
+			continue
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(node.documentID), math.MaxInt, "result id")
+		if err != nil {
+			return nil, err
+		}
+		resultCount++
+	}
+	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
+	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	resultIndex := 0
+	idOffset := 0
+	for _, candidate := range candidates {
+		if resultIndex >= resultCount {
+			break
+		}
+		node := idx.nodes[candidate.nodeID]
+		if node.deleted {
+			continue
+		}
+		currentNodeID, ok := idx.currentNode[string(node.documentID)]
+		if !ok || currentNodeID != candidate.nodeID {
+			continue
+		}
+		nextIDOffset := idOffset + len(node.documentID)
+		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		copy(id, node.documentID)
+		buffer.results[resultIndex] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
+		resultIndex++
+		idOffset = nextIDOffset
+	}
+	return buffer.results, nil
+}
+
+func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, efSearch int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
+	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
+		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
+	}
+	if topK < 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
 	}
 	if len(query) == 0 {
@@ -1906,10 +2442,15 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 		}
 		prepared = &preparedQuery
 	}
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
 		return nil, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), idx.dimensions)
+	}
+	if topK == 0 {
+		return nil, nil
+	}
+	liveDocs := len(idx.currentNode)
+	if liveDocs == 0 {
+		return nil, nil
 	}
 	limit := efSearch
 	if limit <= 0 {
@@ -1918,32 +2459,14 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if limit < topK {
 		limit = topK
 	}
-	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, limit, scratch)
-	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
-	for _, candidate := range candidates {
-		if len(results) >= topK {
-			break
-		}
-		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
-			continue
-		}
-		node := idx.nodes[candidate.nodeID]
-		if node.deleted {
-			continue
-		}
-		currentNodeID, ok := idx.currentNode[string(node.documentID)]
-		if !ok || currentNodeID != candidate.nodeID {
-			continue
-		}
-		results = append(results, VectorSearchResult{
-			DocumentID: node.documentID,
-			Distance:   candidate.distance,
-		})
+	if limit > liveDocs {
+		limit = liveDocs
 	}
-	idx.putSearchScratch(scratch)
-	cloneVectorSearchResultDocumentIDs(results)
-	return results, nil
+	candidates := idx.searchCurrentCandidatesLocked(query, queryNorm, prepared, limit, scratch)
+	if target := minInt(topK, liveDocs); len(candidates) < target {
+		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
+	}
+	return candidates, nil
 }
 
 func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
@@ -2286,6 +2809,69 @@ func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared
 	return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
 }
 
+func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
+		return nil
+	}
+	stale := len(idx.nodes) - len(idx.currentNode)
+	if stale == 0 {
+		entryPoint := idx.entry
+		for layer := idx.maxLevel; layer > 0; layer-- {
+			entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
+		}
+		return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
+	}
+	explorationLimit := limit
+	if stale > 0 && explorationLimit < len(idx.nodes) {
+		// Tombstones remain waypoints, but historical churn must not turn a
+		// bounded ANN query into an O(nodes) traversal. Permit at most one
+		// layer-0 neighbor fanout of stale waypoints per live candidate.
+		degree := maxInt(1, idx.maxNeighborsForLayer(0))
+		maxExtra := math.MaxInt
+		if degree > 1 && limit <= math.MaxInt/(degree-1) {
+			maxExtra = limit * (degree - 1)
+		}
+		explorationLimit += minInt(stale, minInt(maxExtra, len(idx.nodes)-explorationLimit))
+	}
+	entryPoint := idx.entry
+	upperExplored := 0
+	// Keep the requested live-candidate budget plus one possible stale entry
+	// point for layer 0. Upper layers share the remaining stale allowance.
+	upperLimit := maxInt(0, explorationLimit-limit-1)
+	for layer := idx.maxLevel; layer > 0 && upperExplored < upperLimit; layer-- {
+		entryPoint = idx.greedyNearestAtLayerBoundedLocked(query, queryNormSquared, prepared, entryPoint, layer, upperLimit, &upperExplored)
+	}
+	result := idx.searchLayerCurrentWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit-upperExplored, 0, scratch)
+	scratch.explored += upperExplored
+	scratch.explorationLimit = explorationLimit
+	return result
+}
+
+func (idx *VectorIndex) greedyNearestAtLayerBoundedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint, layer, scoreLimit int, scored *int) int {
+	if entryPoint < 0 || scored == nil || *scored >= scoreLimit {
+		return entryPoint
+	}
+	best := entryPoint
+	bestDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, best)
+	(*scored)++
+	for changed := true; changed; {
+		changed = false
+		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
+			if *scored >= scoreLimit {
+				return best
+			}
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighbor.nodeID)
+			(*scored)++
+			if distance < bestDistance {
+				best = neighbor.nodeID
+				bestDistance = distance
+				changed = true
+			}
+		}
+	}
+	return best
+}
+
 func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int) int {
 	if entryPoint < 0 {
 		return entryPoint
@@ -2327,6 +2913,14 @@ func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
 }
 
 func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, limit, layer, scratch, false)
+}
+
+func (idx *VectorIndex) searchLayerCurrentWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchModeLocked(query, queryNormSquared, prepared, entryPoint, limit, explorationLimit, layer, scratch, true)
+}
+
+func (idx *VectorIndex) searchLayerWithScratchModeLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit, explorationLimit int, layer int, scratch *vectorIndexSearchScratch, currentOnly bool) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
 	}
@@ -2337,16 +2931,23 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 	if scratch == nil {
 		scratch = &vectorIndexSearchScratch{}
 	}
+	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
 	visited[entryPoint] = mark
+	scratch.explored = 1
 	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
 	queue := scratch.queue[:0]
 	queue.push(entry)
 	best := scratch.best[:0]
-	best.pushBounded(entry, limit)
+	best.pushBounded(entry, explorationLimit)
+	liveBest := scratch.liveBest[:0]
+	if currentOnly && !idx.nodes[entryPoint].deleted {
+		liveBest.pushBounded(entry, limit)
+	}
+search:
 	for len(queue) > 0 {
 		current := queue.pop()
-		if len(best) >= limit && vectorIndexCandidateWorse(current, best[0]) {
+		if len(best) >= explorationLimit && vectorIndexCandidateWorse(current, best[0]) {
 			break
 		}
 		if current.nodeID < 0 || current.nodeID >= len(idx.nodes) {
@@ -2357,21 +2958,35 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
+			if currentOnly && scratch.explored >= explorationLimit {
+				break search
+			}
 			visited[neighborID] = mark
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
+			scratch.explored++
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
 			candidate := vectorIndexCandidate{nodeID: neighborID, distance: distance}
-			if len(best) < limit || vectorIndexCandidateLess(candidate, best[0]) {
-				queue.push(candidate)
-				best.pushBounded(candidate, limit)
+			if len(best) >= explorationLimit && !vectorIndexCandidateLess(candidate, best[0]) {
+				continue
+			}
+			queue.push(candidate)
+			best.pushBounded(candidate, explorationLimit)
+			if currentOnly && !idx.nodes[neighborID].deleted {
+				liveBest.pushBounded(candidate, limit)
 			}
 		}
 	}
 	scratch.queue = queue[:0]
 	scratch.best = best[:0]
-	out := append(scratch.out[:0], best...)
+	scratch.liveBest = liveBest[:0]
+	out := scratch.out[:0]
+	if currentOnly {
+		out = append(out, liveBest...)
+	} else {
+		out = append(out, best...)
+	}
 	scratch.out = out
 	sortVectorIndexCandidates(out)
 	return out
@@ -3217,11 +3832,14 @@ type vectorIndexCandidate struct {
 }
 
 type vectorIndexSearchScratch struct {
-	visitedEpochs []uint32
-	visitedEpoch  uint32
-	queue         vectorIndexMinCandidateHeap
-	best          vectorIndexMaxCandidateHeap
-	out           []vectorIndexCandidate
+	visitedEpochs    []uint32
+	visitedEpoch     uint32
+	explorationLimit int
+	explored         int
+	queue            vectorIndexMinCandidateHeap
+	best             vectorIndexMaxCandidateHeap
+	liveBest         vectorIndexMaxCandidateHeap
+	out              []vectorIndexCandidate
 }
 
 func (scratch *vectorIndexSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
@@ -3391,6 +4009,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		BytesDisk:           idx.persistedBytesDisk,
 		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
+		LiveANNFullRebuilds: idx.liveANNFullRebuilds,
 	}
 	var edges int
 	var vectorBytes int64
@@ -3414,6 +4033,33 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	stats.BytesMemory = vectorBytes + int64(edges)*int64(unsafe.Sizeof(vectorIndexNeighbor{})) + int64(stats.Nodes*32)
 	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
 	return stats
+}
+
+func (idx *VectorIndex) nativeSearchState() (epoch uint64, bytesDisk int64, liveDocs int, rebuildNeeded bool, fullRebuilds uint64) {
+	if idx == nil {
+		return 0, 0, 0, false, 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	liveDocs = len(idx.currentNode)
+	deletedDocs := len(idx.nodes) - liveDocs
+	rebuildNeeded = deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio
+	return idx.persistedEpoch, idx.persistedBytesDisk, liveDocs, rebuildNeeded, idx.liveANNFullRebuilds
+}
+
+func (idx *VectorIndex) nativeMutationSequence() uint64 {
+	if idx == nil {
+		return 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.mutationSeq
+}
+
+func (idx *VectorIndex) markLiveANNFullRebuild() {
+	idx.mu.Lock()
+	idx.liveANNFullRebuilds++
+	idx.mu.Unlock()
 }
 
 // CheckRecall compares indexed search with exact search for the supplied query
@@ -3648,6 +4294,10 @@ func (idx *VectorIndex) Rebuild() error {
 	entry := rebuilt.entry
 	maxLevel := rebuilt.maxLevel
 	dimensions := rebuilt.dimensions
+	sourceDocumentGeneration := rebuilt.sourceDocumentGeneration
+	sourceDocumentRootsValid := rebuilt.sourceDocumentRootsValid
+	sourceDocumentState := rebuilt.sourceDocumentState
+	sourceDocumentStateValid := rebuilt.sourceDocumentStateValid
 	rebuilt.mu.RUnlock()
 
 	idx.mu.Lock()
@@ -3656,6 +4306,10 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
+	idx.sourceDocumentGeneration = sourceDocumentGeneration
+	idx.sourceDocumentRootsValid = sourceDocumentRootsValid
+	idx.sourceDocumentState = sourceDocumentState
+	idx.sourceDocumentStateValid = sourceDocumentStateValid
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
 	idx.requireFullNativeSnapshotLocked()
