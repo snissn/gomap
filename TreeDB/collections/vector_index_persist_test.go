@@ -15,6 +15,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -224,6 +225,165 @@ func TestCollectionVectorIndexNativeRootSnapshotReopenSearch(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, vectorIndexDirName)); !os.IsNotExist(err) {
 		t.Fatalf("native load created sidecar dir err=%v", err)
 	}
+}
+
+func TestCollectionVectorIndexNativeRootRejectsCommandWALReplayBeyondGraph(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("open setup db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("build vector index: %v", err)
+	}
+	if status, err := index.SaveNativeSnapshot(); err != nil || !status.Loaded {
+		_ = d.Close()
+		t.Fatalf("save native snapshot: status=%+v err=%v", status, err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("checkpoint setup db: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close setup db: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("enable command WAL: %v", err)
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("docs", []commitlog.CollectionDocument{{
+		ID:       []byte("b"),
+		Document: []byte(`{"embedding":[0,1]}`),
+	}})
+	if err != nil {
+		t.Fatalf("encode replay insert: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open replayed collection: %v", err)
+	}
+	var searchBuffer VectorIndexSearchBuffer
+	response, err := reopenedCol.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{0, 1},
+		TopK:      1,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &searchBuffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || response.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("stale native search response=%+v err=%v", response, err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load stale native snapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("stale native snapshot loaded=%v status=%+v", loaded != nil, status)
+	}
+	rebuilt, err := reopenedCol.ensureDeclaredNativeVectorIndexesLoaded()
+	if err != nil {
+		t.Fatalf("rebuild stale native snapshot: %v", err)
+	}
+	if _, ok := rebuilt[def.Name]; !ok {
+		t.Fatalf("rebuilt indexes=%v want %q", rebuilt, def.Name)
+	}
+	current := reopenedCol.registeredVectorIndex(def.Name)
+	if current == nil {
+		t.Fatal("rebuilt native index is nil")
+	}
+	if stats := current.Stats(); stats.LiveANNFullRebuilds != 1 {
+		t.Fatalf("rebuilt native stats=%+v", stats)
+	}
+	results, _, err := current.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search rebuilt native index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testing.T) {
+	dir := t.TempDir()
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		_ = d.Close()
+		t.Fatal("seed insert did not build native index")
+	}
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		_ = d.Close()
+		t.Fatalf("save seed graph: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert live delta: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatalf("flush live delta: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close live delta db: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open live delta collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load live delta graph: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.ExactFallbackReason != "" {
+		t.Fatalf("live delta graph loaded=%v status=%+v", loaded != nil, status)
+	}
+	if stats := loaded.Stats(); stats.LiveANNFullRebuilds != 0 {
+		t.Fatalf("live delta reopened through rebuild: %+v", stats)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search live delta graph: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
 }
 
 func TestCollectionVectorIndexNativeRootMissingFallsBack(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,14 +22,15 @@ import (
 )
 
 const (
-	vectorIndexFormatVersion  = 1
-	vectorIndexDirName        = "vector_indexes"
-	vectorIndexManifestFile   = "manifest.json"
-	vectorIndexMetaFile       = "meta.json"
-	vectorIndexNodesFile      = "nodes.json"
-	vectorIndexEdgesFile      = "edges.json"
-	vectorIndexTombstonesFile = "tombstones.json"
-	vectorIndexDocMapFile     = "docmap.json"
+	vectorIndexFormatVersion        = 1
+	vectorIndexDocumentRootsVersion = 1
+	vectorIndexDirName              = "vector_indexes"
+	vectorIndexManifestFile         = "manifest.json"
+	vectorIndexMetaFile             = "meta.json"
+	vectorIndexNodesFile            = "nodes.json"
+	vectorIndexEdgesFile            = "edges.json"
+	vectorIndexTombstonesFile       = "tombstones.json"
+	vectorIndexDocMapFile           = "docmap.json"
 
 	vectorIndexNativeKeyMeta           = "meta"
 	vectorIndexNativeKeyPrefixNode     = "node/"
@@ -90,6 +92,14 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockCoverage := c.lockVectorIndexCoveragePersistence()
+	defer unlockCoverage()
+	return idx.saveNativeSnapshotWithCoverageLocked()
+}
+
+func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	c := idx.collection
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
@@ -100,6 +110,11 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
+	sourceDocumentRootID, sourceDocumentOverlayRootIDs, err := c.currentVectorIndexDocumentRoots()
+	if err != nil {
+		return status, err
+	}
+	idx.recordSourceDocumentRoots(sourceDocumentRootID, sourceDocumentOverlayRootIDs)
 	return idx.saveNativeSnapshotPrepared()
 }
 
@@ -335,8 +350,10 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockCoverage := c.lockVectorIndexCoveragePersistence()
+	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
-		return idx.SaveNativeSnapshot()
+		return idx.saveNativeSnapshotWithCoverageLocked()
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -348,6 +365,11 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
+	sourceDocumentRootID, sourceDocumentOverlayRootIDs, err := c.currentVectorIndexDocumentRoots()
+	if err != nil {
+		return status, err
+	}
+	idx.recordSourceDocumentRoots(sourceDocumentRootID, sourceDocumentOverlayRootIDs)
 
 	pin := c.db.AcquireSnapshot()
 	if pin == nil {
@@ -626,6 +648,13 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	documentRootName := collectionPrimaryRootName(catalog.meta.Name)
+	if snapshot.Meta.SourceDocumentRootsVersion != vectorIndexDocumentRootsVersion ||
+		snapshot.Meta.SourceDocumentRootID != catalog.rootID(documentRootName) ||
+		!slices.Equal(snapshot.Meta.SourceDocumentOverlayRootIDs, catalog.overlayRootIDs(documentRootName)) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		return nil, status, nil
+	}
 	index, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return nil, status, err
@@ -888,17 +917,20 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
-	Name                string              `json:"name"`
-	Field               string              `json:"field"`
-	Metric              VectorMetric        `json:"metric"`
-	Encoding            VectorIndexEncoding `json:"encoding"`
-	Dimensions          int                 `json:"dimensions"`
-	M                   int                 `json:"m"`
-	EfConstruction      int                 `json:"ef_construction"`
-	EfSearch            int                 `json:"ef_search"`
-	RebuildDeletedRatio float64             `json:"rebuild_deleted_ratio"`
-	Entry               int                 `json:"entry"`
-	MaxLevel            int                 `json:"max_level"`
+	Name                         string              `json:"name"`
+	Field                        string              `json:"field"`
+	Metric                       VectorMetric        `json:"metric"`
+	Encoding                     VectorIndexEncoding `json:"encoding"`
+	Dimensions                   int                 `json:"dimensions"`
+	M                            int                 `json:"m"`
+	EfConstruction               int                 `json:"ef_construction"`
+	EfSearch                     int                 `json:"ef_search"`
+	RebuildDeletedRatio          float64             `json:"rebuild_deleted_ratio"`
+	Entry                        int                 `json:"entry"`
+	MaxLevel                     int                 `json:"max_level"`
+	SourceDocumentRootsVersion   int                 `json:"source_document_roots_version"`
+	SourceDocumentRootID         uint64              `json:"source_document_root_id"`
+	SourceDocumentOverlayRootIDs []uint64            `json:"source_document_overlay_root_ids,omitempty"`
 }
 
 type vectorIndexPersistNode struct {
@@ -931,17 +963,20 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	seq := idx.mutationSeq
 	snapshot := vectorIndexPersistSnapshot{
 		Meta: vectorIndexPersistMeta{
-			Name:                idx.name,
-			Field:               idx.field,
-			Metric:              idx.metric,
-			Encoding:            idx.encoding,
-			Dimensions:          idx.dimensions,
-			M:                   idx.m,
-			EfConstruction:      idx.efConstruction,
-			EfSearch:            idx.efSearch,
-			RebuildDeletedRatio: idx.rebuildDeletedRatio,
-			Entry:               idx.entry,
-			MaxLevel:            idx.maxLevel,
+			Name:                         idx.name,
+			Field:                        idx.field,
+			Metric:                       idx.metric,
+			Encoding:                     idx.encoding,
+			Dimensions:                   idx.dimensions,
+			M:                            idx.m,
+			EfConstruction:               idx.efConstruction,
+			EfSearch:                     idx.efSearch,
+			RebuildDeletedRatio:          idx.rebuildDeletedRatio,
+			Entry:                        idx.entry,
+			MaxLevel:                     idx.maxLevel,
+			SourceDocumentRootsVersion:   vectorIndexDocumentRootsVersion,
+			SourceDocumentRootID:         idx.sourceDocumentRootID,
+			SourceDocumentOverlayRootIDs: slices.Clone(idx.sourceDocumentOverlayRootIDs),
 		},
 		Nodes: make([]vectorIndexPersistNode, len(idx.nodes)),
 		DocMap: vectorIndexPersistDocMap{
@@ -1147,17 +1182,20 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 
 func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 	return vectorIndexPersistMeta{
-		Name:                idx.name,
-		Field:               idx.field,
-		Metric:              idx.metric,
-		Encoding:            idx.encoding,
-		Dimensions:          idx.dimensions,
-		M:                   idx.m,
-		EfConstruction:      idx.efConstruction,
-		EfSearch:            idx.efSearch,
-		RebuildDeletedRatio: idx.rebuildDeletedRatio,
-		Entry:               idx.entry,
-		MaxLevel:            idx.maxLevel,
+		Name:                         idx.name,
+		Field:                        idx.field,
+		Metric:                       idx.metric,
+		Encoding:                     idx.encoding,
+		Dimensions:                   idx.dimensions,
+		M:                            idx.m,
+		EfConstruction:               idx.efConstruction,
+		EfSearch:                     idx.efSearch,
+		RebuildDeletedRatio:          idx.rebuildDeletedRatio,
+		Entry:                        idx.entry,
+		MaxLevel:                     idx.maxLevel,
+		SourceDocumentRootsVersion:   vectorIndexDocumentRootsVersion,
+		SourceDocumentRootID:         idx.sourceDocumentRootID,
+		SourceDocumentOverlayRootIDs: slices.Clone(idx.sourceDocumentOverlayRootIDs),
 	}
 }
 
@@ -1575,6 +1613,8 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.persistedSnapshotDirty = false
 		idx.lastRebuildDuration = 0
 		idx.mutationSeq = 0
+		idx.sourceDocumentRootID = snapshot.Meta.SourceDocumentRootID
+		idx.sourceDocumentOverlayRootIDs = slices.Clone(snapshot.Meta.SourceDocumentOverlayRootIDs)
 		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
@@ -1694,6 +1734,8 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.persistedSnapshotDirty = false
 	idx.lastRebuildDuration = 0
 	idx.mutationSeq = 0
+	idx.sourceDocumentRootID = snapshot.Meta.SourceDocumentRootID
+	idx.sourceDocumentOverlayRootIDs = slices.Clone(snapshot.Meta.SourceDocumentOverlayRootIDs)
 	return ""
 }
 
