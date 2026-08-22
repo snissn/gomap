@@ -236,12 +236,17 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if manifest.AppliedCommandLSN == 0 {
 		return nil, errors.New("collections: stable vector prepared closure requires non-zero manifest AppliedCommandLSN")
 	}
-	rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	if err == nil && !usedTypedColumns {
+		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
-		return nil, err
+	if !usedTypedColumns {
+		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
+			return nil, err
+		}
 	}
 	closeErr := snap.Close()
 	// Snapshot pointers are single-use after Close returns, including when it
