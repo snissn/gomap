@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -278,6 +279,13 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 	}
 	vectorField := def.Field
+	if cfg.textField() == vectorField {
+		return result, &IngestError{
+			Stage:       IngestStageChunk,
+			SourceIndex: 0,
+			Err:         fmt.Errorf("collections: ingest TextField %q cannot equal vector index field %q", cfg.textField(), vectorField),
+		}
+	}
 
 	// Phase 1: plan every source up front. Nothing below can mutate the
 	// collection until every plan validates, so plan failures leave the batch
@@ -363,7 +371,6 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 					Err: fmt.Errorf("collections: before source %q: %w", plan.parentID, err)}
 			}
 		}
-
 		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, vectorField)
 		mu.Lock()
@@ -371,6 +378,14 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		mu.Unlock()
 		if embedErr != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: embedErr}
+		}
+		if err := validateIngestVectors(vectors, def); err != nil {
+			return &IngestError{
+				SourceID:    plan.parentID,
+				SourceIndex: i,
+				Stage:       IngestStageEmbed,
+				Err:         fmt.Errorf("collections: validate embedded vectors for %q: %w", vectorField, err),
+			}
 		}
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
@@ -425,6 +440,12 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			childIDs[j] = append([]byte(nil), ch.id...)
 		}
 		outcome := SourceIngestOutcome{ID: append([]byte(nil), plan.parentID...), ChildIDs: childIDs, Replaced: len(oldChildren)}
+		if cfg.Progress != nil {
+			// Assign the completion number and deliver its callback under the
+			// same lock. A worker that commits later cannot overtake an
+			// earlier callback while retaining a smaller SourcesCompleted.
+			progressMu.Lock()
+		}
 		mu.Lock()
 		result.IndexNanos += indexNanos
 		outcomes[i] = outcome
@@ -442,7 +463,6 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 		mu.Unlock()
 		if cfg.Progress != nil {
-			progressMu.Lock()
 			cfg.Progress(progress)
 			progressMu.Unlock()
 		}
@@ -515,6 +535,33 @@ func (c *Collection) embedIngestChildren(ctx context.Context, emb embedding.Embe
 	return vectors, nil
 }
 
+// validateIngestVectors applies the target index's document-vector contract
+// before a replacement can reach either mutation boundary.
+func validateIngestVectors(vectors [][]float32, def VectorIndexDefinition) error {
+	if len(vectors) == 0 {
+		return nil
+	}
+	if def.Dimensions <= 0 {
+		return fmt.Errorf("vector index %q has invalid dimensions %d", def.Name, def.Dimensions)
+	}
+	metric, err := normalizeVectorMetric(def.Metric)
+	if err != nil {
+		return err
+	}
+	for i, vector := range vectors {
+		if len(vector) != def.Dimensions {
+			return fmt.Errorf("vector[%d] dimensions=%d want %d", i, len(vector), def.Dimensions)
+		}
+		if err := validateFloat32Vector(vector); err != nil {
+			return fmt.Errorf("vector[%d]: %w", i, err)
+		}
+		if metric == VectorMetricCosine && vectorNormSquared(vector) == 0 {
+			return fmt.Errorf("vector[%d]: cosine vector cannot have zero magnitude", i)
+		}
+	}
+	return nil
+}
+
 // extractChunkTexts pulls each planned child's text back out of its stored
 // document JSON so the embedder consumes exactly what will be indexed.
 func extractChunkTexts(children []chunkChild, textField string) ([][]byte, error) {
@@ -537,10 +584,43 @@ func extractChunkTexts(children []chunkChild, textField string) ([][]byte, error
 	return texts, nil
 }
 
+// setIngestJSONRawPath writes value through parsed object components rather
+// than creating a literal dotted key.
+func setIngestJSONRawPath(doc map[string]json.RawMessage, path []string, value json.RawMessage) error {
+	if len(path) == 0 {
+		return errors.New("collections: empty ingest JSON path")
+	}
+	if len(path) == 1 {
+		doc[path[0]] = value
+		return nil
+	}
+	var child map[string]json.RawMessage
+	if raw, ok := doc[path[0]]; ok {
+		if err := json.Unmarshal(raw, &child); err != nil {
+			return fmt.Errorf("path %q has non-object ancestor %q", strings.Join(path, "."), path[0])
+		}
+		if child == nil {
+			return fmt.Errorf("path %q has non-object ancestor %q", strings.Join(path, "."), path[0])
+		}
+	} else {
+		child = make(map[string]json.RawMessage)
+	}
+	if err := setIngestJSONRawPath(child, path[1:], value); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(child)
+	if err != nil {
+		return err
+	}
+	doc[path[0]] = raw
+	return nil
+}
+
 // attachVectorsToChildren re-encodes each planned child document with its
 // embedded vector under the vector index's target field.
 func attachVectorsToChildren(children []chunkChild, vectors [][]float32, vectorField string) [][]byte {
 	docs := make([][]byte, len(children))
+	fieldPath, pathErr := parseVectorFieldPath(vectorField)
 	for i, ch := range children {
 		var doc map[string]json.RawMessage
 		if err := json.Unmarshal(ch.document, &doc); err != nil {
@@ -548,10 +628,10 @@ func attachVectorsToChildren(children []chunkChild, vectors [][]float32, vectorF
 			docs[i] = ch.document
 			continue
 		}
-		if i < len(vectors) && vectors[i] != nil {
+		if pathErr == nil && i < len(vectors) && vectors[i] != nil {
 			raw, err := json.Marshal(vectors[i])
 			if err == nil {
-				doc[vectorField] = raw
+				_ = setIngestJSONRawPath(doc, fieldPath, raw)
 			}
 		}
 		if encoded, err := json.Marshal(doc); err == nil {

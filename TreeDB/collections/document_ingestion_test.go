@@ -788,6 +788,132 @@ func TestIngestSourcesConcurrentBoundedPool(t *testing.T) {
 	assertIndexParity(t, col, parents)
 }
 
+func TestAttachVectorsToChildrenNestedJSONPath(t *testing.T) {
+	children := []chunkChild{{
+		id:       []byte("parent#0"),
+		document: []byte(`{"body":"chunk","payload":{"source":"raw"}}`),
+	}}
+	docs := attachVectorsToChildren(children, [][]float32{{1, 2, 3}}, "payload.embedding")
+	var doc map[string]any
+	if err := json.Unmarshal(docs[0], &doc); err != nil {
+		t.Fatalf("unmarshal attached child: %v", err)
+	}
+	if _, ok := doc["payload.embedding"]; ok {
+		t.Fatal("nested vector was written as a literal dotted key")
+	}
+	payload, ok := doc["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload=%T %v want object", doc["payload"], doc["payload"])
+	}
+	got, ok := payload["embedding"].([]any)
+	if !ok || len(got) != 3 || got[0] != float64(1) || got[1] != float64(2) || got[2] != float64(3) {
+		t.Fatalf("payload.embedding=%v want [1 2 3]", payload["embedding"])
+	}
+}
+
+func TestIngestSourcesRejectsTextFieldVectorFieldCollision(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 8)
+	cfg := ingestTestCfg(8)
+	cfg.TextField = "embedding"
+	res, err := col.IngestSources(context.Background(), []SourceDocument{{
+		ID:     []byte("collision"),
+		Fields: map[string]any{"embedding": "text that must not be overwritten"},
+	}}, cfg)
+	if err == nil {
+		t.Fatal("TextField/vector field collision accepted")
+	}
+	var ingestErr *IngestError
+	if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+		t.Fatalf("err=%v want chunk-stage IngestError", err)
+	}
+	if len(res.Ingested) != 0 {
+		t.Fatalf("collision rejection returned ingested outcomes: %+v", res.Ingested)
+	}
+	if raw, _ := col.Get([]byte("collision")); len(raw) != 0 {
+		t.Fatal("collision rejection mutated the collection")
+	}
+}
+
+func TestIngestSourcesRejectsInvalidReplacementVectorsBeforeDelete(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 8)
+	cfg := ingestTestCfg(8)
+	original := ingestTestSource("replace-zero", 1)
+	mustIngest(t, col, []SourceDocument{original}, cfg)
+	oldChildren, err := col.ChunkChildren(original.ID)
+	if err != nil || len(oldChildren) == 0 {
+		t.Fatalf("old children=%d err=%v", len(oldChildren), err)
+	}
+	oldChild, err := col.Get(oldChildren[0])
+	if err != nil {
+		t.Fatalf("get old child: %v", err)
+	}
+	oldParent, err := col.Get(original.ID)
+	if err != nil {
+		t.Fatalf("get old parent: %v", err)
+	}
+
+	replacement := SourceDocument{ID: append([]byte(nil), original.ID...), Fields: map[string]any{
+		"body": strings.Repeat(" ", 16),
+	}}
+	res, err := col.IngestSources(context.Background(), []SourceDocument{replacement}, cfg)
+	if err == nil || !strings.Contains(err.Error(), "zero magnitude") {
+		t.Fatalf("replacement err=%v want cosine zero-magnitude embed failure", err)
+	}
+	var ingestErr *IngestError
+	if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageEmbed {
+		t.Fatalf("err=%v want embed-stage IngestError", err)
+	}
+	children, err := col.ChunkChildren(original.ID)
+	if err != nil {
+		t.Fatalf("children after rejected replacement: %v", err)
+	}
+	if len(children) != len(oldChildren) || string(children[0]) != string(oldChildren[0]) {
+		t.Fatalf("stale children changed after invalid embedding: got=%q want=%q", children, oldChildren)
+	}
+	newChild, err := col.Get(oldChildren[0])
+	if err != nil {
+		t.Fatalf("get child after rejected replacement: %v", err)
+	}
+	if string(newChild) != string(oldChild) {
+		t.Fatal("stale child document changed after invalid embedding")
+	}
+	newParent, err := col.Get(original.ID)
+	if err != nil {
+		t.Fatalf("get parent after rejected replacement: %v", err)
+	}
+	if string(newParent) != string(oldParent) {
+		t.Fatal("parent changed after invalid embedding")
+	}
+	if len(res.Ingested) != 0 {
+		t.Fatalf("invalid replacement returned ingested outcomes: %+v", res.Ingested)
+	}
+}
+
+func TestIngestSourcesProgressCompletionNumbersMonotonic(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 16)
+	cfg := ingestTestCfg(16)
+	cfg.Concurrency = 8
+	sources := ingestTestSources(16)
+	var mu sync.Mutex
+	progress := make([]IngestSourcesProgress, 0, len(sources))
+	cfg.Progress = func(p IngestSourcesProgress) {
+		mu.Lock()
+		progress = append(progress, p)
+		mu.Unlock()
+	}
+	if _, err := col.IngestSources(context.Background(), sources, cfg); err != nil {
+		t.Fatalf("IngestSources: %v", err)
+	}
+	if len(progress) != len(sources) {
+		t.Fatalf("progress callbacks=%d want %d", len(progress), len(sources))
+	}
+	for i, p := range progress {
+		if p.SourcesCompleted != i+1 || p.SourcesTotal != len(sources) {
+			t.Fatalf("progress[%d]=%+v want completion=%d total=%d", i, p, i+1, len(sources))
+		}
+	}
+}
+
 // BenchmarkIngestSources10K measures the one-call chunk/embed/index path at
 // the C8 before-state scale: 10,000 documents and the hashing embedder at
 // 256 dimensions. Stage shares are reported from the pipeline's wall counters.
