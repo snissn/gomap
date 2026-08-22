@@ -323,7 +323,9 @@ func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, ca
 			if hits > maxHits {
 				maxHits = hits
 			}
-			samples = append(samples, float64(time.Since(start).Microseconds())/1000.0)
+			// Preserve sub-microsecond samples; integer Microseconds truncation
+			// makes fast direct rows appear to have a zero p50 on Windows.
+			samples = append(samples, time.Since(start).Seconds()*1000.0)
 		}
 	}
 	return samples, maxHits, nil
