@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -20,14 +21,15 @@ import (
 )
 
 const (
-	defaultVectorIndexM              = 16
-	defaultVectorIndexEfConstruction = 128
-	defaultVectorIndexEfSearch       = 64
-	defaultVectorIndexFetchMultiple  = 4
-	defaultVectorIndexRebuildPPM     = 250_000
-	defaultVectorIndexExactFilterMax = 1024
-	defaultVectorRecallBatchCells    = 1 << 20
-	maxVectorIndexEagerNeighborCap   = 64
+	defaultVectorIndexM                       = 16
+	defaultVectorIndexEfConstruction          = 128
+	defaultVectorIndexEfSearch                = 64
+	defaultVectorIndexFetchMultiple           = 4
+	defaultVectorIndexRebuildPPM              = 250_000
+	defaultVectorIndexExactFilterMax          = 1024
+	defaultVectorRecallBatchCells             = 1 << 20
+	maxVectorIndexEagerNeighborCap            = 64
+	minVectorIndexParallelReciprocalNeighbors = 4
 )
 
 const (
@@ -296,6 +298,9 @@ type VectorIndex struct {
 	maxLevel      int
 	insertScratch vectorIndexSearchScratch
 	searchScratch sync.Pool
+	// parallelReciprocalLinks is enabled only by the untraced offline column
+	// graph builder. Incremental, traced, and partition builds stay serial.
+	parallelReciprocalLinks bool
 
 	mutationSeq            uint64
 	persistedEpoch         uint64
@@ -1202,12 +1207,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			selectionLimit = idx.m * idx.layer0ConstructionPolicy.initialSelectionFactor
 		}
 		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, selectionLimit, nodeID)
-		for _, neighborID := range neighbors {
-			// selectLayerNeighborsLocked records the exact selection origin before
-			// this directed initial link is made.
-			idx.linkLayerLocked(nodeID, neighborID, layer)
-			idx.linkLayerLocked(neighborID, nodeID, layer)
-		}
+		idx.linkSelectedNeighborsLocked(nodeID, neighbors, layer)
 		if len(neighbors) > 0 {
 			entryPoint = neighbors[0]
 		}
@@ -1218,6 +1218,64 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		idx.markVectorMetaDirtyLocked()
 	}
 	return nil
+}
+
+func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int, layer int) {
+	workers := 1
+	if idx.parallelReciprocalLinks &&
+		idx.constructionTrace == nil &&
+		idx.layer0ConstructionPolicy == nil &&
+		!idx.nativePersistent &&
+		idx.qualityPostfillCandidates == nil &&
+		vectorIndexNeighborIDsDistinct(neighbors) {
+		workers = vectorIndexReciprocalLinkWorkerCount(len(neighbors))
+	}
+	if workers == 1 {
+		for _, neighborID := range neighbors {
+			// selectLayerNeighborsLocked records the exact selection origin before
+			// this directed initial link is made.
+			idx.linkLayerLocked(nodeID, neighborID, layer)
+			idx.linkLayerLocked(neighborID, nodeID, layer)
+		}
+		return
+	}
+
+	// Keep the new node's ordered outgoing edges serial. Each worker below owns
+	// a distinct old node's adjacency slice and only reads immutable node data.
+	for _, neighborID := range neighbors {
+		idx.linkLayerLocked(nodeID, neighborID, layer)
+	}
+	var wg sync.WaitGroup
+	for worker := 1; worker < workers; worker++ {
+		worker := worker
+		wg.Go(func() {
+			for neighbor := worker; neighbor < len(neighbors); neighbor += workers {
+				idx.linkLayerLocked(neighbors[neighbor], nodeID, layer)
+			}
+		})
+	}
+	for neighbor := 0; neighbor < len(neighbors); neighbor += workers {
+		idx.linkLayerLocked(neighbors[neighbor], nodeID, layer)
+	}
+	wg.Wait()
+}
+
+func vectorIndexReciprocalLinkWorkerCount(neighbors int) int {
+	if neighbors < minVectorIndexParallelReciprocalNeighbors {
+		return 1
+	}
+	return minInt(runtime.GOMAXPROCS(0), neighbors)
+}
+
+func vectorIndexNeighborIDsDistinct(neighbors []int) bool {
+	for i := range neighbors {
+		for j := 0; j < i; j++ {
+			if neighbors[i] == neighbors[j] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (node *vectorIndexNode) matchesVector(vector []float32) bool {
