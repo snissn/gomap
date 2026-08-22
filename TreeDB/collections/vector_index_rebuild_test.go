@@ -9,17 +9,74 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
+
+func TestColumnGraphRebuildPinsIndexNamespaceUntilPublication4259(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online index vacuum is not supported on Windows")
+	}
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{0.5, 0.5, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+
+	beforeBuild := make(chan struct{})
+	resumeBuild := make(chan struct{})
+	restore := setColumnVectorGraphRebuildBeforeBuildTestHook(func() {
+		close(beforeBuild)
+		<-resumeBuild
+	})
+	defer restore()
+
+	type rebuildResult struct {
+		status VectorIndexStatus
+		err    error
+	}
+	rebuildDone := make(chan rebuildResult, 1)
+	go func() {
+		status, err := col.RebuildVectorIndex(def.Name)
+		rebuildDone <- rebuildResult{status: status, err: err}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	select {
+	case <-beforeBuild:
+	case <-ctx.Done():
+		close(resumeBuild)
+		t.Fatalf("waiting for paused vector rebuild: %v", ctx.Err())
+	}
+	vacuumErr := d.VacuumIndexOnline(ctx)
+	close(resumeBuild)
+	result := <-rebuildDone
+	if !errors.Is(vacuumErr, rootpublication.ErrResourcePinned) {
+		t.Fatalf("VacuumIndexOnline during paused rebuild=%v, want %v (rebuild err=%v)", vacuumErr, rootpublication.ErrResourcePinned, result.err)
+	}
+	if result.err != nil {
+		t.Fatalf("RebuildVectorIndex after rejected vacuum: %v", result.err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, result.status, def.Name)
+	if err := d.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("VacuumIndexOnline after rebuild publication: %v", err)
+	}
+}
 
 func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
