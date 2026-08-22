@@ -132,7 +132,8 @@ python3 scripts/treedb_vectordbbench_artifact.py \
 
 Use `--skip-route-proof` only for measurement repetitions when an independently
 captured route-proof artifact already gates the same binary and configuration.
-This keeps the timed database limited to the VDBBench collection.
+This keeps the timed database limited to the VDBBench collection. The flag is
+rejected for dry runs, skipped loads, or an empty row list.
 
 Run one VDBBench row per artifact when comparing empty-database load/build
 phases. Multiple requested rows share the artifact-owned service and data
@@ -153,13 +154,14 @@ rejected before service startup.
 
 For a completed load, the harness selects exactly one *new* canonical
 `result_*.json` matching that generated index name. It records the result path,
-SHA-256, run ID, task configuration, insert duration, offline optimize duration,
-total load duration, and `vector_count / insert_duration` in
+SHA-256, run ID, task configuration and its canonical JSON SHA-256, insert
+duration, offline optimize duration, total load duration, and
+`vector_count / insert_duration` in
 `vdbbench_load_metrics.json`. It fails closed if selection is ambiguous, a
-duration is absent/non-positive, the three durations disagree, or the case type
-does not end in a count suffix such as `50K` or `1M`. The profile is deliberately
-full-load only: phase-specific pprof would require VDBBench orchestration not
-owned by this harness.
+case is unsuccessful, a duration is absent/non-positive, the three durations
+disagree, or the case type does not end in a count suffix such as `50K` or `1M`.
+The profile is deliberately full-load only: phase-specific pprof would require
+VDBBench orchestration not owned by this harness.
 
 For `PerformanceCustomDataset`, the vector count instead comes fail-closed from
 the selected result's `task_config.case_config.custom_case.dataset_config.size`.

@@ -148,6 +148,7 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
         self.assertEqual(got["insert_vectors_per_second"], 25_000)
         self.assertEqual(got["offline_optimize_duration_seconds"], 3.0)
         self.assertEqual(len(got["result_sha256"]), 64)
+        self.assertEqual(got["task_config_sha256"], "04fa505555bec57a85ed8491a57562ac60212fd9ea34871a1f9893622e68d394")
 
     def test_canonical_result_fails_closed_when_duration_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,9 +249,16 @@ class HarnessOrderTest(unittest.TestCase):
 
         self.assertTrue(args.skip_route_proof)
 
-    def test_route_proof_skip_requires_vdbbench(self) -> None:
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            harness.parse_args(["--skip-route-proof"])
+    def test_route_proof_skip_requires_real_load_evidence(self) -> None:
+        invalid = [
+            ["--skip-route-proof"],
+            ["--run-vdbbench", "--skip-route-proof", "--vdbbench-dry-run"],
+            ["--run-vdbbench", "--skip-route-proof", "--skip-load"],
+            ["--run-vdbbench", "--skip-route-proof", "--rows", ""],
+        ]
+        for argv in invalid:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                harness.parse_args(argv)
 
 
 class ManifestFileListTest(unittest.TestCase):

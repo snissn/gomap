@@ -785,6 +785,9 @@ def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifa
         "total_load_duration_seconds": load,
         "insert_vectors_per_second": vectors / insert,
         "task_config": task_config,
+        "task_config_sha256": hashlib.sha256(
+            json.dumps(task_config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
     }
 
 
@@ -1010,8 +1013,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
-    if args.skip_route_proof and not args.run_vdbbench:
-        parser.error("skip-route-proof requires run-vdbbench")
+    if args.skip_route_proof and (
+        not args.run_vdbbench
+        or args.vdbbench_dry_run
+        or args.skip_load
+        or not any(row.strip() for row in args.rows.split(","))
+    ):
+        parser.error("skip-route-proof requires at least one non-dry-run, load-enabled VDBBench row")
     try:
         validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
     except ValueError as exc:
