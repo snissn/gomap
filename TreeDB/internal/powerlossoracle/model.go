@@ -352,7 +352,20 @@ func (m *Model) Overlay(root string) error {
 // Observe imports the process-visible bytes from an actual TreeDB cut event
 // and promotes only the persistence boundary completed by that event.
 func (m *Model) Observe(root string, event durabilitycut.Event) error {
+	overlaid := false
 	if event.Namespace != "" {
+		if event.StableParent != nil {
+			if err := m.Overlay(root); err != nil {
+				return err
+			}
+			overlaid = true
+			parent, err := m.stableDirectoryPath(event.StableParent)
+			if err != nil {
+				return err
+			}
+			event.OldPath = stableChildObservationPath(root, parent, event.StableOldName)
+			event.NewPath = stableChildObservationPath(root, parent, event.StableNewName)
+		}
 		if err := m.observeNamespace(root, event); err != nil {
 			return err
 		}
@@ -377,6 +390,20 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 		}
 		eventPaths = make([]string, 0, len(rawPaths))
 		for _, path := range rawPaths {
+			if event.StablePath != nil {
+				if !overlaid {
+					if err := m.Overlay(root); err != nil {
+						return err
+					}
+					overlaid = true
+				}
+				stablePath, err := m.stableOpenFilePath(event.StablePath)
+				if err != nil {
+					return err
+				}
+				eventPaths = append(eventPaths, stablePath)
+				continue
+			}
 			if path == "" {
 				return fmt.Errorf("powerlossoracle: cut %s contains an empty exact path", event.Point)
 			}
@@ -405,8 +432,10 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 			return fmt.Errorf("powerlossoracle: cut %s created directory %q is outside root %q: %w", event.Point, event.CreatedDirectory, root, err)
 		}
 	}
-	if err := m.Overlay(root); err != nil {
-		return err
+	if !overlaid {
+		if err := m.Overlay(root); err != nil {
+			return err
+		}
 	}
 	switch event.Point {
 	case durabilitycut.AfterDependencyFileSync:
@@ -437,6 +466,47 @@ func (m *Model) Observe(root string, event durabilitycut.Event) error {
 	}
 	m.trace = append(m.trace, "cut:"+string(event.Point)+":"+string(event.Resource))
 	return nil
+}
+
+func stableChildObservationPath(root, parent, name string) string {
+	if name == "" {
+		return ""
+	}
+	return filepath.Join(root, filepath.FromSlash(parent), name)
+}
+
+func (m *Model) stableDirectoryPath(file *os.File) (string, error) {
+	identity, err := captureStableIdentityFromFile(file)
+	if err != nil {
+		return "", err
+	}
+	for path, candidate := range m.volatileDirs {
+		if rootpublication.SamePhysicalIdentity(candidate, identity) {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("powerlossoracle: retained directory handle %q is outside the observed namespace", file.Name())
+}
+
+func (m *Model) stableOpenFilePath(file *os.File) (string, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return m.stableDirectoryPath(file)
+	}
+	identity, err := captureStableIdentityFromFile(file)
+	if err != nil {
+		return "", err
+	}
+	for path, id := range m.volatile {
+		node := m.inodes[id]
+		if node != nil && rootpublication.SamePhysicalIdentity(node.stableIdentity, identity) {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("powerlossoracle: retained file handle %q is outside the observed namespace", file.Name())
 }
 
 // observeNamespace applies the explicit production mutation before Overlay.

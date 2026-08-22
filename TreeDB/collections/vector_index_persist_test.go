@@ -1717,6 +1717,112 @@ func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
 	}
 }
 
+func TestNativeVectorCoverageFinalizerOrdersDomainBeforeActive(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first collection handle: %v", err)
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	second, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+
+	second.catalogMu.Lock()
+	second.catalog = nil
+	second.catalogCommitSeq = 0
+	second.catalogSystemRoot = 0
+	second.catalogMu.Unlock()
+	domain := second.writeDomain
+	domain.mu.Lock()
+	baseSystemRoot := domain.baseSystemRoot
+	domain.baseSystemRoot = 0
+	domain.mu.Unlock()
+
+	loadEntered := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	var loadOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseLoad) }) }
+	restoreHook := setTestCollectionCatalogLoadHookForTest(func(ctx collectionCatalogLoadFaultContext) error {
+		if ctx.Collection == "docs" && ctx.Stage == collectionCatalogLoadFaultMeta {
+			loadOnce.Do(func() {
+				close(loadEntered)
+				<-releaseLoad
+			})
+		}
+		return nil
+	})
+	defer restoreHook()
+
+	unlockCoverage := second.lockVectorIndexCoverageMutation()
+	finalizerDone := make(chan struct{})
+	go func() {
+		unlockCoverage()
+		close(finalizerDone)
+	}()
+	defer func() {
+		release()
+		select {
+		case <-finalizerDone:
+		case <-time.After(5 * time.Second):
+		}
+		domain.mu.Lock()
+		domain.baseSystemRoot = baseSystemRoot
+		domain.mu.Unlock()
+	}()
+
+	select {
+	case <-loadEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("coverage finalizer did not reach the forced catalog miss")
+	}
+	if domain.mu.TryLock() {
+		domain.mu.Unlock()
+		t.Fatal("coverage finalizer reached catalog loading without retaining the domain read lock")
+	}
+
+	transitionDone := make(chan error, 1)
+	go func() {
+		domain.mu.Lock()
+		domain.baseSystemRoot = baseSystemRoot
+		err := first.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+		domain.mu.Unlock()
+		transitionDone <- err
+	}()
+	select {
+	case err := <-transitionDone:
+		t.Fatalf("coverage transition escaped the domain barrier: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-finalizerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("coverage finalizer remained blocked after catalog loading resumed")
+	}
+	select {
+	case err := <-transitionDone:
+		if err != nil {
+			t.Fatalf("coverage transition: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("coverage transition remained blocked after finalization")
+	}
+}
+
 func (acceptedVectorMutationErrorForTest) CommitPublicationAccepted() bool { return true }
 
 func (e acceptedVectorMutationErrorForTest) Unwrap() error { return e.error }

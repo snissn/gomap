@@ -631,6 +631,14 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 }
 
 func (c *Collection) currentVectorIndexDocumentGeneration() (uint64, error) {
+	return c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(false)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLocked() (uint64, error) {
+	return c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(true)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationWithWriteDomainLockState(writeDomainLocked bool) (uint64, error) {
 	if c == nil {
 		return 0, errCollectionNil
 	}
@@ -642,7 +650,7 @@ func (c *Collection) currentVectorIndexDocumentGeneration() (uint64, error) {
 		return 0, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
+	catalog, err := c.catalogForSnapshotWithWriteDomainLockState(snap, writeDomainLocked)
 	if err != nil {
 		return 0, err
 	}
@@ -1154,12 +1162,13 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain.nativeVectorActive++
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
+		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
 		if domain.nativeVectorActive == 0 {
 			indexes := c.registeredVectorIndexes()
 			if len(indexes) != 0 {
-				if generation, err := c.currentVectorIndexDocumentGeneration(); err == nil {
+				if generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLocked(); err == nil {
 					for _, index := range indexes {
 						if index.hasValidSourceDocumentRoots() {
 							index.recordSourceDocumentGeneration(generation)
@@ -1168,8 +1177,9 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 				}
 			}
 		}
-		domain.nativeVectorActiveMu.Unlock()
 		domain.nativeVectorCoverageMu.RUnlock()
+		domain.nativeVectorActiveMu.Unlock()
+		domain.mu.RUnlock()
 	}
 }
 
@@ -1182,11 +1192,19 @@ func (c *Collection) lockVectorIndexCoveragePersistence() func() {
 }
 
 func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex) error {
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, false)
+}
+
+func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLocked(indexes []*VectorIndex) error {
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, true)
+}
+
+func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes []*VectorIndex, writeDomainLocked bool) error {
 	if c == nil {
 		return errCollectionNil
 	}
 	if c.writeDomain == nil {
-		generation, err := c.currentVectorIndexDocumentGeneration()
+		generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLockState(writeDomainLocked)
 		if err != nil {
 			c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 			return err
@@ -1200,12 +1218,16 @@ func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex)
 	}
 
 	domain := c.writeDomain
+	if !writeDomainLocked {
+		domain.mu.RLock()
+		defer domain.mu.RUnlock()
+	}
 	domain.nativeVectorActiveMu.Lock()
 	defer domain.nativeVectorActiveMu.Unlock()
 	if domain.nativeVectorActive > 1 {
 		return nil
 	}
-	generation, err := c.currentVectorIndexDocumentGeneration()
+	generation, err := c.currentVectorIndexDocumentGenerationWithWriteDomainLocked()
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 		return err
@@ -1218,14 +1240,15 @@ func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex)
 	return nil
 }
 
-func (c *Collection) recordVectorIndexCoverageAfterBufferedPublish(meta CollectionMeta, rootNames []string) error {
-	if !slices.Contains(rootNames, collectionPrimaryRootName(meta.Name)) {
-		return nil
-	}
-	return c.recordVectorIndexCoverageAfterBufferedDocumentPublish()
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublish() error {
+	return c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(false)
 }
 
-func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublish() error {
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked() error {
+	return c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(true)
+}
+
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLockState(writeDomainLocked bool) error {
 	if c == nil || c.writeDomain == nil {
 		return nil
 	}
@@ -1253,7 +1276,7 @@ func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublish() err
 	if active {
 		return nil
 	}
-	return c.recordReconciledVectorIndexCoverage(indexes)
+	return c.recordReconciledVectorIndexCoverageWithWriteDomainLockState(indexes, writeDomainLocked)
 }
 
 func (c *Collection) lockNativeVectorIndexPublicationRead() func() {

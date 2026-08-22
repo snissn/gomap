@@ -3811,7 +3811,7 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 }
 
 func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
-	for _, publication := range []string{"status", "no_index_read", "delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
+	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
 		t.Run(publication, func(t *testing.T) {
 			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 			if err != nil {
@@ -3821,7 +3821,7 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 
 			def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
 			indexes := []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
-			if publication == "no_index_read" {
+			if publication == "no_index_read" || publication == "concurrent_no_index_search" {
 				indexes = nil
 			}
 			mgr := NewCollectionManager(d)
@@ -3871,6 +3871,55 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			case "no_index_read":
 				if _, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1}); err != nil {
 					t.Fatalf("FindByCompoundIndexRange: %v", err)
+				}
+			case "concurrent_no_index_search":
+				col.writeDomain.nativeVectorActiveMu.Lock()
+				activeUnlocked := false
+				defer func() {
+					if !activeUnlocked {
+						col.writeDomain.nativeVectorActiveMu.Unlock()
+					}
+				}()
+				flushDone := make(chan error, 1)
+				go func() {
+					_, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1})
+					flushDone <- err
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				for col.writeDomain.mu.TryLock() {
+					col.writeDomain.mu.Unlock()
+					if time.Now().After(deadline) {
+						t.Fatal("read flush did not reach the coverage transition")
+					}
+					runtime.Gosched()
+				}
+				type searchResult struct {
+					response VectorIndexSearchResponse
+					err      error
+				}
+				searchDone := make(chan searchResult, 1)
+				go func() {
+					var buffer VectorIndexSearchBuffer
+					response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+					searchDone <- searchResult{response: response, err: err}
+				}()
+				select {
+				case result := <-searchDone:
+					t.Fatalf("concurrent search escaped coverage transition: response=%+v err=%v", result.response, result.err)
+				case <-time.After(50 * time.Millisecond):
+				}
+				col.writeDomain.nativeVectorActiveMu.Unlock()
+				activeUnlocked = true
+				if err := <-flushDone; err != nil {
+					t.Fatalf("FindByCompoundIndexRange: %v", err)
+				}
+				select {
+				case result := <-searchDone:
+					if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" {
+						t.Fatalf("concurrent search response=%+v err=%v", result.response, result.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("concurrent search remained blocked after coverage refresh")
 				}
 			case "delayed_async":
 				work, err := col.prepareIndexedAsyncPublish()

@@ -337,7 +337,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			}
 		}
 	}()
-	if err := observeNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", revisionFile.Name()); err != nil {
+	if err := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", revisionFile.Name(), parent, revisionFile, "", revisionName); err != nil {
 		return nil, s.ambiguous(err)
 	}
 	if err := revisionFile.Chmod(0o600); err != nil {
@@ -378,7 +378,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 			return nil, s.ambiguous(err)
 		}
 	}
-	if err := stabilizeLeafGenerationManifestNamespace(namespace, s.leafDir); err != nil {
+	if err := stabilizeLeafGenerationManifestNamespace(namespace, s.leafDir, parent); err != nil {
 		return nil, s.ambiguous(err)
 	}
 	s.durabilityCounters.NamespaceSyncs.Add(1)
@@ -522,7 +522,7 @@ func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.
 			retErr = errors.Join(retErr, rootpublication.RemoveStableChildFile(parent, tempName))
 		}
 	}()
-	if err := observeNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", temp.Name()); err != nil {
+	if err := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", temp.Name(), parent, temp, "", tempName); err != nil {
 		return err
 	}
 	if _, err := temp.Write(data); err != nil {
@@ -535,7 +535,7 @@ func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.
 		return err
 	}
 	renamed = true
-	if err := observeNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceOuterLeaf, s.leafDir, temp.Name(), leafGenerationManifestPath(s.leafDir)); err != nil {
+	if err := observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceOuterLeaf, s.leafDir, temp.Name(), leafGenerationManifestPath(s.leafDir), parent, temp, tempName, leafGenerationManifestFileName); err != nil {
 		return err
 	}
 	if err := rootpublication.ValidateStableChildLink(parent, temp, leafGenerationManifestFileName); err != nil {
@@ -554,27 +554,27 @@ func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.
 		return err
 	}
 	defer namespace.Release()
-	return stabilizeLeafGenerationManifestNamespace(namespace, s.leafDir)
+	return stabilizeLeafGenerationManifestNamespace(namespace, s.leafDir, parent)
 }
 
 func syncLeafGenerationManifestFile(file *os.File, root string) error {
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceOuterLeaf, root, file.Name()); err != nil {
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceOuterLeaf, root, file.Name(), file); err != nil {
 		return err
 	}
 	if err := file.Sync(); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceOuterLeaf, root, file.Name())
+	return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceOuterLeaf, root, file.Name(), file)
 }
 
-func stabilizeLeafGenerationManifestNamespace(namespace *rootpublication.StableNamespaceToken, root string) error {
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, root, root); err != nil {
+func stabilizeLeafGenerationManifestNamespace(namespace *rootpublication.StableNamespaceToken, root string, parent *os.File) error {
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, root, root, parent); err != nil {
 		return err
 	}
 	if err := namespace.Stabilize(); err != nil {
 		return err
 	}
-	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, root, root)
+	return durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, root, root, parent)
 }
 
 func (s *leafGenerationManifestStore) prepareReplacement(manifest *leafGenerationManifest, oldFile *os.File, allowPathRead bool) (*leafGenerationManifest, []byte, error) {

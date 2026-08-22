@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -104,6 +105,57 @@ func TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationManifestFileName)); !os.IsNotExist(err) {
 		t.Fatalf("diagnostic replacement path became authoritative: %v", err)
+	}
+}
+
+func TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind(t *testing.T) {
+	root := t.TempDir()
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+	model, err := powerlossoracle.Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedDir := filepath.Join(root, "retained_leaf_vlog")
+	if err := os.Rename(leafDir, retainedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.AfterNewFileDirectorySync, Path: root}); err != nil {
+		t.Fatalf("stabilize rebind fixture: %v", err)
+	}
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		return model.Observe(root, event)
+	})
+	token, err := store.Replace(newLeafGenerationManifest(1))
+	restore()
+	if err != nil {
+		t.Fatalf("Replace after path rebind: %v", err)
+	}
+	token.Release()
+
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", leafGenerationManifestFileName)); err != nil {
+		t.Fatalf("retained crash manifest: %v", err)
+	}
+	revisionName := leafGenerationDurableManifestFileName(1)
+	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", revisionName)); err != nil {
+		t.Fatalf("retained crash revision: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "leaf_vlog", leafGenerationManifestFileName)); !os.IsNotExist(err) {
+		t.Fatalf("rebound crash path became authoritative: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "leaf_vlog", revisionName)); !os.IsNotExist(err) {
+		t.Fatalf("rebound crash revision became authoritative: %v", err)
 	}
 }
 
