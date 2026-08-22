@@ -62,6 +62,8 @@ callers; see [Document chunking](document-chunking.md).
 Embeddings come from the pluggable embedder seam; dimension validation against
 the target vector index happens at ingest time and fails closed before any
 write. See [Document embedding](document-embedding.md).
+For one-call chunk → embed → index ingestion with bounded concurrency, see
+[One-call document ingestion](document-ingestion.md).
 
 ### Typed-row collection
 

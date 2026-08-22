@@ -74,3 +74,32 @@ func (c *Collection) ValidateEmbedderForVectorIndex(vectorIndexName string, emb 
 	}
 	return nil
 }
+
+// EmbedderForIngest resolves the configured embedder against the named vector
+// index definition and returns it for repeated batch use, applying the same
+// fail-closed gates as EmbedForIngest — unknown vector index, config/provider
+// dimension agreement, and declared-vs-index dimension agreement — without
+// embedding anything. Batch composition paths (see IngestSources) call this
+// once per batch and then drive EmbedBatch per source through the returned
+// embedder.
+func (c *Collection) EmbedderForIngest(vectorIndexName string, cfg embedding.Config) (embedding.Embedder, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
+	if !ok {
+		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, errCollectionEmbedderUnknownVectorIndex)
+	}
+	if cfg.Dimensions != def.Dimensions {
+		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
+			def.Name, def.Dimensions, cfg.Dimensions, embedding.ErrDimensionMismatch)
+	}
+	emb, err := embedding.DefaultRegistry().Create(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+	}
+	return emb, nil
+}
