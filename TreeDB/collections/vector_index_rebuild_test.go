@@ -65,7 +65,12 @@ func TestColumnGraphRebuildPinsIndexNamespaceUntilPublication4259(t *testing.T) 
 	}
 	vacuumErr := d.VacuumIndexOnline(ctx)
 	close(resumeBuild)
-	result := <-rebuildDone
+	var result rebuildResult
+	select {
+	case result = <-rebuildDone:
+	case <-ctx.Done():
+		t.Fatalf("waiting for vector rebuild after release: %v", ctx.Err())
+	}
 	if !errors.Is(vacuumErr, rootpublication.ErrResourcePinned) {
 		t.Fatalf("VacuumIndexOnline during paused rebuild=%v, want %v (rebuild err=%v)", vacuumErr, rootpublication.ErrResourcePinned, result.err)
 	}
