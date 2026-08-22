@@ -531,7 +531,8 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return nil, err
 		}
 	}
-	nativeDef, nativePersistent := findVectorIndex(c.meta.VectorIndexes, index.name)
+	nativeDef, declared := findVectorIndex(c.meta.VectorIndexes, index.name)
+	nativePersistent := declared && vectorIndexDefinitionUsesNativeRuntime(nativeDef)
 	var replaceCurrent *VectorIndex
 	var replaceMutationSeq uint64
 	index.setNativePersistent(nativePersistent)

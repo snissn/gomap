@@ -221,6 +221,39 @@ func TestColumnGraphVectorIndexStatusReportsMissingPhysicalSupportV2A(t *testing
 	}
 }
 
+func TestBuildVectorIndexDeclaredColumnGraphKeepsCompatibilityV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build declared column graph: %v", err)
+	}
+	if col.registeredVectorIndex(def.Name) != index {
+		t.Fatal("declared column graph build did not retain the compatible in-memory registration")
+	}
+}
+
 func TestNativeRuntimeVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
