@@ -14,6 +14,12 @@ import (
 
 const columnVectorGraphTypedColumnVectorScopeID = "column-vector-graph-typed-column-vector"
 
+// errColumnVectorGraphTypedColumnMultipartDeferred identifies the one
+// lifecycle shape the typed vector reader cannot yet certify. Callers that
+// still have the canonical document source may deliberately fall back only for
+// this condition; every malformed asset remains an error.
+var errColumnVectorGraphTypedColumnMultipartDeferred = errors.New("collections: column_graph typed-column vector source multipart physical rows are deferred")
+
 type columnVectorGraphTypedColumnVectorOutcome uint8
 
 const (
@@ -333,7 +339,7 @@ func columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(refs []columnM
 			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source requires insert-only physical refs, got %s", asset.Reason)
 		}
 		if _, exists := rowsByGeneration[asset.Ref.Generation]; exists {
-			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source generation=%d has multiple physical row parts; multipart typed-column vector graph reads are deferred", asset.Ref.Generation)
+			return nil, nil, fmt.Errorf("%w: generation=%d has multiple physical row parts", errColumnVectorGraphTypedColumnMultipartDeferred, asset.Ref.Generation)
 		}
 		rowsByGeneration[asset.Ref.Generation] = asset.Rows
 		partByGeneration[asset.Ref.Generation] = asset.Ref.PartID
@@ -366,7 +372,7 @@ func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection st
 			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source requires insert-only physical refs, got %s", asset.Reason)
 		}
 		if _, exists := rowsByGeneration[asset.Ref.Generation]; exists {
-			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source generation=%d has multiple physical row parts; multipart typed-column vector graph reads are deferred", asset.Ref.Generation)
+			return nil, nil, fmt.Errorf("%w: generation=%d has multiple physical row parts", errColumnVectorGraphTypedColumnMultipartDeferred, asset.Ref.Generation)
 		}
 		raw, err := readCache.read(asset.Ref, scratch)
 		if err != nil {
@@ -418,7 +424,10 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	if image.PartID != typedRef.Ref.PartID || image.Rows != typedRef.Rows {
 		return nil, 0, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d ref_rows=%d", image.PartID, typedRef.Ref.PartID, image.Rows, typedRef.Rows)
 	}
-	adapterPart, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: []TypedStorageField{field}}, image)
+	// A typed part may carry sibling declared columns (including another graph
+	// index's vector). Validate the complete certified schema, then select the
+	// requested column below.
+	adapterPart, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(cfg)}, image)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -236,7 +236,10 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if manifest.AppliedCommandLSN == 0 {
 		return nil, errors.New("collections: stable vector prepared closure requires non-zero manifest AppliedCommandLSN")
 	}
-	rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	if err == nil && !usedTypedColumns {
+		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	}
 	if err != nil {
 		return nil, err
 	}

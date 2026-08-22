@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -61,6 +63,32 @@ var (
 	errColumnVectorGraphInvNormNormInvalid    = errors.New("collections: column_graph vector norm must be finite and non-zero")
 	errColumnVectorGraphInvNormOutOfRange     = errors.New("collections: column_graph vector inverse norm must be finite and fit float32")
 )
+
+var columnVectorGraphCanonicalRowsTestHook struct {
+	sync.RWMutex
+	hook func()
+}
+
+func setColumnVectorGraphCanonicalRowsTestHook(hook func()) func() {
+	columnVectorGraphCanonicalRowsTestHook.Lock()
+	previous := columnVectorGraphCanonicalRowsTestHook.hook
+	columnVectorGraphCanonicalRowsTestHook.hook = hook
+	columnVectorGraphCanonicalRowsTestHook.Unlock()
+	return func() {
+		columnVectorGraphCanonicalRowsTestHook.Lock()
+		columnVectorGraphCanonicalRowsTestHook.hook = previous
+		columnVectorGraphCanonicalRowsTestHook.Unlock()
+	}
+}
+
+func runColumnVectorGraphCanonicalRowsTestHook() {
+	columnVectorGraphCanonicalRowsTestHook.RLock()
+	hook := columnVectorGraphCanonicalRowsTestHook.hook
+	columnVectorGraphCanonicalRowsTestHook.RUnlock()
+	if hook != nil {
+		hook()
+	}
+}
 
 func takeColumnVectorGraphDurablePublication(prepared *columnVectorGraphPreparedPhysicalAsset, records []columnManifestRecord, activeGeneration uint64, namespace string) (*rootpublication.StableResourceSet, rootpublication.StableLogicalObligationRequirements, error) {
 	if err := runColumnVectorGraphStablePublishTestHook(prepared); err != nil {
@@ -189,7 +217,10 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
-	rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
+	if err == nil && !usedTypedColumns {
+		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	}
 	if err != nil {
 		_ = snap.Close()
 		return VectorIndexStatus{}, err
@@ -273,6 +304,124 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return c.columnGraphVectorIndexStatus(def.Name)
+}
+
+// columnVectorGraphRowsFromTypedColumnCatalogSnapshot is the narrow rebuild
+// source fast path for the currently certified publication shape. It retains
+// manifest validation at its caller and falls back only for shapes the typed
+// lifecycle explicitly does not support; bad or mismatched assets fail closed.
+func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, bool, error) {
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	if catalog == nil {
+		return nil, false, errCollectionNotFound
+	}
+	field, adapterColumn, ok, err := columnVectorGraphTypedColumnVectorField(cfg, def.Field, def.Dimensions)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	physicalRefs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if mutationParts != 0 {
+		return nil, false, nil
+	}
+	typedRefs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(typedRefs) == 0 {
+		return nil, false, errors.New("collections: column_graph rebuild missing typed_column_part refs")
+	}
+	if typedColumnRefsHaveSortKey(typedRefs) {
+		return nil, false, nil
+	}
+	physicalRowsByGeneration, physicalPartByGeneration, err := columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(physicalRefs)
+	if errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	physicalLocations, scannedRowsByGeneration, err := c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
+	if errors.Is(err, errColumnVectorGraphTypedColumnMultipartDeferred) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	for generation, rows := range scannedRowsByGeneration {
+		if physicalRowsByGeneration[generation] != rows {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild physical row count generation=%d scanned=%d manifest=%d", generation, rows, physicalRowsByGeneration[generation])
+		}
+	}
+
+	source := &columnVectorGraphTypedColumnVectorSource{field: field, column: adapterColumn, dims: def.Dimensions, manager: mappedresource.NewManager()}
+	defer func() { _ = source.Close() }()
+	parts := make(map[uint64]*columnVectorGraphTypedColumnVectorPart, len(typedRefs))
+	for generation, typedRef := range typedRefs {
+		physicalRows, exists := physicalRowsByGeneration[generation]
+		if !exists {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild typed_column_part generation=%d has no physical rows", generation)
+		}
+		part, _, loadErr := c.loadColumnVectorGraphTypedColumnVectorPart(catalog.meta.Name, cfg, typedRef, physicalRows, field, adapterColumn, source.manager)
+		if loadErr != nil {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild load typed_column_part generation=%d: %w", generation, loadErr)
+		}
+		source.parts = append(source.parts, part)
+		parts[generation] = part
+	}
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	if err != nil {
+		return nil, false, err
+	}
+	if it == nil {
+		return nil, true, nil
+	}
+	defer func() { _ = it.Close() }()
+	rows := make([]columnVectorGraphAssetRow, 0, len(physicalLocations))
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		id := bytes.Clone(it.UnsafeKey())
+		location, exists := physicalLocations[string(id)]
+		if !exists {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild missing physical row for document id %q", string(id))
+		}
+		if physicalPartByGeneration[location.generation] != location.partID {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild physical row document id %q generation=%d part mismatch", string(id), location.generation)
+		}
+		part := parts[location.generation]
+		if part == nil || location.rowIndex < 0 || location.rowIndex >= part.rows {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q generation=%d row_index=%d unavailable", string(id), location.generation, location.rowIndex)
+		}
+		start := location.rowIndex * def.Dimensions
+		end := start + def.Dimensions
+		if start < 0 || end < start || end > len(part.values) {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild typed row document id %q vector bounds", string(id))
+		}
+		vector := append([]float32(nil), part.values[start:end]...)
+		invNorm, normErr := columnVectorGraphInvNorm(vector)
+		if normErr != nil {
+			return nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
+		}
+		rows = append(rows, columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm})
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, false, err
+	}
+	if len(rows) != len(physicalLocations) {
+		return nil, false, fmt.Errorf("collections: column_graph rebuild physical rows=%d primary documents=%d", len(physicalLocations), len(rows))
+	}
+	return rows, true, nil
 }
 
 func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
@@ -369,6 +518,7 @@ func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status Vect
 }
 
 func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, error) {
+	runColumnVectorGraphCanonicalRowsTestHook()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}

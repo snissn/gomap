@@ -21,6 +21,25 @@ import (
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
 
+func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-z", vector: []float32{1, 0}},
+		{id: "doc-a", vector: []float32{0, 1}},
+		{id: "doc-m", vector: []float32{0.5, 0.5}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 1, rows)
+	defer func() { _ = d.Close() }()
+	called := false
+	restore := setColumnVectorGraphCanonicalRowsTestHook(func() { called = true })
+	defer restore()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if called {
+		t.Fatal("RebuildVectorIndex selected canonical JSON extraction despite certified typed columns")
+	}
+}
+
 func assertColumnGraphNoLegacyAdjacencySources1989(tb testing.TB, graph columnVectorGraphManifestSnapshot) {
 	tb.Helper()
 	if columnVectorGraphManifestHasPhysicalAsset(graph) {
