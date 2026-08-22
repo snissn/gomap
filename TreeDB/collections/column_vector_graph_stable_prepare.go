@@ -243,8 +243,10 @@ func (c *Collection) PrepareVectorIndexStableClosure(name string) (*ColumnVector
 	if err != nil {
 		return nil, err
 	}
-	if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
-		return nil, err
+	if !usedTypedColumns {
+		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
+			return nil, err
+		}
 	}
 	closeErr := snap.Close()
 	// Snapshot pointers are single-use after Close returns, including when it

@@ -225,9 +225,11 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
-	if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
-		_ = snap.Close()
-		return VectorIndexStatus{}, err
+	if !usedTypedColumns {
+		if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
+			_ = snap.Close()
+			return VectorIndexStatus{}, err
+		}
 	}
 	_ = snap.Close()
 
@@ -412,7 +414,16 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 		if normErr != nil {
 			return nil, false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(id), normErr)
 		}
-		rows = append(rows, columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm})
+		baseRowRef := DocumentRowRef{
+			Generation:        location.generation,
+			PartID:            location.partID,
+			RowIndex:          location.rowIndex,
+			AppliedCommandLSN: location.appliedCommandLSN,
+		}
+		if err := validateColumnVectorGraphRowRefForState(len(rows), baseRowRef, manifest.Generation); err != nil {
+			return nil, false, err
+		}
+		rows = append(rows, columnVectorGraphAssetRow{ID: id, Vector: vector, InvNorm: invNorm, BaseRowRef: baseRowRef})
 		it.Next()
 	}
 	if err := it.Error(); err != nil {

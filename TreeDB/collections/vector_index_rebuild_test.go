@@ -27,8 +27,55 @@ func TestColumnGraphRebuildVectorIndexUsesTypedColumnRows4254(t *testing.T) {
 		{id: "doc-a", vector: []float32{0, 1}},
 		{id: "doc-m", vector: []float32{0.5, 0.5}},
 	}
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 1, rows)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 1, nil)
 	defer func() { _ = d.Close() }()
+	for _, row := range rows {
+		insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{row})
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	cfg := *catalog.meta.Options.ColumnStore
+	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)))
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
+	}
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	typedRows, usedTypedColumns, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, cfg, records, manifest, def)
+	if err != nil || !usedTypedColumns {
+		_ = snap.Close()
+		t.Fatalf("typed rebuild rows used=%v err=%v", usedTypedColumns, err)
+	}
+	canonicalRows, err := col.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+	if err == nil {
+		err = col.assignColumnVectorGraphRowRefsFromBaseManifest(catalog.meta.Name, cfg, records, manifest.Generation, canonicalRows)
+	}
+	if closeErr := snap.Close(); closeErr != nil {
+		t.Fatalf("snapshot close: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("canonical row refs: %v", err)
+	}
+	if len(typedRows) != len(canonicalRows) {
+		t.Fatalf("typed rows=%d canonical rows=%d", len(typedRows), len(canonicalRows))
+	}
+	for i := range typedRows {
+		typedRef, canonicalRef := typedRows[i].BaseRowRef, canonicalRows[i].BaseRowRef
+		if string(typedRows[i].ID) != string(canonicalRows[i].ID) || !slices.Equal(typedRows[i].Vector, canonicalRows[i].Vector) || typedRows[i].InvNorm != canonicalRows[i].InvNorm || !slices.Equal(typedRef.DocumentID, canonicalRef.DocumentID) || typedRef.Generation != canonicalRef.Generation || typedRef.PartID != canonicalRef.PartID || typedRef.RowIndex != canonicalRef.RowIndex || typedRef.AppliedCommandLSN != canonicalRef.AppliedCommandLSN {
+			t.Fatalf("row[%d] typed=%+v canonical=%+v want exact source/row-ref parity", i, typedRows[i], canonicalRows[i])
+		}
+	}
 	called := false
 	restore := setColumnVectorGraphCanonicalRowsTestHook(func() { called = true })
 	defer restore()
