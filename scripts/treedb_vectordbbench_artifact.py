@@ -737,7 +737,10 @@ def case_vector_count(case_type: str) -> int:
     match = re.search(r"(\d+)([KMG])$", case_type, flags=re.IGNORECASE)
     if not match:
         raise ValueError(f"cannot derive vector count from VDBBench case type {case_type!r}")
-    return int(match.group(1)) * {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[match.group(2).upper()]
+    count = int(match.group(1)) * {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[match.group(2).upper()]
+    if count <= 0:
+        raise ValueError(f"cannot derive positive vector count from VDBBench case type {case_type!r}")
+    return count
 
 
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:

@@ -160,6 +160,33 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "load_duration"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
+    def test_canonical_result_fails_closed_when_total_is_inconsistent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "metrics": {"insert_duration": 2.0, "optimize_duration": 3.0, "load_duration": 6.0},
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "load_duration !="):
+                harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
+    def test_capture_fails_closed_on_ambiguous_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            results = root / "results"
+            results.mkdir()
+            (results / "result_one.json").write_text("{}", encoding="utf-8")
+            (results / "result_two.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "expected exactly one"):
+                harness.capture_vdbbench_load_metrics(results, set(), "idx", "Performance1536D50K", root)
+
+    def test_standard_case_rejects_zero_vector_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "positive vector count"):
+            harness.case_vector_count("Performance1536D0K")
+
     def test_custom_dataset_uses_selected_result_size(self) -> None:
         task_config = {"case_config": {"custom_case": {"dataset_config": {"size": "50000"}}}}
 

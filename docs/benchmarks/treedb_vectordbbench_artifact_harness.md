@@ -134,6 +134,10 @@ Use `--skip-route-proof` only for measurement repetitions when an independently
 captured route-proof artifact already gates the same binary and configuration.
 This keeps the timed database limited to the VDBBench collection.
 
+Run one VDBBench row per artifact when comparing empty-database load/build
+phases. Multiple requested rows share the artifact-owned service and data
+directory, so only the first row starts from an empty database.
+
 The generated VDBBench commands use unique index names derived from
 `--index-prefix` (or a timestamped default) and set `RESULTS_LOCAL_DIR` to
 `$OUT/vdbbench-results/exact` or `$OUT/vdbbench-results/scalar` plus `LOG_FILE`
