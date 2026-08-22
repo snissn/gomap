@@ -55,6 +55,10 @@ meta := &collections.CollectionMeta{
 Use this when schema flexibility and point reads matter more than typed-column
 scan/aggregate paths.
 
+For RAG-style ingestion of long text into a document-only collection, use the
+built-in chunking seam (`IngestChunkedDocument`) instead of pre-splitting
+callers; see [Document chunking](document-chunking.md).
+
 ### Typed-row collection
 
 ```go
