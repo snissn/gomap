@@ -1127,18 +1127,24 @@ func TestServicesShareNativeRuntimeMutationsThroughManager(t *testing.T) {
 	if _, err := first.CreateIndex(ctx, req); err != nil {
 		t.Fatalf("first CreateIndex: %v", err)
 	}
-	if _, err := second.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("second compatible CreateIndex: %v", err)
-	}
 	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("first UpsertDocuments: %v", err)
 	}
-	if _, err := second.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "b", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+	if _, err := first.OptimizeIndex(ctx, req.Name, OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("persist initial native graph: %v", err)
+	}
+	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "b", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("dirty first native graph: %v", err)
+	}
+	if _, err := second.CreateIndex(ctx, req); err != nil {
+		t.Fatalf("second compatible CreateIndex: %v", err)
+	}
+	if _, err := second.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{-1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("second UpsertDocuments: %v", err)
 	}
 	for name, service := range map[string]*Service{"first": first, "second": second} {
-		got, err := service.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-		if err != nil || len(got.Results) != 2 {
+		got, err := service.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
+		if err != nil || len(got.Results) != 3 {
 			t.Fatalf("%s SearchBenchmarkVector results=%+v err=%v", name, got.Results, err)
 		}
 	}
