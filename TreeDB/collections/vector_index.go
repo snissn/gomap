@@ -2282,6 +2282,17 @@ func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
 	}
+	// Tombstones remain graph waypoints but cannot satisfy the caller's live
+	// result limit. Widen the bounded candidate set so stale nodes do not evict
+	// live neighbors before the caller filters them.
+	if limit < len(idx.nodes) {
+		stale := len(idx.nodes) - len(idx.currentNode)
+		if stale > len(idx.nodes)-limit {
+			limit = len(idx.nodes)
+		} else {
+			limit += stale
+		}
+	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > 0; layer-- {
 		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)

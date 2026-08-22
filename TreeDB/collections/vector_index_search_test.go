@@ -4772,7 +4772,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
 		}
-		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.ExactFallbacks != 0 || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
+		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
 			t.Fatalf("native response=%+v diagnostics=%+v", got, got.Diagnostics())
 		}
 		return got
@@ -4815,6 +4815,81 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	}
 	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1}, &buffer); !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 		t.Fatalf("stale native runtime search err=%v want unavailable", err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 2, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.99,0.01]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[-1,0]}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		matched, err := col.Replace([]byte(id), []byte(`{"embedding":[-0.99,-0.01]}`))
+		if err != nil || !matched {
+			t.Fatalf("Replace %s matched=%v err=%v", id, matched, err)
+		}
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("results=%+v want TopK live results despite closer tombstones", got.Results)
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeWorkAccounting,
+	}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(buffer.results) != 0 {
+		t.Fatalf("work-accounting err=%v buffered_results=%d want fail-closed reset", err, len(buffer.results))
+	}
+}
+
+func TestValidateRegisteredNativeRuntimeVectorIndexMissingCollectionFailsClosed(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	c := &Collection{db: d, name: "missing"}
+	_, _, err = c.validateRegisteredNativeRuntimeVectorIndexForSearch(VectorIndexDefinition{Name: "embedding_native"}, &VectorIndex{})
+	if !errors.Is(err, errCollectionNotFound) {
+		t.Fatalf("validate missing collection err=%v want errCollectionNotFound", err)
 	}
 }
 

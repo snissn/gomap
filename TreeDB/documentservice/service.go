@@ -1610,7 +1610,7 @@ func validateBenchmarkVectorSearchRoute(mode BenchmarkVectorQueryMode, req Bench
 	}
 	switch mode {
 	case BenchmarkVectorQueryModeExact:
-		nativeRoute := response.Strategy == collections.VectorIndexStrategyNativeRuntime && diag.Route == collections.VectorIndexSearchRouteNativeRuntime && diag.LiveANN.Enabled && diag.LiveANN.ExactFallbacks == 0 && diag.LiveANN.FullRebuilds == 0
+		nativeRoute := response.Strategy == collections.VectorIndexStrategyNativeRuntime && diag.Route == collections.VectorIndexSearchRouteNativeRuntime && diag.LiveANN.Enabled && diag.LiveANN.FullRebuilds == 0
 		packRoute := response.Strategy == collections.VectorIndexStrategyColumnGraph && diag.Route == collections.VectorIndexSearchRouteExactHNSWSearchPackV1 && diag.ExactHNSWSearchPackNoDocRoute
 		if (!nativeRoute && !packRoute) || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
 			return serviceErrorf(CodeIndexUnavailable, "exact benchmark vector search did not use the exact no-document hnsw_search_pack_v1 route: diagnostics=%+v", diag)

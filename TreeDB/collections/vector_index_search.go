@@ -710,9 +710,8 @@ type VectorIndexSearchDiagnostics struct {
 // VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
 // the mutable ANN route rather than rebuilding or scanning exact documents.
 type VectorIndexSearchLiveANNDiagnostics struct {
-	Enabled        bool   `json:"enabled"`
-	ExactFallbacks uint64 `json:"exact_fallbacks"`
-	FullRebuilds   uint64 `json:"full_rebuilds"`
+	Enabled      bool   `json:"enabled"`
+	FullRebuilds uint64 `json:"full_rebuilds"`
 }
 
 // Diagnostics returns a compact route/status summary for the response.
@@ -740,7 +739,7 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
 		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
 		LiveANN: VectorIndexSearchLiveANNDiagnostics{
-			Enabled:      s.SearchRouteNativeRuntime == 1,
+			Enabled:      s.SearchRouteNativeRuntime > 0,
 			FullRebuilds: s.NativeRuntimeFullRebuilds,
 		},
 	}
@@ -1340,6 +1339,10 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		buffer.Reset()
 		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)
 	}
+	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
+		buffer.Reset()
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=work_accounting", "native_runtime work-accounting counters are not implemented; use production/minimal mode with CPU profiles")
+	}
 	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
 	if err != nil {
 		buffer.Reset()
@@ -1417,6 +1420,9 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return nil, VectorIndexLoadStatus{}, err
+	}
+	if catalog == nil {
+		return nil, VectorIndexLoadStatus{}, errCollectionNotFound
 	}
 	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
 	if !ok {

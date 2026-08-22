@@ -945,13 +945,16 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SearchBenchmarkVector: %v", err)
 		}
-		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.ExactFallbacks != 0 || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
+		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
 			t.Fatalf("native response=%+v", got)
 		}
 		return got
 	}
 
 	upsert(Document{ID: "a", Embedding: []float32{1, 0}}, Document{ID: "b", Embedding: []float32{0, 1}})
+	if _, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: collections.VectorIndexSearchStatsModeWorkAccounting}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("native work-accounting err=%v code=%s want unavailable until instrumented", err, ErrorCodeOf(err))
+	}
 	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
 		t.Fatalf("insert results=%+v want a first", got.Results)
 	}
