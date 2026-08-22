@@ -4905,12 +4905,17 @@ func (c *Collection) flushBufferedNoIndex() error {
 		return nil
 	}
 	domain.mu.Lock()
-	defer domain.mu.Unlock()
 	if hasBufferedIndexedPendingWrites(domain) {
+		domain.mu.Unlock()
 		return nil
 	}
+	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
 	err := c.flushBufferedNoIndexLocked(domain)
 	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+	domain.mu.Unlock()
+	if err == nil && publishedPrimary {
+		err = c.recordVectorIndexCoverageAfterBufferedDocumentPublish()
+	}
 	return err
 }
 

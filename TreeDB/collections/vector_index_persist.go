@@ -102,13 +102,13 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadS
 	c := idx.collection
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
+		return status, err
+	}
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
 		return staleStatus, err
 	} else if stale {
 		return staleStatus, nil
-	}
-	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
-		return status, err
 	}
 	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
@@ -411,13 +411,13 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
+		return status, err
+	}
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
 		return staleStatus, err
 	} else if stale {
 		return staleStatus, nil
-	}
-	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
-		return status, err
 	}
 	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {

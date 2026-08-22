@@ -3811,7 +3811,7 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 }
 
 func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
-	for _, publication := range []string{"status", "delayed_async", "snapshot_waits_for_delayed_async"} {
+	for _, publication := range []string{"status", "no_index_read", "delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
 		t.Run(publication, func(t *testing.T) {
 			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 			if err != nil {
@@ -3820,6 +3820,10 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			defer func() { _ = d.Close() }()
 
 			def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+			indexes := []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
+			if publication == "no_index_read" {
+				indexes = nil
+			}
 			mgr := NewCollectionManager(d)
 			if _, err := mgr.CreateCollection(&CollectionMeta{
 				Name: "docs",
@@ -3829,7 +3833,7 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 					BufferedIndexedWriteMaxDocuments: 1024,
 					DisableBufferedIndexedAsyncFlush: true,
 				},
-				Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+				Indexes:       indexes,
 				VectorIndexes: []VectorIndexDefinition{def},
 			}); err != nil {
 				t.Fatalf("CreateCollection: %v", err)
@@ -3840,6 +3844,17 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			}
 			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+			var stale *VectorIndex
+			if publication == "stale_snapshot_waits_for_delayed_async" {
+				stale = col.registeredVectorIndex(def.Name)
+				current, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+				if err != nil {
+					t.Fatalf("BuildVectorIndex replacement: %v", err)
+				}
+				if current == stale || col.registeredVectorIndex(def.Name) != current {
+					t.Fatalf("replacement current=%p stale=%p registered=%p", current, stale, col.registeredVectorIndex(def.Name))
+				}
 			}
 			if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"kind":"vector","embedding":[1,0]}`)}); err != nil {
 				t.Fatalf("InsertBatch: %v", err)
@@ -3852,6 +3867,10 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 			case "status":
 				if _, err := col.VectorIndexStatus(def.Name); err != nil {
 					t.Fatalf("VectorIndexStatus: %v", err)
+				}
+			case "no_index_read":
+				if _, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1}); err != nil {
+					t.Fatalf("FindByCompoundIndexRange: %v", err)
 				}
 			case "delayed_async":
 				work, err := col.prepareIndexedAsyncPublish()
@@ -3903,6 +3922,59 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 					}
 				case <-time.After(5 * time.Second):
 					t.Fatal("snapshot remained blocked after delayed async publication")
+				}
+			case "stale_snapshot_waits_for_delayed_async":
+				work, err := col.prepareIndexedAsyncPublish()
+				if err != nil || work == nil {
+					t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work, err)
+				}
+				if !col.writeDomain.beginIndexedAsyncFlush() {
+					t.Fatal("beginIndexedAsyncFlush returned false")
+				}
+				finished := false
+				defer func() {
+					if !finished {
+						col.writeDomain.finishIndexedAsyncFlush(errors.New("test cleanup"))
+					}
+				}()
+				heldMutation := col.lockMutation()
+				mutationReleased := false
+				defer func() {
+					if !mutationReleased {
+						heldMutation.Unlock()
+					}
+				}()
+				type saveResult struct {
+					status VectorIndexLoadStatus
+					err    error
+				}
+				saveDone := make(chan saveResult, 1)
+				go func() {
+					status, err := stale.SaveNativeSnapshot()
+					saveDone <- saveResult{status: status, err: err}
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				for col.writeDomain.nativeVectorCoverageMu.TryRLock() {
+					col.writeDomain.nativeVectorCoverageMu.RUnlock()
+					if time.Now().After(deadline) {
+						t.Fatal("stale snapshot did not acquire the coverage writer lock")
+					}
+					runtime.Gosched()
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+				col.writeDomain.finishIndexedAsyncFlush(nil)
+				finished = true
+				heldMutation.Unlock()
+				mutationReleased = true
+				select {
+				case result := <-saveDone:
+					if result.err != nil || result.status.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+						t.Fatalf("stale SaveNativeSnapshot status=%+v err=%v", result.status, result.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("stale snapshot remained blocked after delayed async publication")
 				}
 			}
 			if pending := mgr.StatsSnapshot().PendingDocuments; pending != 0 {
