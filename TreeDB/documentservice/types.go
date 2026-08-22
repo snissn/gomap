@@ -31,11 +31,13 @@ const (
 
 // Document is the service's Haystack-compatible document shape.
 type Document struct {
-	ID        string         `json:"id"`
-	Content   string         `json:"content,omitempty"`
-	Embedding []float32      `json:"embedding,omitempty"`
-	Score     *float64       `json:"score,omitempty"`
-	Meta      map[string]any `json:"meta,omitempty"`
+	ID        string    `json:"id"`
+	Content   string    `json:"content,omitempty"`
+	Embedding []float32 `json:"embedding,omitempty"`
+	// EmbeddingF32LEBase64 is accepted only as a compact upsert transport.
+	EmbeddingF32LEBase64 string         `json:"embedding_f32_le_b64,omitempty"`
+	Score                *float64       `json:"score,omitempty"`
+	Meta                 map[string]any `json:"meta,omitempty"`
 }
 
 // IndexCapabilities describes the supported operations for one service index.
@@ -117,11 +119,12 @@ type UpsertDocumentsRequest struct {
 }
 
 type UpsertDocumentsResponse struct {
-	Index    IndexInfo `json:"index"`
-	Upserted int       `json:"upserted"`
-	Inserted int       `json:"inserted"`
-	Updated  int       `json:"updated"`
-	IDs      []string  `json:"ids"`
+	Index             IndexInfo `json:"index"`
+	Upserted          int       `json:"upserted"`
+	Inserted          int       `json:"inserted"`
+	Updated           int       `json:"updated"`
+	IDs               []string  `json:"ids"`
+	CompactEmbeddings int       `json:"compact_embeddings,omitempty"`
 }
 
 // DeleteDocumentsRequest deletes either explicit IDs or documents matching a
