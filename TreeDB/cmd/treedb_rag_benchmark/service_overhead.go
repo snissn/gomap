@@ -302,10 +302,14 @@ func ingestServiceOverheadDocs(col *collections.Collection, chunks []ragChunk) e
 
 // timeServiceOverheadQueries mirrors the C1 measurement boundary: warmup
 // queries outside the timing window, then reps passes over the committed query
-// set with per-query wall timing around the retrieval call only. One final
-// untimed call records the result count for the sanity gate.
+// set with per-query wall timing around the retrieval call only. Each measured
+// sample batches a bounded number of identical calls so fast direct collection
+// queries remain above coarse Windows timer resolution; the reported duration
+// is divided back to one query. One final untimed call records the result count
+// for the sanity gate.
 func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, call func(ragQuery) (int, error)) ([]float64, int, error) {
-	for i := 0; i < cfg.Warmup; i++ {
+	const timingIterations = 32
+	for i := range cfg.Warmup {
 		q := corpus.Queries[i%len(corpus.Queries)]
 		if _, err := call(q); err != nil {
 			return nil, 0, fmt.Errorf("warmup query %s: %w", q.ID, err)
@@ -313,19 +317,22 @@ func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, ca
 	}
 	samples := make([]float64, 0, cfg.Reps*len(corpus.Queries))
 	maxHits := 0
-	for rep := 0; rep < cfg.Reps; rep++ {
+	for range cfg.Reps {
 		for _, q := range corpus.Queries {
 			start := time.Now()
-			hits, err := call(q)
-			if err != nil {
-				return nil, 0, fmt.Errorf("timed query %s: %w", q.ID, err)
+			hits := 0
+			for range timingIterations {
+				var err error
+				hits, err = call(q)
+				if err != nil {
+					return nil, 0, fmt.Errorf("timed query %s: %w", q.ID, err)
+				}
 			}
 			if hits > maxHits {
 				maxHits = hits
 			}
-			// Preserve sub-microsecond samples; integer Microseconds truncation
-			// makes fast direct rows appear to have a zero p50 on Windows.
-			samples = append(samples, time.Since(start).Seconds()*1000.0)
+			millis := time.Since(start).Seconds() * 1000.0 / timingIterations
+			samples = append(samples, millis)
 		}
 	}
 	return samples, maxHits, nil
