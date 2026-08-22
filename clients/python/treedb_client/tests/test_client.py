@@ -478,6 +478,33 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertNotIn("score", body["documents"][0])
             self.assertEqual(body["documents"][0]["embedding"], [1.0, 0.0])
 
+    def test_upsert_documents_emits_compact_embedding_from_models_and_mappings(self) -> None:
+        route = "/v1/indexes/docs/documents/upsert"
+        response = {
+            "index": SAMPLE_INDEX,
+            "upserted": 2,
+            "inserted": 2,
+            "updated": 0,
+            "ids": ["model", "mapping"],
+            "compact_embeddings": 2,
+        }
+        encoded = base64.b64encode(struct.pack("<2f", 1.0, -2.0)).decode("ascii")
+        with FixtureServer({("POST", route): (200, response, 0)}) as server:
+            client = TreeDBClient(server.base_url, timeout=1)
+
+            result = client.upsert_documents(
+                "docs",
+                [
+                    Document(id="model", embedding_f32_le_b64=encoded),
+                    {"id": "mapping", "embedding_f32_le_b64": encoded},
+                ],
+            )
+
+            self.assertEqual(result.compact_embeddings, 2)
+            documents = json_body(server.records[0])["documents"]
+            self.assertEqual(documents[0], {"id": "model", "embedding_f32_le_b64": encoded})
+            self.assertEqual(documents[1], {"id": "mapping", "embedding_f32_le_b64": encoded})
+
     def test_count_filter_search_and_delete_by_filter_parse_responses(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/documents/count"): (200, {"index": SAMPLE_INDEX, "count": 2}, 0),

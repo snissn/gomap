@@ -220,6 +220,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	defer s.writeMu.Unlock()
 
 	ids := make([]string, 0, len(prepared))
+	compactEmbeddings := 0
 	insertIDs := make([][]byte, 0, len(prepared))
 	insertDocs := make([][]byte, 0, len(prepared))
 	inserts := make([]preparedDocument, 0, len(prepared))
@@ -229,6 +230,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			return UpsertDocumentsResponse{}, err
 		}
 		ids = append(ids, doc.id)
+		if doc.compactEmbedding {
+			compactEmbeddings++
+		}
 		current, err := col.Get([]byte(doc.id))
 		if err != nil {
 			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "read before upsert failed", err)
@@ -296,7 +300,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
 	}
-	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids}, nil
+	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil
 }
 
 // DeleteDocuments deletes explicit IDs or documents matching a filter.
@@ -1139,8 +1143,9 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 }
 
 type preparedDocument struct {
-	id  string
-	raw []byte
+	id               string
+	raw              []byte
+	compactEmbedding bool
 }
 
 func preflightServiceVectorAutoRebuildSupported(info IndexInfo) error {
@@ -1196,6 +1201,10 @@ func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedD
 			return nil, serviceErrorf(CodeInvalidRequest, "duplicate document id %q", id)
 		}
 		seen[id] = struct{}{}
+		compactEmbedding, err := normalizeDocumentEmbedding(&doc, i)
+		if err != nil {
+			return nil, err
+		}
 		if err := validateEmbedding(fmt.Sprintf("documents[%d].embedding", i), doc.Embedding, info.Dimension, info.Metric); err != nil {
 			return nil, err
 		}
@@ -1204,9 +1213,26 @@ func prepareDocumentsForWrite(documents []Document, info IndexInfo) ([]preparedD
 		if err != nil {
 			return nil, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("documents[%d] is not JSON-serializable", i), err)
 		}
-		prepared[i] = preparedDocument{id: id, raw: raw}
+		prepared[i] = preparedDocument{id: id, raw: raw, compactEmbedding: compactEmbedding}
 	}
 	return prepared, nil
+}
+
+func normalizeDocumentEmbedding(doc *Document, index int) (bool, error) {
+	encoded := strings.TrimSpace(doc.EmbeddingF32LEBase64)
+	if doc.Embedding != nil && encoded != "" {
+		return false, serviceErrorf(CodeInvalidRequest, "documents[%d] accepts either embedding or embedding_f32_le_b64, not both", index)
+	}
+	if encoded == "" {
+		return false, nil
+	}
+	embedding, err := decodeFloat32LEBase64String(encoded, fmt.Sprintf("documents[%d].embedding_f32_le_b64", index))
+	if err != nil {
+		return false, err
+	}
+	doc.Embedding = embedding
+	doc.EmbeddingF32LEBase64 = ""
+	return true, nil
 }
 
 func validateDocumentIDs(ids []string) ([]string, error) {
@@ -1460,11 +1486,15 @@ func normalizeBenchmarkVectorQueryEmbedding(req *BenchmarkVectorSearchRequest) e
 }
 
 func decodeBenchmarkVectorQueryEmbeddingF32LEBase64String(encoded string) ([]float32, error) {
+	return decodeFloat32LEBase64String(encoded, "query_embedding_f32_le_b64")
+}
+
+func decodeFloat32LEBase64String(encoded, label string) ([]float32, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, wrapServiceError(CodeInvalidRequest, "decode query_embedding_f32_le_b64 failed", err)
+		return nil, wrapServiceError(CodeInvalidRequest, "decode "+label+" failed", err)
 	}
-	return decodeBenchmarkVectorQueryEmbeddingF32LERaw(raw)
+	return decodeBenchmarkVectorQueryEmbeddingF32LERawWithLabel(raw, label+" decoded")
 }
 
 func decodeBenchmarkVectorQueryEmbeddingF32LEBase64Bytes(encoded []byte) ([]float32, error) {

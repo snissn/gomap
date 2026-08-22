@@ -122,7 +122,8 @@ class Document:
 
     The base client intentionally does not import Haystack. It mirrors the
     fields (`id`, `content`, `embedding`, `meta`, `score`) that the service
-    accepts and returns. `score` is response-only and is omitted from write
+    accepts and returns. `embedding_f32_le_b64` is a write-only compact
+    embedding transport. `score` is response-only and is omitted from write
     payloads unless `include_score=True` is explicitly passed to `to_dict`.
     """
 
@@ -131,11 +132,12 @@ class Document:
     embedding: Optional[list[float]] = None
     meta: Dict[str, Any] = field(default_factory=dict)
     score: Optional[float] = None
+    embedding_f32_le_b64: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Document":
         data = _as_mapping(data, "document")
-        _reject_unknown(data, ["id", "content", "embedding", "meta", "score"], "document")
+        _reject_unknown(data, ["id", "content", "embedding", "meta", "score", "embedding_f32_le_b64"], "document")
         if "id" not in data:
             raise ValueError("document.id is required")
         return cls(
@@ -144,6 +146,11 @@ class Document:
             embedding=_optional_float_list(data.get("embedding"), "document.embedding"),
             meta=_copy_meta(data.get("meta"), "document.meta"),
             score=_optional_float(data.get("score"), "document.score"),
+            embedding_f32_le_b64=(
+                None
+                if data.get("embedding_f32_le_b64") is None
+                else _as_str(data["embedding_f32_le_b64"], "document.embedding_f32_le_b64")
+            ),
         )
 
     def to_dict(self, *, include_score: bool = False) -> Dict[str, Any]:
@@ -152,6 +159,8 @@ class Document:
             out["content"] = self.content
         if self.embedding is not None:
             out["embedding"] = [float(value) for value in self.embedding]
+        if self.embedding_f32_le_b64 is not None:
+            out["embedding_f32_le_b64"] = self.embedding_f32_le_b64
         if self.meta:
             out["meta"] = copy.deepcopy(self.meta)
         if include_score and self.score is not None:
@@ -495,6 +504,7 @@ class UpsertDocumentsResponse:
     inserted: int
     updated: int
     ids: list[str]
+    compact_embeddings: int = 0
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "UpsertDocumentsResponse":
@@ -505,6 +515,7 @@ class UpsertDocumentsResponse:
             inserted=_as_int(data["inserted"], "inserted"),
             updated=_as_int(data["updated"], "updated"),
             ids=[_as_str(item, "ids[]") for item in data.get("ids", [])],
+            compact_embeddings=_as_optional_int_default(data.get("compact_embeddings"), "compact_embeddings"),
         )
 
 

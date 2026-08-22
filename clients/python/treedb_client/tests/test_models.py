@@ -49,6 +49,15 @@ class DocumentModelTests(unittest.TestCase):
         self.assertEqual(doc.score, 0.25)
         self.assertEqual(doc.to_dict(include_score=True), {"id": "doc-1", "score": 0.25})
 
+    def test_document_compact_embedding_round_trip(self) -> None:
+        encoded = "AACAPwAAAEA="
+
+        doc = Document.from_dict({"id": "doc-1", "embedding_f32_le_b64": encoded})
+
+        self.assertIsNone(doc.embedding)
+        self.assertEqual(doc.embedding_f32_le_b64, encoded)
+        self.assertEqual(doc.to_dict(), {"id": "doc-1", "embedding_f32_le_b64": encoded})
+
     def test_document_rejects_unknown_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported field"):
             Document.from_dict({"id": "doc-1", "metadata": {"repo": "gomap"}})
