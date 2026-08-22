@@ -1288,6 +1288,7 @@ func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 		if i+1 < staleNodes {
 			index.nodes[i].neighbors[1] = []vectorIndexNeighbor{{nodeID: i + 1}}
 		}
+		index.nodes[i].neighbors[0] = []vectorIndexNeighbor{{nodeID: staleNodes}}
 		index.nodes[i].cacheVectorNorms()
 	}
 	index.nodes[staleNodes] = vectorIndexNode{documentID: []byte("live"), vector: []float32{1, 0}, neighbors: make([][]vectorIndexNeighbor, 1)}
@@ -1303,7 +1304,10 @@ func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
 		t.Fatalf("prepare query: %v", err)
 	}
 	var scratch vectorIndexSearchScratch
-	_ = index.searchCurrentCandidatesLocked(query, queryNorm, &prepared, 1, &scratch)
+	got := index.searchCurrentCandidatesLocked(query, queryNorm, &prepared, 1, &scratch)
+	if len(got) != 1 || got[0].nodeID != staleNodes {
+		t.Fatalf("candidates=%v want live node %d after stale upper-layer entry", got, staleNodes)
+	}
 	if scratch.explorationLimit != 4 || scratch.explored != scratch.explorationLimit {
 		t.Fatalf("upper-layer bounded scoring explored=%d limit=%d want all score calls capped and counted", scratch.explored, scratch.explorationLimit)
 	}

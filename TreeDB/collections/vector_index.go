@@ -2440,9 +2440,9 @@ func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNorm
 	}
 	entryPoint := idx.entry
 	upperExplored := 0
-	// Keep at least the requested live-candidate budget for layer 0. Upper
-	// layers share only the bounded stale-waypoint allowance.
-	upperLimit := explorationLimit - limit
+	// Keep the requested live-candidate budget plus one possible stale entry
+	// point for layer 0. Upper layers share the remaining stale allowance.
+	upperLimit := maxInt(0, explorationLimit-limit-1)
 	for layer := idx.maxLevel; layer > 0 && upperExplored < upperLimit; layer-- {
 		entryPoint = idx.greedyNearestAtLayerBoundedLocked(query, queryNormSquared, prepared, entryPoint, layer, upperLimit, &upperExplored)
 	}
