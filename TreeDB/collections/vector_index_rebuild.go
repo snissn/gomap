@@ -338,6 +338,9 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 		return nil, false, err
 	}
 	if len(typedRefs) == 0 {
+		if manifest.RowCount == 0 {
+			return nil, false, nil
+		}
 		return nil, false, errors.New("collections: column_graph rebuild missing typed_column_part refs")
 	}
 	if typedColumnRefsHaveSortKey(typedRefs) {

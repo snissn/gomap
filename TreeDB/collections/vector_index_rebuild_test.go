@@ -191,6 +191,16 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	status, err = col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("second RebuildVectorIndex empty collection: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	closure, err := col.PrepareVectorIndexStableClosure(def.Name)
+	if err != nil {
+		t.Fatalf("PrepareVectorIndexStableClosure empty collection: %v", err)
+	}
+	closure.Release()
 	frames := collectionCommandWALFrames(t, dir)
 	if len(frames) == 0 || frames[len(frames)-1].Kind != commitlog.CommandKindCollectionRebuildVectorIndex {
 		t.Fatalf("last command WAL frame=%+v, want vector-index rebuild", frames)
