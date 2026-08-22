@@ -4,9 +4,9 @@ Issues: `snissn/gomap#2599`, `#4181`, `#4193`. Parent tracker: `#2598`.
 
 This harness creates a repeatable TreeDB VectorDBBench artifact root. It starts
 `treedb-document-service` with a fresh artifact-owned data directory, captures
-service logs and host/version context, runs a focused no-document route-proof
-smoke, and can optionally run selected TreeDB VectorDBBench rows from a local
-`snissn/vectordbbench` checkout.
+service logs and host/version context, optionally runs selected TreeDB
+VectorDBBench rows from a local `snissn/vectordbbench` checkout on that empty
+database, then runs a focused no-document route-proof smoke.
 
 The artifact is a reproducibility contract for downstream benchmark issues. A
 smoke artifact is **not** public claim-quality throughput evidence.
@@ -23,7 +23,8 @@ python3 scripts/treedb_vectordbbench_artifact.py \
 Expected primary files:
 
 - `manifest.json` — artifact schema, commands, gomap/vectordbbench commits when
-  available, Python/Go/OS context, service command, health response, skips.
+  available, Python/Go/OS context, service command and binary SHA-256, health
+  response, skips.
 - `route_proof.json` — stable sidecar proving exact/scalar TreeDB routes and
   counters.
 - `health.json` — `GET /v1/health` response.
@@ -31,6 +32,8 @@ Expected primary files:
 - `commands/*.stdout.txt`, `commands/*.stderr.txt` — command output streams.
 - `vdbbench-results/` and `vdbbench.log` — VectorDBBench result JSON/logs when
   `--run-vdbbench` is enabled.
+- `vdbbench_load_metrics.json` — checksum-identified canonical VDBBench result
+  metrics for each completed load row.
 
 The harness requires `--out` to be new or empty, then creates a fresh
 `treedb-data` directory under that artifact root. It does not truncate durable
@@ -127,9 +130,19 @@ python3 scripts/treedb_vectordbbench_artifact.py \
   --rerank-candidates 32
 ```
 
+Use `--skip-route-proof` only for measurement repetitions when an independently
+captured route-proof artifact already gates the same binary and configuration.
+This keeps the timed database limited to the VDBBench collection. The flag is
+rejected for dry runs, skipped loads, or an empty row list.
+
+Run one VDBBench row per artifact when comparing empty-database load/build
+phases. Multiple requested rows share the artifact-owned service and data
+directory, so only the first row starts from an empty database.
+
 The generated VDBBench commands use unique index names derived from
 `--index-prefix` (or a timestamped default) and set `RESULTS_LOCAL_DIR` to
-`$OUT/vdbbench-results` plus `LOG_FILE` to `$OUT/vdbbench.log`. The exact row is
+`$OUT/vdbbench-results/exact` or `$OUT/vdbbench-results/scalar` plus `LOG_FILE`
+to `$OUT/vdbbench.log`. The exact row is
 `treedbcolumngraphexact`; the scalar row is `treedbscalaru8rerank` with
 `query_mode="quantized_rerank"`, `quantized_index_name="embedding.scalar_u8.fast"`,
 and `quantized_rerank_candidates=32`. TreeDB rows also receive
@@ -138,6 +151,25 @@ and `quantized_rerank_candidates=32`. TreeDB rows also receive
 recorded in the manifest, README, and each VDBBench row record. CLI and
 environment values must be positive integers; zero and negative values are
 rejected before service startup.
+
+For a completed load, the harness selects exactly one *new* canonical
+`result_*.json` matching that generated index name. It records the result path,
+SHA-256, run ID, task configuration and its canonical JSON SHA-256, insert
+duration, offline optimize duration, total load duration, and
+`throughput_vector_count / insert_duration` in
+`vdbbench_load_metrics.json`. It fails closed if selection is ambiguous, a
+case is unsuccessful, a duration is absent/non-positive, the three durations
+disagree, a positive reported `inserted_count` differs from the expected dataset
+size, or the case type does not end in a count suffix such as `50K` or `1M`.
+The current VDBBench performance result schema emits `inserted_count=0` as a
+sentinel after a successful full-dataset load; the artifact records whether its
+throughput numerator came from a positive reported count or that explicit
+full-dataset contract.
+The profile is deliberately full-load only: phase-specific pprof would require
+VDBBench orchestration not owned by this harness.
+
+For `PerformanceCustomDataset`, the vector count instead comes fail-closed from
+the selected result's `task_config.case_config.custom_case.dataset_config.size`.
 
 ## Environment variables
 
@@ -166,6 +198,7 @@ Most flags also have environment equivalents:
 | `TREEDB_VDBBENCH_SMOKE_DIMENSION` | route-proof vector dimensions | `2` |
 | `TREEDB_VDBBENCH_SMOKE_DOCUMENTS` | route-proof document count | `4` |
 | `TREEDB_VDBBENCH_SMOKE_TOP_K` | route-proof topK | `2` |
+| `TREEDB_VDBBENCH_SKIP_ROUTE_PROOF` | omit route proof from measurement-only repetitions | `false` |
 | `TREEDB_VDBBENCH_EXTRA_ARGS` | appended to each VDBBench row command | unset |
 | `TREEDB_VDBBENCH_USE_UV` | `auto`, `on`, or `off` for VDBBench Python commands | `auto` |
 | `TREEDB_VDBBENCH_TEST_CMD` | override VDBBench test command | auto `uv run ... python -m pytest ...` or `python -m pytest ...` |

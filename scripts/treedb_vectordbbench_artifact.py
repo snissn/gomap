@@ -12,9 +12,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import hashlib
 import json
+import math
 import os
 import platform
+import re
 import shlex
 import shutil
 import signal
@@ -107,6 +110,7 @@ class HarnessState:
     commands: list[CommandRecord] = field(default_factory=list)
     skips: list[dict[str, str]] = field(default_factory=list)
     service_pid: int | None = None
+    service_binary: dict[str, Any] | None = None
     health: dict[str, Any] | None = None
     route_proof: dict[str, Any] | None = None
     vdbbench: list[dict[str, Any]] = field(default_factory=list)
@@ -699,13 +703,115 @@ def vdbbench_base_cmd(args: argparse.Namespace, base_url: str, index_name: str, 
     return cmd
 
 
-def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState) -> dict[str, str]:
+def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_root: Path, state: HarnessState, row: str = "") -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = pythonpath_for(vectordbbench_dir, gomap_root)
-    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results")
+    env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
     return env
+
+
+def vdbbench_result_files(root: Path) -> set[Path]:
+    return set(root.rglob("result_*.json")) if root.exists() else set()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_identity(path: Path) -> dict[str, Any]:
+    return {"path": str(path), "bytes": path.stat().st_size, "sha256": sha256_file(path)}
+
+
+def positive_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"canonical VDBBench result is missing positive {name}")
+    return float(value)
+
+
+def case_vector_count(case_type: str) -> int:
+    match = re.search(r"(\d+)([KMG])$", case_type, flags=re.IGNORECASE)
+    if not match:
+        raise ValueError(f"cannot derive vector count from VDBBench case type {case_type!r}")
+    count = int(match.group(1)) * {"K": 1_000, "M": 1_000_000, "G": 1_000_000_000}[match.group(2).upper()]
+    if count <= 0:
+        raise ValueError(f"cannot derive positive vector count from VDBBench case type {case_type!r}")
+    return count
+
+
+def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
+    custom_case = task_config.get("case_config", {}).get("custom_case") or {}
+    size = custom_case.get("dataset_config", {}).get("size")
+    if (isinstance(size, int) and not isinstance(size, bool) and size > 0) or (isinstance(size, str) and size.isdigit() and int(size) > 0):
+        return int(size), "task_config.case_config.custom_case.dataset_config.size"
+    return case_vector_count(case_type), "case_type suffix"
+
+
+def throughput_vector_count(metrics: dict[str, Any], expected: int) -> tuple[int, str]:
+    inserted = metrics.get("inserted_count")
+    if isinstance(inserted, bool) or not isinstance(inserted, int) or inserted < 0:
+        raise ValueError("canonical VDBBench result is missing non-negative inserted_count")
+    if inserted == 0:
+        return expected, "expected dataset size; VDBBench performance sentinel inserted_count=0"
+    if inserted != expected:
+        raise ValueError(f"canonical VDBBench inserted_count {inserted} != expected dataset size {expected}")
+    return inserted, "metrics.inserted_count"
+
+
+def load_metrics_from_result(path: Path, index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
+    try:
+        result = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read canonical VDBBench result {path}: {exc}") from exc
+    matches = [
+        item for item in result.get("results", [])
+        if item.get("task_config", {}).get("db_config", {}).get("index_name") == index_name
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"canonical VDBBench result {path} has {len(matches)} entries for index {index_name!r}; expected one")
+    if matches[0].get("label") != ":)":
+        raise ValueError(f"canonical VDBBench result {path} did not report success")
+    metrics = matches[0].get("metrics") or {}
+    insert = positive_number(metrics.get("insert_duration"), "insert_duration")
+    optimize = positive_number(metrics.get("optimize_duration"), "optimize_duration")
+    load = positive_number(metrics.get("load_duration"), "load_duration")
+    if not math.isclose(load, insert + optimize, rel_tol=0.0, abs_tol=0.0002):
+        raise ValueError(f"canonical VDBBench result {path} has load_duration != insert_duration + optimize_duration")
+    task_config = matches[0].get("task_config") or {}
+    vectors, vector_source = result_vector_count(task_config, case_type)
+    throughput_vectors, throughput_source = throughput_vector_count(metrics, vectors)
+    return {
+        "result_file": str(path.relative_to(artifact_root)),
+        "result_sha256": sha256_file(path),
+        "result_run_id": result.get("run_id"),
+        "index_name": index_name,
+        "case_type": case_type,
+        "vector_count": vectors,
+        "vector_count_source": vector_source,
+        "inserted_count": metrics["inserted_count"],
+        "throughput_vector_count": throughput_vectors,
+        "throughput_vector_count_source": throughput_source,
+        "insert_duration_seconds": insert,
+        "offline_optimize_duration_seconds": optimize,
+        "total_load_duration_seconds": load,
+        "insert_vectors_per_second": throughput_vectors / insert,
+        "task_config": task_config,
+        "task_config_sha256": hashlib.sha256(
+            json.dumps(task_config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def capture_vdbbench_load_metrics(results_dir: Path, before: set[Path], index_name: str, case_type: str, artifact_root: Path) -> dict[str, Any]:
+    candidates = sorted(vdbbench_result_files(results_dir) - before)
+    if len(candidates) != 1:
+        raise ValueError(f"expected exactly one new canonical VDBBench result for {index_name!r}, found {len(candidates)}")
+    return load_metrics_from_result(candidates[0], index_name, case_type, artifact_root)
 
 
 def run_vdbbench_rows(
@@ -722,7 +828,6 @@ def run_vdbbench_rows(
         return
     if vectordbbench_dir is None or not vectordbbench_dir.exists():
         raise RuntimeError("--run-vdbbench requires VECTORDBBENCH_DIR or --vectordbbench-dir")
-    env = vdbbench_row_env(args, vectordbbench_dir, gomap_root, state)
     rows = [row.strip().lower() for row in args.rows.split(",") if row.strip()]
     row_specs = {
         "exact": ("treedbcolumngraphexact", f"{index_prefix}_exact_vdbbench"),
@@ -732,7 +837,10 @@ def run_vdbbench_rows(
         if row not in row_specs:
             raise ValueError(f"unknown TreeDB VDBBench row {row!r}; allowed: exact,scalar")
         command_name, index_name = row_specs[row]
+        env = vdbbench_row_env(args, vectordbbench_dir, gomap_root, state, row)
+        results_dir = state.root / "vdbbench-results" / row
         cmd = vdbbench_base_cmd(args, base_url, index_name, command_name)
+        before_results = vdbbench_result_files(results_dir)
         if row == "scalar":
             cmd.extend([
                 "--quantized-index-name",
@@ -749,15 +857,26 @@ def run_vdbbench_rows(
             timeout=args.vdbbench_timeout,
             required=True,
         )
-        state.vdbbench.append({
+        row_record = {
             "row": row,
             "index_name": index_name,
             "command": record.command_string,
             "exit_code": record.exit_code,
-            "results_dir": "vdbbench-results",
+            "results_dir": str(results_dir.relative_to(state.root)),
             "log_file": "vdbbench.log",
             "num_per_batch": args.num_per_batch,
-        })
+        }
+        if not args.vdbbench_dry_run and not args.skip_load:
+            row_record["load_metrics"] = capture_vdbbench_load_metrics(
+                results_dir, before_results, index_name, args.case_type, state.root
+            )
+        state.vdbbench.append(row_record)
+        if "load_metrics" in row_record:
+            write_json(state.root / "vdbbench_load_metrics.json", {
+                "schema_version": "treedb-vectordbbench-load-metrics/v1",
+                "rows": state.vdbbench,
+                "note": "Durations and derived insert throughput are selected from the checksum-identified canonical VDBBench result JSON.",
+            })
 
 
 def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
@@ -772,7 +891,7 @@ def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
         "",
         f"- generated_at: `{iso_now()}`",
         f"- manifest: `manifest.json`",
-        f"- route proof: `route_proof.json`",
+        f"- route proof: `{'skipped' if args.skip_route_proof else 'route_proof.json'}`",
         f"- service log: `service.log`",
         f"- data dir: `{args.data_dir}`",
         f"- VDBBench load batch: `{args.num_per_batch}` documents",
@@ -838,11 +957,12 @@ def write_manifest(
             "data_dir": str(args.data_dir),
             "pid": state.service_pid,
             "command": service_command,
+            "binary": state.service_binary,
             "health": state.health,
             "log": "service.log",
         },
         "harness": {
-            "mode": "vdbbench+smoke" if args.run_vdbbench else "smoke",
+            "mode": "vdbbench" if args.skip_route_proof else ("vdbbench+smoke" if args.run_vdbbench else "smoke"),
             "rows": args.rows,
             "case_type": args.case_type,
             "k": args.k,
@@ -860,6 +980,7 @@ def write_manifest(
         },
         "commands": [asdict(record) for record in state.commands],
         "vdbbench": state.vdbbench,
+        "vdbbench_load_metrics": "vdbbench_load_metrics.json" if (state.root / "vdbbench_load_metrics.json").exists() else None,
         "route_proof": "route_proof.json" if state.route_proof else None,
         "skips": state.skips,
         "files": files,
@@ -904,9 +1025,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--smoke-dimension", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DIMENSION", "2")))
     parser.add_argument("--smoke-documents", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_DOCUMENTS", "4")))
     parser.add_argument("--smoke-top-k", type=int, default=int(env_text("TREEDB_VDBBENCH_SMOKE_TOP_K", "2")))
+    parser.add_argument("--skip-route-proof", action="store_true", default=env_flag("TREEDB_VDBBENCH_SKIP_ROUTE_PROOF", False), help="skip the independent route-proof smoke")
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
+    if args.skip_route_proof and (
+        not args.run_vdbbench
+        or args.vdbbench_dry_run
+        or args.skip_load
+        or not any(row.strip() for row in args.rows.split(","))
+    ):
+        parser.error("skip-route-proof requires at least one non-dry-run, load-enabled VDBBench row")
     try:
         validate_smoke_shape(args.smoke_dimension, args.smoke_documents, args.smoke_top_k, args.ef_search, args.rerank_candidates)
     except ValueError as exc:
@@ -974,6 +1103,7 @@ def main(argv: list[str]) -> int:
     service_command: list[str] | None = None
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
+        state.service_binary = file_identity(service_bin)
         service_proc, health, service_command = start_service(
             state,
             gomap_root=gomap_root,
@@ -986,19 +1116,6 @@ def main(argv: list[str]) -> int:
         )
         state.health = health
         write_json(args.out / "health.json", health)
-        run_route_proof_smoke(
-            state,
-            base_url=args.base_url,
-            index_prefix=args.index_prefix,
-            m=args.m,
-            ef_construction=args.ef_construction,
-            ef_search=args.ef_search,
-            quantized_index_name=args.quantized_index_name,
-            rerank_candidates=args.rerank_candidates,
-            smoke_dimension=args.smoke_dimension,
-            smoke_documents_count=args.smoke_documents,
-            smoke_top_k=args.smoke_top_k,
-        )
         run_vdbbench_tests(state, args=args, gomap_root=gomap_root, vectordbbench_dir=args.vectordbbench_dir)
         run_vdbbench_rows(
             state,
@@ -1008,11 +1125,28 @@ def main(argv: list[str]) -> int:
             base_url=args.base_url,
             index_prefix=args.index_prefix,
         )
+        if args.skip_route_proof:
+            add_skip(state, "route_proof", "skip-route-proof requested")
+        else:
+            run_route_proof_smoke(
+                state,
+                base_url=args.base_url,
+                index_prefix=args.index_prefix,
+                m=args.m,
+                ef_construction=args.ef_construction,
+                ef_search=args.ef_search,
+                quantized_index_name=args.quantized_index_name,
+                rerank_candidates=args.rerank_candidates,
+                smoke_dimension=args.smoke_dimension,
+                smoke_documents_count=args.smoke_documents,
+                smoke_top_k=args.smoke_top_k,
+            )
         write_readme(state, args)
         write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"artifact_root={args.out}")
         print(f"manifest={args.out / 'manifest.json'}")
-        print(f"route_proof={args.out / 'route_proof.json'}")
+        if not args.skip_route_proof:
+            print(f"route_proof={args.out / 'route_proof.json'}")
         return 0
     except Exception as exc:  # noqa: BLE001 - write failure artifact before exiting
         error = {"error": str(exc), "traceback": traceback.format_exc(), "generated_at": iso_now()}
