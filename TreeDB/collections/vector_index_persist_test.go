@@ -910,6 +910,90 @@ func TestCollectionVectorIndexNativeRootDelayedLoadKeepsNewerPublishedGraph(t *t
 	requireVectorResultIDs(t, got, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootDelayedLoadRejectsAcceptedDocumentMutation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	seed, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open seed collection: %v", err)
+	}
+	if _, err := seed.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := seed.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("seed insert did not register native graph")
+	}
+	if status, err := index.SaveNativeSnapshot(); err != nil || !status.Loaded {
+		t.Fatalf("save seed graph status=%+v err=%v", status, err)
+	}
+	seed.UnregisterVectorIndex(def.Name)
+
+	loader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open loader collection: %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var hookMu sync.Mutex
+	hookUsed := false
+	restore := setNativeVectorIndexBeforeInstallHookForTest(func(name string) {
+		if name != def.Name {
+			return
+		}
+		hookMu.Lock()
+		firstCall := !hookUsed
+		hookUsed = true
+		hookMu.Unlock()
+		if !firstCall {
+			return
+		}
+		close(entered)
+		<-release
+	})
+	defer restore()
+	type loadResult struct {
+		index  *VectorIndex
+		status VectorIndexLoadStatus
+		err    error
+	}
+	loaded := make(chan loadResult, 1)
+	go func() {
+		index, status, err := loader.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		loaded <- loadResult{index: index, status: status, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("native install hook was not reached")
+	}
+	if _, err := seed.insertBatch([][]byte{[]byte("accepted")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil); err != nil {
+		t.Fatalf("accepted document publication: %v", err)
+	}
+	seed.invalidateVectorIndexCoverageOnAcceptedMutation(acceptedVectorMutationErrorForTest{error: errors.New("injected post-acceptance failure")})
+	close(release)
+	result := <-loaded
+	if result.err != nil || result.index != nil || result.status.Loaded || result.status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("delayed stale load index=%p status=%+v err=%v", result.index, result.status, result.err)
+	}
+	if loader.registeredVectorIndex(def.Name) != nil {
+		t.Fatal("delayed stale candidate remained registered")
+	}
+	var buffer VectorIndexSearchBuffer
+	response, searchErr := loader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(searchErr, ErrVectorIndexSearchUnavailable) || response.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("search after delayed stale load response=%+v err=%v", response, searchErr)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootDelayedEmptyBuildKeepsFirstMutation(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

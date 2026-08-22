@@ -1105,14 +1105,14 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 				continue
 			}
 			if err := index.InsertDocument(documentID); err != nil {
-				c.invalidateRegisteredVectorIndexDocumentCoverage()
+				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 				return err
 			}
 		}
 	}
 	documentGeneration, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
-		c.invalidateRegisteredVectorIndexDocumentCoverage()
+		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 		return err
 	}
 	for _, index := range indexes {
@@ -1122,6 +1122,12 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 }
 
 func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverage() {
+	unlockPublication := c.lockNativeVectorIndexPublicationRead()
+	defer unlockPublication()
+	c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+}
+
+func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverageLocked() {
 	for _, index := range c.registeredVectorIndexes() {
 		index.invalidateSourceDocumentRoots()
 	}
@@ -1772,6 +1778,26 @@ func (idx *VectorIndex) hasValidSourceDocumentRoots() bool {
 	valid := idx.sourceDocumentRootsValid
 	idx.mu.RUnlock()
 	return valid
+}
+
+func (idx *VectorIndex) coversSourceDocumentGeneration(generation uint64) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) sourceDocumentCoverage() (uint64, bool) {
+	if idx == nil {
+		return 0, false
+	}
+	idx.mu.RLock()
+	generation, valid := idx.sourceDocumentGeneration, idx.sourceDocumentRootsValid
+	idx.mu.RUnlock()
+	return generation, valid
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {

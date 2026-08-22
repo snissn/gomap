@@ -41,8 +41,9 @@ const (
 )
 
 var (
-	errVectorIndexNotDeclared     = errors.New("collections: vector index is not declared in collection metadata")
-	errVectorIndexStaleNativeRoot = errors.New("collections: vector index native root changed since load")
+	errVectorIndexNotDeclared             = errors.New("collections: vector index is not declared in collection metadata")
+	errVectorIndexStaleNativeRoot         = errors.New("collections: vector index native root changed since load")
+	errVectorIndexStaleDocumentGeneration = errors.New("collections: vector index document generation changed since load")
 )
 
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
@@ -293,6 +294,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	if candidate == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
+	candidateGeneration, candidateCoverageValid := candidate.sourceDocumentCoverage()
 	runNativeVectorIndexBeforeInstallHookForTest(candidate.name)
 	publicationMu := candidate.nativePublicationLock()
 	publicationMu.Lock()
@@ -315,9 +317,13 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
 	}
 	activeRoot := catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name))
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return nil, err
+	}
 	current := c.registeredVectorIndex(def.Name)
 	replaceCurrentUnchanged := current != nil && current == replaceCurrent && current.nativeMutationSequence() == replaceMutationSeq && activeRoot == expectedRoot
-	if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == activeRoot {
+	if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == activeRoot && current.coversSourceDocumentGeneration(documentGeneration) {
 		if !replaceCurrentUnchanged {
 			return current, nil
 		}
@@ -333,7 +339,52 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
+	candidate.invalidateSourceDocumentRoots()
 	c.RegisterVectorIndex(candidate)
+	rollback := func() {
+		if c.registeredVectorIndex(def.Name) != candidate {
+			return
+		}
+		if current != nil {
+			c.RegisterVectorIndex(current)
+		} else {
+			c.UnregisterVectorIndex(def.Name)
+		}
+	}
+	postInstall := c.db.AcquireSnapshot()
+	if postInstall == nil {
+		rollback()
+		return nil, backenddb.ErrClosed
+	}
+	postCatalog, err := loadCollectionCatalog(postInstall, c.meta.Name)
+	if err != nil {
+		_ = postInstall.Close()
+		rollback()
+		return nil, err
+	}
+	if postCatalog == nil {
+		_ = postInstall.Close()
+		rollback()
+		return nil, errCollectionNotFound
+	}
+	postDef, ok := findVectorIndex(postCatalog.meta.VectorIndexes, candidate.name)
+	postRoot := postCatalog.rootID(collectionVectorIndexRootName(postCatalog.meta.Name, candidate.name))
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(postDef) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
+		_ = postInstall.Close()
+		rollback()
+		return nil, fmt.Errorf("%w: index %q changed during install", errVectorIndexStaleNativeRoot, candidate.name)
+	}
+	postGeneration, err := vectorIndexDocumentGeneration(postInstall, postCatalog)
+	_ = postInstall.Close()
+	if err != nil {
+		rollback()
+		return nil, err
+	}
+	if !candidateCoverageValid || candidateGeneration != postGeneration {
+		rollback()
+		return nil, fmt.Errorf("%w: index %q candidate generation %d current generation %d", errVectorIndexStaleDocumentGeneration, candidate.name, candidateGeneration, postGeneration)
+	}
+	candidate.recordSourceDocumentGeneration(candidateGeneration)
 	return candidate, nil
 }
 
@@ -675,6 +726,10 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	index.recordLoadedSnapshot(rootID, bytesDisk)
 	installed, err := c.installNativeVectorIndexCandidate(index, rootID, nil, 0)
 	if err != nil {
+		if errors.Is(err, errVectorIndexStaleDocumentGeneration) {
+			status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+			return nil, status, nil
+		}
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return nil, status, err
 	}

@@ -2475,15 +2475,18 @@ mark deleted nodes, and document keys map the current document ID to its node.
 
 The `meta` value binds the graph to one collection document snapshot. Coverage
 version `3` stores `source_document_generation_version` and
-`source_document_generation`. The generation is the value of the collection
-system key `collections/document-generation/<collection>`. A successful
+`source_document_generation`. The generation is the big-endian `uint64` value
+of the collection system key `collections/document-generation/<collection>`;
+an absent key is generation zero. A successful
 document mutation advances that key atomically with its primary-root or
 primary-overlay descriptor. Physical root remapping during checkpoint,
 compaction, or vacuum and vector-index-only publication do not advance it.
 
 Load and status checks reject persisted metadata as `stale_document_root`
 unless the coverage version and generation match the current collection.
-Search and save reject a runtime whose in-memory coverage was invalidated.
+Search rejects a runtime whose in-memory coverage is invalid or differs from
+the generation in the current search snapshot. Save rejects invalid in-memory
+coverage.
 Under the coverage barrier, save may advance coverage after successful graph
 maintenance, including by publishing a meta-only delta when document metadata
 changed but vector values did not. Older coverage versions are not migrated in

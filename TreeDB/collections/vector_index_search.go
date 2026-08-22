@@ -1247,7 +1247,26 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
-	if def, ok := c.cachedVectorIndexDefinitionForSearch(opts.IndexName); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	if !catalogCurrent {
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, backenddb.ErrClosed
+		}
+		catalog, err := c.catalogForSnapshot(snap)
+		_ = snap.Close()
+		if err != nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, err
+		}
+		if catalog == nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, errCollectionNotFound
+		}
+		def, found = findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
+	}
+	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
 		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
@@ -1426,13 +1445,18 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 	return index, status, nil
 }
 
-func (c *Collection) cachedVectorIndexDefinitionForSearch(name string) (VectorIndexDefinition, bool) {
+func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (VectorIndexDefinition, bool, bool) {
+	if c == nil || c.db == nil {
+		return VectorIndexDefinition{}, false, false
+	}
+	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
 	c.catalogMu.RLock()
 	defer c.catalogMu.RUnlock()
-	if c.catalog == nil {
-		return VectorIndexDefinition{}, false
+	if c.catalog == nil || systemRoot == 0 || c.catalogSystemRoot != systemRoot || (c.catalogCommitSeq != commitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+		return VectorIndexDefinition{}, false, false
 	}
-	return findVectorIndex(c.catalog.meta.VectorIndexes, name)
+	def, ok := findVectorIndex(c.catalog.meta.VectorIndexes, name)
+	return def, ok, true
 }
 
 func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
@@ -1454,7 +1478,11 @@ func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def Vec
 	if catalog == nil {
 		return nil, VectorIndexLoadStatus{}, errCollectionNotFound
 	}
-	if !index.hasValidSourceDocumentRoots() {
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return nil, VectorIndexLoadStatus{}, err
+	}
+	if !index.coversSourceDocumentGeneration(documentGeneration) {
 		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
