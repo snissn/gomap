@@ -4096,6 +4096,10 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorPublishMu.Lock()
+		defer c.writeDomain.nativeVectorPublishMu.Unlock()
+	}
 	clearedRootNames := []string{collectionVectorIndexRootName(baseMeta.Name, name)}
 	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
 		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)

@@ -4928,6 +4928,54 @@ func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T
 	}
 }
 
+func TestNativeRuntimeDropSerializesSearchPublication(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
+	dropDone := make(chan error, 1)
+	go func() {
+		_, err := col.DropVectorIndex(def.Name)
+		dropDone <- err
+	}()
+	select {
+	case err := <-dropDone:
+		publicationMu.RUnlock()
+		t.Fatalf("DropVectorIndex crossed search publication read lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publicationMu.RUnlock()
+	if err := <-dropDone; err != nil {
+		t.Fatalf("DropVectorIndex: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, ErrIndexNotFound) || len(got.Results) != 0 {
+		t.Fatalf("search after drop results=%+v err=%v, want fail closed", got.Results, err)
+	}
+}
+
 func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
