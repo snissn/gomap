@@ -59,6 +59,10 @@ For RAG-style ingestion of long text into a document-only collection, use the
 built-in chunking seam (`IngestChunkedDocument`) instead of pre-splitting
 callers; see [Document chunking](document-chunking.md).
 
+Embeddings come from the pluggable embedder seam; dimension validation against
+the target vector index happens at ingest time and fails closed before any
+write. See [Document embedding](document-embedding.md).
+
 ### Typed-row collection
 
 ```go
