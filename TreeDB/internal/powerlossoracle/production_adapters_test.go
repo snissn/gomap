@@ -25,10 +25,9 @@ func TestProductionAtomicReplacePreservesInodeUntilDirectorySync(t *testing.T) {
 	}
 	var operations []durabilitycut.NamespaceOperation
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-		if event.Namespace == "" {
-			return nil
+		if event.Namespace != "" {
+			operations = append(operations, event.Namespace)
 		}
-		operations = append(operations, event.Namespace)
 		return model.Observe(root, event)
 	})
 	if err := atomicfile.Write(path, []byte("new"), 0o600); err != nil {
@@ -41,9 +40,6 @@ func TestProductionAtomicReplacePreservesInodeUntilDirectorySync(t *testing.T) {
 	}
 
 	assertStableFile(t, model, "manifest", "old")
-	if err := model.SyncFile("manifest"); err != nil {
-		t.Fatal(err)
-	}
 	// The new inode's bytes are stable, but the old inode remains reachable
 	// through the stable destination name until its directory is synced.
 	assertStableFile(t, model, "manifest", "old")

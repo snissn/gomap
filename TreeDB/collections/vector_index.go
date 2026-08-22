@@ -1192,7 +1192,9 @@ func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex)
 			return err
 		}
 		for _, index := range indexes {
-			index.recordSourceDocumentGeneration(generation)
+			if c.isRegisteredVectorIndex(index) {
+				index.recordSourceDocumentGeneration(generation)
+			}
 		}
 		return nil
 	}
@@ -1209,44 +1211,49 @@ func (c *Collection) recordReconciledVectorIndexCoverage(indexes []*VectorIndex)
 		return err
 	}
 	for _, index := range indexes {
-		if index.hasValidSourceDocumentRoots() {
+		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
 			index.recordSourceDocumentGeneration(generation)
 		}
 	}
 	return nil
 }
 
-func (c *Collection) flushBufferedWritesForVectorSearch() error {
+func (c *Collection) recordVectorIndexCoverageAfterBufferedPublish(meta CollectionMeta, rootNames []string) error {
+	if !slices.Contains(rootNames, collectionPrimaryRootName(meta.Name)) {
+		return nil
+	}
+	return c.recordVectorIndexCoverageAfterBufferedDocumentPublish()
+}
+
+func (c *Collection) recordVectorIndexCoverageAfterBufferedDocumentPublish() error {
 	if c == nil || c.writeDomain == nil {
 		return nil
 	}
-	c.writeDomain.mu.RLock()
-	pending := c.writeDomain.count != 0
-	c.writeDomain.mu.RUnlock()
-	if !pending {
-		return c.flushBufferedWrites()
+	indexes := c.registeredVectorIndexes()
+	if len(indexes) == 0 {
+		return nil
+	}
+	domain := c.writeDomain
+	domain.nativeVectorActiveMu.Lock()
+	active := domain.nativeVectorActive != 0
+	domain.nativeVectorActiveMu.Unlock()
+	if active {
+		return nil
 	}
 
-	unlockCoverage := c.lockVectorIndexCoveragePersistence()
-	defer unlockCoverage()
-	before, err := c.currentVectorIndexDocumentGeneration()
-	if err != nil {
-		return err
+	if !domain.nativeVectorCoverageMu.TryLock() {
+		// The holder is either a public mutation, whose final unlock certifies
+		// coverage, or persistence, whose locked flush does the same.
+		return nil
 	}
-	indexes := c.registeredVectorIndexes()
-	if err := c.flushBufferedWrites(); err != nil {
-		return err
+	defer domain.nativeVectorCoverageMu.Unlock()
+	domain.nativeVectorActiveMu.Lock()
+	active = domain.nativeVectorActive != 0
+	domain.nativeVectorActiveMu.Unlock()
+	if active {
+		return nil
 	}
-	after, err := c.currentVectorIndexDocumentGeneration()
-	if err != nil {
-		return err
-	}
-	for _, index := range indexes {
-		if c.isRegisteredVectorIndex(index) && index.coversSourceDocumentGeneration(before) {
-			index.recordSourceDocumentGeneration(after)
-		}
-	}
-	return nil
+	return c.recordReconciledVectorIndexCoverage(indexes)
 }
 
 func (c *Collection) lockNativeVectorIndexPublicationRead() func() {

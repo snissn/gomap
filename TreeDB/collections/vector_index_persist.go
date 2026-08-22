@@ -107,7 +107,7 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadS
 	} else if stale {
 		return staleStatus, nil
 	}
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
 		return status, err
 	}
 	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()
@@ -416,7 +416,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	} else if stale {
 		return staleStatus, nil
 	}
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
 		return status, err
 	}
 	sourceDocumentGeneration, err := c.currentVectorIndexDocumentGeneration()

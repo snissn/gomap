@@ -3124,12 +3124,16 @@ func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *col
 	defer unlockMutation.Unlock()
 	domain.waitIndexedAsyncFlush()
 	domain.mu.Lock()
-	defer domain.mu.Unlock()
 	if hasBufferedIndexedRootRuns(domain) {
 		domain.observeIndexedFlushForcedDrain()
 	}
+	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
 	err := collection.flushBufferedWritesLocked(domain)
 	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+	domain.mu.Unlock()
+	if err == nil && publishedPrimary {
+		err = collection.recordVectorIndexCoverageAfterBufferedDocumentPublish()
+	}
 	return err
 }
 
@@ -4911,10 +4915,18 @@ func (c *Collection) flushBufferedNoIndex() error {
 }
 
 func (c *Collection) flushBufferedWrites() error {
-	return c.flushBufferedWritesWithRawPublishState(false)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false)
 }
 
 func (c *Collection) flushBufferedWritesWithRawPublishState(rawPublishLocked bool) error {
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false)
+}
+
+func (c *Collection) flushBufferedWritesWithCoverageLocked() error {
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, true)
+}
+
+func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked bool) error {
 	domain := c.writeDomain
 	if domain == nil {
 		return nil
@@ -4929,9 +4941,15 @@ func (c *Collection) flushBufferedWritesWithRawPublishState(rawPublishLocked boo
 		if hasBufferedIndexedRootRuns(domain) {
 			domain.observeIndexedFlushForcedDrain()
 		}
+		publishedPrimary := hasBufferedPrimaryWritesLocked(domain, c.meta.Name)
 		err := c.flushBufferedWritesLockedWithRawPublishState(domain, rawPublishLocked)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		domain.mu.Unlock()
+		if err == nil && coverageLocked {
+			err = c.recordReconciledVectorIndexCoverage(c.registeredVectorIndexes())
+		} else if err == nil && publishedPrimary {
+			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublish()
+		}
 		return err
 	}
 }
@@ -8878,7 +8896,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		if completeErr != nil {
 			return completeErr
 		}
-		return publishErr
+		if publishErr != nil {
+			return publishErr
+		}
+		return c.recordVectorIndexCoverageAfterBufferedPublish(work.meta, work.rootNames)
 	}
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
@@ -8901,7 +8922,10 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	if completeErr != nil {
 		return completeErr
 	}
-	return publishErr
+	if publishErr != nil {
+		return publishErr
+	}
+	return c.recordVectorIndexCoverageAfterBufferedPublish(work.meta, work.rootNames)
 }
 
 func buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames []string, rootRuns map[string][]memtable.Table, rootPolicies map[string]backenddb.OrderedRootStoragePolicy, rootOverlays map[string][]uint64) ([]backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {

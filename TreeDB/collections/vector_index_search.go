@@ -1094,7 +1094,7 @@ func (c *Collection) searchVectorIndexPreparedNoDocumentOwned(opts VectorIndexSe
 	if c.db == nil {
 		return response, errCollectionDBNil
 	}
-	if err := c.flushBufferedWritesForVectorSearch(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return response, err
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
@@ -1243,7 +1243,7 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, errCollectionDBNil
 	}
-	if err := c.flushBufferedWritesForVectorSearch(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
@@ -1764,7 +1764,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	if c.db == nil {
 		return nil, response, errCollectionDBNil
 	}
-	if err := c.flushBufferedWritesForVectorSearch(); err != nil {
+	if err := c.flushBufferedWrites(); err != nil {
 		return nil, response, err
 	}
 	snap := c.db.AcquireSnapshot()
