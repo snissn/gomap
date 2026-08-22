@@ -3337,12 +3337,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		commandWALIntent = intent
 		return commandWALIntent, nil
 	}
-	snap := m.db.AcquireSnapshot()
+	snap := m.db.AcquireStableSnapshot()
 	if snap == nil {
 		return nil, false, backenddb.ErrClosed
 	}
+	defer func() { _ = snap.Close() }()
 	existing, err := loadCollectionCatalog(snap, normalized.Name)
-	_ = snap.Close()
 	if err != nil {
 		return nil, false, err
 	}
