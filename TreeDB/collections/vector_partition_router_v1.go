@@ -635,7 +635,7 @@ func buildVectorPartitionRouterPackV1(manifest VectorPartitionManifestV1, model 
 			},
 		}
 	}
-	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+	if err := buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows, def, nil, true, nil); err != nil {
 		return nil, err
 	}
 	graph := columnVectorGraphManifestSnapshot{
