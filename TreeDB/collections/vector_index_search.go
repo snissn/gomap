@@ -1469,7 +1469,7 @@ func (c *Collection) publishedNativeSearchLoadStatusDuringMutation(def VectorInd
 	if c != nil && c.writeDomain != nil {
 		if coord := c.writeDomain.schemaCoordinator; coord != nil {
 			if baseline := coord.nativeVectorBaseline.Load(); baseline != nil {
-				if !index.publishedSearchViewCoversSourceDocumentState(*baseline) {
+				if !index.publishedSearchViewCoversSourceDocumentGeneration(*baseline) {
 					return VectorIndexLoadStatus{}, false
 				}
 				return c.publishedNativeSearchLoadStatus(def, index)

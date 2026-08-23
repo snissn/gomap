@@ -685,7 +685,11 @@ func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collection
 	if snap == nil || catalog == nil {
 		return 0, errCollectionNotFound
 	}
-	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(catalog.meta.Name))
+	return vectorIndexDocumentGenerationForCollection(snap, catalog.meta.Name)
+}
+
+func vectorIndexDocumentGenerationForCollection(snap *backenddb.Snapshot, collection string) (uint64, error) {
+	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(collection))
 	if err != nil {
 		return 0, err
 	}
@@ -693,6 +697,21 @@ func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collection
 		return 0, nil
 	}
 	return decodeRootID(raw)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationForAdmission() (uint64, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	return vectorIndexDocumentGenerationForCollection(snap, c.collectionName())
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
@@ -1271,13 +1290,19 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		admissionMu.RUnlock()
 		admissionMu.Lock()
 	}
+	var baselineGeneration uint64
+	var baselineErr error
+	if hasMaintainedVectorIndexes {
+		baselineGeneration, baselineErr = c.currentVectorIndexDocumentGenerationForAdmission()
+	}
 	if exclusiveAdmission && coord != nil {
-		if baseline, ok := c.db.StateToken(); ok {
-			coord.nativeVectorBaseline.Store(&baseline)
+		coord.nativeVectorBaseline.Store(nil)
+		if baselineErr == nil {
+			coord.nativeVectorBaseline.Store(&baselineGeneration)
 		}
 	}
 	domain.nativeVectorCoverageMu.RLock()
-	publishedBaselineCurrent := !hasMaintainedVectorIndexes || c.nativeVectorPublishedBaselineCurrent()
+	publishedBaselineCurrent := !hasMaintainedVectorIndexes || baselineErr == nil && c.nativeVectorPublishedBaselineCovers(baselineGeneration)
 	domain.nativeVectorActiveMu.Lock()
 	if domain.nativeVectorActive == 0 {
 		domain.nativeVectorReconciled = false
@@ -1319,14 +1344,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	}
 }
 
-func (c *Collection) nativeVectorPublishedBaselineCurrent() bool {
-	if c == nil || c.db == nil || c.writeDomain == nil {
-		return false
-	}
-	state, ok := c.db.StateToken()
-	if !ok {
-		return false
-	}
+func (c *Collection) nativeVectorPublishedBaselineCovers(generation uint64) bool {
 	domain := c.writeDomain
 	domain.nativeVectorIndexesMu.RLock()
 	defer domain.nativeVectorIndexesMu.RUnlock()
@@ -1334,7 +1352,7 @@ func (c *Collection) nativeVectorPublishedBaselineCurrent() bool {
 		return false
 	}
 	for _, index := range domain.nativeVectorIndexes {
-		if !index.publishedSearchViewCoversSourceDocumentState(state) {
+		if !index.publishedSearchViewCoversSourceDocumentGeneration(generation) {
 			return false
 		}
 	}
@@ -1386,13 +1404,13 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		domain.nativeVectorReconciled = true
 		return nil
 	}
-	domain.nativeVectorSearchActive.Store(c.nativeVectorPublishedBaselineCurrent())
-	defer domain.nativeVectorSearchActive.Store(false)
 	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 		return err
 	}
+	domain.nativeVectorSearchActive.Store(c.nativeVectorPublishedBaselineCovers(generation))
+	defer domain.nativeVectorSearchActive.Store(false)
 	for _, index := range indexes {
 		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
 			index.recordSourceDocumentStateAndPublish(generation, state)
@@ -2183,6 +2201,18 @@ func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentState(state backe
 	idx.mu.RLock()
 	view := idx.searchView.Load()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state &&
+		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentGeneration(generation uint64) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	view := idx.searchView.Load()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation &&
 		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers

@@ -5615,6 +5615,16 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	if _, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &readerBuffer); err != nil {
 		t.Fatalf("prime reader native runtime: %v", err)
 	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "other", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+		t.Fatalf("create unrelated collection: %v", err)
+	}
+	other, err := mgr.OpenCollection("other")
+	if err != nil {
+		t.Fatalf("open unrelated collection: %v", err)
+	}
+	if _, err := other.InsertBatch([][]byte{[]byte("x")}, [][]byte{[]byte(`{"value":1}`)}); err != nil {
+		t.Fatalf("insert unrelated document: %v", err)
+	}
 	index := col.registeredVectorIndex(def.Name)
 	if index == nil {
 		t.Fatal("registered native vector index is nil")
