@@ -530,6 +530,72 @@ func TestIngestSourcesSerializesSharedEmbedder(t *testing.T) {
 	}
 }
 
+func TestIngestSourcesSerializesProviderAcrossInvocations(t *testing.T) {
+	const provider = "ingest-test-serial-guard-cross-call"
+	_, _, col := openIngestTestCollection(t, 16)
+	emb := &serialGuardEmbedder{dims: 16}
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("register serial guard embedder: %v", err)
+	}
+	cfg := ingestTestCfg(16)
+	cfg.Embedding.Provider = provider
+	cfg.Concurrency = 1
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for i := range 2 {
+		go func(i int) {
+			<-start
+			_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource(fmt.Sprintf("src-cross-%d", i), i)}, cfg)
+			errs <- err
+		}(i)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("cross-call ingest: %v", err)
+		}
+	}
+	if emb.concurrent.Load() {
+		t.Fatal("provider observed concurrent EmbedBatch calls across IngestSources invocations")
+	}
+}
+
+type immediateErrorEmbedder struct {
+	dims  int
+	calls atomic.Int32
+	err   error
+}
+
+func (e *immediateErrorEmbedder) Dimensions() int { return e.dims }
+func (e *immediateErrorEmbedder) EmbedBatch(context.Context, [][]byte) ([][]float32, error) {
+	e.calls.Add(1)
+	return nil, e.err
+}
+
+func TestIngestSourcesProviderErrorCancelsBeforeUnlock(t *testing.T) {
+	const provider = "ingest-test-provider-error-cancel"
+	sentinel := errors.New("provider failed")
+	emb := &immediateErrorEmbedder{dims: 16, err: sentinel}
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("register error embedder: %v", err)
+	}
+	_, _, col := openIngestTestCollection(t, 16)
+	cfg := ingestTestCfg(16)
+	cfg.Embedding.Provider = provider
+	cfg.Concurrency = 4
+	_, err := col.IngestSources(context.Background(), ingestTestSources(8), cfg)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("IngestSources err=%v want provider sentinel", err)
+	}
+	if calls := emb.calls.Load(); calls != 1 {
+		t.Fatalf("EmbedBatch calls=%d want 1; queued calls must observe cancellation before provider unlock", calls)
+	}
+}
+
 // TestIngestSourcesChunkFailureFailClosedBeforeMutation proves plan validation
 // runs up front across the whole batch: one invalid source leaves the entire
 // collection untouched, with the typed chunk-stage error naming that source.

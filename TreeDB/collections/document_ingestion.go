@@ -415,7 +415,6 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	var (
 		mu         sync.Mutex // guards firstErr, committed, outcomes, and stage counters
 		progressMu sync.Mutex // serializes completion numbering and callbacks
-		embedMu    sync.Mutex // one public embedder instance may not be concurrency-safe
 		firstErr   error
 		next       atomic.Int64
 		outcomes   = make([]SourceIngestOutcome, len(plans))
@@ -459,15 +458,22 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 					Err: fmt.Errorf("collections: before source %q: %w", plan.parentID, err)}
 			}
 		}
-		embedMu.Lock()
+		unlockProvider, lockErr := embedding.DefaultRegistry().LockProvider(wctx, cfg.Embedding.Provider)
+		if lockErr != nil {
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
+				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, lockErr)}
+		}
 		if err := wctx.Err(); err != nil {
-			embedMu.Unlock()
+			unlockProvider()
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
 				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, err)}
 		}
 		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, cfg.Embedding.Provider, def.Name)
-		embedMu.Unlock()
+		if embedErr != nil {
+			cancel()
+		}
+		unlockProvider()
 		mu.Lock()
 		result.EmbedNanos += time.Since(embedStart).Nanoseconds()
 		mu.Unlock()

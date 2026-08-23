@@ -56,8 +56,8 @@ func (c *Collection) ValidateEmbedderForVectorIndex(vectorIndexName string, emb 
 	if c.db == nil {
 		return errCollectionDBNil
 	}
-	if emb == nil {
-		return fmt.Errorf("collections: validate embedder for %q: embedder must be non-nil", vectorIndexName)
+	if err := embedding.ValidateEmbedder(emb); err != nil {
+		return fmt.Errorf("collections: validate embedder for %q: %w", vectorIndexName, err)
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {

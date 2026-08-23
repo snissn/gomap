@@ -209,6 +209,11 @@ func TestValidateEmbedderForVectorIndex(t *testing.T) {
 	if err := col.ValidateEmbedderForVectorIndex("embedding", nil); err == nil {
 		t.Fatal("nil embedder accepted")
 	}
+	var typedNil *typedNilDimsEmbedder
+	var typedNilInterface embedding.Embedder = typedNil
+	if err := col.ValidateEmbedderForVectorIndex("embedding", typedNilInterface); !errors.Is(err, embedding.ErrInvalidEmbedder) {
+		t.Fatalf("typed-nil embedder err=%v want ErrInvalidEmbedder", err)
+	}
 }
 
 type stubDimsEmbedder struct{ dims int }
@@ -220,6 +225,16 @@ func (s stubDimsEmbedder) EmbedBatch(ctx context.Context, texts [][]byte) ([][]f
 		out[i] = make([]float32, s.dims)
 	}
 	return out, nil
+}
+
+type typedNilDimsEmbedder struct{}
+
+func (*typedNilDimsEmbedder) Dimensions() int {
+	panic("Dimensions called on typed-nil embedder")
+}
+
+func (*typedNilDimsEmbedder) EmbedBatch(context.Context, [][]byte) ([][]float32, error) {
+	panic("EmbedBatch called on typed-nil embedder")
 }
 
 type staticOutputEmbedder struct {
