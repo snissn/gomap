@@ -2,16 +2,18 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-// chunkingScanMaxDocuments bounds full-collection child scans; collection
-// scans are bounded calls, so chunk-child discovery uses a practical maximum.
+// chunkingScanMaxDocuments is the fail-closed cap for one parent# prefix.
 const chunkingScanMaxDocuments = math.MaxInt32
 
 // ChunkedIngestOptions tunes IngestChunkedDocument.
@@ -19,6 +21,11 @@ type ChunkedIngestOptions struct {
 	// TextField names the parent document field holding the text to chunk.
 	// Empty defaults to "body".
 	TextField string
+	hooks     *chunkedIngestHooks
+}
+
+type chunkedIngestHooks struct {
+	afterDelete func()
 }
 
 func (o ChunkedIngestOptions) textField() string {
@@ -26,6 +33,19 @@ func (o ChunkedIngestOptions) textField() string {
 		return "body"
 	}
 	return o.TextField
+}
+
+func validateChunkTextField(field string) error {
+	path, err := parseVectorFieldPath(field)
+	if err != nil {
+		return fmt.Errorf("collections: invalid chunk text field %q: %w", field, err)
+	}
+	switch path[0] {
+	case chunking.MetaFieldParent, chunking.MetaFieldOrdinal, chunking.MetaFieldKind:
+		return fmt.Errorf("collections: chunk text field %q overlaps reserved linkage root %q", field, path[0])
+	default:
+		return nil
+	}
 }
 
 // ChunkedIngestResult reports the outcome of one chunked ingest.
@@ -76,8 +96,11 @@ type chunkedIngestPlan struct {
 // fails closed here, before any mutation.
 func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg chunking.Config, opts ChunkedIngestOptions) (chunkedIngestPlan, error) {
 	var plan chunkedIngestPlan
-	if len(parentID) == 0 {
-		return plan, fmt.Errorf("collections: chunked ingest requires a non-empty parent document ID")
+	if err := chunking.ValidateParentID(string(parentID)); err != nil {
+		return plan, err
+	}
+	if err := validateChunkTextField(opts.textField()); err != nil {
+		return plan, err
 	}
 	if !json.Valid(parentDocument) {
 		return plan, fmt.Errorf("collections: chunked ingest requires a JSON parent document")
@@ -119,17 +142,92 @@ func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg 
 	return plan, nil
 }
 
+type chunkParentLifecycleLocks struct {
+	mu      sync.Mutex
+	unlocks map[string]func()
+}
+
+func (locks *chunkParentLifecycleLocks) release(parentID []byte) {
+	if locks == nil {
+		return
+	}
+	locks.mu.Lock()
+	unlock := locks.unlocks[string(parentID)]
+	delete(locks.unlocks, string(parentID))
+	locks.mu.Unlock()
+	if unlock != nil {
+		unlock()
+	}
+}
+
+func (locks *chunkParentLifecycleLocks) releaseAll() {
+	if locks == nil {
+		return
+	}
+	locks.mu.Lock()
+	unlocks := locks.unlocks
+	locks.unlocks = make(map[string]func())
+	locks.mu.Unlock()
+	for _, unlock := range unlocks {
+		unlock()
+	}
+}
+
+func (c *Collection) lockChunkParentLifecycles(ctx context.Context, parentIDs [][]byte) (*chunkParentLifecycleLocks, error) {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, fmt.Errorf("collections: chunk lifecycle coordinator unavailable")
+	}
+	ids := make([]string, len(parentIDs))
+	for i := range parentIDs {
+		ids[i] = string(parentIDs[i])
+	}
+	sort.Strings(ids)
+	locks := &chunkParentLifecycleLocks{unlocks: make(map[string]func(), len(ids))}
+	for _, id := range ids {
+		unlock, err := coord.lockChunkLifecycle(ctx, id)
+		if err != nil {
+			locks.releaseAll()
+			return nil, err
+		}
+		locks.unlocks[id] = unlock
+	}
+	return locks, nil
+}
+
+func (c *Collection) lockChunkMutation(ctx context.Context) (func(), error) {
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return nil, fmt.Errorf("collections: chunk mutation coordinator unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	coord.chunkMutationOnce.Do(func() {
+		coord.chunkMutationToken = make(chan struct{}, 1)
+		coord.chunkMutationToken <- struct{}{}
+	})
+	select {
+	case <-coord.chunkMutationToken:
+		var once sync.Once
+		return func() {
+			once.Do(func() { coord.chunkMutationToken <- struct{}{} })
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // IngestChunkedDocument stores parentDocument under parentID and replaces its
 // chunk children with the stream derived from the configured text field.
 //
-// Lifecycle: the child plan is built and validated first — invalid config,
-// missing text field, or chunker failure leaves the collection untouched.
-// Stale children (previous `<parentID>#<ordinal>` rows) are tombstoned with
-// one atomic DeleteBatch, then the new children are inserted with one atomic
-// InsertBatch. A crash between the batches cannot tear a child row (batch
-// atomicity), leaves the parent intact with its prior or partial next child
-// set, and a retry of the same ingest converges because child IDs derive from
-// the parent ID and ordinal, never from content.
+// Lifecycle: parent ID, text field, and child plan validate before mutation.
+// A per-parent lock shared across collection handles serializes plan through
+// replacement. The parent upsert, stale-child DeleteBatch, and replacement
+// InsertBatch remain separate durable commits: each batch is atomic, but an
+// error between boundaries is commit-ambiguous. The source may be old, new, or
+// between those states; retrying converges because child IDs derive only from
+// parent ID and ordinal. Atomic durable publication is deferred to #4284.
 //
 // Children are ordinary documents to the index layer: text, scalar, and vector
 // indexes maintain them through the normal InsertBatch/DeleteBatch paths, so
@@ -142,25 +240,43 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	if c.db == nil {
 		return result, errCollectionDBNil
 	}
+	if err := chunking.ValidateParentID(string(parentID)); err != nil {
+		return result, err
+	}
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), [][]byte{parentID})
+	if err != nil {
+		return result, err
+	}
+	defer lifecycleLocks.releaseAll()
 	plan, err := c.buildChunkPlan(parentID, parentDocument, cfg, opts)
 	if err != nil {
 		return result, err
 	}
-
-	// Upsert the parent document first: children reference it, so any crash
-	// window leaves a consistent parent whose child set a retry repairs.
-	if err := c.upsertParentDocument(parentID, parentDocument); err != nil {
+	unlockMutation, err := c.lockChunkMutation(context.Background())
+	if err != nil {
 		return result, err
 	}
+	defer unlockMutation()
 
-	oldChildren, err := c.ChunkChildren(parentID)
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return result, fmt.Errorf("collections: publish chunk write domains before replacement: %w", err)
+	}
+	oldChildren, _, err := c.chunkChildrenUnlocked(parentID)
 	if err != nil {
+		return result, err
+	}
+	// Parent upsert, stale-child delete, and child insert remain separate
+	// durable boundaries; retry repairs any reported commit ambiguity.
+	if err := c.upsertParentDocument(parentID, parentDocument); err != nil {
 		return result, err
 	}
 	if len(oldChildren) > 0 {
 		if _, err := c.DeleteBatch(oldChildren); err != nil {
 			return result, fmt.Errorf("collections: tombstone stale chunk children of %q: %w", parentID, err)
 		}
+	}
+	if opts.hooks != nil && opts.hooks.afterDelete != nil {
+		opts.hooks.afterDelete()
 	}
 	if len(plan.children) > 0 {
 		if _, err := c.InsertBatch(chunkPlanIDs(plan.children), chunkPlanDocs(plan.children)); err != nil {
@@ -198,31 +314,56 @@ func (c *Collection) upsertParentDocument(parentID []byte, parentDocument []byte
 	return nil
 }
 
+// ChunkChildrenScanStats is structural evidence for one bounded child lookup.
+// ScannedPrimaryRows counts only rows inside the requested parent# range.
+type ChunkChildrenScanStats struct {
+	ScannedPrimaryRows     int
+	ReconstructedDocuments int
+	RowLocatorLookups      int
+	PointRowFetches        int
+}
+
 // ChunkChildren returns the live chunk child IDs of parentID in ordinal order.
 // Children are identified by the derived `<parentID>#<ordinal>` ID scheme and
 // verified against their stored linkage metadata; rows carrying malformed
 // chunk metadata fail closed rather than being reported as children.
 func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
+	children, _, err := c.ChunkChildrenWithStats(parentID)
+	return children, err
+}
+
+// ChunkChildrenWithStats returns ChunkChildren plus prefix-scan evidence.
+func (c *Collection) ChunkChildrenWithStats(parentID []byte) ([][]byte, ChunkChildrenScanStats, error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return nil, ChunkChildrenScanStats{}, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errCollectionDBNil
+		return nil, ChunkChildrenScanStats{}, errCollectionDBNil
 	}
+	if err := chunking.ValidateParentID(string(parentID)); err != nil {
+		return nil, ChunkChildrenScanStats{}, err
+	}
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), [][]byte{parentID})
+	if err != nil {
+		return nil, ChunkChildrenScanStats{}, err
+	}
+	defer lifecycleLocks.releaseAll()
+	return c.chunkChildrenUnlocked(parentID)
+}
+
+func (c *Collection) chunkChildrenUnlocked(parentID []byte) ([][]byte, ChunkChildrenScanStats, error) {
 	prefix := append(append([]byte(nil), parentID...), '#')
 	ordinals := map[int][]byte{}
 	inspect := func(record DocumentRecord) (bool, error) {
 		id := record.ID
 		if !bytes.HasPrefix(id, prefix) {
-			return true, nil
+			return false, fmt.Errorf("collections: chunk prefix scan escaped %q at document %q", prefix, id)
 		}
 		meta, err := chunking.ParseChildMeta(record.Document)
 		if err != nil {
 			return false, fmt.Errorf("collections: chunk child %q metadata: %w", id, err)
 		}
 		if meta == nil {
-			// ID-shaped but not a linked chunk child: fail closed instead of
-			// silently reporting an orphaned row.
 			return false, fmt.Errorf("collections: document %q has a chunk child ID without chunk metadata", id)
 		}
 		if err := chunking.ValidateChunkChild(string(id), record.Document); err != nil {
@@ -231,60 +372,55 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 		if _, dup := ordinals[meta.Ordinal]; dup {
 			return false, fmt.Errorf("collections: duplicate chunk ordinal %d for parent %q", meta.Ordinal, parentID)
 		}
-		ordinals[meta.Ordinal] = append([]byte(nil), id...)
+		ordinals[meta.Ordinal] = bytes.Clone(id)
 		return true, nil
 	}
-	var truncated bool
-	var err error
-	if columnStoreCanReconstructDocument(c.meta) {
-		truncated, err = c.ScanDocumentsFunc(chunkingScanMaxDocuments, inspect)
-	} else {
-		truncated, err = c.scanChunkDocumentsByParentPrefix(prefix, inspect)
-	}
+	truncated, stats, err := c.scanChunkDocumentsByParentPrefix(prefix, chunkingScanMaxDocuments, inspect)
 	if err != nil {
-		return nil, err
+		return nil, stats, err
 	}
 	if truncated {
-		return nil, fmt.Errorf("collections: chunk child prefix scan for %q exceeded bound %d", parentID, chunkingScanMaxDocuments)
+		return nil, stats, fmt.Errorf("collections: chunk child prefix scan for %q exceeded bound %d", parentID, chunkingScanMaxDocuments)
 	}
 	children := make([][]byte, 0, len(ordinals))
 	for ordinal := 0; len(children) < len(ordinals); ordinal++ {
 		id, ok := ordinals[ordinal]
 		if !ok {
-			return nil, fmt.Errorf("collections: chunk ordinal gap %d for parent %q", ordinal, parentID)
+			return nil, stats, fmt.Errorf("collections: chunk ordinal gap %d for parent %q", ordinal, parentID)
 		}
 		children = append(children, id)
 	}
-	return children, nil
+	return children, stats, nil
 }
 
 // scanChunkDocumentsByParentPrefix walks only primary IDs in the requested
-// parent# child namespace. The bounded range avoids a full collection scan for
-// every source while retaining snapshot-consistent document validation.
-func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, fn func(DocumentRecord) (bool, error)) (bool, error) {
+// parent# child namespace and reconstructs only those rows when column storage
+// omits projected fields from the retained JSON payload.
+func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error) {
+	var stats ChunkChildrenScanStats
 	if c == nil {
-		return false, errCollectionNil
+		return false, stats, errCollectionNil
 	}
 	if c.db == nil {
-		return false, errCollectionDBNil
+		return false, stats, errCollectionDBNil
 	}
-	if len(prefix) == 0 || fn == nil {
-		return false, fmt.Errorf("collections: chunk child prefix and callback are required")
+	if len(prefix) == 0 || maxDocuments <= 0 || fn == nil {
+		return false, stats, fmt.Errorf("collections: chunk child prefix, positive bound, and callback are required")
 	}
 	if err := c.flushBufferedWrites(); err != nil {
-		return false, err
+		return false, stats, err
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return false, backenddb.ErrClosed
+		return false, stats, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return false, err
+		return false, stats, err
 	}
 	if catalog == nil {
-		return false, errCollectionNotFound
+		return false, stats, errCollectionNotFound
 	}
 	it, err := collectionIteratorAtCatalogRoot(
 		snap,
@@ -295,39 +431,47 @@ func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, fn func(Doc
 		false,
 	)
 	if err != nil {
-		return false, err
+		return false, stats, err
 	}
 	if it == nil {
-		return false, nil
+		return false, stats, nil
 	}
 	defer func() { _ = it.Close() }()
-	scanned := 0
+	if columnStoreCanReconstructDocument(catalog.meta) {
+		var reconstruction CollectionDocumentScanStats
+		truncated, err := c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, func(record DocumentRecord) (bool, error) {
+			stats.ScannedPrimaryRows++
+			stats.ReconstructedDocuments++
+			return fn(record)
+		}, &reconstruction)
+		stats.RowLocatorLookups = int(reconstruction.LocatorLookups)
+		stats.PointRowFetches = int(reconstruction.PointRowFetches)
+		return truncated, stats, err
+	}
 	for it.Valid() {
 		if it.IsDeleted() {
 			it.Next()
 			continue
 		}
-		if scanned >= chunkingScanMaxDocuments {
-			return true, nil
+		if stats.ScannedPrimaryRows >= maxDocuments {
+			return true, stats, nil
 		}
-		record := DocumentRecord{
-			ID:       bytes.Clone(it.UnsafeKey()),
-			Document: it.ValueCopy(nil),
-		}
-		scanned++
-		next, err := fn(record)
+		id := bytes.Clone(it.UnsafeKey())
+		document := it.ValueCopy(nil)
+		stats.ScannedPrimaryRows++
+		next, err := fn(DocumentRecord{ID: id, Document: document})
 		if err != nil {
-			return false, err
+			return false, stats, err
 		}
 		if !next {
-			return false, nil
+			return false, stats, nil
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return false, err
+		return false, stats, err
 	}
-	return false, nil
+	return false, stats, nil
 }
 
 // ValidateChunkChildDocument verifies that a stored document with chunk

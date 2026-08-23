@@ -26,13 +26,35 @@ cfg := collections.IngestSourcesConfig{
 result, err := collection.IngestSources(ctx, sources, cfg)
 ```
 
-The configured vector index must exist and its dimensions must exactly match the embedder configuration. Every source is validated and chunk-planned before mutation. Embedding also completes before that source is changed, so chunk or embed errors fail closed. A successful result contains one `Ingested` outcome per source, including deterministic child IDs (`<sourceID>#<ordinal>`).
+The configured vector index must exist and its dimensions must exactly match
+the embedder configuration. Every source is validated and chunk-planned before
+mutation. Parent IDs must be non-empty valid UTF-8 without `#`; reserved chunk
+linkage roots cannot be text/vector destinations. Embedding also completes
+before that source is changed, so chunk or embed errors fail closed. A
+successful result contains one `Ingested` outcome per source, including
+deterministic child IDs (`<sourceID>#<ordinal>`).
 
 ## Failure and retry behavior
 
-`*collections.IngestError` identifies the source ID, input index, and stage (`chunk`, `embed`, or `storage`); use `errors.As` and `errors.Is` to inspect it. The worker pool is bounded by `Concurrency` (zero defaults to four), and cancellation stops unstarted work while preserving completed sources.
+`*collections.IngestError` identifies the source ID, input index, and stage
+(`chunk`, `embed`, or `storage`); parent-ID rejection unwraps a typed
+`*chunking.ParentIDError`. The worker pool is bounded by `Concurrency` (zero
+defaults to four), and cancellation stops unstarted work while preserving
+completed sources.
 
-Child deletion and insertion are separate collection mutation boundaries. A storage error after one boundary is therefore commit-ambiguous for that source; the source may still have its old children, its new children, or be between those states. Retry the same source to converge. Child IDs are deterministic, so retries do not duplicate children. The built-in test fault boundary runs before either mutation and leaves the source unchanged.
+The shared per-parent lock covers the complete plan through replacement across
+concurrent calls and collection handles; independent parents do not share that
+lifecycle lock. A separate collection-wide lock serializes each source's
+enumerate/delete/insert/parent-upsert mutation section, so `Concurrency`
+parallelizes planning and embedding but not storage publication. Parent
+lifecycle locks are context-aware and release after a source commits, before
+its progress callback. Stale-child deletion, child insertion, and parent upsert
+remain separate durable boundaries. A storage error is therefore commit-
+ambiguous for that source: durable state may be old, new, or between those
+boundaries, including no children after delete or new children with the old
+parent after insert. Retry the same source to converge. Deterministic child IDs
+prevent duplicates. This is not an atomic-publication claim; #4284 owns that
+stronger durability contract.
 
 ## Quick smoke path
 
@@ -86,11 +108,12 @@ the native vector-insert work from #4282): 27.32 docs/sec, 366.06 s wall time,
 | prefix-scan `efe5d4488` | 37.59 | 132,071,674,336 | 95,534,267 | 0.01514 | 0.007082 | 99.98 |
 
 This is a +37.6% docs/sec improvement, -25.8% B/op, and -67.8% allocs/op
-under identical fixture/host/command conditions. The implementation changes
-`ChunkChildren` from a full primary-collection scan per source to a bounded
-primary-key `parent#` prefix range while retaining snapshot consistency and
-truncation failure behavior. It does not weaken durability or change storage
-formats.
+under identical fixture/host/command conditions. The implementation changed
+ordinary JSON `ChunkChildren` from a full primary-collection scan per source to
+a bounded primary-key `parent#` prefix range. #4293 extends that same bounded
+range to reconstructable column-store layouts, reconstructs only matched rows,
+and exposes `ChunkChildrenWithStats` structural counters. Truncation and
+linkage validation remain fail closed; no storage format changes.
 
 The optimized CPU profile (`/tmp/c8-prefix.cpu`) identifies the remaining
 limiter as durable root publication rather than chunking or embedding:

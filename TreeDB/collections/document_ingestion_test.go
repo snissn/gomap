@@ -692,6 +692,262 @@ func TestIngestSourcesRetryConvergesAfterMidBatchFault(t *testing.T) {
 	_ = d
 }
 
+func TestIngestSourcesCommitAmbiguityBoundariesReopenAndRetry(t *testing.T) {
+	tests := []struct {
+		name          string
+		setHook       func(*ingestFaultHooks)
+		wantParentNew bool
+		wantChildren  bool
+	}{
+		{
+			name: "after delete",
+			setHook: func(h *ingestFaultHooks) {
+				h.afterDelete = func(int) error { return errIngestInjected }
+			},
+		},
+		{
+			name: "after insert",
+			setHook: func(h *ingestFaultHooks) {
+				h.afterInsert = func(int) error { return errIngestInjected }
+			},
+			wantChildren: true,
+		},
+		{
+			name: "after parent",
+			setHook: func(h *ingestFaultHooks) {
+				h.afterParent = func(int) error { return errIngestInjected }
+			},
+			wantParentNew: true,
+			wantChildren:  true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, d, col := openIngestTestCollection(t, 256)
+			oldSource := ingestTestSource("src-0", 0)
+			newSource := ingestTestSource("src-0", 7)
+			cfg := ingestTestCfg(256)
+			mustIngest(t, col, []SourceDocument{oldSource}, cfg)
+
+			hooks := &ingestFaultHooks{}
+			tc.setHook(hooks)
+			cfg.hooks = hooks
+			_, err := col.IngestSources(context.Background(), []SourceDocument{newSource}, cfg)
+			var ingestErr *IngestError
+			if !errors.Is(err, errIngestInjected) || !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageStorage {
+				t.Fatalf("boundary error=%v typed=%+v", err, ingestErr)
+			}
+			if err := d.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint ambiguous state: %v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close ambiguous state: %v", err)
+			}
+			d2, err := backenddb.Open(backenddb.Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("reopen ambiguous state: %v", err)
+			}
+			defer func() { _ = d2.Close() }()
+			col2, err := NewCollectionManager(d2).OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection after ambiguous state: %v", err)
+			}
+
+			parentRaw, err := col2.Get([]byte("src-0"))
+			if err != nil {
+				t.Fatalf("Get parent: %v", err)
+			}
+			var parent map[string]any
+			if err := json.Unmarshal(parentRaw, &parent); err != nil {
+				t.Fatalf("decode parent: %v", err)
+			}
+			parentBody := parent["body"].(string)
+			if gotNew := strings.Contains(parentBody, "tok7"); gotNew != tc.wantParentNew {
+				t.Fatalf("parent new=%t want %t body=%q", gotNew, tc.wantParentNew, parentBody[:min(80, len(parentBody))])
+			}
+			children, err := col2.ChunkChildren([]byte("src-0"))
+			if err != nil {
+				t.Fatalf("ChunkChildren ambiguous state: %v", err)
+			}
+			if got := len(children) > 0; got != tc.wantChildren {
+				t.Fatalf("children present=%t count=%d want %t", got, len(children), tc.wantChildren)
+			}
+
+			cfg.hooks = nil
+			mustIngest(t, col2, []SourceDocument{newSource}, cfg)
+			assertIndexParity(t, col2, []string{"src-0"})
+			resp, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: "tok7", TopK: 100})
+			if err != nil || len(resp.Results) == 0 {
+				t.Fatalf("retry new text results=%d err=%v", len(resp.Results), err)
+			}
+		})
+	}
+}
+
+func TestIngestSourcesIndependentParentsDoNotShareLifecycleLock(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	baseCfg := ingestTestCfg(256)
+	mustIngest(t, col, []SourceDocument{ingestTestSource("src-a", 0), ingestTestSource("src-b", 1)}, baseCfg)
+
+	firstAfterDelete := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondBeforeMutation := make(chan struct{})
+	cfgA := baseCfg
+	cfgA.hooks = &ingestFaultHooks{afterDelete: func(int) error {
+		close(firstAfterDelete)
+		<-releaseFirst
+		return nil
+	}}
+	cfgB := baseCfg
+	cfgB.hooks = &ingestFaultHooks{beforeInsert: func(int) error {
+		close(secondBeforeMutation)
+		return nil
+	}}
+
+	errs := make(chan error, 2)
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-a", 7)}, cfgA)
+		errs <- err
+	}()
+	<-firstAfterDelete
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-b", 8)}, cfgB)
+		errs <- err
+	}()
+	select {
+	case <-secondBeforeMutation:
+	case <-time.After(time.Second):
+		t.Fatal("independent parent blocked before its mutation boundary")
+	}
+	close(releaseFirst)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("independent ingest: %v", err)
+		}
+	}
+	assertIndexParity(t, col, []string{"src-a", "src-b"})
+}
+
+func TestIngestSourcesLifecycleLockHonorsCancellation(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	baseCfg := ingestTestCfg(256)
+	mustIngest(t, col, []SourceDocument{ingestTestSource("src-cancel-lock", 0)}, baseCfg)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	blockingCfg := baseCfg
+	blockingCfg.hooks = &ingestFaultHooks{afterDelete: func(int) error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-cancel-lock", 1)}, blockingCfg)
+		firstDone <- err
+	}()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := col.IngestSources(ctx, []SourceDocument{ingestTestSource("src-cancel-lock", 2)}, baseCfg)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting lifecycle lock err=%v want context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("canceled lifecycle acquisition took %s", elapsed)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("blocking ingest: %v", err)
+	}
+}
+
+func TestIngestSourcesProgressCallbackCanReadCommittedParent(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	cfg := ingestTestCfg(256)
+	callbackErr := make(chan error, 1)
+	cfg.Progress = func(progress IngestSourcesProgress) {
+		children, err := col.ChunkChildren(progress.SourceID)
+		if err == nil && len(children) == 0 {
+			err = errors.New("progress callback observed no committed children")
+		}
+		callbackErr <- err
+	}
+	ingestDone := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-progress-read", 0)}, cfg)
+		ingestDone <- err
+	}()
+	select {
+	case err := <-ingestDone:
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress callback deadlocked on the committed parent's lifecycle lock")
+	}
+	if err := <-callbackErr; err != nil {
+		t.Fatalf("progress callback: %v", err)
+	}
+}
+
+func TestIngestSourcesProgressCallbackCanReadSiblingParent(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	cfg := ingestTestCfg(256)
+	cfg.Concurrency = 1
+	sources := []SourceDocument{ingestTestSource("src-progress-a", 0), ingestTestSource("src-progress-b", 1)}
+	callbacks := 0
+	cfg.Progress = func(progress IngestSourcesProgress) {
+		callbacks++
+		if callbacks == 1 {
+			if _, err := col.ChunkChildren(sources[1].ID); err != nil {
+				t.Errorf("read sibling from progress callback: %v", err)
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), sources, cfg)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress callback deadlocked on a sibling lifecycle lock")
+	}
+	if callbacks != len(sources) {
+		t.Fatalf("callbacks=%d want %d", callbacks, len(sources))
+	}
+}
+
+func TestIngestSourcesMutationLockHonorsCancellation(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	unlock, err := col.lockChunkMutation(context.Background())
+	if err != nil {
+		t.Fatalf("lock mutation: %v", err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = col.IngestSources(ctx, []SourceDocument{ingestTestSource("src-mutation-cancel", 0)}, ingestTestCfg(256))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("mutation lock wait err=%v want context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("canceled mutation lock acquisition took %s", elapsed)
+	}
+	if raw, getErr := col.Get([]byte("src-mutation-cancel")); getErr != nil || len(raw) != 0 {
+		t.Fatalf("canceled source mutated: len=%d err=%v", len(raw), getErr)
+	}
+}
+
 // TestIngestSourcesCancelBetweenSources proves ctx cancellation stops the
 // pipeline between sources: completed sources stay intact, unstarted sources
 // remain untouched, and the cancellation is surfaced.
