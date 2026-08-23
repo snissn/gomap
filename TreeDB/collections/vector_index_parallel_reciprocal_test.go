@@ -25,14 +25,14 @@ func TestVectorIndexParallelReciprocalLinksPreserveExactTopology4257(t *testing.
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := vectorIndexReciprocalParityRows4257(tc.rows, tc.dims, tc.tieHeavy)
-			serial := buildVectorIndexReciprocalParity4257(t, rows, tc.m, tc.construction, false)
+			serial := buildVectorIndexReciprocalParity4257(t, rows, tc.m, tc.construction, false, false)
 			if serial.maxLevel < 1 {
 				t.Fatalf("fixture max level=%d want multilevel graph", serial.maxLevel)
 			}
 			want := snapshotVectorIndexTopology4257(serial)
 			wantSearch := snapshotVectorIndexSearches4257(t, serial, rows)
 			for run := 0; run < 3; run++ {
-				parallel := buildVectorIndexReciprocalParity4257(t, rows, tc.m, tc.construction, true)
+				parallel := buildVectorIndexReciprocalParity4257(t, rows, tc.m, tc.construction, true, false)
 				if got := snapshotVectorIndexTopology4257(parallel); !reflect.DeepEqual(got, want) {
 					t.Fatalf("parallel run %d changed exact topology", run)
 				}
@@ -41,6 +41,27 @@ func TestVectorIndexParallelReciprocalLinksPreserveExactTopology4257(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestVectorIndexNativeParallelReciprocalLinksPreserveDirtyNodes4243(t *testing.T) {
+	previous := runtime.GOMAXPROCS(8)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previous) })
+
+	rows := vectorIndexReciprocalParityRows4257(512, 32, false)
+	serial := buildVectorIndexReciprocalParity4257(t, rows, 16, 128, false, true)
+	parallel := buildVectorIndexReciprocalParity4257(t, rows, 16, 128, true, true)
+	if got, want := snapshotVectorIndexTopology4257(parallel), snapshotVectorIndexTopology4257(serial); !reflect.DeepEqual(got, want) {
+		t.Fatal("native parallel reciprocal links changed exact topology")
+	}
+	if len(serial.dirtyNodes) == 0 {
+		t.Fatal("native serial fixture did not record dirty nodes")
+	}
+	if !reflect.DeepEqual(parallel.dirtyNodes, serial.dirtyNodes) {
+		t.Fatalf("native parallel dirty nodes differ: got %d want %d", len(parallel.dirtyNodes), len(serial.dirtyNodes))
+	}
+	if !reflect.DeepEqual(parallel.dirtyDocs, serial.dirtyDocs) {
+		t.Fatalf("native parallel dirty documents differ: got %d want %d", len(parallel.dirtyDocs), len(serial.dirtyDocs))
 	}
 }
 
@@ -105,12 +126,13 @@ func snapshotVectorIndexSearches4257(t *testing.T, index *VectorIndex, rows [][]
 	return out
 }
 
-func buildVectorIndexReciprocalParity4257(t *testing.T, rows [][]float32, m, construction int, parallel bool) *VectorIndex {
+func buildVectorIndexReciprocalParity4257(t *testing.T, rows [][]float32, m, construction int, parallel, native bool) *VectorIndex {
 	t.Helper()
 	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: m, EfConstruction: construction})
 	if err != nil {
 		t.Fatal(err)
 	}
+	index.setNativePersistent(native)
 	index.parallelReciprocalLinks = parallel
 	for row := range rows {
 		if err := index.insertVectorLocked([]byte(fmt.Sprintf("doc-%04d", row)), rows[row]); err != nil {
