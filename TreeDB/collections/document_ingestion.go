@@ -365,14 +365,14 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		seen[key] = struct{}{}
 		parentIDs[i] = sources[i].ID
 	}
-	unlockLifecycles, err := c.lockChunkParentLifecycles(parentIDs)
+	lifecycleLocks, err := c.lockChunkParentLifecycles(ctx, parentIDs)
 	if err != nil {
 		return result, &IngestError{
 			SourceID: append([]byte(nil), sources[0].ID...), SourceIndex: 0,
 			Stage: IngestStageStorage, Err: err,
 		}
 	}
-	defer unlockLifecycles()
+	defer lifecycleLocks.releaseAll()
 
 	// Phase 1: plan every source up front. Nothing below can mutate the
 	// collection until every plan validates, so plan failures leave the batch
@@ -423,7 +423,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 
 	var (
 		mu         sync.Mutex // guards firstErr, committed, outcomes, and stage counters
-		progressMu sync.Mutex // serializes user callbacks without holding mu
+		progressMu sync.Mutex // serializes completion numbering and callbacks
 		embedMu    sync.Mutex // one public embedder instance may not be concurrency-safe
 		firstErr   error
 		next       atomic.Int64
@@ -441,6 +441,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 
 	runOne := func(i int) *IngestError {
 		plan := &plans[i]
+		defer lifecycleLocks.release(plan.parentID)
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
 		}
@@ -544,8 +545,8 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		outcome := SourceIngestOutcome{ID: append([]byte(nil), plan.parentID...), ChildIDs: childIDs, Replaced: len(oldChildren)}
 		if cfg.Progress != nil {
 			// Assign the completion number and deliver its callback under the
-			// same lock. A worker that commits later cannot overtake an
-			// earlier callback while retaining a smaller SourcesCompleted.
+			// same lock. Release this parent's lifecycle lock after its commit
+			// and before invoking user code so reentrant reads cannot deadlock.
 			progressMu.Lock()
 		}
 		mu.Lock()
@@ -565,6 +566,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 		mu.Unlock()
 		if cfg.Progress != nil {
+			lifecycleLocks.release(plan.parentID)
 			cfg.Progress(progress)
 			progressMu.Unlock()
 		}

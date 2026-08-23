@@ -828,6 +828,71 @@ func TestIngestSourcesIndependentParentsDoNotShareLifecycleLock(t *testing.T) {
 	assertIndexParity(t, col, []string{"src-a", "src-b"})
 }
 
+func TestIngestSourcesLifecycleLockHonorsCancellation(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	baseCfg := ingestTestCfg(256)
+	mustIngest(t, col, []SourceDocument{ingestTestSource("src-cancel-lock", 0)}, baseCfg)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	blockingCfg := baseCfg
+	blockingCfg.hooks = &ingestFaultHooks{afterDelete: func(int) error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-cancel-lock", 1)}, blockingCfg)
+		firstDone <- err
+	}()
+	<-entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := col.IngestSources(ctx, []SourceDocument{ingestTestSource("src-cancel-lock", 2)}, baseCfg)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting lifecycle lock err=%v want context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("canceled lifecycle acquisition took %s", elapsed)
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("blocking ingest: %v", err)
+	}
+}
+
+func TestIngestSourcesProgressCallbackCanReadCommittedParent(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	cfg := ingestTestCfg(256)
+	callbackErr := make(chan error, 1)
+	cfg.Progress = func(progress IngestSourcesProgress) {
+		children, err := col.ChunkChildren(progress.SourceID)
+		if err == nil && len(children) == 0 {
+			err = errors.New("progress callback observed no committed children")
+		}
+		callbackErr <- err
+	}
+	ingestDone := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-progress-read", 0)}, cfg)
+		ingestDone <- err
+	}()
+	select {
+	case err := <-ingestDone:
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress callback deadlocked on the committed parent's lifecycle lock")
+	}
+	if err := <-callbackErr; err != nil {
+		t.Fatalf("progress callback: %v", err)
+	}
+}
+
 // TestIngestSourcesCancelBetweenSources proves ctx cancellation stops the
 // pipeline between sources: completed sources stay intact, unstarted sources
 // remain untouched, and the cancellation is surfaced.

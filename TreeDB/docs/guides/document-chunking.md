@@ -25,9 +25,11 @@ chunks, err := chunking.SplitChunks("parent-doc-id", sourceText, cfg)
 
 - **Strategies.** `fixed_window` slices text into overlapping `Size`-rune
   windows. For each recursive window, `recursive` selects the furthest
-  occurrence of the first configured separator that permits forward progress;
-  only when that separator is absent does it try the next. An empty separator
-  immediately hard-splits that window, so entries after `""` are unreachable.
+  occurrence of the first configured separator that permits forward progress.
+  When no occurrence permits forward progress, it tries the next separator.
+  An empty separator immediately hard-splits that window, so entries after
+  `""` are unreachable. When all configured separators fail, the window
+  hard-splits at the size boundary.
 - **Size unit.** Runes only (`SizeUnitRunes`), and this is explicit in the
   config. Token-based sizing would require a tokenizer dependency and a
   model-bound definition of "token"; rune counts are deterministic across

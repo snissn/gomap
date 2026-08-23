@@ -2,11 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
-	"strings"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -35,13 +36,13 @@ func (o ChunkedIngestOptions) textField() string {
 }
 
 func validateChunkTextField(field string) error {
-	root := field
-	if i := strings.IndexByte(root, '.'); i >= 0 {
-		root = root[:i]
+	path, err := parseVectorFieldPath(field)
+	if err != nil {
+		return fmt.Errorf("collections: invalid chunk text field %q: %w", field, err)
 	}
-	switch root {
+	switch path[0] {
 	case chunking.MetaFieldParent, chunking.MetaFieldOrdinal, chunking.MetaFieldKind:
-		return fmt.Errorf("collections: chunk text field %q overlaps reserved linkage root %q", field, root)
+		return fmt.Errorf("collections: chunk text field %q overlaps reserved linkage root %q", field, path[0])
 	default:
 		return nil
 	}
@@ -141,7 +142,38 @@ func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg 
 	return plan, nil
 }
 
-func (c *Collection) lockChunkParentLifecycles(parentIDs [][]byte) (func(), error) {
+type chunkParentLifecycleLocks struct {
+	mu      sync.Mutex
+	unlocks map[string]func()
+}
+
+func (locks *chunkParentLifecycleLocks) release(parentID []byte) {
+	if locks == nil {
+		return
+	}
+	locks.mu.Lock()
+	unlock := locks.unlocks[string(parentID)]
+	delete(locks.unlocks, string(parentID))
+	locks.mu.Unlock()
+	if unlock != nil {
+		unlock()
+	}
+}
+
+func (locks *chunkParentLifecycleLocks) releaseAll() {
+	if locks == nil {
+		return
+	}
+	locks.mu.Lock()
+	unlocks := locks.unlocks
+	locks.unlocks = make(map[string]func())
+	locks.mu.Unlock()
+	for _, unlock := range unlocks {
+		unlock()
+	}
+}
+
+func (c *Collection) lockChunkParentLifecycles(ctx context.Context, parentIDs [][]byte) (*chunkParentLifecycleLocks, error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return nil, fmt.Errorf("collections: chunk lifecycle coordinator unavailable")
@@ -151,15 +183,16 @@ func (c *Collection) lockChunkParentLifecycles(parentIDs [][]byte) (func(), erro
 		ids[i] = string(parentIDs[i])
 	}
 	sort.Strings(ids)
-	unlocks := make([]func(), 0, len(ids))
+	locks := &chunkParentLifecycleLocks{unlocks: make(map[string]func(), len(ids))}
 	for _, id := range ids {
-		unlocks = append(unlocks, coord.lockChunkLifecycle(id))
-	}
-	return func() {
-		for i := len(unlocks) - 1; i >= 0; i-- {
-			unlocks[i]()
+		unlock, err := coord.lockChunkLifecycle(ctx, id)
+		if err != nil {
+			locks.releaseAll()
+			return nil, err
 		}
-	}, nil
+		locks.unlocks[id] = unlock
+	}
+	return locks, nil
 }
 
 func (c *Collection) lockChunkMutation() (func(), error) {
@@ -196,11 +229,11 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	if err := chunking.ValidateParentID(string(parentID)); err != nil {
 		return result, err
 	}
-	unlock, err := c.lockChunkParentLifecycles([][]byte{parentID})
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), [][]byte{parentID})
 	if err != nil {
 		return result, err
 	}
-	defer unlock()
+	defer lifecycleLocks.releaseAll()
 	plan, err := c.buildChunkPlan(parentID, parentDocument, cfg, opts)
 	if err != nil {
 		return result, err
@@ -293,11 +326,11 @@ func (c *Collection) ChunkChildrenWithStats(parentID []byte) ([][]byte, ChunkChi
 	if err := chunking.ValidateParentID(string(parentID)); err != nil {
 		return nil, ChunkChildrenScanStats{}, err
 	}
-	unlock, err := c.lockChunkParentLifecycles([][]byte{parentID})
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), [][]byte{parentID})
 	if err != nil {
 		return nil, ChunkChildrenScanStats{}, err
 	}
-	defer unlock()
+	defer lifecycleLocks.releaseAll()
 	return c.chunkChildrenUnlocked(parentID)
 }
 

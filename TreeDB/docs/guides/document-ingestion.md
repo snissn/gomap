@@ -44,13 +44,17 @@ completed sources.
 
 The shared per-parent lock covers the complete plan through replacement across
 concurrent calls and collection handles; independent parents do not share that
-lifecycle lock. Stale-child deletion, child insertion, and parent upsert remain
-separate collection mutation boundaries. A storage error is therefore
-commit-ambiguous for that source: durable state may be old, new, or between
-those boundaries, including no children after delete or new children with the
-old parent after insert. Retry the same source to converge. Deterministic child
-IDs prevent duplicates. This is not an atomic-publication claim; #4284 owns
-that stronger durability contract.
+lifecycle lock. A separate collection-wide lock serializes each source's
+enumerate/delete/insert/parent-upsert mutation section, so `Concurrency`
+parallelizes planning and embedding but not storage publication. Parent
+lifecycle locks are context-aware and release after a source commits, before
+its progress callback. Stale-child deletion, child insertion, and parent upsert
+remain separate durable boundaries. A storage error is therefore commit-
+ambiguous for that source: durable state may be old, new, or between those
+boundaries, including no children after delete or new children with the old
+parent after insert. Retry the same source to converge. Deterministic child IDs
+prevent duplicates. This is not an atomic-publication claim; #4284 owns that
+stronger durability contract.
 
 ## Quick smoke path
 
