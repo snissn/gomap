@@ -77,7 +77,9 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	}
 	next.reuseState.Store(vectorIndexSearchViewActive)
 	nodes := next.nodes
-	if cap(nodes) < len(idx.nodes) {
+	if len(idx.nodes) < cap(nodes)-len(idx.nodes) {
+		nodes = make([]vectorIndexNode, len(idx.nodes))
+	} else if cap(nodes) < len(idx.nodes) {
 		capacity := maxInt(len(idx.nodes), cap(nodes)*2)
 		nodes = make([]vectorIndexNode, len(idx.nodes), capacity)
 	} else {

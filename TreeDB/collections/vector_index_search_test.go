@@ -5806,6 +5806,11 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	if currentReader.reuseState.Load() != vectorIndexSearchViewDiscarded || index.searchViewSpare.Load() != retired {
 		t.Fatal("more than one retired view was retained for reuse")
 	}
+	retired.mu.Lock()
+	oversized := make([]vectorIndexNode, len(retired.nodes), 1024)
+	copy(oversized, retired.nodes)
+	retired.nodes = oversized
+	retired.mu.Unlock()
 
 	large := index.acquireSearchView()
 	if large == nil {
@@ -5830,6 +5835,10 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	if shrunk != retired {
 		index.releaseSearchView(shrunk)
 		t.Fatal("shrinking publication did not reuse the returned retired view")
+	}
+	if cap(shrunk.nodes) != len(shrunk.nodes) {
+		index.releaseSearchView(shrunk)
+		t.Fatalf("shrunk search view capacity=%d want %d", cap(shrunk.nodes), len(shrunk.nodes))
 	}
 	for i, node := range shrunk.nodes[len(shrunk.nodes):cap(shrunk.nodes)] {
 		if node.documentID != nil || node.vector != nil || node.quantized != nil || node.neighbors != nil {
