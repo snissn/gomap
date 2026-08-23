@@ -1270,7 +1270,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
 					for _, index := range indexes {
 						if index.hasValidSourceDocumentRoots() {
-							index.recordSourceDocumentStateAndPublish(generation, state)
+							index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
 						}
 					}
 				}
@@ -2050,6 +2050,21 @@ func (idx *VectorIndex) recordSourceDocumentStateAndPublish(generation uint64, s
 	idx.mu.Lock()
 	idx.recordSourceDocumentStateLocked(generation, state)
 	idx.publishSearchViewLocked(false)
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateAndPublishIfChanged(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	view := idx.searchView.Load()
+	publish := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation ||
+		view == nil || len(view.nodes) != len(idx.nodes) || len(idx.searchViewDirty) != 0
+	idx.recordSourceDocumentStateLocked(generation, state)
+	if publish {
+		idx.publishSearchViewLocked(false)
+	}
 	idx.mu.Unlock()
 }
 

@@ -1753,6 +1753,37 @@ func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
 	requireVectorResultIDs(t, results, "overlap-first", "overlap-second", "seed")
 }
 
+func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	c, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := c.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := c.registeredVectorIndex(def.Name)
+	if index == nil || index.searchView.Load() == nil {
+		t.Fatal("seed insert did not publish native search view")
+	}
+	before := index.searchView.Load()
+	if ids, err := c.InsertBatch(nil, nil); err != nil || len(ids) != 0 {
+		t.Fatalf("empty insert ids=%q err=%v", ids, err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("empty insert republished the unchanged native graph")
+	}
+}
+
 func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

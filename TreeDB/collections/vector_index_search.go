@@ -1433,6 +1433,11 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 		if err != nil {
 			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {
+				if c.nativeVectorIndexMutationActive() {
+					if status, ok := c.publishedNativeSearchLoadStatus(def, index); ok {
+						return index, status, nil
+					}
+				}
 				unlockCoverage := c.lockVectorIndexCoveragePersistence()
 				current := c.registeredVectorIndex(def.Name)
 				if current != nil {
