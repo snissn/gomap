@@ -435,6 +435,9 @@ func TestLeafGenerationPack_PostPromotionCreateCutRollsBackExactly(t *testing.T)
 		if event.Namespace == durabilitycut.NamespaceCreate &&
 			event.Resource == durabilitycut.ResourceOuterLeaf &&
 			filepath.Clean(filepath.Dir(event.NewPath)) == filepath.Clean(LeafLogDirPath(dir)) {
+			if _, _, ok := parseLeafGenerationBootstrapFileName(filepath.Base(event.NewPath)); !ok {
+				return nil
+			}
 			promotedPath = event.NewPath
 			promotedCreateIndex = len(namespaceEvents) - 1
 			return cutErr
@@ -579,12 +582,14 @@ func TestLeafGenerationPack_PromotedDirectorySyncCutRollsBackExactly(t *testing.
 	testErr := errors.New("leaf pack directory sync failpoint")
 
 	var failOnce atomic.Bool
-	failOnce.Store(true)
 	leafDir := filepath.Clean(LeafLogDirPath(dir))
 	var promotedPath string
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Namespace == durabilitycut.NamespaceCreate && event.Resource == durabilitycut.ResourceOuterLeaf && filepath.Clean(filepath.Dir(event.NewPath)) == leafDir {
-			promotedPath = event.NewPath
+			if _, _, ok := parseLeafGenerationBootstrapFileName(filepath.Base(event.NewPath)); ok {
+				promotedPath = event.NewPath
+				failOnce.Store(true)
+			}
 		}
 		if event.Point == durabilitycut.BeforeNewFileDirectorySync && filepath.Clean(event.Path) == leafDir && failOnce.CompareAndSwap(true, false) {
 			return testErr

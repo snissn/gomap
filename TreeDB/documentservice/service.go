@@ -69,6 +69,10 @@ type serviceBenchmarkSearchCacheEntry struct {
 	info       IndexInfo
 }
 
+func (e *serviceBenchmarkSearchCacheEntry) matches(name string) bool {
+	return e != nil && e.collection != nil && e.info.Name == name
+}
+
 // New returns a document/search service backed by manager.
 func New(manager *collections.CollectionManager) *Service {
 	return &Service{
@@ -128,6 +132,15 @@ func serviceClosedError() error {
 
 // CreateIndex creates or opens a compatible document service index.
 func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
+	if s == nil {
+		return IndexInfo{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.createIndexLocked(ctx, req)
+}
+
+func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest) (IndexInfo, error) {
 	if err := ctxErr(ctx); err != nil {
 		return IndexInfo{}, err
 	}
@@ -198,17 +211,69 @@ func (s *Service) CreateIndex(ctx context.Context, req CreateIndexRequest) (Inde
 		}
 		meta.Indexes = indexes
 	}
-	created, err := s.manager.CreateCollection(meta)
+	created, alreadyExisted, err := s.manager.CreateCollectionWithPreparedCommandWALIntentStatus(*meta, nil)
 	if err != nil {
 		if strings.Contains(err.Error(), "incompatible") {
 			return IndexInfo{}, wrapServiceError(CodeConflict, fmt.Sprintf("index %q already exists with an incompatible schema", req.Name), err)
 		}
 		return IndexInfo{}, wrapServiceError(CodeInternal, "create index failed", err)
 	}
-	if err := s.invalidateBenchmarkSearchCache(req.Name); err != nil {
-		return IndexInfo{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after create index failed", err)
+	if !alreadyExisted {
+		if err := s.invalidateBenchmarkSearchCache(req.Name); err != nil {
+			return IndexInfo{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after create index failed", err)
+		}
 	}
-	return indexInfoFromMeta(*created)
+	info, err := indexInfoFromMeta(*created)
+	if err != nil {
+		return IndexInfo{}, err
+	}
+	if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
+		s.benchmarkSearchCacheMu.RLock()
+		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
+		s.benchmarkSearchCacheMu.RUnlock()
+		if cached {
+			return info, nil
+		}
+		col, _, err := s.openIndex(ctx, req.Name, 0)
+		if err != nil {
+			return IndexInfo{}, err
+		}
+		opts := collections.VectorIndexOptions{
+			Name:           info.VectorIndexName,
+			Field:          info.EmbeddingField,
+			Metric:         collectionMetric,
+			Dimensions:     info.Dimension,
+			M:              info.VectorM,
+			EfConstruction: info.VectorEfConstruction,
+			EfSearch:       info.VectorEfSearch,
+			Encoding:       collections.VectorIndexEncodingFloat32,
+		}
+		index, load, err := col.LoadNativeVectorIndexSnapshot(opts)
+		if err != nil {
+			return IndexInfo{}, mapCollectionMaintenanceError("load native vector index", err)
+		}
+		if index == nil && !load.Loaded && load.RootName != "" && load.RootID == 0 {
+			empty := true
+			if _, err := col.ScanDocumentsFunc(1, func(collections.DocumentRecord) (bool, error) {
+				empty = false
+				return false, nil
+			}); err != nil {
+				return IndexInfo{}, mapCollectionMaintenanceError("inspect native vector index", err)
+			}
+			if empty {
+				index, err = col.BuildVectorIndex(opts)
+				if err != nil {
+					return IndexInfo{}, mapCollectionMaintenanceError("initialize native vector index", err)
+				}
+			}
+		}
+		if index != nil {
+			if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
+				return IndexInfo{}, wrapServiceError(CodeInternal, "prime native vector search cache after create index failed", err)
+			}
+		}
+	}
+	return info, nil
 }
 
 // OpenIndex returns metadata for an existing document service index.
@@ -220,6 +285,12 @@ func (s *Service) OpenIndex(ctx context.Context, name string) (IndexInfo, error)
 
 // UpsertDocuments writes or replaces documents in index.
 func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertDocumentsRequest) (UpsertDocumentsResponse, error) {
+	if s == nil {
+		return UpsertDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
@@ -231,8 +302,6 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if err != nil {
 		return UpsertDocumentsResponse{}, err
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	ids := make([]string, 0, len(prepared))
 	compactEmbeddings := 0
@@ -308,8 +377,8 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		rebuildErr = rebuildServiceVectorIndex(ctx, col)
 	}
 	if inserted+updated > 0 {
-		if err := s.invalidateBenchmarkSearchCache(index); err != nil && rebuildErr == nil {
-			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after upsert failed", err)
+		if err := s.finishVectorMutation(index, col, info); err != nil && rebuildErr == nil {
+			return UpsertDocumentsResponse{}, wrapServiceError(CodeInternal, "publish vector mutation after upsert failed", err)
 		}
 	}
 	if rebuildErr != nil {
@@ -320,6 +389,12 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 
 // DeleteDocuments deletes explicit IDs or documents matching a filter.
 func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteDocumentsRequest) (DeleteDocumentsResponse, error) {
+	if s == nil {
+		return DeleteDocumentsResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return DeleteDocumentsResponse{}, err
@@ -327,8 +402,6 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 	if len(req.IDs) > 0 && req.Filter != nil {
 		return DeleteDocumentsResponse{}, serviceError(CodeInvalidRequest, "delete accepts either ids or filter, not both")
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	var ids []string
 	if len(req.IDs) > 0 {
@@ -359,8 +432,8 @@ func (s *Service) DeleteDocuments(ctx context.Context, index string, req DeleteD
 		return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "delete documents failed", err)
 	}
 	if deleted > 0 {
-		if err := s.invalidateBenchmarkSearchCache(index); err != nil {
-			return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after delete failed", err)
+		if err := s.finishVectorMutation(index, col, info); err != nil {
+			return DeleteDocumentsResponse{}, wrapServiceError(CodeInternal, "publish vector mutation after delete failed", err)
 		}
 	}
 	return DeleteDocumentsResponse{Index: info, Deleted: deleted, IDs: ids}, nil
@@ -538,6 +611,9 @@ func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Rout
 // VectorDBBench needs. Managed benchmark runs should use a fresh data directory;
 // external shared services should use a unique index name per run.
 func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRequest) (ResetIndexResponse, error) {
+	if s == nil {
+		return ResetIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	if err := ctxErr(ctx); err != nil {
 		return ResetIndexResponse{}, err
 	}
@@ -552,7 +628,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		if ErrorCodeOf(err) != CodeIndexNotFound {
 			return ResetIndexResponse{}, err
 		}
-		info, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
+		info, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions})
 		if err != nil {
 			return ResetIndexResponse{}, err
 		}
@@ -570,7 +646,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if existingInfo.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
 		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
 	}
-	if _, err := s.CreateIndex(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
+	if _, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, VectorIndexOptions: req.VectorIndexOptions}); err != nil {
 		return ResetIndexResponse{}, err
 	}
 
@@ -586,19 +662,22 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		if _, err := existingCol.DeleteBatch(deleteIDs); err != nil {
 			return ResetIndexResponse{}, mapCollectionMaintenanceError("reset index", err)
 		}
+		if err := s.finishVectorMutation(index, existingCol, existingInfo); err != nil {
+			return ResetIndexResponse{}, wrapServiceError(CodeInternal, "publish vector mutation after reset failed", err)
+		}
 	}
 	_, info, err := s.openIndex(ctx, index, 0)
 	if err != nil {
 		return ResetIndexResponse{}, err
-	}
-	if err := s.invalidateBenchmarkSearchCache(index); err != nil {
-		return ResetIndexResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache after reset failed", err)
 	}
 	return ResetIndexResponse{Index: info, Created: false, Reset: true, DropOld: req.DropOld, DroppedDocuments: len(ids)}, nil
 }
 
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	if s == nil {
+		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -626,9 +705,11 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		if err := s.primeBenchmarkSearchCache(index, col, info); err != nil {
 			return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "prime benchmark vector search cache after optimize failed", err)
 		}
-		if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
-			_ = s.invalidateBenchmarkSearchCache(index)
-			return OptimizeIndexResponse{}, err
+		if info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
+				_ = s.invalidateBenchmarkSearchCache(index)
+				return OptimizeIndexResponse{}, err
+			}
 		}
 	}
 	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance}, nil
@@ -644,7 +725,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 	}
 	defer release()
 	if !info.Capabilities.NoDocumentVectorSearch {
-		return BenchmarkVectorSearchResponse{}, serviceError(CodeIndexUnavailable, "no-document vector-index search requires a cosine column_graph index")
+		return BenchmarkVectorSearchResponse{}, serviceError(CodeIndexUnavailable, "no-document vector-index search requires a supported cosine float32 index")
 	}
 	if req.TopK <= 0 {
 		return BenchmarkVectorSearchResponse{}, serviceError(CodeInvalidRequest, "top_k must be positive")
@@ -881,7 +962,7 @@ func (s *Service) acquireBenchmarkSearchIndex(ctx context.Context, name string, 
 			return nil, IndexInfo{}, nil, serviceClosedError()
 		}
 		entry := s.benchmarkSearchCache[name]
-		if entry != nil && entry.collection != nil {
+		if entry.matches(name) {
 			info := entry.info
 			if expectedGeneration != 0 && expectedGeneration != info.Generation {
 				s.benchmarkSearchCacheMu.RUnlock()
@@ -904,7 +985,7 @@ func (s *Service) acquireBenchmarkSearchIndex(ctx context.Context, name string, 
 			if s.benchmarkSearchCache == nil {
 				s.benchmarkSearchCache = make(map[string]*serviceBenchmarkSearchCacheEntry)
 			}
-			if existing := s.benchmarkSearchCache[name]; existing != nil && existing.collection != nil {
+			if existing := s.benchmarkSearchCache[name]; existing.matches(name) {
 				closeCol = col
 			} else {
 				s.benchmarkSearchCache[name] = entry
@@ -924,6 +1005,13 @@ func (s *Service) primeBenchmarkSearchCache(name string, col *collections.Collec
 	if s == nil || col == nil {
 		return nil
 	}
+	s.benchmarkSearchCacheMu.RLock()
+	existing := s.benchmarkSearchCache[name]
+	if !s.closed && existing != nil && existing.collection == col {
+		s.benchmarkSearchCacheMu.RUnlock()
+		return nil
+	}
+	s.benchmarkSearchCacheMu.RUnlock()
 	var closeCol *collections.Collection
 	s.benchmarkSearchCacheMu.Lock()
 	if s.closed {
@@ -942,6 +1030,13 @@ func (s *Service) primeBenchmarkSearchCache(name string, col *collections.Collec
 		return closeCol.CloseVectorIndexPreparedSearchCache()
 	}
 	return nil
+}
+
+func (s *Service) finishVectorMutation(name string, col *collections.Collection, info IndexInfo) error {
+	if info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime || !info.Capabilities.NoDocumentVectorSearch {
+		return s.invalidateBenchmarkSearchCache(name)
+	}
+	return s.primeBenchmarkSearchCache(name, col, info)
 }
 
 func (s *Service) invalidateBenchmarkSearchCache(name string) error {
@@ -1005,6 +1100,17 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if err := collections.ValidateCollectionName(name); err != nil {
 		return nil, IndexInfo{}, wrapServiceError(CodeInvalidRequest, "invalid index name", err)
 	}
+	s.benchmarkSearchCacheMu.RLock()
+	entry := s.benchmarkSearchCache[name]
+	if entry.matches(name) {
+		col, info := entry.collection, entry.info
+		s.benchmarkSearchCacheMu.RUnlock()
+		if expectedGeneration != 0 && expectedGeneration != info.Generation {
+			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
+		}
+		return col, info, nil
+	}
+	s.benchmarkSearchCacheMu.RUnlock()
 	col, err := s.manager.OpenCollection(name)
 	if err != nil {
 		return nil, IndexInfo{}, serviceErrorFromCollectionOpen(err, name)
@@ -1620,7 +1726,9 @@ func validateBenchmarkVectorSearchRoute(mode BenchmarkVectorQueryMode, req Bench
 	}
 	switch mode {
 	case BenchmarkVectorQueryModeExact:
-		if diag.Route != collections.VectorIndexSearchRouteExactHNSWSearchPackV1 || !diag.ExactHNSWSearchPackNoDocRoute || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
+		nativeRoute := response.Strategy == collections.VectorIndexStrategyNativeRuntime && diag.Route == collections.VectorIndexSearchRouteNativeRuntime && diag.LiveANN.Enabled && diag.LiveANN.ExactFallbacks == 0 && diag.LiveANN.FullRebuilds == 0
+		packRoute := response.Strategy == collections.VectorIndexStrategyColumnGraph && diag.Route == collections.VectorIndexSearchRouteExactHNSWSearchPackV1 && diag.ExactHNSWSearchPackNoDocRoute
+		if (!nativeRoute && !packRoute) || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
 			return serviceErrorf(CodeIndexUnavailable, "exact benchmark vector search did not use the exact no-document hnsw_search_pack_v1 route: diagnostics=%+v", diag)
 		}
 	case BenchmarkVectorQueryModeQuantizedOnly, BenchmarkVectorQueryModeQuantizedRerank:

@@ -59,6 +59,8 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
@@ -83,7 +85,7 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err == nil && modified {
 		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
 	}
-	return matched, modified, err
+	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func (c *Collection) validateBSONSetDocumentFormat() error {
@@ -142,11 +144,13 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 // value changes in the planning snapshot. This is the BSON-set equivalent of
 // UpdateBatchIfNoSecondaryUniqueIndexChanges.
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	results, batched, err := c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
 	}
-	return results, batched, err
+	return results, batched, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 // PrepareBSONSetUpdateBatchCommandWAL plans a BSON $set batch without applying
@@ -198,6 +202,8 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	if commandWALIntent == nil {
 		return nil, errors.New("collections: UpdateBSONSetBatchWithCommandWALIntent requires command WAL intent")
 	}
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -240,7 +246,7 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUp
 	if err == nil {
 		err = commitAmbiguousError("UpdateBSONSetBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(replacementItems, results))
 	}
-	return results, err
+	return results, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
 func validateBSONSetCommandWALDocumentsForItems(items []BSONSetUpdateBatchItem, docs []commitlog.CollectionDocument) error {

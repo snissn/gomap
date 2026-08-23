@@ -3810,6 +3810,242 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 	}
 }
 
+func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
+	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
+		t.Run(publication, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+			indexes := []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}}
+			if publication == "no_index_read" || publication == "concurrent_no_index_search" {
+				indexes = nil
+			}
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name: "docs",
+				Options: CollectionOptions{
+					DocumentFormat:                   DocumentFormatJSON,
+					BufferedIndexedWrites:            true,
+					BufferedIndexedWriteMaxDocuments: 1024,
+					DisableBufferedIndexedAsyncFlush: true,
+				},
+				Indexes:       indexes,
+				VectorIndexes: []VectorIndexDefinition{def},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+			var stale *VectorIndex
+			if publication == "stale_snapshot_waits_for_delayed_async" {
+				stale = col.registeredVectorIndex(def.Name)
+				current, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+				if err != nil {
+					t.Fatalf("BuildVectorIndex replacement: %v", err)
+				}
+				if current == stale || col.registeredVectorIndex(def.Name) != current {
+					t.Fatalf("replacement current=%p stale=%p registered=%p", current, stale, col.registeredVectorIndex(def.Name))
+				}
+			}
+			if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"kind":"vector","embedding":[1,0]}`)}); err != nil {
+				t.Fatalf("InsertBatch: %v", err)
+			}
+			if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+				t.Fatal("insert did not remain buffered before publication")
+			}
+
+			switch publication {
+			case "status":
+				if _, err := col.VectorIndexStatus(def.Name); err != nil {
+					t.Fatalf("VectorIndexStatus: %v", err)
+				}
+			case "no_index_read":
+				if _, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1}); err != nil {
+					t.Fatalf("FindByCompoundIndexRange: %v", err)
+				}
+			case "concurrent_no_index_search":
+				col.writeDomain.nativeVectorActiveMu.Lock()
+				activeUnlocked := false
+				defer func() {
+					if !activeUnlocked {
+						col.writeDomain.nativeVectorActiveMu.Unlock()
+					}
+				}()
+				flushDone := make(chan error, 1)
+				go func() {
+					_, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1})
+					flushDone <- err
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				for col.writeDomain.mu.TryLock() {
+					col.writeDomain.mu.Unlock()
+					if time.Now().After(deadline) {
+						t.Fatal("read flush did not reach the coverage transition")
+					}
+					runtime.Gosched()
+				}
+				type searchResult struct {
+					response VectorIndexSearchResponse
+					err      error
+				}
+				searchDone := make(chan searchResult, 1)
+				go func() {
+					var buffer VectorIndexSearchBuffer
+					response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+					searchDone <- searchResult{response: response, err: err}
+				}()
+				select {
+				case result := <-searchDone:
+					t.Fatalf("concurrent search escaped coverage transition: response=%+v err=%v", result.response, result.err)
+				case <-time.After(50 * time.Millisecond):
+				}
+				col.writeDomain.nativeVectorActiveMu.Unlock()
+				activeUnlocked = true
+				if err := <-flushDone; err != nil {
+					t.Fatalf("FindByCompoundIndexRange: %v", err)
+				}
+				select {
+				case result := <-searchDone:
+					if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" {
+						t.Fatalf("concurrent search response=%+v err=%v", result.response, result.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("concurrent search remained blocked after coverage refresh")
+				}
+			case "delayed_async":
+				work, err := col.prepareIndexedAsyncPublish()
+				if err != nil || work == nil {
+					t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work, err)
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+			case "snapshot_waits_for_delayed_async":
+				work, err := col.prepareIndexedAsyncPublish()
+				if err != nil || work == nil {
+					t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work, err)
+				}
+				if !col.writeDomain.beginIndexedAsyncFlush() {
+					t.Fatal("beginIndexedAsyncFlush returned false")
+				}
+				finished := false
+				defer func() {
+					if !finished {
+						col.writeDomain.finishIndexedAsyncFlush(errors.New("test cleanup"))
+					}
+				}()
+				waited := make(chan struct{})
+				var waitOnce sync.Once
+				restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
+					waitOnce.Do(func() { close(waited) })
+				})
+				defer restoreWaitHook()
+				saveDone := make(chan error, 1)
+				go func() {
+					_, err := col.registeredVectorIndex(def.Name).SaveNativeSnapshot()
+					saveDone <- err
+				}()
+				select {
+				case <-waited:
+				case <-time.After(5 * time.Second):
+					t.Fatal("snapshot did not wait for delayed async publication")
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+				col.writeDomain.finishIndexedAsyncFlush(nil)
+				finished = true
+				select {
+				case err := <-saveDone:
+					if err != nil {
+						t.Fatalf("SaveNativeSnapshot: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("snapshot remained blocked after delayed async publication")
+				}
+			case "stale_snapshot_waits_for_delayed_async":
+				work, err := col.prepareIndexedAsyncPublish()
+				if err != nil || work == nil {
+					t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work, err)
+				}
+				if !col.writeDomain.beginIndexedAsyncFlush() {
+					t.Fatal("beginIndexedAsyncFlush returned false")
+				}
+				finished := false
+				defer func() {
+					if !finished {
+						col.writeDomain.finishIndexedAsyncFlush(errors.New("test cleanup"))
+					}
+				}()
+				heldMutation := col.lockMutation()
+				mutationReleased := false
+				defer func() {
+					if !mutationReleased {
+						heldMutation.Unlock()
+					}
+				}()
+				type saveResult struct {
+					status VectorIndexLoadStatus
+					err    error
+				}
+				saveDone := make(chan saveResult, 1)
+				go func() {
+					status, err := stale.SaveNativeSnapshot()
+					saveDone <- saveResult{status: status, err: err}
+				}()
+				deadline := time.Now().Add(5 * time.Second)
+				for col.writeDomain.nativeVectorCoverageMu.TryRLock() {
+					col.writeDomain.nativeVectorCoverageMu.RUnlock()
+					if time.Now().After(deadline) {
+						t.Fatal("stale snapshot did not acquire the coverage writer lock")
+					}
+					runtime.Gosched()
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+				col.writeDomain.finishIndexedAsyncFlush(nil)
+				finished = true
+				heldMutation.Unlock()
+				mutationReleased = true
+				select {
+				case result := <-saveDone:
+					if result.err != nil || result.status.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+						t.Fatalf("stale SaveNativeSnapshot status=%+v err=%v", result.status, result.err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("stale snapshot remained blocked after delayed async publication")
+				}
+			}
+			if pending := mgr.StatsSnapshot().PendingDocuments; pending != 0 {
+				t.Fatalf("PendingDocuments=%d want 0 before search", pending)
+			}
+
+			var buffer VectorIndexSearchBuffer
+			got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+			if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" {
+				t.Fatalf("SearchVectorIndexWithBuffer results=%+v err=%v", got.Results, err)
+			}
+			generation, err := col.currentVectorIndexDocumentGeneration()
+			if err != nil {
+				t.Fatalf("currentVectorIndexDocumentGeneration: %v", err)
+			}
+			if index := col.registeredVectorIndex(def.Name); index == nil || !index.coversSourceDocumentGeneration(generation) {
+				t.Fatalf("native runtime does not cover flushed generation %d", generation)
+			}
+		})
+	}
+}
+
 func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -4716,6 +4952,652 @@ func TestSearchVectorIndexNativeRuntimeDoesNotFallbackToColumnGraphV4(t *testing
 	}
 	if got.Path != "" || len(got.Results) != 0 {
 		t.Fatalf("response path=%q results=%d want no column graph fallback", got.Path, len(got.Results))
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding_native",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+		Strategy:   VectorIndexStrategyNativeRuntime,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection fresh handle: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex empty: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	search := func(query []float32) VectorIndexSearchResponse {
+		t.Helper()
+		got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name,
+			Query:     query,
+			TopK:      2,
+			EfSearch:  8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil {
+			t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+		}
+		if got.Path != VectorIndexSearchPathNativeRuntime || got.Stats.SearchRouteNativeRuntime != 1 || got.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime || !got.Diagnostics().LiveANN.Enabled || got.Diagnostics().LiveANN.ExactFallbacks != 0 || got.Diagnostics().LiveANN.FullRebuilds != 0 || !got.Diagnostics().NoDocumentGuardrailsOK || got.Stats.DocumentsFetched != 0 {
+			t.Fatalf("native response=%+v diagnostics=%+v", got, got.Diagnostics())
+		}
+		return got
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || string(got.Results[0].ID) != "a" {
+		t.Fatalf("initial results=%+v want a first", got.Results)
+	}
+	if matched, err := col.Replace([]byte("a"), []byte(`{"embedding":[-1,0]}`)); err != nil || !matched {
+		t.Fatalf("Replace matched=%v err=%v", matched, err)
+	}
+	if got := search([]float32{1, 0}); len(got.Results) != 2 || string(got.Results[0].ID) == "a" {
+		t.Fatalf("updated results=%+v want replacement excluded from old-vector top hit", got.Results)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if got := search([]float32{-1, 0}); len(got.Results) != 1 || string(got.Results[0].ID) != "b" {
+		t.Fatalf("deleted results=%+v want only b", got.Results)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var concurrentBuffer VectorIndexSearchBuffer
+			_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &concurrentBuffer)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent native runtime search: %v", err)
+		}
+	}
+	if _, err := freshCol.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex fresh handle: %v", err)
+	}
+	if col.registeredVectorIndex(def.Name) != freshCol.registeredVectorIndex(def.Name) {
+		t.Fatal("collection handles did not converge on the replacement native graph")
+	}
+	if got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "b" {
+		t.Fatalf("native runtime search after cross-handle rebuild results=%+v err=%v", got.Results, err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeSteadyStateAllocations(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native runtime is nil")
+	}
+	if _, err := index.SaveNativeDeltaSnapshot(); err != nil {
+		t.Fatalf("no-work SaveNativeDeltaSnapshot: %v", err)
+	}
+	state, ok := d.StateToken()
+	if !ok || !index.coversSourceDocumentState(state) {
+		t.Fatal("native runtime did not preserve its exact post-write DB state across a no-work save")
+	}
+
+	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(opts, &buffer); err != nil {
+		t.Fatalf("warm SearchVectorIndexWithBuffer: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "native-runtime-search-with-buffer") {
+		return
+	}
+	var sink int
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(got.Results) != 1 {
+			panic("unexpected native runtime result count")
+		}
+		sink += len(got.Results) + len(got.Results[0].ID)
+	})
+	if allocs != 0 {
+		t.Fatalf("native runtime SearchVectorIndexWithBuffer steady-state allocs=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
+	}
+}
+
+func TestSearchVectorIndexWithBufferRefreshesNativeRouteAcrossHandles(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	fresh, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection fresh: %v", err)
+	}
+	if _, err := fresh.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := fresh.CreateVectorIndex(def); err != nil {
+		t.Fatalf("CreateVectorIndex: %v", err)
+	}
+	if _, err := fresh.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := stale.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" || got.Stats.SearchRouteNativeRuntime != 1 {
+		t.Fatalf("cross-handle native search results=%+v stats=%+v err=%v", got.Results, got.Stats, err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferRejectsRuntimeBehindCurrentGeneration(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	ids, err := col.insertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("insertBatch: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || got.Status.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("stale runtime search response=%+v err=%v", got, err)
+	}
+	if err := col.notifyVectorIndexesUpsert(ids); err != nil {
+		t.Fatalf("notifyVectorIndexesUpsert: %v", err)
+	}
+}
+
+func TestNativeRuntimeDelayedCrossHandleDeleteReconcilesCurrentDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	first, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection first: %v", err)
+	}
+	second, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection second: %v", err)
+	}
+	if _, err := first.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("initial InsertBatch: %v", err)
+	}
+	if deleted, err := first.DeleteDocument([]byte("a")); err != nil || !deleted {
+		t.Fatalf("DeleteDocument deleted=%v err=%v", deleted, err)
+	}
+	if _, err := second.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("replacement InsertBatch: %v", err)
+	}
+	if err := first.notifyVectorIndexesDelete([][]byte{[]byte("a")}); err != nil {
+		t.Fatalf("delayed delete reconciliation: %v", err)
+	}
+	if first.registeredVectorIndex(def.Name) != second.registeredVectorIndex(def.Name) {
+		t.Fatal("collection handles do not share the native graph")
+	}
+	var buffer VectorIndexSearchBuffer
+	got, err := second.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "a" {
+		t.Fatalf("search after delayed delete results=%+v err=%v", got.Results, err)
+	}
+}
+
+func TestNativeRuntimeSearchValidationSerializesSnapshotPublication(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
+	publishDone := make(chan error, 1)
+	go func() {
+		_, err := index.SaveNativeDeltaSnapshot()
+		publishDone <- err
+	}()
+	select {
+	case err := <-publishDone:
+		publicationMu.RUnlock()
+		t.Fatalf("native publication crossed validation read lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publicationMu.RUnlock()
+	if err := <-publishDone; err != nil {
+		t.Fatalf("SaveNativeDeltaSnapshot: %v", err)
+	}
+
+	publicationMu.Lock()
+	searchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		_, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		publicationMu.Unlock()
+		t.Fatalf("native validation crossed publication write lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publicationMu.Unlock()
+	if err := <-searchDone; err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+}
+
+func TestNativeRuntimeDropSerializesSearchPublication(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
+	dropDone := make(chan error, 1)
+	go func() {
+		_, err := col.DropVectorIndex(def.Name)
+		dropDone <- err
+	}()
+	select {
+	case err := <-dropDone:
+		publicationMu.RUnlock()
+		t.Fatalf("DropVectorIndex crossed search publication read lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	publicationMu.RUnlock()
+	if err := <-dropDone; err != nil {
+		t.Fatalf("DropVectorIndex: %v", err)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, ErrIndexNotFound) || len(got.Results) != 0 {
+		t.Fatalf("search after drop results=%+v err=%v, want fail closed", got.Results, err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeTombstonesDoNotReduceTopK(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 2, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.99,0.01]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[-1,0]}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	for _, id := range []string{"a", "b"} {
+		matched, err := col.Replace([]byte(id), []byte(`{"embedding":[-0.99,-0.01]}`))
+		if err != nil || !matched {
+			t.Fatalf("Replace %s matched=%v err=%v", id, matched, err)
+		}
+	}
+	for range 16 {
+		for _, id := range []string{"a", "b"} {
+			for _, document := range [][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[-0.99,-0.01]}`)} {
+				matched, err := col.Replace([]byte(id), document)
+				if err != nil || !matched {
+					t.Fatalf("churn Replace %s matched=%v err=%v", id, matched, err)
+				}
+			}
+		}
+	}
+
+	var buffer VectorIndexSearchBuffer
+	got, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer: %v", err)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("results=%+v want TopK live results despite closer tombstones", got.Results)
+	}
+	if got.Stats.CandidateRows != 4 || !got.Status.RebuildNeeded {
+		t.Fatalf("native search state candidate_rows=%d rebuild_needed=%v want 4,true", got.Stats.CandidateRows, got.Status.RebuildNeeded)
+	}
+	if candidates := len(buffer.nativeSearchScratch.out); candidates > 2 {
+		t.Fatalf("native live candidate heap=%d want efSearch bound 2", candidates)
+	}
+	wide, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  100,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(wide.Results) != 2 {
+		t.Fatalf("wide efSearch response=%+v err=%v want two live results", wide, err)
+	}
+	if got := buffer.nativeSearchScratch.explorationLimit; got <= 0 || got >= 100 {
+		t.Fatalf("wide efSearch exploration limit=%d want a positive bound below requested efSearch", got)
+	}
+	if got := buffer.nativeSearchScratch.explored; got > buffer.nativeSearchScratch.explorationLimit {
+		t.Fatalf("wide efSearch explored=%d limit=%d want bounded total scoring", got, buffer.nativeSearchScratch.explorationLimit)
+	}
+	zero, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      0,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(zero.Results) != 0 || zero.Diagnostics().Route != VectorIndexSearchRouteNativeRuntime {
+		t.Fatalf("zero TopK response=%+v err=%v want empty native route", zero, err)
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1},
+		TopK:      0,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err == nil || len(buffer.results) != 0 {
+		t.Fatalf("zero TopK invalid query err=%v buffered_results=%d want validation error and reset", err, len(buffer.results))
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+	_, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, EfSearch: 2, FetchMultiplier: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("ordinary Search: %v", err)
+	}
+	if trace.CandidatesExamined > 2 {
+		t.Fatalf("ordinary Search candidates=%d want configured bound 2", trace.CandidatesExamined)
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
+	}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "StatsMode=default") || len(buffer.results) != 0 {
+		t.Fatalf("default stats-mode err=%v buffered_results=%d want accurately named fail-closed reset", err, len(buffer.results))
+	}
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  2,
+		StatsMode: VectorIndexSearchStatsModeWorkAccounting,
+	}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(buffer.results) != 0 {
+		t.Fatalf("work-accounting err=%v buffered_results=%d want fail-closed reset", err, len(buffer.results))
+	}
+}
+
+func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 4})
+	if err != nil {
+		t.Fatalf("newVectorIndex: %v", err)
+	}
+	index.mu.Lock()
+	for i, vector := range [][]float32{{1, 0}, {0.9, 0.1}, {0, 1}, {-1, 0}} {
+		if err := index.insertVectorLocked([]byte{byte('a' + i)}, vector); err != nil {
+			index.mu.Unlock()
+			t.Fatalf("insertVectorLocked: %v", err)
+		}
+	}
+	index.mu.Unlock()
+
+	query := []float32{1, 0}
+	var buffer VectorIndexSearchBuffer
+	if _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
+		t.Fatalf("warm searchGraphOnlyWithBuffer: %v", err)
+	}
+	if collectionsRaceEnabled {
+		t.Skip("AllocsPerRun is not stable under -race")
+	}
+	if !enterIsolatedVectorAllocationGate(t, "native-search-with-buffer") {
+		return
+	}
+	var sink int
+	allocs := testing.AllocsPerRun(1000, func() {
+		results, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer)
+		if err != nil {
+			panic(err)
+		}
+		if len(results) != 2 {
+			panic("unexpected native buffered result count")
+		}
+		sink += len(results) + len(results[0].ID)
+	})
+	if allocs != 0 {
+		t.Fatalf("native searchGraphOnlyWithBuffer steady-state allocs=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("allocation check did not consume results")
+	}
+}
+
+func TestValidateRegisteredNativeRuntimeVectorIndexMissingCollectionFailsClosed(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	c := &Collection{db: d, name: "missing"}
+	_, _, err = c.validateRegisteredNativeRuntimeVectorIndexForSearch(VectorIndexDefinition{Name: "embedding_native"}, &VectorIndex{})
+	if !errors.Is(err, errCollectionNotFound) {
+		t.Fatalf("validate missing collection err=%v want errCollectionNotFound", err)
+	}
+}
+
+func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	_, err = col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("SearchVectorIndexWithBuffer err=%v want unavailable", err)
+	}
+	if col.registeredVectorIndex(def.Name) != nil {
+		t.Fatal("missing-root search registered or rebuilt a native graph")
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 17)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			var searchBuffer VectorIndexSearchBuffer
+			response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
+			if err == nil && response.Diagnostics().LiveANN.FullRebuilds != 1 {
+				errs <- fmt.Errorf("successful search observed live ANN full rebuilds=%d want 1", response.Diagnostics().LiveANN.FullRebuilds)
+				return
+			}
+			if err != nil && !errors.Is(err, ErrVectorIndexSearchUnavailable) {
+				errs <- err
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		_, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)})
+		errs <- err
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent first insert/search: %v", err)
+		}
+	}
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil {
+		t.Fatalf("SearchVectorIndexWithBuffer after automatic rebuild: %v", err)
+	}
+	if got := response.Diagnostics().LiveANN.FullRebuilds; got != 1 {
+		t.Fatalf("live ANN full rebuilds=%d want 1", got)
 	}
 }
 

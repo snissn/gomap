@@ -1584,6 +1584,9 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndM
 		}
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
+	if err := c.addDocumentMutationGenerationUpdate(updates, updatedMeta, rootNames); err != nil {
+		return nil, CollectionMeta{}, err
+	}
 	iter, err := buildSystemDeltaIterator(updates)
 	if err != nil {
 		return nil, CollectionMeta{}, err

@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -23,6 +25,21 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
 	store.durabilityCounters = counters
 	defer store.Close()
+	var creates, renames, contentSyncs, namespaceSyncs int
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceCreate:
+			creates++
+		case event.Namespace == durabilitycut.NamespaceRename:
+			renames++
+		case event.Point == durabilitycut.AfterDependencyFileSync:
+			contentSyncs++
+		case event.Point == durabilitycut.AfterNewFileDirectorySync:
+			namespaceSyncs++
+		}
+		return nil
+	})
+	defer restore()
 
 	manifest := newLeafGenerationManifest(10)
 	token, err := store.Replace(manifest)
@@ -55,6 +72,9 @@ func TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken(t *testi
 	if got := counters.NamespaceSyncs.Load(); got != 1 {
 		t.Fatalf("namespace syncs=%d want exactly 1", got)
 	}
+	if creates != 2 || renames != 1 || contentSyncs != 2 || namespaceSyncs != 2 {
+		t.Fatalf("durability observations create=%d rename=%d content-sync=%d namespace-sync=%d want 2,1,2,2", creates, renames, contentSyncs, namespaceSyncs)
+	}
 	if got := registry.PinCount(token.Identity()); got != 1 {
 		t.Fatalf("pin count=%d want 1", got)
 	}
@@ -85,6 +105,57 @@ func TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(leafDir, leafGenerationManifestFileName)); !os.IsNotExist(err) {
 		t.Fatalf("diagnostic replacement path became authoritative: %v", err)
+	}
+}
+
+func TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind(t *testing.T) {
+	root := t.TempDir()
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store := newLeafGenerationManifestStore(leafDir, rootpublication.NewIdentityPinRegistry(), leafGenerationManifestStable, nil)
+	defer store.Close()
+	model, err := powerlossoracle.Capture(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedDir := filepath.Join(root, "retained_leaf_vlog")
+	if err := os.Rename(leafDir, retainedDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(leafDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Observe(root, durabilitycut.Event{Point: durabilitycut.AfterNewFileDirectorySync, Path: root}); err != nil {
+		t.Fatalf("stabilize rebind fixture: %v", err)
+	}
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		return model.Observe(root, event)
+	})
+	token, err := store.Replace(newLeafGenerationManifest(1))
+	restore()
+	if err != nil {
+		t.Fatalf("Replace after path rebind: %v", err)
+	}
+	token.Release()
+
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", leafGenerationManifestFileName)); err != nil {
+		t.Fatalf("retained crash manifest: %v", err)
+	}
+	revisionName := leafGenerationDurableManifestFileName(1)
+	if _, err := os.Stat(filepath.Join(crashDir, "retained_leaf_vlog", revisionName)); err != nil {
+		t.Fatalf("retained crash revision: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "leaf_vlog", leafGenerationManifestFileName)); !os.IsNotExist(err) {
+		t.Fatalf("rebound crash path became authoritative: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, "leaf_vlog", revisionName)); !os.IsNotExist(err) {
+		t.Fatalf("rebound crash revision became authoritative: %v", err)
 	}
 }
 

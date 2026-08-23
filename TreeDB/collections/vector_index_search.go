@@ -21,6 +21,9 @@ var collectionSearchVectorIndexResponseBufferPool sync.Pool
 type VectorIndexSearchPath string
 
 const (
+	// VectorIndexSearchPathNativeRuntime searches the collection's persistent
+	// mutable native HNSW graph without fetching source documents.
+	VectorIndexSearchPathNativeRuntime VectorIndexSearchPath = "native_runtime"
 	// VectorIndexSearchPathColumnGraphNativeReader searches persisted column_graph
 	// state through the native reader. Current healthy indexes use TVIS/base
 	// typed-column sources; legacy physical graph rows are compatibility fallback
@@ -445,6 +448,10 @@ type VectorIndexSearchStats struct {
 
 	// SearchRouteColumnGraphPrepared reports that this search used the current prepared column_graph route.
 	SearchRouteColumnGraphPrepared uint64 `json:"search_route_column_graph_prepared,omitempty"`
+	// SearchRouteNativeRuntime reports that this search used the persistent mutable native HNSW graph.
+	SearchRouteNativeRuntime uint64 `json:"search_route_native_runtime,omitempty"`
+	// NativeRuntimeFullRebuilds reports automatic document-scan rebuilds retained by the selected live graph.
+	NativeRuntimeFullRebuilds uint64 `json:"native_runtime_full_rebuilds,omitempty"`
 	// SearchRouteColumnGraphFallback reports that this search used the column_graph compatibility/fallback route instead of the prepared route.
 	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
 	// SearchRouteHNSWSearchPack reports that this search used the exact FP32 hnsw_search_pack_v1 route.
@@ -615,6 +622,8 @@ type VectorIndexSearchRouteKind string
 const (
 	// VectorIndexSearchRouteUnknown reports that stats did not identify a search route.
 	VectorIndexSearchRouteUnknown VectorIndexSearchRouteKind = "unknown"
+	// VectorIndexSearchRouteNativeRuntime reports the persistent mutable native HNSW route.
+	VectorIndexSearchRouteNativeRuntime VectorIndexSearchRouteKind = "native_runtime"
 	// VectorIndexSearchRouteExactHNSWSearchPackV1 reports the exact FP32 hnsw_search_pack_v1 route.
 	VectorIndexSearchRouteExactHNSWSearchPackV1 VectorIndexSearchRouteKind = "exact_hnsw_search_pack_v1"
 	// VectorIndexSearchRouteQuantizedOnly reports the codec-generic quantized-only route.
@@ -695,6 +704,15 @@ type VectorIndexSearchDiagnostics struct {
 	HNSWSearchPackCacheMisses     uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
 	HNSWSearchPackCacheWaits      uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
 	HNSWSearchPackCacheBuilds     uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
+	LiveANN                       VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
+}
+
+// VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
+// the mutable ANN route rather than rebuilding or scanning exact documents.
+type VectorIndexSearchLiveANNDiagnostics struct {
+	Enabled        bool   `json:"enabled"`
+	ExactFallbacks uint64 `json:"exact_fallbacks"`
+	FullRebuilds   uint64 `json:"full_rebuilds"`
 }
 
 // Diagnostics returns a compact route/status summary for the response.
@@ -721,12 +739,18 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		HNSWSearchPackCacheMisses:     s.HNSWSearchPackCacheMisses,
 		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
 		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
+		LiveANN: VectorIndexSearchLiveANNDiagnostics{
+			Enabled:      s.SearchRouteNativeRuntime > 0,
+			FullRebuilds: s.NativeRuntimeFullRebuilds,
+		},
 	}
 }
 
 // RouteKind reports the low-cardinality route selected for this search.
 func (s VectorIndexSearchStats) RouteKind() VectorIndexSearchRouteKind {
 	switch {
+	case s.SearchRouteNativeRuntime > 0:
+		return VectorIndexSearchRouteNativeRuntime
 	case s.SearchRouteQuantizedOnly > 0:
 		return VectorIndexSearchRouteQuantizedOnly
 	case s.SearchRouteQuantizedRerank > 0:
@@ -812,9 +836,10 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
-	results       []VectorIndexSearchResult
-	idBytes       []byte
-	searchScratch columnVectorGraphNativeSearchScratch
+	results             []VectorIndexSearchResult
+	idBytes             []byte
+	searchScratch       columnVectorGraphNativeSearchScratch
+	nativeSearchScratch vectorIndexSearchScratch
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -1222,6 +1247,28 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
+	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	if !catalogCurrent {
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, backenddb.ErrClosed
+		}
+		catalog, err := c.catalogForSnapshot(snap)
+		_ = snap.Close()
+		if err != nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, err
+		}
+		if catalog == nil {
+			buffer.Reset()
+			return VectorIndexSearchResponse{}, errCollectionNotFound
+		}
+		def, found = findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
+	}
+	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
 		buffer.Reset()
@@ -1294,6 +1341,188 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		return lastResponse, lastErr
 	}
 	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a healthy exact no-document hnsw_search_pack_v1 route; rebuild the vector index or use SearchVectorIndex for the response-owned convenience path", ErrVectorIndexSearchUnavailable, opts.IndexName)
+}
+
+func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	response := VectorIndexSearchResponse{
+		IndexName: def.Name,
+		Strategy:  def.Strategy,
+		Path:      VectorIndexSearchPathNativeRuntime,
+		Status: VectorIndexStatus{
+			Definition: def,
+			Name:       def.Name,
+			Strategy:   def.Strategy,
+			State:      VectorIndexStateNativeRuntime,
+			Reason:     VectorIndexReasonNativeRuntime,
+		},
+	}
+	if def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+		buffer.Reset()
+		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	if opts.StatsMode == VectorIndexSearchStatsModeDefault || opts.StatsMode == VectorIndexSearchStatsModeFullDiagnostics {
+		buffer.Reset()
+		mode := string(opts.StatsMode)
+		if mode == "" {
+			mode = "default"
+		}
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode="+mode, "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
+	}
+	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
+		buffer.Reset()
+		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=work_accounting", "native_runtime work-accounting counters are not implemented; use production/minimal mode with CPU profiles")
+	}
+	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
+	if err != nil {
+		buffer.Reset()
+		return response, err
+	}
+	if queryMode != columnVectorGraphNativeSearchQueryModeExact {
+		buffer.Reset()
+		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def)
+		if err != nil {
+			buffer.Reset()
+			response.Status.ExactFallbackReason = load.ExactFallbackReason
+			return response, err
+		}
+		if index == nil || !load.Loaded {
+			buffer.Reset()
+			response.Status.ExactFallbackReason = load.ExactFallbackReason
+			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
+		}
+		publicationMu := index.nativePublicationLock()
+		publicationMu.RLock()
+		if c.registeredVectorIndex(def.Name) != index {
+			publicationMu.RUnlock()
+			continue
+		}
+		response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		if err == nil {
+			_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
+			response.Status.Loaded = true
+			response.Status.Registered = true
+			response.Status.RootName = load.RootName
+			response.Status.RootID = load.RootID
+			response.Status.NativeRootLoaded = load.RootID != 0
+			response.Status.NativeRootBytes = load.BytesDisk
+			response.Status.RebuildNeeded = rebuildNeeded
+			response.Stats.SearchRouteNativeRuntime = 1
+			response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
+			response.Stats.CandidateRows = uint64(liveDocs)
+		} else if !index.hasValidSourceDocumentRoots() {
+			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		}
+		publicationMu.RUnlock()
+		return response, err
+	}
+	buffer.Reset()
+	response.Status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+	return response, fmt.Errorf("%w: native_runtime vector index %q changed during search validation", ErrVectorIndexSearchUnavailable, def.Name)
+}
+
+func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if index := c.registeredVectorIndex(def.Name); index != nil {
+		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+		if err != nil {
+			if current := c.registeredVectorIndex(def.Name); current != nil && current != index {
+				return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
+			}
+		}
+		return validated, status, err
+	}
+	unlockLoad := c.lockNativeVectorIndexLoad()
+	defer unlockLoad()
+	if index := c.registeredVectorIndex(def.Name); index != nil {
+		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
+	}
+	index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		return nil, status, err
+	}
+	return index, status, nil
+}
+
+func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (VectorIndexDefinition, bool, bool) {
+	if c == nil || c.db == nil {
+		return VectorIndexDefinition{}, false, false
+	}
+	state, ok := c.db.StateToken()
+	if !ok {
+		return VectorIndexDefinition{}, false, false
+	}
+	def, _, found, current := c.cachedVectorIndexForState(name, "", state)
+	return def, found, current
+}
+
+func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if c.catalog == nil || state.SystemRootPageID == 0 || c.catalogSystemRoot != state.SystemRootPageID || (c.catalogCommitSeq != state.CommitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+		return VectorIndexDefinition{}, 0, false, false
+	}
+	def, ok := findVectorIndex(c.catalog.meta.VectorIndexes, name)
+	if !ok {
+		return VectorIndexDefinition{}, 0, false, true
+	}
+	return def, c.catalog.rootID(rootName), true, true
+}
+
+func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if index == nil {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: "nil_index"}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: nil_index", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	publicationMu := index.nativePublicationLock()
+	publicationMu.RLock()
+	defer publicationMu.RUnlock()
+	rootName := index.nativeRootName
+	if state, ok := c.db.StateToken(); ok && rootName != "" && index.coversSourceDocumentState(state) {
+		currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, rootName, state)
+		if current && found && index.validateNativeSnapshotDefinition(currentDef) == "" && rootID == index.nativeSnapshotBaseEpochForFullSave() {
+			epoch, bytesDisk, _, _, _ := index.nativeSearchState()
+			return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
+		}
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	state, ok := snap.StateToken()
+	if !ok {
+		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return nil, VectorIndexLoadStatus{}, err
+	}
+	if catalog == nil {
+		return nil, VectorIndexLoadStatus{}, errCollectionNotFound
+	}
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return nil, VectorIndexLoadStatus{}, err
+	}
+	if !index.coversSourceDocumentGeneration(documentGeneration) {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
+	if !ok {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackMissingVectorIndexMetadata}, fmt.Errorf("%w: native_runtime vector index %q is not declared", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	if reason := index.validateNativeSnapshotDefinition(currentDef); reason != "" {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: reason}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: %s", ErrVectorIndexSearchUnavailable, def.Name, reason)
+	}
+	rootName = collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+	rootID := catalog.rootID(rootName)
+	if rootID != index.nativeSnapshotBaseEpochForFullSave() {
+		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleRuntimeIndex}, fmt.Errorf("%w: native_runtime vector index %q is stale", ErrVectorIndexSearchUnavailable, def.Name)
+	}
+	index.recordSourceDocumentState(documentGeneration, state)
+	epoch, bytesDisk, _, _, _ := index.nativeSearchState()
+	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
 }
 
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {

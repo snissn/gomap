@@ -252,8 +252,11 @@ func TestPowerLossCertificationGroupedLifecyclePublicReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireGroupCertificationSelector(t, groupedLifecycleVariant, durabilitycut.AfterMetaSync, 0)
+	var observeMu sync.Mutex
 	frozen := false
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		observeMu.Lock()
+		defer observeMu.Unlock()
 		if frozen {
 			return nil
 		}
@@ -274,7 +277,10 @@ func TestPowerLossCertificationGroupedLifecyclePublicReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore()
-	if !frozen {
+	observeMu.Lock()
+	wasFrozen := frozen
+	observeMu.Unlock()
+	if !wasFrozen {
 		t.Fatal("grouped lifecycle checkpoint emitted no stable meta boundary")
 	}
 	stats := database.Stats()

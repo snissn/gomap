@@ -17,19 +17,19 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const (
-	vectorIndexFormatVersion  = 1
-	vectorIndexDirName        = "vector_indexes"
-	vectorIndexManifestFile   = "manifest.json"
-	vectorIndexMetaFile       = "meta.json"
-	vectorIndexNodesFile      = "nodes.json"
-	vectorIndexEdgesFile      = "edges.json"
-	vectorIndexTombstonesFile = "tombstones.json"
-	vectorIndexDocMapFile     = "docmap.json"
+	vectorIndexFormatVersion             = 1
+	vectorIndexDocumentGenerationVersion = 3
+	vectorIndexDirName                   = "vector_indexes"
+	vectorIndexManifestFile              = "manifest.json"
+	vectorIndexMetaFile                  = "meta.json"
+	vectorIndexNodesFile                 = "nodes.json"
+	vectorIndexEdgesFile                 = "edges.json"
+	vectorIndexTombstonesFile            = "tombstones.json"
+	vectorIndexDocMapFile                = "docmap.json"
 
 	vectorIndexNativeKeyMeta           = "meta"
 	vectorIndexNativeKeyPrefixNode     = "node/"
@@ -41,8 +41,9 @@ const (
 )
 
 var (
-	errVectorIndexNotDeclared     = errors.New("collections: vector index is not declared in collection metadata")
-	errVectorIndexStaleNativeRoot = errors.New("collections: vector index native root changed since load")
+	errVectorIndexNotDeclared             = errors.New("collections: vector index is not declared in collection metadata")
+	errVectorIndexStaleNativeRoot         = errors.New("collections: vector index native root changed since load")
+	errVectorIndexStaleDocumentGeneration = errors.New("collections: vector index document generation changed since load")
 )
 
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
@@ -91,16 +92,29 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockCoverage := c.lockVectorIndexCoveragePersistence()
+	defer unlockCoverage()
+	return idx.saveNativeSnapshotWithCoverageLocked()
+}
+
+func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	c := idx.collection
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
+		return status, err
+	}
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
 		return staleStatus, err
 	} else if stale {
 		return staleStatus, nil
 	}
-	if err := c.flushBufferedWrites(); err != nil {
+	sourceDocumentGeneration, sourceDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
 		return status, err
 	}
+	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
 	return idx.saveNativeSnapshotPrepared()
 }
 
@@ -108,6 +122,10 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 	status := VectorIndexLoadStatus{}
 	if c == nil || idx == nil {
 		return status, false, nil
+	}
+	if idx.isNativePersistent() && !idx.hasValidSourceDocumentRoots() {
+		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		return status, false, fmt.Errorf("%w: index %q does not cover current documents", errVectorIndexStaleNativeRoot, idx.name)
 	}
 	if c.isRegisteredVectorIndex(idx) {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
@@ -120,11 +138,11 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 		}
 		return status, false, nil
 	}
-	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
+	if idx.isNativePersistent() || collectionMetaDeclaresNativeVectorIndex(c.meta, idx.name) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, true, nil
 	}
-	declared, err := c.refreshVectorIndexDeclaration(idx.name)
+	declared, err := c.refreshNativeVectorIndexDeclaration(idx.name)
 	if err != nil || !declared {
 		return status, false, nil
 	}
@@ -135,6 +153,10 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
 // already acquired the collection mutation barrier and flushed buffered writes.
 func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
+	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(nil)
+}
+
+func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -160,7 +182,7 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -194,16 +216,38 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, replay)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
 	iter := publishTable.NewIterator(nil, nil)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	publicationMu := idx.nativePublicationLock()
+	publicationMu.Lock()
+	newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn([]backenddb.OrderedRootDeltaPublishInput{{
 		// Native vector snapshots are full graph images. Publish a replacement
 		// root so keys removed by rebuild/shrink do not survive from prior roots.
 		BaseRoot:      0,
 		Iter:          iter,
 		StoragePolicy: policy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	}}, columnWritePublishInput{
+		meta:             catalog.meta,
+		baseCommitSeq:    baseCommitSeq,
+		baseSystemRoot:   baseSystemRoot,
+		rootNames:        []string{rootName},
+		baseRootIDs:      baseRootIDs,
+		commandWALIntent: intent,
 	})
+	if err == nil && len(rootIDs) == 1 {
+		status.Loaded = true
+		status.RootID = rootIDs[0]
+		status.Epoch = rootIDs[0]
+		status.BytesDisk = bytesDisk
+		idx.setNativePersistent(true)
+		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+		c.RegisterVectorIndex(idx)
+	}
+	publicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {
@@ -212,15 +256,14 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	if len(rootIDs) != 1 {
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
-	status.Loaded = true
-	status.RootID = rootIDs[0]
-	status.Epoch = rootIDs[0]
-	status.BytesDisk = bytesDisk
-	idx.setNativePersistent(true)
-	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if generation, valid := idx.sourceDocumentCoverage(); valid {
+		if state, ok := c.db.StateToken(); ok && state.SystemRootPageID == newSystemRoot {
+			idx.recordSourceDocumentState(generation, state)
+		}
+	}
 	return status, nil
 }
 
@@ -246,6 +289,115 @@ func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error)
 	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
 }
 
+func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, expectedRoot uint64, replaceCurrent *VectorIndex, replaceMutationSeq uint64) (*VectorIndex, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if candidate == nil {
+		return nil, errors.New("collections: vector index is nil")
+	}
+	candidateGeneration, candidateCoverageValid := candidate.sourceDocumentCoverage()
+	runNativeVectorIndexBeforeInstallHookForTest(candidate.name)
+	publicationMu := candidate.nativePublicationLock()
+	publicationMu.Lock()
+	defer publicationMu.Unlock()
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, candidate.name)
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
+		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
+	}
+	activeRoot := catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name))
+	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return nil, err
+	}
+	current := c.registeredVectorIndex(def.Name)
+	replaceCurrentUnchanged := current != nil && current == replaceCurrent && current.nativeMutationSequence() == replaceMutationSeq && activeRoot == expectedRoot
+	if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == activeRoot && current.coversSourceDocumentGeneration(documentGeneration) {
+		if !replaceCurrentUnchanged {
+			return current, nil
+		}
+	}
+	if reason := candidate.validateNativeSnapshotDefinition(def); reason != "" {
+		return nil, fmt.Errorf("%w: index %q candidate metadata changed: %s", errVectorIndexStaleNativeRoot, def.Name, reason)
+	}
+	if activeRoot != expectedRoot {
+		return nil, fmt.Errorf("%w: index %q candidate root %d current root %d", errVectorIndexStaleNativeRoot, def.Name, expectedRoot, activeRoot)
+	}
+	if current != nil && current.needsNativeAutoPersist() && !replaceCurrentUnchanged {
+		return nil, fmt.Errorf("%w: refusing to replace dirty registered index %q", errVectorIndexStaleNativeRoot, def.Name)
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	candidate.invalidateSourceDocumentRoots()
+	c.RegisterVectorIndex(candidate)
+	rollback := func() {
+		if c.registeredVectorIndex(def.Name) != candidate {
+			return
+		}
+		if current != nil {
+			c.RegisterVectorIndex(current)
+		} else {
+			c.UnregisterVectorIndex(def.Name)
+		}
+	}
+	postInstall := c.db.AcquireSnapshot()
+	if postInstall == nil {
+		rollback()
+		return nil, backenddb.ErrClosed
+	}
+	postCatalog, err := loadCollectionCatalog(postInstall, c.meta.Name)
+	if err != nil {
+		_ = postInstall.Close()
+		rollback()
+		return nil, err
+	}
+	if postCatalog == nil {
+		_ = postInstall.Close()
+		rollback()
+		return nil, errCollectionNotFound
+	}
+	postDef, ok := findVectorIndex(postCatalog.meta.VectorIndexes, candidate.name)
+	postRoot := postCatalog.rootID(collectionVectorIndexRootName(postCatalog.meta.Name, candidate.name))
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(postDef) || candidate.validateNativeSnapshotDefinition(postDef) != "" || postRoot != expectedRoot {
+		_ = postInstall.Close()
+		rollback()
+		return nil, fmt.Errorf("%w: index %q changed during install", errVectorIndexStaleNativeRoot, candidate.name)
+	}
+	postGeneration, err := vectorIndexDocumentGeneration(postInstall, postCatalog)
+	postState, stateOK := postInstall.StateToken()
+	_ = postInstall.Close()
+	if err != nil {
+		rollback()
+		return nil, err
+	}
+	if !candidateCoverageValid || candidateGeneration != postGeneration {
+		rollback()
+		return nil, fmt.Errorf("%w: index %q candidate generation %d current generation %d", errVectorIndexStaleDocumentGeneration, candidate.name, candidateGeneration, postGeneration)
+	}
+	if !stateOK {
+		rollback()
+		return nil, backenddb.ErrClosed
+	}
+	candidate.recordSourceDocumentState(candidateGeneration, postState)
+	return candidate, nil
+}
+
 // SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
 // index as a collection-root delta. It is used by live write maintenance; full
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
@@ -262,19 +414,26 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockCoverage := c.lockVectorIndexCoveragePersistence()
+	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
-		return idx.SaveNativeSnapshot()
+		return idx.saveNativeSnapshotWithCoverageLocked()
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithCoverageLocked(); err != nil {
+		return status, err
+	}
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
 		return staleStatus, err
 	} else if stale {
 		return staleStatus, nil
 	}
-	if err := c.flushBufferedWrites(); err != nil {
+	sourceDocumentGeneration, sourceDocumentState, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(false)
+	if err != nil {
 		return status, err
 	}
+	idx.recordSourceDocumentState(sourceDocumentGeneration, sourceDocumentState)
 
 	pin := c.db.AcquireSnapshot()
 	if pin == nil {
@@ -290,7 +449,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
-	if !ok {
+	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
@@ -327,14 +486,35 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
 	}
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(idx.name, nil)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
 	iter := publishTable.NewIterator(nil, nil)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+	publicationMu := idx.nativePublicationLock()
+	publicationMu.Lock()
+	newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn([]backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
 		Iter:          iter,
 		StoragePolicy: policy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	}}, columnWritePublishInput{
+		meta:             catalog.meta,
+		baseCommitSeq:    baseCommitSeq,
+		baseSystemRoot:   baseSystemRoot,
+		rootNames:        []string{rootName},
+		baseRootIDs:      baseRootIDs,
+		commandWALIntent: intent,
 	})
+	if err == nil && len(rootIDs) == 1 {
+		status.Loaded = true
+		status.RootID = rootIDs[0]
+		status.Epoch = rootIDs[0]
+		status.BytesDisk = bytesDisk
+		idx.setNativePersistent(true)
+		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	}
+	publicationMu.Unlock()
 	_ = iter.Close()
 	resetCollectionRunTable(table)
 	if err != nil {
@@ -343,15 +523,14 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if len(rootIDs) != 1 {
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
-	status.Loaded = true
-	status.RootID = rootIDs[0]
-	status.Epoch = rootIDs[0]
-	status.BytesDisk = bytesDisk
-	idx.setNativePersistent(true)
-	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if generation, valid := idx.sourceDocumentCoverage(); valid {
+		if state, ok := c.db.StateToken(); ok && state.SystemRootPageID == newSystemRoot {
+			idx.recordSourceDocumentState(generation, state)
+		}
+	}
 	return status, nil
 }
 
@@ -511,7 +690,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return nil, status, err
 	}
@@ -538,6 +717,14 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
+	if err != nil {
+		return nil, status, err
+	}
+	if !matchesDocumentRoots {
+		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		return nil, status, nil
+	}
 	index, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return nil, status, err
@@ -546,14 +733,36 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
-	status.Loaded = true
+	if index.validateNativeSnapshotDefinition(def) != "" {
+		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
+		return nil, status, nil
+	}
 	status.RootID = rootID
-	status.Epoch = rootID
-	status.BytesDisk = bytesDisk
-	index.recordLoadedSnapshot(status.Epoch, bytesDisk)
-	c.meta = catalog.meta
-	c.RegisterVectorIndex(index)
-	return index, status, nil
+	index.recordLoadedSnapshot(rootID, bytesDisk)
+	installed, err := c.installNativeVectorIndexCandidate(index, rootID, nil, 0)
+	if err != nil {
+		if errors.Is(err, errVectorIndexStaleDocumentGeneration) {
+			status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+			return nil, status, nil
+		}
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return nil, status, err
+	}
+	status.Loaded = true
+	status.Epoch, status.BytesDisk, _, _, _ = installed.nativeSearchState()
+	status.RootID = status.Epoch
+	return installed, status, nil
+}
+
+func vectorIndexSnapshotMatchesDocumentRoots(meta vectorIndexPersistMeta, catalog *collectionCatalog, snap *backenddb.Snapshot) (bool, error) {
+	if catalog == nil || meta.SourceDocumentGenerationVersion != vectorIndexDocumentGenerationVersion {
+		return false, nil
+	}
+	generation, err := vectorIndexDocumentGeneration(snap, catalog)
+	if err != nil {
+		return false, err
+	}
+	return meta.SourceDocumentGeneration == generation, nil
 }
 
 func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
@@ -793,17 +1002,19 @@ type vectorIndexPersistSnapshot struct {
 }
 
 type vectorIndexPersistMeta struct {
-	Name                string              `json:"name"`
-	Field               string              `json:"field"`
-	Metric              VectorMetric        `json:"metric"`
-	Encoding            VectorIndexEncoding `json:"encoding"`
-	Dimensions          int                 `json:"dimensions"`
-	M                   int                 `json:"m"`
-	EfConstruction      int                 `json:"ef_construction"`
-	EfSearch            int                 `json:"ef_search"`
-	RebuildDeletedRatio float64             `json:"rebuild_deleted_ratio"`
-	Entry               int                 `json:"entry"`
-	MaxLevel            int                 `json:"max_level"`
+	Name                            string              `json:"name"`
+	Field                           string              `json:"field"`
+	Metric                          VectorMetric        `json:"metric"`
+	Encoding                        VectorIndexEncoding `json:"encoding"`
+	Dimensions                      int                 `json:"dimensions"`
+	M                               int                 `json:"m"`
+	EfConstruction                  int                 `json:"ef_construction"`
+	EfSearch                        int                 `json:"ef_search"`
+	RebuildDeletedRatio             float64             `json:"rebuild_deleted_ratio"`
+	Entry                           int                 `json:"entry"`
+	MaxLevel                        int                 `json:"max_level"`
+	SourceDocumentGenerationVersion int                 `json:"source_document_generation_version"`
+	SourceDocumentGeneration        uint64              `json:"source_document_generation"`
 }
 
 type vectorIndexPersistNode struct {
@@ -836,17 +1047,19 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	seq := idx.mutationSeq
 	snapshot := vectorIndexPersistSnapshot{
 		Meta: vectorIndexPersistMeta{
-			Name:                idx.name,
-			Field:               idx.field,
-			Metric:              idx.metric,
-			Encoding:            idx.encoding,
-			Dimensions:          idx.dimensions,
-			M:                   idx.m,
-			EfConstruction:      idx.efConstruction,
-			EfSearch:            idx.efSearch,
-			RebuildDeletedRatio: idx.rebuildDeletedRatio,
-			Entry:               idx.entry,
-			MaxLevel:            idx.maxLevel,
+			Name:                            idx.name,
+			Field:                           idx.field,
+			Metric:                          idx.metric,
+			Encoding:                        idx.encoding,
+			Dimensions:                      idx.dimensions,
+			M:                               idx.m,
+			EfConstruction:                  idx.efConstruction,
+			EfSearch:                        idx.efSearch,
+			RebuildDeletedRatio:             idx.rebuildDeletedRatio,
+			Entry:                           idx.entry,
+			MaxLevel:                        idx.maxLevel,
+			SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
+			SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 		},
 		Nodes: make([]vectorIndexPersistNode, len(idx.nodes)),
 		DocMap: vectorIndexPersistDocMap{
@@ -949,7 +1162,7 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 	defer idx.mu.RUnlock()
 	seq := idx.mutationSeq
 	persistedEpoch := idx.persistedEpoch
-	if seq == 0 {
+	if seq == 0 && !idx.dirtyMeta {
 		return nil, 0, seq, persistedEpoch, false, nil
 	}
 	if includeMeta || idx.dirtyMeta {
@@ -1052,17 +1265,19 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 
 func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 	return vectorIndexPersistMeta{
-		Name:                idx.name,
-		Field:               idx.field,
-		Metric:              idx.metric,
-		Encoding:            idx.encoding,
-		Dimensions:          idx.dimensions,
-		M:                   idx.m,
-		EfConstruction:      idx.efConstruction,
-		EfSearch:            idx.efSearch,
-		RebuildDeletedRatio: idx.rebuildDeletedRatio,
-		Entry:               idx.entry,
-		MaxLevel:            idx.maxLevel,
+		Name:                            idx.name,
+		Field:                           idx.field,
+		Metric:                          idx.metric,
+		Encoding:                        idx.encoding,
+		Dimensions:                      idx.dimensions,
+		M:                               idx.m,
+		EfConstruction:                  idx.efConstruction,
+		EfSearch:                        idx.efSearch,
+		RebuildDeletedRatio:             idx.rebuildDeletedRatio,
+		Entry:                           idx.entry,
+		MaxLevel:                        idx.maxLevel,
+		SourceDocumentGenerationVersion: vectorIndexDocumentGenerationVersion,
+		SourceDocumentGeneration:        idx.sourceDocumentGeneration,
 	}
 }
 
@@ -1285,7 +1500,7 @@ func (idx *VectorIndex) needsNativeAutoPersist() bool {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty)
+	return idx.dirtyMeta || (idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty))
 }
 
 func (idx *VectorIndex) needsNativeFullSnapshotAutoPersist() bool {
@@ -1480,6 +1695,8 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.persistedSnapshotDirty = false
 		idx.lastRebuildDuration = 0
 		idx.mutationSeq = 0
+		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
+		idx.sourceDocumentRootsValid = true
 		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
@@ -1599,6 +1816,8 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.persistedSnapshotDirty = false
 	idx.lastRebuildDuration = 0
 	idx.mutationSeq = 0
+	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
+	idx.sourceDocumentRootsValid = true
 	return ""
 }
 
