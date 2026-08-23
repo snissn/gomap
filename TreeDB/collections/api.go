@@ -3982,9 +3982,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	if c.writeDomain != nil {
-		c.writeDomain.nativeVectorAdmissionMu.Lock()
-		defer c.writeDomain.nativeVectorAdmissionMu.Unlock()
+	if admissionMu := c.nativeVectorAdmissionMutex(); admissionMu != nil {
+		admissionMu.Lock()
+		defer admissionMu.Unlock()
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -4076,9 +4076,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	if c.writeDomain != nil {
-		c.writeDomain.nativeVectorAdmissionMu.Lock()
-		defer c.writeDomain.nativeVectorAdmissionMu.Unlock()
+	if admissionMu := c.nativeVectorAdmissionMutex(); admissionMu != nil {
+		admissionMu.Lock()
+		defer admissionMu.Unlock()
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()

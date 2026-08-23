@@ -1832,6 +1832,40 @@ func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t 
 	}
 }
 
+func TestNativeVectorCoverageAdmissionSerializesAcrossManagers(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second handle: %v", err)
+	}
+
+	unlockFirst := first.lockVectorIndexCoverageMutation()
+	secondAdmission := second.nativeVectorAdmissionMutex()
+	if secondAdmission.TryLock() {
+		secondAdmission.Unlock()
+		unlockFirst()
+		t.Fatal("native vector admission escaped the DB-wide collection barrier")
+	}
+	unlockFirst()
+	if !secondAdmission.TryLock() {
+		t.Fatal("second manager did not acquire native vector admission")
+	}
+	secondAdmission.Unlock()
+}
+
 func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

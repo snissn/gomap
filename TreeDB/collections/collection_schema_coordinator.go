@@ -7,10 +7,11 @@ import (
 )
 
 type collectionSchemaCoordinator struct {
-	schemaMu              sync.RWMutex
-	legacyVectorSidecarMu sync.Mutex
-	domainsMu             sync.Mutex
-	domains               map[*collectionWriteDomain]struct{}
+	schemaMu                sync.RWMutex
+	nativeVectorAdmissionMu sync.RWMutex
+	legacyVectorSidecarMu   sync.Mutex
+	domainsMu               sync.Mutex
+	domains                 map[*collectionWriteDomain]struct{}
 }
 
 type collectionDBSchemaCoordinators struct {

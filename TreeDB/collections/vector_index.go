@@ -1232,12 +1232,23 @@ func (c *Collection) lockVectorIndexMutation() func() {
 	return c.vectorIndexMutationMu.Unlock
 }
 
+func (c *Collection) nativeVectorAdmissionMutex() *sync.RWMutex {
+	if c == nil || c.writeDomain == nil {
+		return nil
+	}
+	if coord := c.writeDomain.schemaCoordinator; coord != nil {
+		return &coord.nativeVectorAdmissionMu
+	}
+	return &c.writeDomain.nativeVectorAdmissionMu
+}
+
 func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	if c == nil || c.writeDomain == nil {
 		return func() {}
 	}
 	domain := c.writeDomain
-	domain.nativeVectorAdmissionMu.RLock()
+	admissionMu := c.nativeVectorAdmissionMutex()
+	admissionMu.RLock()
 	domain.mu.RLock()
 	hasMaintainedVectorIndexes := false
 	for _, def := range domain.meta.VectorIndexes {
@@ -1252,8 +1263,8 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain.nativeVectorIndexesMu.RUnlock()
 	exclusiveAdmission := hasMaintainedVectorIndexes
 	if exclusiveAdmission {
-		domain.nativeVectorAdmissionMu.RUnlock()
-		domain.nativeVectorAdmissionMu.Lock()
+		admissionMu.RUnlock()
+		admissionMu.Lock()
 	}
 	domain.nativeVectorCoverageMu.RLock()
 	publishedBaselineCurrent := !hasMaintainedVectorIndexes || c.nativeVectorPublishedBaselineCurrent()
@@ -1288,9 +1299,9 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		domain.nativeVectorActiveMu.Unlock()
 		domain.mu.RUnlock()
 		if exclusiveAdmission {
-			domain.nativeVectorAdmissionMu.Unlock()
+			admissionMu.Unlock()
 		} else {
-			domain.nativeVectorAdmissionMu.RUnlock()
+			admissionMu.RUnlock()
 		}
 	}
 }
