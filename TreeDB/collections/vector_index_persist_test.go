@@ -1784,6 +1784,54 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 	}
 }
 
+func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	stale := first.registeredVectorIndex(def.Name)
+	if stale == nil {
+		t.Fatal("seed insert did not build native index")
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second handle: %v", err)
+	}
+	if _, err := second.InsertBatch([][]byte{[]byte("external")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert through second manager: %v", err)
+	}
+	current, err := first.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("current generation: %v", err)
+	}
+	if stale.coversSourceDocumentGeneration(current) {
+		t.Fatal("first manager runtime unexpectedly covers the external write")
+	}
+
+	unlock := first.lockVectorIndexCoverageMutation()
+	if first.nativeVectorIndexMutationActive() {
+		unlock()
+		t.Fatal("stale admission exposed its published view to concurrent search")
+	}
+	unlock()
+	if stale.coversSourceDocumentGeneration(current) {
+		t.Fatal("unreconciled stale admission certified the external write")
+	}
+}
+
 func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

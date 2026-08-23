@@ -39,6 +39,7 @@ type vectorIndexSearchView struct {
 	rebuildDeletedRatio      float64
 	persisted                atomic.Pointer[vectorIndexSearchPersistedMetadata]
 	fullRebuilds             uint64
+	mutationSeq              uint64
 }
 
 type vectorIndexSearchPersistedMetadata struct {
@@ -121,6 +122,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.rebuildDeletedRatio = idx.rebuildDeletedRatio
 	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
 	next.fullRebuilds = idx.liveANNFullRebuilds
+	next.mutationSeq = idx.mutationSeq
 	next.mu.Unlock()
 	idx.searchView.Store(next)
 	if previous != nil {

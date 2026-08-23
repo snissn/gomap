@@ -1256,25 +1256,32 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		domain.nativeVectorAdmissionMu.Lock()
 	}
 	domain.nativeVectorCoverageMu.RLock()
+	publishedBaselineCurrent := !hasMaintainedVectorIndexes || c.nativeVectorPublishedBaselineCurrent()
 	domain.nativeVectorActiveMu.Lock()
+	if domain.nativeVectorActive == 0 {
+		domain.nativeVectorReconciled = false
+	}
 	domain.nativeVectorActive++
-	domain.nativeVectorSearchActive.Store(true)
+	domain.nativeVectorSearchActive.Store(hasMaintainedVectorIndexes && publishedBaselineCurrent)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
 		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
 		if domain.nativeVectorActive == 0 {
-			indexes := c.registeredVectorIndexes()
-			if len(indexes) != 0 {
-				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
-					for _, index := range indexes {
-						if index.hasValidSourceDocumentRoots() {
-							index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
+			if publishedBaselineCurrent || domain.nativeVectorReconciled {
+				indexes := c.registeredVectorIndexes()
+				if len(indexes) != 0 {
+					if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
+						for _, index := range indexes {
+							if index.hasValidSourceDocumentRoots() {
+								index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
+							}
 						}
 					}
 				}
 			}
+			domain.nativeVectorReconciled = false
 			domain.nativeVectorSearchActive.Store(false)
 		}
 		domain.nativeVectorCoverageMu.RUnlock()
@@ -1286,6 +1293,28 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 			domain.nativeVectorAdmissionMu.RUnlock()
 		}
 	}
+}
+
+func (c *Collection) nativeVectorPublishedBaselineCurrent() bool {
+	if c == nil || c.db == nil || c.writeDomain == nil {
+		return false
+	}
+	state, ok := c.db.StateToken()
+	if !ok {
+		return false
+	}
+	domain := c.writeDomain
+	domain.nativeVectorIndexesMu.RLock()
+	defer domain.nativeVectorIndexesMu.RUnlock()
+	if len(domain.nativeVectorIndexes) == 0 {
+		return false
+	}
+	for _, index := range domain.nativeVectorIndexes {
+		if !index.publishedSearchViewCoversSourceDocumentState(state) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Collection) lockVectorIndexCoveragePersistence() func() {
@@ -1330,9 +1359,10 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	domain.nativeVectorActiveMu.Lock()
 	defer domain.nativeVectorActiveMu.Unlock()
 	if domain.nativeVectorActive != 0 {
+		domain.nativeVectorReconciled = true
 		return nil
 	}
-	domain.nativeVectorSearchActive.Store(true)
+	domain.nativeVectorSearchActive.Store(c.nativeVectorPublishedBaselineCurrent())
 	defer domain.nativeVectorSearchActive.Store(false)
 	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
 	if err != nil {
@@ -2060,7 +2090,7 @@ func (idx *VectorIndex) recordSourceDocumentStateAndPublishIfChanged(generation 
 	idx.mu.Lock()
 	view := idx.searchView.Load()
 	publish := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation ||
-		view == nil || len(view.nodes) != len(idx.nodes) || len(idx.searchViewDirty) != 0
+		view == nil || view.mutationSeq != idx.mutationSeq
 	idx.recordSourceDocumentStateLocked(generation, state)
 	if publish {
 		idx.publishSearchViewLocked(false)
@@ -2118,6 +2148,18 @@ func (idx *VectorIndex) coversSourceDocumentState(state backenddb.StateToken) bo
 	}
 	idx.mu.RLock()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentState(state backenddb.StateToken) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	view := idx.searchView.Load()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state &&
+		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers
 }
