@@ -704,7 +704,7 @@ func hybridSearchFailClosed(response HybridSearchResponse, reason HybridFailClos
 	if reason == "" {
 		reason = HybridFailClosedReasonUnsupported
 	}
-	if response.Stats.FailClosed == 0 {
+	if response.Stats.FailClosed != 1 {
 		response.Stats.FailClosed = 1
 	}
 	response.Stats.FailClosedReason = reason
