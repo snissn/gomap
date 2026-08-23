@@ -1,6 +1,7 @@
 package chunking
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func benchmarkChunkCorpus(b *testing.B, docs []string, cfg Config) {
 	for iter := 0; iter < b.N; iter++ {
 		count := 0
 		for i, doc := range docs {
-			chunks, err := SplitChunks(ChildDocumentID("bench-parent", i), doc, cfg)
+			chunks, err := SplitChunks("bench-parent-"+strconv.Itoa(i), doc, cfg)
 			if err != nil {
 				b.Fatalf("SplitChunks: %v", err)
 			}

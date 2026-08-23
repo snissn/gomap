@@ -1,16 +1,25 @@
 package collections
 
 import (
+	"context"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+type chunkLifecycleLock struct {
+	token chan struct{}
+	refs  int
+}
 type collectionSchemaCoordinator struct {
 	schemaMu              sync.RWMutex
 	legacyVectorSidecarMu sync.Mutex
 	domainsMu             sync.Mutex
 	domains               map[*collectionWriteDomain]struct{}
+	chunkLifecycleMu      sync.Mutex
+	chunkLifecycles       map[string]*chunkLifecycleLock
+	chunkMutationOnce     sync.Once
+	chunkMutationToken    chan struct{}
 }
 
 type collectionDBSchemaCoordinators struct {
@@ -196,6 +205,47 @@ func (coord *collectionSchemaCoordinator) snapshotDomains() []*collectionWriteDo
 		}
 	}
 	return out
+}
+
+func (coord *collectionSchemaCoordinator) lockChunkLifecycle(ctx context.Context, parentID string) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	coord.chunkLifecycleMu.Lock()
+	if coord.chunkLifecycles == nil {
+		coord.chunkLifecycles = make(map[string]*chunkLifecycleLock)
+	}
+	entry := coord.chunkLifecycles[parentID]
+	if entry == nil {
+		entry = &chunkLifecycleLock{token: make(chan struct{}, 1)}
+		entry.token <- struct{}{}
+		coord.chunkLifecycles[parentID] = entry
+	}
+	entry.refs++
+	coord.chunkLifecycleMu.Unlock()
+
+	select {
+	case <-entry.token:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				entry.token <- struct{}{}
+				coord.releaseChunkLifecycleRef(parentID, entry)
+			})
+		}, nil
+	case <-ctx.Done():
+		coord.releaseChunkLifecycleRef(parentID, entry)
+		return nil, ctx.Err()
+	}
+}
+
+func (coord *collectionSchemaCoordinator) releaseChunkLifecycleRef(parentID string, entry *chunkLifecycleLock) {
+	coord.chunkLifecycleMu.Lock()
+	defer coord.chunkLifecycleMu.Unlock()
+	entry.refs--
+	if entry.refs == 0 {
+		delete(coord.chunkLifecycles, parentID)
+	}
 }
 
 func (c *Collection) collectionSchemaCoordinator() *collectionSchemaCoordinator {
