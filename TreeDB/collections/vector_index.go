@@ -1628,8 +1628,9 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	}
 	if document == nil {
 		idx.mu.Lock()
+		beforeMutation := idx.mutationSeq
 		idx.tombstoneDocumentIDLocked(documentID)
-		if publish {
+		if publish && idx.mutationSeq != beforeMutation {
 			idx.publishSearchViewLocked(false)
 		}
 		idx.mu.Unlock()
@@ -1641,8 +1642,9 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	}
 	if !ok {
 		idx.mu.Lock()
+		beforeMutation := idx.mutationSeq
 		idx.tombstoneDocumentIDLocked(documentID)
-		if publish {
+		if publish && idx.mutationSeq != beforeMutation {
 			idx.publishSearchViewLocked(false)
 		}
 		idx.mu.Unlock()
@@ -1650,10 +1652,11 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	beforeMutation := idx.mutationSeq
 	if err := idx.insertVectorLocked(documentID, vector); err != nil {
 		return err
 	}
-	if publish {
+	if publish && idx.mutationSeq != beforeMutation {
 		idx.publishSearchViewLocked(false)
 	}
 	return nil
@@ -1667,8 +1670,11 @@ func (idx *VectorIndex) TombstoneDocumentID(documentID []byte) {
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	beforeMutation := idx.mutationSeq
 	idx.tombstoneDocumentIDLocked(documentID)
-	idx.publishSearchViewLocked(false)
+	if idx.mutationSeq != beforeMutation {
+		idx.publishSearchViewLocked(false)
+	}
 }
 
 func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) error {

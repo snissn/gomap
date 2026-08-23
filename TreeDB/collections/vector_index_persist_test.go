@@ -1782,6 +1782,16 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 	if after := index.searchView.Load(); after != before {
 		t.Fatal("empty insert republished the unchanged native graph")
 	}
+	if err := index.InsertDocument([]byte("seed")); err != nil {
+		t.Fatalf("direct idempotent insert: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("direct idempotent insert republished the unchanged native graph")
+	}
+	index.TombstoneDocumentID([]byte("missing"))
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("direct absent tombstone republished the unchanged native graph")
+	}
 }
 
 func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t *testing.T) {
