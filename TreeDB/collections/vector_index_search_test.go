@@ -5607,6 +5607,14 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
+	reader, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader collection: %v", err)
+	}
+	var readerBuffer VectorIndexSearchBuffer
+	if _, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &readerBuffer); err != nil {
+		t.Fatalf("prime reader native runtime: %v", err)
+	}
 	index := col.registeredVectorIndex(def.Name)
 	if index == nil {
 		t.Fatal("registered native vector index is nil")
@@ -5653,7 +5661,7 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	searchDone := make(chan searchResult, 1)
 	go func() {
 		var buffer VectorIndexSearchBuffer
-		response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+		response, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 		searchDone <- searchResult{response: response, err: err}
 	}()
 	select {

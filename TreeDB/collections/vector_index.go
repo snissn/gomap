@@ -1271,6 +1271,11 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		admissionMu.RUnlock()
 		admissionMu.Lock()
 	}
+	if exclusiveAdmission && coord != nil {
+		if baseline, ok := c.db.StateToken(); ok {
+			coord.nativeVectorBaseline.Store(&baseline)
+		}
+	}
 	domain.nativeVectorCoverageMu.RLock()
 	publishedBaselineCurrent := !hasMaintainedVectorIndexes || c.nativeVectorPublishedBaselineCurrent()
 	domain.nativeVectorActiveMu.Lock()
@@ -1304,6 +1309,9 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		domain.nativeVectorActiveMu.Unlock()
 		domain.mu.RUnlock()
 		if exclusiveAdmission {
+			if coord != nil {
+				coord.nativeVectorBaseline.Store(nil)
+			}
 			admissionMu.Unlock()
 		} else {
 			admissionMu.RUnlock()

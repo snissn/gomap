@@ -10,6 +10,7 @@ import (
 type collectionSchemaCoordinator struct {
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
+	nativeVectorBaseline    atomic.Pointer[backenddb.StateToken]
 	hasNativeVectorIndexes  atomic.Bool
 	legacyVectorSidecarMu   sync.Mutex
 	domainsMu               sync.Mutex

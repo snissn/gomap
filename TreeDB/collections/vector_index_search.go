@@ -1425,18 +1425,14 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
-		if c.nativeVectorIndexMutationActive() {
-			if status, ok := c.publishedNativeSearchLoadStatus(def, index); ok {
-				return index, status, nil
-			}
+		if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
+			return index, status, nil
 		}
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 		if err != nil {
 			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {
-				if c.nativeVectorIndexMutationActive() {
-					if status, ok := c.publishedNativeSearchLoadStatus(def, index); ok {
-						return index, status, nil
-					}
+				if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
+					return index, status, nil
 				}
 				unlockCoverage := c.lockVectorIndexCoveragePersistence()
 				current := c.registeredVectorIndex(def.Name)
@@ -1464,6 +1460,23 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 		return nil, status, err
 	}
 	return index, status, nil
+}
+
+func (c *Collection) publishedNativeSearchLoadStatusDuringMutation(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
+	if c.nativeVectorIndexMutationActive() {
+		return c.publishedNativeSearchLoadStatus(def, index)
+	}
+	if c != nil && c.writeDomain != nil {
+		if coord := c.writeDomain.schemaCoordinator; coord != nil {
+			if baseline := coord.nativeVectorBaseline.Load(); baseline != nil {
+				if !index.publishedSearchViewCoversSourceDocumentState(*baseline) {
+					return VectorIndexLoadStatus{}, false
+				}
+				return c.publishedNativeSearchLoadStatus(def, index)
+			}
+		}
+	}
+	return VectorIndexLoadStatus{}, false
 }
 
 func (c *Collection) publishedNativeSearchLoadStatus(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {

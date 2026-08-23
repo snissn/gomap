@@ -1820,6 +1820,13 @@ func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t 
 	if stale.coversSourceDocumentGeneration(current) {
 		t.Fatal("first manager runtime unexpectedly covers the external write")
 	}
+	unlockCurrent := second.lockVectorIndexCoverageMutation()
+	var staleBuffer VectorIndexSearchBuffer
+	_, searchErr := first.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8}, &staleBuffer)
+	unlockCurrent()
+	if !errors.Is(searchErr, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("stale cross-manager search error=%v want ErrVectorIndexSearchUnavailable", searchErr)
+	}
 
 	unlock := first.lockVectorIndexCoverageMutation()
 	if first.nativeVectorIndexMutationActive() {
