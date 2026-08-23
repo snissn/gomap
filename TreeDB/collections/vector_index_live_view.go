@@ -45,10 +45,10 @@ func (idx *VectorIndex) publishSearchView() {
 func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	previous := idx.searchView.Load()
 	next := idx.searchViewSpare
-	if next == nil {
+	if next == nil || !next.mu.TryLock() {
 		next = &vectorIndexSearchView{}
+		next.mu.Lock()
 	}
-	next.mu.Lock()
 	nodes := next.nodes
 	if cap(nodes) < len(idx.nodes) {
 		capacity := maxInt(len(idx.nodes), cap(nodes)*2)
@@ -98,7 +98,11 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.fullRebuilds = idx.liveANNFullRebuilds
 	next.mu.Unlock()
 	idx.searchView.Store(next)
-	idx.searchViewSpare = previous
+	if previous != nil && len(previous.nodes) > len(next.nodes) {
+		idx.searchViewSpare = nil
+	} else {
+		idx.searchViewSpare = previous
+	}
 	clear(idx.searchViewDirty)
 }
 

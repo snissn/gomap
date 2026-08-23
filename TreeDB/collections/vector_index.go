@@ -1177,7 +1177,6 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 				return err
 			}
 		}
-		index.publishSearchView()
 	}
 	return c.recordReconciledVectorIndexCoverage(indexes)
 }
@@ -1252,7 +1251,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
 					for _, index := range indexes {
 						if index.hasValidSourceDocumentRoots() {
-							index.recordSourceDocumentState(generation, state)
+							index.recordSourceDocumentStateAndPublish(generation, state)
 						}
 					}
 				}
@@ -1292,7 +1291,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		}
 		for _, index := range indexes {
 			if c.isRegisteredVectorIndex(index) {
-				index.recordSourceDocumentState(generation, state)
+				index.recordSourceDocumentStateAndPublish(generation, state)
 			}
 		}
 		return nil
@@ -1305,7 +1304,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	}
 	domain.nativeVectorActiveMu.Lock()
 	defer domain.nativeVectorActiveMu.Unlock()
-	if domain.nativeVectorActive > 1 {
+	if domain.nativeVectorActive != 0 {
 		return nil
 	}
 	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
@@ -1315,7 +1314,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	}
 	for _, index := range indexes {
 		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
-			index.recordSourceDocumentState(generation, state)
+			index.recordSourceDocumentStateAndPublish(generation, state)
 		}
 	}
 	return nil
@@ -2010,6 +2009,24 @@ func (idx *VectorIndex) recordSourceDocumentStateWithPublication(generation uint
 		return
 	}
 	idx.mu.Lock()
+	wasValid := idx.recordSourceDocumentStateLocked(generation, state)
+	if publish && !wasValid {
+		idx.publishSearchViewLocked(false)
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateAndPublish(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.recordSourceDocumentStateLocked(generation, state)
+	idx.publishSearchViewLocked(false)
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state backenddb.StateToken) bool {
 	wasValid := idx.sourceDocumentRootsValid
 	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
 	idx.sourceDocumentRootsValid = true
@@ -2019,10 +2036,7 @@ func (idx *VectorIndex) recordSourceDocumentStateWithPublication(generation uint
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
-	if publish && !wasValid {
-		idx.publishSearchViewLocked(false)
-	}
-	idx.mu.Unlock()
+	return wasValid
 }
 
 func (idx *VectorIndex) invalidateSourceDocumentRoots() {

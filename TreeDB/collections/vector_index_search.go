@@ -1426,7 +1426,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		if c.nativeVectorIndexMutationActive() {
-			if status, ok := index.publishedNativeSearchLoadStatus(def); ok {
+			if status, ok := c.publishedNativeSearchLoadStatus(def, index); ok {
 				return index, status, nil
 			}
 		}
@@ -1459,6 +1459,22 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 		return nil, status, err
 	}
 	return index, status, nil
+}
+
+func (c *Collection) publishedNativeSearchLoadStatus(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
+	status, ok := index.publishedNativeSearchLoadStatus(def)
+	if !ok || c == nil || c.db == nil || status.RootName == "" {
+		return VectorIndexLoadStatus{}, false
+	}
+	state, ok := c.db.StateToken()
+	if !ok {
+		return VectorIndexLoadStatus{}, false
+	}
+	currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, status.RootName, state)
+	if !current || !found || !vectorIndexDefinitionValuesEqual(def, currentDef) || rootID != status.RootID {
+		return VectorIndexLoadStatus{}, false
+	}
+	return status, true
 }
 
 func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (VectorIndexDefinition, bool, bool) {
