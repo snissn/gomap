@@ -5870,6 +5870,29 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	if !ok || status.RootID != 99 || status.BytesDisk != 123 {
 		t.Fatalf("published persisted status=%+v ok=%v", status, ok)
 	}
+	wantBytes := map[uint64]int64{99: 123, 100: 1000, 101: 1001}
+	snapshotSeq := index.nativeMutationSequence()
+	refreshDone := make(chan struct{})
+	go func() {
+		for i := 0; i < 1000; i++ {
+			epoch := uint64(100 + i%2)
+			index.recordPersistedSnapshot(epoch, wantBytes[epoch], snapshotSeq)
+			runtime.Gosched()
+		}
+		close(refreshDone)
+	}()
+persistedRace:
+	for {
+		status, ok = index.publishedNativeSearchLoadStatus(VectorIndexDefinition{Name: index.name, Field: index.field, Metric: index.metric, Dimensions: index.dimensions, M: index.m, EfConstruction: index.efConstruction, EfSearch: index.efSearch, Encoding: index.encoding})
+		if !ok || wantBytes[status.Epoch] != status.BytesDisk {
+			t.Fatalf("published persisted status was torn: %+v ok=%v", status, ok)
+		}
+		select {
+		case <-refreshDone:
+			break persistedRace
+		default:
+		}
+	}
 }
 
 func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {

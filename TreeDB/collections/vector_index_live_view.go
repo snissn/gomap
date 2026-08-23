@@ -37,9 +37,13 @@ type vectorIndexSearchView struct {
 	liveDocs                 int
 	sourceDocumentRootsValid bool
 	rebuildDeletedRatio      float64
-	epoch                    atomic.Uint64
-	bytesDisk                atomic.Int64
+	persisted                atomic.Pointer[vectorIndexSearchPersistedMetadata]
 	fullRebuilds             uint64
+}
+
+type vectorIndexSearchPersistedMetadata struct {
+	epoch     uint64
+	bytesDisk int64
 }
 
 func (idx *VectorIndex) publishSearchView() {
@@ -109,8 +113,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.liveDocs = len(idx.currentNode)
 	next.sourceDocumentRootsValid = idx.sourceDocumentRootsValid
 	next.rebuildDeletedRatio = idx.rebuildDeletedRatio
-	next.epoch.Store(epoch)
-	next.bytesDisk.Store(idx.persistedBytesDisk)
+	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
 	next.fullRebuilds = idx.liveANNFullRebuilds
 	next.mu.Unlock()
 	idx.searchView.Store(next)
@@ -190,13 +193,17 @@ func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinitio
 		}
 		return VectorIndexLoadStatus{}, false
 	}
-	epoch := view.epoch.Load()
+	persisted := view.persisted.Load()
+	if persisted == nil {
+		idx.releaseSearchView(view)
+		return VectorIndexLoadStatus{}, false
+	}
 	status := VectorIndexLoadStatus{
 		Loaded:    true,
 		RootName:  idx.nativeRootName,
-		RootID:    epoch,
-		Epoch:     epoch,
-		BytesDisk: view.bytesDisk.Load(),
+		RootID:    persisted.epoch,
+		Epoch:     persisted.epoch,
+		BytesDisk: persisted.bytesDisk,
 	}
 	idx.releaseSearchView(view)
 	return status, true
