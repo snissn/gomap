@@ -5601,6 +5601,86 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 	}
 }
 
+func TestSearchVectorIndexWithBufferWaitsForNativeCoverageReconciliation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("seed InsertBatch: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	unlockCoverage := col.lockVectorIndexCoverageMutation()
+	coverageLocked := true
+	defer func() {
+		if coverageLocked {
+			unlockCoverage()
+		}
+	}()
+	ids, err := col.insertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("insertBatch: %v", err)
+	}
+
+	type searchResult struct {
+		response VectorIndexSearchResponse
+		err      error
+	}
+	searchDone := make(chan searchResult, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+		searchDone <- searchResult{response: response, err: err}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for col.writeDomain.nativeVectorCoverageMu.TryRLock() {
+		col.writeDomain.nativeVectorCoverageMu.RUnlock()
+		select {
+		case result := <-searchDone:
+			_ = col.notifyVectorIndexesUpsert(ids)
+			unlockCoverage()
+			coverageLocked = false
+			t.Fatalf("search escaped in-flight native reconciliation: response=%+v err=%v", result.response, result.err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			_ = col.notifyVectorIndexesUpsert(ids)
+			unlockCoverage()
+			coverageLocked = false
+			t.Fatal("search did not wait on the native coverage barrier")
+		}
+		runtime.Gosched()
+	}
+
+	if err := col.notifyVectorIndexesUpsert(ids); err != nil {
+		unlockCoverage()
+		coverageLocked = false
+		t.Fatalf("notifyVectorIndexesUpsert: %v", err)
+	}
+	unlockCoverage()
+	coverageLocked = false
+	select {
+	case result := <-searchDone:
+		if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "b" {
+			t.Fatalf("search after native reconciliation response=%+v err=%v", result.response, result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("search remained blocked after native reconciliation")
+	}
+}
+
 func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

@@ -1427,6 +1427,13 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 	if index := c.registeredVectorIndex(def.Name); index != nil {
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 		if err != nil {
+			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {
+				unlockCoverage := c.lockVectorIndexCoveragePersistence()
+				unlockCoverage()
+				if current := c.registeredVectorIndex(def.Name); current != nil {
+					return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
+				}
+			}
 			if current := c.registeredVectorIndex(def.Name); current != nil && current != index {
 				return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
 			}
