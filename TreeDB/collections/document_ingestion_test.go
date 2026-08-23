@@ -365,6 +365,9 @@ func TestIngestSourcesEmbedFailureTaxonomy(t *testing.T) {
 	if !errors.Is(err, emb.err) {
 		t.Fatalf("error %v does not preserve provider cause %v", err, emb.err)
 	}
+	if !strings.Contains(err.Error(), ingestFailingProvider) || !strings.Contains(err.Error(), `"embedding"`) {
+		t.Fatalf("error %q does not name provider %q and vector index %q", err, ingestFailingProvider, "embedding")
+	}
 	// Sources before N are fully intact.
 	for i := 0; i < n; i++ {
 		children, err := col.ChunkChildren(sources[i].ID)
@@ -465,6 +468,9 @@ func TestIngestSourcesRejectsMalformedProviderOutputBeforeMutation(t *testing.T)
 			res, err := col.IngestSources(context.Background(), []SourceDocument{source}, cfg)
 			if !errors.Is(err, embedding.ErrInvalidOutput) {
 				t.Fatalf("IngestSources error=%v want ErrInvalidOutput", err)
+			}
+			if !strings.Contains(err.Error(), provider) || !strings.Contains(err.Error(), `"embedding"`) {
+				t.Fatalf("IngestSources error %q does not name provider %q and vector index %q", err, provider, "embedding")
 			}
 			if tc.wantDimensionErr && !errors.Is(err, embedding.ErrDimensionMismatch) {
 				t.Fatalf("IngestSources error=%v want ErrDimensionMismatch", err)
@@ -872,6 +878,9 @@ func TestIngestSourcesCancellationSkipsQueuedProviderCalls(t *testing.T) {
 	res, err := col.IngestSources(ctx, ingestTestSources(8), cfg)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("IngestSources error=%v want context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), provider) || !strings.Contains(err.Error(), `"embedding"`) {
+		t.Fatalf("IngestSources error %q does not name provider %q and vector index %q", err, provider, "embedding")
 	}
 	if calls := emb.calls.Load(); calls != 1 {
 		t.Fatalf("EmbedBatch calls=%d want 1; queued calls must stop after cancellation", calls)

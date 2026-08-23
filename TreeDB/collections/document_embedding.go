@@ -37,10 +37,10 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 	}
 	vectors, err := emb.EmbedBatch(ctx, texts)
 	if err != nil {
-		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+		return nil, fmt.Errorf("collections: provider %q embed into vector index %q: %w", cfg.Provider, def.Name, err)
 	}
 	if err := validateEmbeddingOutput(vectors, len(texts), def); err != nil {
-		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+		return nil, fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Provider, def.Name, err)
 	}
 	return vectors, nil
 }

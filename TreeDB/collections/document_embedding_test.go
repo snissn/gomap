@@ -177,6 +177,9 @@ func TestEmbedForIngestRejectsMalformedProviderOutput(t *testing.T) {
 			if !errors.Is(err, embedding.ErrInvalidOutput) {
 				t.Fatalf("EmbedForIngest=(%v, %v) want ErrInvalidOutput", vectors, err)
 			}
+			if !strings.Contains(err.Error(), provider) || !strings.Contains(err.Error(), `"embedding"`) {
+				t.Fatalf("EmbedForIngest error %q does not name provider %q and vector index %q", err, provider, "embedding")
+			}
 			if tc.wantDimensionErr && !errors.Is(err, embedding.ErrDimensionMismatch) {
 				t.Fatalf("EmbedForIngest error %v want ErrDimensionMismatch", err)
 			}

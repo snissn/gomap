@@ -456,7 +456,8 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	runOne := func(i int) *IngestError {
 		plan := &plans[i]
 		if err := wctx.Err(); err != nil {
-			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
+				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, err)}
 		}
 		if cfg.hooks != nil && cfg.hooks.beforeSource != nil {
 			if err := cfg.hooks.beforeSource(i); err != nil {
@@ -467,10 +468,11 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		embedMu.Lock()
 		if err := wctx.Err(); err != nil {
 			embedMu.Unlock()
-			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
+				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, err)}
 		}
 		embedStart := time.Now()
-		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, vectorField)
+		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, cfg.Embedding.Provider, def.Name)
 		embedMu.Unlock()
 		mu.Lock()
 		result.EmbedNanos += time.Since(embedStart).Nanoseconds()
@@ -483,11 +485,12 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 				SourceID:    plan.parentID,
 				SourceIndex: i,
 				Stage:       IngestStageEmbed,
-				Err:         fmt.Errorf("collections: validate embedded vectors for %q: %w", vectorField, err),
+				Err:         fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Embedding.Provider, def.Name, err),
 			}
 		}
 		if err := wctx.Err(); err != nil {
-			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
+				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, err)}
 		}
 		childDocs, attachErr := attachVectorsToChildren(plan.children, vectors, vectorField)
 		if attachErr != nil {
@@ -628,13 +631,14 @@ func storageIngestError(sourceID []byte, index int, action string, err error) *I
 }
 
 // embedIngestChildren runs the C3 embed seam over a plan's child texts.
-func (c *Collection) embedIngestChildren(ctx context.Context, emb embedding.Embedder, plan *ingestPlan, vectorField string) ([][]float32, error) {
+func (c *Collection) embedIngestChildren(ctx context.Context, emb embedding.Embedder, plan *ingestPlan, provider, vectorIndexName string) ([][]float32, error) {
 	if len(plan.texts) == 0 {
 		return nil, nil
 	}
 	vectors, err := emb.EmbedBatch(ctx, plan.texts)
 	if err != nil {
-		return nil, fmt.Errorf("collections: embed chunk children of %q into %q: %w", plan.parentID, vectorField, err)
+		return nil, fmt.Errorf("collections: provider %q embed chunk children of %q for vector index %q: %w",
+			provider, plan.parentID, vectorIndexName, err)
 	}
 	return vectors, nil
 }
