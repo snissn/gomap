@@ -356,7 +356,7 @@ type VectorIndex struct {
 	insertScratch       vectorIndexSearchScratch
 	searchScratch       sync.Pool
 	searchView          atomic.Pointer[vectorIndexSearchView]
-	searchViewPool      sync.Pool
+	searchViewSpare     atomic.Pointer[vectorIndexSearchView]
 	searchViewDirty     map[int]struct{}
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
 	// untraced offline column graph builder. Traced and partition builds stay

@@ -12,7 +12,7 @@ import (
 const (
 	vectorIndexSearchViewActive uint32 = iota
 	vectorIndexSearchViewRetired
-	vectorIndexSearchViewPooled
+	vectorIndexSearchViewSpare
 	vectorIndexSearchViewDiscarded
 )
 
@@ -53,9 +53,9 @@ func (idx *VectorIndex) publishSearchView() {
 
 func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	previous := idx.searchView.Load()
-	next, _ := idx.searchViewPool.Get().(*vectorIndexSearchView)
+	next := idx.searchViewSpare.Swap(nil)
 	if next != nil && !next.mu.TryLock() {
-		if next.reuseState.CompareAndSwap(vectorIndexSearchViewPooled, vectorIndexSearchViewRetired) {
+		if next.reuseState.CompareAndSwap(vectorIndexSearchViewSpare, vectorIndexSearchViewRetired) {
 			idx.recycleSearchView(next)
 		}
 		next = nil
@@ -134,12 +134,14 @@ func (idx *VectorIndex) recycleSearchView(view *vectorIndexSearchView) {
 	if idx == nil || view == nil || view.reuseState.Load() != vectorIndexSearchViewRetired || !view.mu.TryLock() {
 		return
 	}
-	if view.reuseState.CompareAndSwap(vectorIndexSearchViewRetired, vectorIndexSearchViewPooled) {
+	if !view.reuseState.CompareAndSwap(vectorIndexSearchViewRetired, vectorIndexSearchViewSpare) {
 		view.mu.Unlock()
-		idx.searchViewPool.Put(view)
 		return
 	}
 	view.mu.Unlock()
+	if !idx.searchViewSpare.CompareAndSwap(nil, view) {
+		view.reuseState.Store(vectorIndexSearchViewDiscarded)
+	}
 }
 
 func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {

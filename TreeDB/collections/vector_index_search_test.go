@@ -5780,6 +5780,14 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 		index.releaseSearchView(retired)
 		t.Fatal("second publication did not install an independent current view")
 	}
+	currentReader := index.acquireSearchView()
+	if currentReader != current {
+		index.releaseSearchView(retired)
+		if currentReader != nil {
+			index.releaseSearchView(currentReader)
+		}
+		t.Fatal("second published search view was not acquired")
+	}
 
 	publicationDone := make(chan error, 1)
 	go func() {
@@ -5795,15 +5803,21 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	case err := <-publicationDone:
 		if err != nil {
 			index.releaseSearchView(retired)
+			index.releaseSearchView(currentReader)
 			t.Fatalf("third publication: %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		index.releaseSearchView(retired)
+		index.releaseSearchView(currentReader)
 		t.Fatal("third publication blocked behind a retired reader")
 	}
 	index.releaseSearchView(retired)
-	if retired.reuseState.Load() != vectorIndexSearchViewPooled {
+	if retired.reuseState.Load() != vectorIndexSearchViewSpare || index.searchViewSpare.Load() != retired {
 		t.Fatal("retired view was not returned for reuse after its reader released it")
+	}
+	index.releaseSearchView(currentReader)
+	if currentReader.reuseState.Load() != vectorIndexSearchViewDiscarded || index.searchViewSpare.Load() != retired {
+		t.Fatal("more than one retired view was retained for reuse")
 	}
 
 	large := index.acquireSearchView()
@@ -5825,6 +5839,10 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	shrunk := index.acquireSearchView()
 	if shrunk == nil {
 		t.Fatal("shrunk search view is nil")
+	}
+	if shrunk != retired {
+		index.releaseSearchView(shrunk)
+		t.Fatal("shrinking publication did not reuse the returned retired view")
 	}
 	for i, node := range shrunk.nodes[len(shrunk.nodes):cap(shrunk.nodes)] {
 		if node.documentID != nil || node.vector != nil || node.quantized != nil || node.neighbors != nil {
