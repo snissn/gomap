@@ -1480,10 +1480,8 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 		clear(idx.dirtyDocs)
 	}
 	if view := idx.searchView.Load(); idx.nativePersistent && view != nil {
-		view.mu.Lock()
-		view.epoch = epoch
-		view.bytesDisk = bytesDisk
-		view.mu.Unlock()
+		view.epoch.Store(epoch)
+		view.bytesDisk.Store(bytesDisk)
 	}
 }
 

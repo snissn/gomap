@@ -5853,7 +5853,19 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	index.releaseSearchView(shrunk)
 
 	index.setNativePersistent(true)
-	index.recordPersistedSnapshot(99, 123, index.nativeMutationSequence())
+	persistedReader := index.acquireSearchView()
+	persistedDone := make(chan struct{})
+	go func() {
+		index.recordPersistedSnapshot(99, 123, index.nativeMutationSequence())
+		close(persistedDone)
+	}()
+	select {
+	case <-persistedDone:
+	case <-time.After(5 * time.Second):
+		index.releaseSearchView(persistedReader)
+		t.Fatal("persisted metadata refresh blocked behind a search reader")
+	}
+	index.releaseSearchView(persistedReader)
 	status, ok := index.publishedNativeSearchLoadStatus(VectorIndexDefinition{Name: index.name, Field: index.field, Metric: index.metric, Dimensions: index.dimensions, M: index.m, EfConstruction: index.efConstruction, EfSearch: index.efSearch, Encoding: index.encoding})
 	if !ok || status.RootID != 99 || status.BytesDisk != 123 {
 		t.Fatalf("published persisted status=%+v ok=%v", status, ok)
