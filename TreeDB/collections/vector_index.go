@@ -1306,19 +1306,29 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	}
 	domain := c.writeDomain
 	admissionMu := c.nativeVectorAdmissionMutex()
-	admissionMu.RLock()
 	coord := domain.schemaCoordinator
-	hasMaintainedVectorIndexes := coord != nil && coord.hasNativeVectorIndexes.Load()
-	domain.mu.RLock()
-	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
-	domain.mu.RUnlock()
-	domain.nativeVectorIndexesMu.RLock()
-	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
-	domain.nativeVectorIndexesMu.RUnlock()
-	exclusiveAdmission := hasMaintainedVectorIndexes
-	if exclusiveAdmission {
+	var hasMaintainedVectorIndexes bool
+	var exclusiveAdmission bool
+	for {
+		admissionMu.RLock()
+		hasMaintainedVectorIndexes = coord != nil && coord.hasNativeVectorIndexes.Load()
+		domain.mu.RLock()
+		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
+		domain.mu.RUnlock()
+		domain.nativeVectorIndexesMu.RLock()
+		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
+		domain.nativeVectorIndexesMu.RUnlock()
+		if !hasMaintainedVectorIndexes {
+			break
+		}
 		admissionMu.RUnlock()
+		domain.waitIndexedAsyncFlush()
 		admissionMu.Lock()
+		if !domain.indexedAsyncFlushRunning() {
+			exclusiveAdmission = true
+			break
+		}
+		admissionMu.Unlock()
 	}
 	var baselineGeneration uint64
 	var baselineErr error

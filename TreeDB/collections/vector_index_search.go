@@ -1463,10 +1463,13 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 }
 
 func (c *Collection) publishedNativeSearchLoadStatusDuringMutation(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
+	if c == nil {
+		return VectorIndexLoadStatus{}, false
+	}
 	if c.nativeVectorIndexMutationActive() {
 		return c.publishedNativeSearchLoadStatus(def, index)
 	}
-	if c != nil && c.writeDomain != nil {
+	if c.writeDomain != nil {
 		if coord := c.writeDomain.schemaCoordinator; coord != nil {
 			if baseline := coord.nativeVectorBaseline.Load(); baseline != nil {
 				if !index.publishedSearchViewCoversSourceDocumentGeneration(*baseline) {

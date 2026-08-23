@@ -3811,7 +3811,7 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 }
 
 func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
-	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
+	for _, publication := range []string{"status", "no_index_read", "concurrent_no_index_search", "delayed_async", "mutation_waits_for_delayed_async", "snapshot_waits_for_delayed_async", "stale_snapshot_waits_for_delayed_async"} {
 		t.Run(publication, func(t *testing.T) {
 			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 			if err != nil {
@@ -3913,6 +3913,43 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 				}
 				if err := col.publishPreparedIndexedFlush(work); err != nil {
 					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+			case "mutation_waits_for_delayed_async":
+				work, err := col.prepareIndexedAsyncPublish()
+				if err != nil || work == nil {
+					t.Fatalf("prepareIndexedAsyncPublish work=%v err=%v", work, err)
+				}
+				if !col.writeDomain.beginIndexedAsyncFlush() {
+					t.Fatal("beginIndexedAsyncFlush returned false")
+				}
+				finished := false
+				defer func() {
+					if !finished {
+						col.writeDomain.finishIndexedAsyncFlush(errors.New("test cleanup"))
+					}
+				}()
+				mutationDone := make(chan error, 1)
+				go func() {
+					_, _, err := col.Update([]byte("a"), func([]byte) ([]byte, bool, error) { return nil, false, nil })
+					mutationDone <- err
+				}()
+				select {
+				case err := <-mutationDone:
+					t.Fatalf("mutation escaped delayed async flush: %v", err)
+				case <-time.After(100 * time.Millisecond):
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+				col.writeDomain.finishIndexedAsyncFlush(nil)
+				finished = true
+				select {
+				case err := <-mutationDone:
+					if err != nil {
+						t.Fatalf("Update after delayed async flush: %v", err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("mutation remained blocked after delayed async publication")
 				}
 			case "snapshot_waits_for_delayed_async":
 				work, err := col.prepareIndexedAsyncPublish()
