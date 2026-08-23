@@ -346,7 +346,6 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	if len(sources) == 0 {
 		return result, nil
 	}
-	parentIDs := make([][]byte, len(sources))
 	seen := make(map[string]struct{}, len(sources))
 	for i := range sources {
 		if err := chunking.ValidateParentID(string(sources[i].ID)); err != nil {
@@ -363,16 +362,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			}
 		}
 		seen[key] = struct{}{}
-		parentIDs[i] = sources[i].ID
 	}
-	lifecycleLocks, err := c.lockChunkParentLifecycles(ctx, parentIDs)
-	if err != nil {
-		return result, &IngestError{
-			SourceID: append([]byte(nil), sources[0].ID...), SourceIndex: 0,
-			Stage: IngestStageStorage, Err: err,
-		}
-	}
-	defer lifecycleLocks.releaseAll()
 
 	// Phase 1: plan every source up front. Nothing below can mutate the
 	// collection until every plan validates, so plan failures leave the batch
@@ -441,10 +431,26 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 
 	runOne := func(i int) *IngestError {
 		plan := &plans[i]
-		defer lifecycleLocks.release(plan.parentID)
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
 		}
+		lifecycleLocks, err := c.lockChunkParentLifecycles(wctx, [][]byte{plan.parentID})
+		if err != nil {
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage, Err: err}
+		}
+		defer lifecycleLocks.releaseAll()
+		// Phase 1 validated every source without mutation. Rebuild the
+		// authoritative pure plan under this parent's lock so same-parent
+		// plan→replace remains coherent without holding sibling locks.
+		replanned, err := c.buildChunkPlan(plan.parentID, plan.parent, cfg.Chunking, ChunkedIngestOptions{TextField: cfg.TextField})
+		if err != nil {
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageChunk, Err: err}
+		}
+		texts, err := extractChunkTexts(replanned.children, cfg.textField())
+		if err != nil {
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageChunk, Err: err}
+		}
+		plan.children, plan.texts = replanned.children, texts
 		if cfg.hooks != nil && cfg.hooks.beforeSource != nil {
 			if err := cfg.hooks.beforeSource(i); err != nil {
 				return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage,
@@ -490,7 +496,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage, Err: err}
 		}
 		apply := func() ([][]byte, *IngestError) {
-			unlockMutation, err := c.lockChunkMutation()
+			unlockMutation, err := c.lockChunkMutation(wctx)
 			if err != nil {
 				return nil, storageIngestError(plan.parentID, i, "lock collection mutation", err)
 			}
@@ -537,6 +543,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			return applyErr
 		}
 		indexNanos := time.Since(indexStart).Nanoseconds()
+		lifecycleLocks.release(plan.parentID)
 
 		childIDs := make([][]byte, len(plan.children))
 		for j, ch := range plan.children {
@@ -566,7 +573,6 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 		mu.Unlock()
 		if cfg.Progress != nil {
-			lifecycleLocks.release(plan.parentID)
 			cfg.Progress(progress)
 			progressMu.Unlock()
 		}

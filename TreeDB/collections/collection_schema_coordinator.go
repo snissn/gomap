@@ -18,7 +18,8 @@ type collectionSchemaCoordinator struct {
 	domains               map[*collectionWriteDomain]struct{}
 	chunkLifecycleMu      sync.Mutex
 	chunkLifecycles       map[string]*chunkLifecycleLock
-	chunkMutationMu       sync.Mutex
+	chunkMutationOnce     sync.Once
+	chunkMutationToken    chan struct{}
 }
 
 type collectionDBSchemaCoordinators struct {

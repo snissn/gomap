@@ -893,6 +893,61 @@ func TestIngestSourcesProgressCallbackCanReadCommittedParent(t *testing.T) {
 	}
 }
 
+func TestIngestSourcesProgressCallbackCanReadSiblingParent(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	cfg := ingestTestCfg(256)
+	cfg.Concurrency = 1
+	sources := []SourceDocument{ingestTestSource("src-progress-a", 0), ingestTestSource("src-progress-b", 1)}
+	callbacks := 0
+	cfg.Progress = func(progress IngestSourcesProgress) {
+		callbacks++
+		if callbacks == 1 {
+			if _, err := col.ChunkChildren(sources[1].ID); err != nil {
+				t.Errorf("read sibling from progress callback: %v", err)
+			}
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := col.IngestSources(context.Background(), sources, cfg)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("progress callback deadlocked on a sibling lifecycle lock")
+	}
+	if callbacks != len(sources) {
+		t.Fatalf("callbacks=%d want %d", callbacks, len(sources))
+	}
+}
+
+func TestIngestSourcesMutationLockHonorsCancellation(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	unlock, err := col.lockChunkMutation(context.Background())
+	if err != nil {
+		t.Fatalf("lock mutation: %v", err)
+	}
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = col.IngestSources(ctx, []SourceDocument{ingestTestSource("src-mutation-cancel", 0)}, ingestTestCfg(256))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("mutation lock wait err=%v want context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("canceled mutation lock acquisition took %s", elapsed)
+	}
+	if raw, getErr := col.Get([]byte("src-mutation-cancel")); getErr != nil || len(raw) != 0 {
+		t.Fatalf("canceled source mutated: len=%d err=%v", len(raw), getErr)
+	}
+}
+
 // TestIngestSourcesCancelBetweenSources proves ctx cancellation stops the
 // pipeline between sources: completed sources stay intact, unstarted sources
 // remain untouched, and the cancellation is surfaced.

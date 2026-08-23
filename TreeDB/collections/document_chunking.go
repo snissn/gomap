@@ -195,13 +195,27 @@ func (c *Collection) lockChunkParentLifecycles(ctx context.Context, parentIDs []
 	return locks, nil
 }
 
-func (c *Collection) lockChunkMutation() (func(), error) {
+func (c *Collection) lockChunkMutation(ctx context.Context) (func(), error) {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
 		return nil, fmt.Errorf("collections: chunk mutation coordinator unavailable")
 	}
-	coord.chunkMutationMu.Lock()
-	return coord.chunkMutationMu.Unlock, nil
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	coord.chunkMutationOnce.Do(func() {
+		coord.chunkMutationToken = make(chan struct{}, 1)
+		coord.chunkMutationToken <- struct{}{}
+	})
+	select {
+	case <-coord.chunkMutationToken:
+		var once sync.Once
+		return func() {
+			once.Do(func() { coord.chunkMutationToken <- struct{}{} })
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // IngestChunkedDocument stores parentDocument under parentID and replaces its
@@ -238,7 +252,7 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	if err != nil {
 		return result, err
 	}
-	unlockMutation, err := c.lockChunkMutation()
+	unlockMutation, err := c.lockChunkMutation(context.Background())
 	if err != nil {
 		return result, err
 	}
