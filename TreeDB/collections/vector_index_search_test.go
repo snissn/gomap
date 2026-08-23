@@ -5895,17 +5895,25 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 		}
 		close(refreshDone)
 	}()
+	var tornStatus VectorIndexLoadStatus
+	var tornOK bool
+	var torn bool
 persistedRace:
 	for {
 		status, ok = index.publishedNativeSearchLoadStatus(VectorIndexDefinition{Name: index.name, Field: index.field, Metric: index.metric, Dimensions: index.dimensions, M: index.m, EfConstruction: index.efConstruction, EfSearch: index.efSearch, Encoding: index.encoding})
 		if !ok || wantBytes[status.Epoch] != status.BytesDisk {
-			t.Fatalf("published persisted status was torn: %+v ok=%v", status, ok)
+			tornStatus, tornOK, torn = status, ok, true
+			<-refreshDone
+			break
 		}
 		select {
 		case <-refreshDone:
 			break persistedRace
 		default:
 		}
+	}
+	if torn {
+		t.Fatalf("published persisted status was torn: %+v ok=%v", tornStatus, tornOK)
 	}
 }
 
