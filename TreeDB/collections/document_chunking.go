@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // chunkingScanMaxDocuments bounds full-collection child scans; collection
@@ -210,7 +211,7 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 	}
 	prefix := append(append([]byte(nil), parentID...), '#')
 	ordinals := map[int][]byte{}
-	_, err := c.ScanDocumentsFunc(chunkingScanMaxDocuments, func(record DocumentRecord) (bool, error) {
+	inspect := func(record DocumentRecord) (bool, error) {
 		id := record.ID
 		if !bytes.HasPrefix(id, prefix) {
 			return true, nil
@@ -232,9 +233,19 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 		}
 		ordinals[meta.Ordinal] = append([]byte(nil), id...)
 		return true, nil
-	})
+	}
+	var truncated bool
+	var err error
+	if columnStoreCanReconstructDocument(c.meta) {
+		truncated, err = c.ScanDocumentsFunc(chunkingScanMaxDocuments, inspect)
+	} else {
+		truncated, err = c.scanChunkDocumentsByParentPrefix(prefix, inspect)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if truncated {
+		return nil, fmt.Errorf("collections: chunk child prefix scan for %q exceeded bound %d", parentID, chunkingScanMaxDocuments)
 	}
 	children := make([][]byte, 0, len(ordinals))
 	for ordinal := 0; len(children) < len(ordinals); ordinal++ {
@@ -245,6 +256,78 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 		children = append(children, id)
 	}
 	return children, nil
+}
+
+// scanChunkDocumentsByParentPrefix walks only primary IDs in the requested
+// parent# child namespace. The bounded range avoids a full collection scan for
+// every source while retaining snapshot-consistent document validation.
+func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	if len(prefix) == 0 || fn == nil {
+		return false, fmt.Errorf("collections: chunk child prefix and callback are required")
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	it, err := collectionIteratorAtCatalogRoot(
+		snap,
+		catalog,
+		collectionPrimaryRootName(catalog.meta.Name),
+		prefix,
+		prefixEnd(prefix),
+		false,
+	)
+	if err != nil {
+		return false, err
+	}
+	if it == nil {
+		return false, nil
+	}
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		if scanned >= chunkingScanMaxDocuments {
+			return true, nil
+		}
+		record := DocumentRecord{
+			ID:       bytes.Clone(it.UnsafeKey()),
+			Document: it.ValueCopy(nil),
+		}
+		scanned++
+		next, err := fn(record)
+		if err != nil {
+			return false, err
+		}
+		if !next {
+			return false, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // ValidateChunkChildDocument verifies that a stored document with chunk
