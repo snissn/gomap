@@ -354,8 +354,9 @@ type VectorIndex struct {
 	maxLevel            int
 	insertScratch       vectorIndexSearchScratch
 	searchScratch       sync.Pool
-	// parallelReciprocalLinks is enabled only by the untraced offline column
-	// graph builder. Incremental, traced, and partition builds stay serial.
+	// parallelReciprocalLinks is enabled for native runtime indexes and the
+	// untraced offline column graph builder. Traced and partition builds stay
+	// serial.
 	parallelReciprocalLinks bool
 
 	mutationSeq              uint64
@@ -1125,21 +1126,72 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
 		c.manager.registerCollectionHandle(c)
 	}
+	needsInsert := false
+	for _, index := range indexes {
+		if _, ok := rebuilt[index.name]; !ok {
+			needsInsert = true
+			break
+		}
+	}
+	if !needsInsert {
+		return c.recordReconciledVectorIndexCoverage(indexes)
+	}
+	cachedPrimaryRead := c.snapshotVectorIndexPrimaryCache(documentIDs)
+	defer putUpdateBatchBufferedEntries(cachedPrimaryRead.primaryEntries, cachedPrimaryRead.primaryBuffer)
+	materializer, err := c.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+		return err
+	}
+	defer func() { _ = materializer.Close() }()
 	for _, index := range indexes {
 		if _, ok := rebuilt[index.name]; ok {
 			continue
 		}
-		for _, documentID := range documentIDs {
+		for documentIndex, documentID := range documentIDs {
 			if len(documentID) == 0 {
 				continue
 			}
-			if err := index.InsertDocument(documentID); err != nil {
+			var document []byte
+			if cachedPrimaryRead.enabled && cachedPrimaryRead.primaryEntries[documentIndex].found {
+				entry := cachedPrimaryRead.primaryEntries[documentIndex]
+				if entry.flags&node.FlagTombstone == 0 {
+					document = entry.value
+				}
+			} else {
+				document, err = c.Get(documentID)
+				if err != nil {
+					c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+					return err
+				}
+			}
+			if err := index.insertStoredDocument(materializer, documentID, document); err != nil {
 				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 				return err
 			}
 		}
 	}
 	return c.recordReconciledVectorIndexCoverage(indexes)
+}
+
+func (c *Collection) snapshotVectorIndexPrimaryCache(documentIDs [][]byte) updateBatchBufferedRead {
+	if c == nil || c.db == nil || len(documentIDs) == 0 {
+		return updateBatchBufferedRead{}
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return updateBatchBufferedRead{}
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil || catalog == nil {
+		return updateBatchBufferedRead{}
+	}
+	items := make([]updateBatchItem, len(documentIDs))
+	for i, documentID := range documentIDs {
+		items[i].DocumentID = documentID
+	}
+	return snapshotUpdateBatchPrimaryCache(c.writeDomain, catalog.meta, snapshotSystemRoot(snap), items)
 }
 
 func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverage() {
@@ -1445,15 +1497,25 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 	if err != nil {
 		return err
 	}
-	if document == nil {
-		idx.TombstoneDocumentID(documentID)
-		return nil
-	}
 	materializer, err := idx.collection.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = materializer.Close() }()
+	return idx.insertStoredDocument(materializer, documentID, document)
+}
+
+func (idx *VectorIndex) insertStoredDocument(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
+	if idx == nil {
+		return errors.New("collections: vector index is nil")
+	}
+	if len(documentID) == 0 {
+		return errors.New("collections: document id cannot be empty")
+	}
+	if document == nil {
+		idx.TombstoneDocumentID(documentID)
+		return nil
+	}
 	vector, ok, err := vectorFromStoredDocument(materializer, document, idx.fieldPath)
 	if err != nil {
 		return fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, documentID, err)
@@ -1581,7 +1643,6 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	if idx.parallelReciprocalLinks &&
 		idx.constructionTrace == nil &&
 		idx.layer0ConstructionPolicy == nil &&
-		!idx.nativePersistent &&
 		idx.qualityPostfillCandidates == nil &&
 		vectorIndexNeighborIDsDistinct(neighbors) {
 		workers = vectorIndexReciprocalLinkWorkerCount(len(neighbors))
@@ -1590,8 +1651,8 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 		for _, neighborID := range neighbors {
 			// selectLayerNeighborsLocked records the exact selection origin before
 			// this directed initial link is made.
-			idx.linkLayerLocked(nodeID, neighborID, layer)
-			idx.linkLayerLocked(neighborID, nodeID, layer)
+			idx.linkLayerLocked(nodeID, neighborID, layer, true)
+			idx.linkLayerLocked(neighborID, nodeID, layer, true)
 		}
 		return
 	}
@@ -1599,21 +1660,24 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	// Keep the new node's ordered outgoing edges serial. Each worker below owns
 	// a distinct old node's adjacency slice and only reads immutable node data.
 	for _, neighborID := range neighbors {
-		idx.linkLayerLocked(nodeID, neighborID, layer)
+		idx.linkLayerLocked(nodeID, neighborID, layer, true)
 	}
 	var wg sync.WaitGroup
 	for worker := 1; worker < workers; worker++ {
 		worker := worker
 		wg.Go(func() {
 			for neighbor := worker; neighbor < len(neighbors); neighbor += workers {
-				idx.linkLayerLocked(neighbors[neighbor], nodeID, layer)
+				idx.linkLayerLocked(neighbors[neighbor], nodeID, layer, false)
 			}
 		})
 	}
 	for neighbor := 0; neighbor < len(neighbors); neighbor += workers {
-		idx.linkLayerLocked(neighbors[neighbor], nodeID, layer)
+		idx.linkLayerLocked(neighbors[neighbor], nodeID, layer, false)
 	}
 	wg.Wait()
+	for _, neighborID := range neighbors {
+		idx.markVectorNodeDirtyLocked(neighborID)
+	}
 }
 
 func vectorIndexReciprocalLinkWorkerCount(neighbors int) int {
@@ -1836,6 +1900,7 @@ func (idx *VectorIndex) setNativePersistent(enabled bool) {
 	}
 	idx.mu.Lock()
 	idx.nativePersistent = enabled
+	idx.parallelReciprocalLinks = enabled
 	idx.mu.Unlock()
 }
 
@@ -1845,6 +1910,7 @@ func (idx *VectorIndex) recordNativeDefinition(def VectorIndexDefinition) {
 	}
 	idx.mu.Lock()
 	idx.nativePersistent = true
+	idx.parallelReciprocalLinks = true
 	idx.schemaGeneration = def.SchemaGeneration
 	idx.mu.Unlock()
 }
@@ -2008,7 +2074,7 @@ func normalizeVectorIndexEdgeDistance(distance float32) (float32, bool) {
 	return distance, true
 }
 
-func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
+func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int, markDirty bool) {
 	if fromNodeID < 0 || fromNodeID >= len(idx.nodes) {
 		return
 	}
@@ -2082,7 +2148,9 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		}
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
-	idx.markVectorNodeDirtyLocked(fromNodeID)
+	if markDirty {
+		idx.markVectorNodeDirtyLocked(fromNodeID)
+	}
 }
 
 func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
