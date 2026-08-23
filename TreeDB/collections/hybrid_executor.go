@@ -398,28 +398,49 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
 
-	// Text and vector candidate generation use independent read views. Run both
-	// together when hybrid has both sources; preserve deterministic merge order
-	// and text-first error precedence below.
-	if plan.text != nil && plan.vector != nil {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
-		}()
-		textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
-		wg.Wait()
-	} else {
+	// Explicit source-order strategies retain sequential short-circuit
+	// semantics. Other strategies can overlap independent candidate reads.
+	switch plan.scalarFilterStrategy {
+	case HybridScalarFilterStrategyTextFirst:
 		if plan.text != nil {
 			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
 		}
+		if textErr == nil && plan.vector != nil {
+			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+		}
+	case HybridScalarFilterStrategyVectorFirst:
 		if plan.vector != nil {
 			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
 		}
+		if vectorErr == nil && plan.text != nil {
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+		}
+	default:
+		if plan.text != nil && plan.vector != nil {
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+			}()
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+			wg.Wait()
+		} else {
+			if plan.text != nil {
+				textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+			}
+			if plan.vector != nil {
+				vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+			}
+		}
 	}
-	hybridMergeStats(&stats, textResponse.Stats)
-	hybridMergeStats(&stats, vectorResponse.Stats)
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyVectorFirst {
+		hybridMergeStats(&stats, vectorResponse.Stats)
+		hybridMergeStats(&stats, textResponse.Stats)
+	} else {
+		hybridMergeStats(&stats, textResponse.Stats)
+		hybridMergeStats(&stats, vectorResponse.Stats)
+	}
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyVectorFirst {
 		if vectorErr != nil {
 			return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceVector, err: vectorErr}
