@@ -52,17 +52,18 @@ Measured on an Apple M3 (one iteration, hashing embedder, 256 dimensions):
 
 The storage/index share includes collection mutation and index maintenance; this is a before-state measurement, not a production capacity claim.
 
-# C8 ingestion limiter classification
+# C8 ingestion limiter classification and optimization
 
-The C8 characterization used the same fixture and command as the C4 before-state benchmark:
+The C8 characterization used the C4 fixture on the current mainline before
+the prefix-scan change. Run from the repository root:
 
 ```sh
 PATH="$HOME/.gvm/gos/go1.26.0/bin:$PATH" \
 GOROOT="$HOME/.gvm/gos/go1.26.0" CGO_ENABLED=1 \
-GOCACHE="$HOME/orca/workspaces/gomap/.gocache-go126" \
+GOCACHE="${GOCACHE:-$HOME/.cache/gomap-go126}" \
 go test ./TreeDB/collections -run '^$' \
   -bench '^BenchmarkIngestSources10K$' -benchtime=1x -count=1 -benchmem \
-  -cpuprofile=/tmp/c8-before.cpu -memprofile=/tmp/c8-before.mem
+  -cpuprofile=/tmp/c8-prefix.cpu -memprofile=/tmp/c8-prefix.mem
 ```
 
 Host: Apple M3, darwin/arm64, 8 CPUs, Go 1.26.0. Fixture: 10,000 source
@@ -71,44 +72,38 @@ dimensions, four workers, collection scalar + text-v1 + vector indexes.
 The benchmark timer covers `IngestSources` only; embedding and chunking are
 included in the stage counters, while setup is excluded.
 
-Two identical profiled baseline repetitions measured 31.01 and 31.21
-docs/sec, 322.50 s and 320.37 s wall time, 176,532,381,152 and
-175,967,961,112 B/op, and 296,096,807 and 295,444,436 allocs/op. Stage
-shares were 0.01281% and 0.01175% chunk, 0.00886% and 0.01133% embed, and
-99.98% index in both runs.
+The pre-change current-main run was head `5516aaba2` (mainline already included
+the native vector-insert work from #4282): 27.32 docs/sec, 366.06 s wall time,
+177,905,962,160 B/op, 296,268,940 allocs/op, with 0.01210% chunk,
+0.008471% embed, and 99.98% index stage share. The optimized run at
+`efe5d4488` measured 37.59 docs/sec, 266.02 s wall time,
+132,071,674,336 B/op, 95,534,267 allocs/op, with 0.01514% chunk,
+0.007082% embed, and 99.98% index stage share:
 
-An identical resource-wrapped repetition measured 36.58 docs/sec, 273.35 s,
-175,860,713,496 B/op, and 295,345,710 allocs/op; peak resident set size was
-2,652,635,136 bytes (2.47 GiB). The wider 31.01--36.58 docs/sec spread is
-measurement noise from the durable maintenance worker, not evidence of an
-ingestion-stage improvement. The existing C4 one-run result (34.35 docs/sec)
-is within the same single-run noise envelope; the limiter classification is
-unchanged.
+| revision | docs/sec | B/op | allocs/op | chunk % | embed % | index % |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| pre-change `5516aaba2` | 27.32 | 177,905,962,160 | 296,268,940 | 0.01210 | 0.008471 | 99.98 |
+| prefix-scan `efe5d4488` | 37.59 | 132,071,674,336 | 95,534,267 | 0.01514 | 0.007082 | 99.98 |
 
-The CPU profile (`/tmp/c8-before.cpu`) samples on-CPU time; it does not
-attribute time blocked on locks or waiting in maintenance. It identifies the
-dominant CPU work inside the measured storage boundary: `InsertBatch` is
-59.79% cumulative, durable value-log reference capture is 53.19% cumulative,
-and `maintenanceReachabilityScan` is 51.33% cumulative. The profile's direct
-hot symbols are `Node.GetLeafValueView` (14.07% flat), `pthread_cond_signal`
-(12.13%), and `syscall.rawsyscalln` (11.15%). Combined with the 99.98% index
-stage share, this supports a **checkpoint/value-log and durable root-publication
-interaction** classification, but is not by itself a wall-time attribution.
-The 0.008--0.011% embed share also rules out an embed batching/concurrency lane
-for this fixture.
+This is a +37.6% docs/sec improvement, -25.8% B/op, and -67.8% allocs/op
+under identical fixture/host/command conditions. The implementation changes
+`ChunkChildren` from a full primary-collection scan per source to a bounded
+primary-key `parent#` prefix range while retaining snapshot consistency and
+truncation failure behavior. It does not weaken durability or change storage
+formats.
 
-The heap profile (`/tmp/c8-before.mem`) corroborates the same boundary:
-`maintenanceReachabilityScan` accounts for 60.52% cumulative allocation
-space, `tree.Iterator.ValueCopy` for 24.22%, and leaf-reference walking for
-4.03%. This is storage-maintenance allocation churn, not chunk/embed handoff
-allocation churn.
-
-No ingestion-path code change is safe within C8 ownership: reducing durable
-root publications requires a new atomic batch publication contract spanning
-collection and storage, and bypassing it would violate C4 durability and
-reopen guarantees. Text-v2 delta staging is likewise a spec-first blocker.
-The measured follow-up is tracked in [#4284](https://github.com/snissn/gomap/issues/4284).
+The optimized CPU profile (`/tmp/c8-prefix.cpu`) identifies the remaining
+limiter as durable root publication rather than chunking or embedding:
+`InsertBatch` is 58.27% cumulative, durable value-log reference capture is
+54.74% cumulative, and `maintenanceReachabilityScan` is 53.10% cumulative.
+These are on-CPU samples and do not by themselves attribute blocked wall time.
+The heap profile (`/tmp/c8-prefix.mem`) attributes 81.40% cumulative allocation
+space to `maintenanceReachabilityScan`, with durable value-log capture at
+86.95% cumulative. The remaining root-publication optimization requires the
+atomic durable batch-publication contract tracked in
+[#4284](https://github.com/snissn/gomap/issues/4284); C8 does not weaken
+durability or absorb that storage-contract work.
 
 The retrieval cross-check remains the C1 medium fixture's hybrid
 `score_only`/`none_100pct` row: recall@10 `0.0222`, p50 `0.671 ms`, p99
-`1.333 ms`; no search-path code was changed by C8.
+`1.333 ms`; no search-path code changed by C8.
