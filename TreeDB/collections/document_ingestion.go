@@ -463,8 +463,8 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 					Err: fmt.Errorf("collections: before source %q: %w", plan.parentID, err)}
 			}
 		}
-		embedStart := time.Now()
 		embedMu.Lock()
+		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, vectorField)
 		embedMu.Unlock()
 		mu.Lock()
