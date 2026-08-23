@@ -54,6 +54,9 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		capacity := maxInt(len(idx.nodes), cap(nodes)*2)
 		nodes = make([]vectorIndexNode, len(idx.nodes), capacity)
 	} else {
+		if len(idx.nodes) < len(nodes) {
+			clear(nodes[len(idx.nodes):])
+		}
 		nodes = nodes[:len(idx.nodes)]
 	}
 	if !forceFull && previous != nil && len(previous.nodes) <= len(nodes) {

@@ -618,7 +618,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if currentDocumentGeneration != sourceDocumentGeneration {
 		return nil, ErrConcurrentMutation
 	}
-	index.recordSourceDocumentState(sourceDocumentGeneration, currentDocumentState)
+	index.recordSourceDocumentStateUnpublished(sourceDocumentGeneration, currentDocumentState)
 	if liveANNFullRebuild {
 		index.markLiveANNFullRebuild()
 	}
@@ -785,6 +785,9 @@ func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
 func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
+	}
+	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
+		index.publishSearchView()
 	}
 	index.collection = c
 	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
@@ -1995,6 +1998,14 @@ func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 }
 
 func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backenddb.StateToken) {
+	idx.recordSourceDocumentStateWithPublication(generation, state, true)
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateUnpublished(generation uint64, state backenddb.StateToken) {
+	idx.recordSourceDocumentStateWithPublication(generation, state, false)
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateWithPublication(generation uint64, state backenddb.StateToken, publish bool) {
 	if idx == nil {
 		return
 	}
@@ -2008,7 +2019,7 @@ func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backe
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
-	if !wasValid {
+	if publish && !wasValid {
 		idx.publishSearchViewLocked(false)
 	}
 	idx.mu.Unlock()
@@ -4187,7 +4198,6 @@ func (idx *VectorIndex) nativeMutationSequence() uint64 {
 func (idx *VectorIndex) markLiveANNFullRebuild() {
 	idx.mu.Lock()
 	idx.liveANNFullRebuilds++
-	idx.publishSearchViewLocked(false)
 	idx.mu.Unlock()
 }
 

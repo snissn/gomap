@@ -5692,7 +5692,7 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	}
 }
 
-func TestVectorIndexSearchViewReusesRetiredBufferWithoutBlockingCurrentSearch(t *testing.T) {
+func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	index := &VectorIndex{
 		name:                     "embedding_native",
 		field:                    "embedding",
@@ -5775,6 +5775,25 @@ func TestVectorIndexSearchViewReusesRetiredBufferWithoutBlockingCurrentSearch(t 
 	case <-time.After(5 * time.Second):
 		t.Fatal("third publication did not resume after retired reader released")
 	}
+
+	index.mu.Lock()
+	index.nodes = index.nodes[:1]
+	index.currentNode = map[string]int{"a": 0}
+	index.entry = 0
+	index.maxLevel = index.nodes[0].level
+	index.publishSearchViewLocked(true)
+	index.mu.Unlock()
+	shrunk := index.acquireSearchView()
+	if shrunk == nil {
+		t.Fatal("shrunk search view is nil")
+	}
+	for i, node := range shrunk.nodes[len(shrunk.nodes):cap(shrunk.nodes)] {
+		if node.documentID != nil || node.vector != nil || node.quantized != nil || node.neighbors != nil {
+			shrunk.mu.RUnlock()
+			t.Fatalf("retained search view tail node %d was not cleared", i+len(shrunk.nodes))
+		}
+	}
+	shrunk.mu.RUnlock()
 }
 
 func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {
