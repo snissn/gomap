@@ -236,21 +236,19 @@ func TestRechunkReplacesChildrenAcrossIndexes(t *testing.T) {
 			t.Fatalf("old child %q still live after re-chunk", id)
 		}
 	}
-	v2Words := []string{"orchard", "tractor", "seasonal", "cooperatives"}
 	for _, id := range v2.ChildIDs {
 		raw, err := col.Get(id)
 		if err != nil || len(raw) == 0 {
 			t.Fatalf("new child %q missing: err=%v", id, err)
 		}
-		carriesNew := false
-		for _, w := range v2Words {
-			if strings.Contains(string(raw), w) {
-				carriesNew = true
-				break
-			}
+		var stored struct {
+			Body string `json:"body"`
 		}
-		if !carriesNew {
-			t.Fatalf("new child %q does not carry v2 content: %s", id, raw)
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			t.Fatalf("decode new child %q: %v", id, err)
+		}
+		if stored.Body == "" || !strings.Contains(newBody, stored.Body) {
+			t.Fatalf("new child %q body %q is not a non-empty span of v2 source", id, stored.Body)
 		}
 	}
 
