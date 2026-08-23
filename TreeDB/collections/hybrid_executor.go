@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -388,54 +389,45 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 	_, ok := findIndex(catalog.meta.Indexes, indexName)
 	return ok, nil
 }
-
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	if capHint := hybridSearchCandidatePreallocHint(plan); capHint > 0 {
 		out = make([]HybridSearchCandidate, 0, capHint)
 	}
 	var stats HybridSearchStats
-	runText := func() error {
-		if plan.text == nil {
-			return nil
-		}
-		response, err := c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
-		hybridMergeStats(&stats, response.Stats)
-		if err != nil {
-			return hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
-		}
-		out = appendHybridSearchCandidates(out, response.Candidates)
-		return nil
-	}
-	runVector := func() error {
-		if plan.vector == nil {
-			return nil
-		}
-		response, err := c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
-		hybridMergeStats(&stats, response.Stats)
-		if err != nil {
-			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
-		}
-		out = appendHybridSearchCandidates(out, response.Candidates)
-		return nil
-	}
+	var textResponse, vectorResponse HybridCandidateResponse
+	var textErr, vectorErr error
 
-	switch plan.scalarFilterStrategy {
-	case HybridScalarFilterStrategyVectorFirst:
-		if err := runVector(); err != nil {
-			return nil, stats, err
+	// Text and vector candidate generation use independent read views. Run both
+	// together when hybrid has both sources; preserve deterministic merge order
+	// and text-first error precedence below.
+	if plan.text != nil && plan.vector != nil {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+		}()
+		textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
+		wg.Wait()
+	} else {
+		if plan.text != nil {
+			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
 		}
-		if err := runText(); err != nil {
-			return nil, stats, err
-		}
-	default:
-		if err := runText(); err != nil {
-			return nil, stats, err
-		}
-		if err := runVector(); err != nil {
-			return nil, stats, err
+		if plan.vector != nil {
+			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
 		}
 	}
+	hybridMergeStats(&stats, textResponse.Stats)
+	hybridMergeStats(&stats, vectorResponse.Stats)
+	if textErr != nil {
+		return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceText, err: textErr}
+	}
+	if vectorErr != nil {
+		return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceVector, err: vectorErr}
+	}
+	out = appendHybridSearchCandidates(out, textResponse.Candidates)
+	out = appendHybridSearchCandidates(out, vectorResponse.Candidates)
 	return out, stats, nil
 }
 
