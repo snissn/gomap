@@ -912,31 +912,76 @@ func TestIngestSourcesRejectsAncestorTextVectorPaths(t *testing.T) {
 	}
 }
 
+func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
+	for _, field := range []string{
+		chunking.MetaFieldParent,
+		chunking.MetaFieldParent + ".embedding",
+		chunking.MetaFieldOrdinal,
+		chunking.MetaFieldOrdinal + ".embedding",
+		chunking.MetaFieldKind,
+		chunking.MetaFieldKind + ".embedding",
+	} {
+		t.Run(field, func(t *testing.T) {
+			_, _, col := openIngestTestCollection(t, 8)
+			col.meta.VectorIndexes[0].Field = field
+			res, err := col.IngestSources(context.Background(), []SourceDocument{{
+				ID:     []byte("reserved-vector-field"),
+				Fields: map[string]any{"body": "must not be indexed"},
+			}}, ingestTestCfg(8))
+			if err == nil {
+				t.Fatal("vector field overlaps chunk metadata but was accepted")
+			}
+			var ingestErr *IngestError
+			if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+				t.Fatalf("err=%v want chunk-stage IngestError", err)
+			}
+			if len(res.Ingested) != 0 {
+				t.Fatalf("reserved vector field rejection returned ingested outcomes: %+v", res.Ingested)
+			}
+			if raw, _ := col.Get([]byte("reserved-vector-field")); len(raw) != 0 {
+				t.Fatal("reserved vector field rejection mutated the collection")
+			}
+		})
+	}
+}
+
 func TestIngestSourcesRejectsParentChildNamespaceCollision(t *testing.T) {
-	_, _, col := openIngestTestCollection(t, 8)
-	cfg := ingestTestCfg(8)
-	sources := []SourceDocument{
-		ingestTestSource("doc", 0),
-		ingestTestSource("doc#0", 1),
+	tests := []struct {
+		name        string
+		parentIDs   []string
+		collidingID string
+	}{
+		{name: "planned ordinal", parentIDs: []string{"doc", "doc#0"}, collidingID: "doc#0"},
+		{name: "unplanned ordinal", parentIDs: []string{"doc", "doc#999"}, collidingID: "doc#999"},
 	}
-	res, err := col.IngestSources(context.Background(), sources, cfg)
-	if err == nil {
-		t.Fatal("parent/child namespace collision accepted")
-	}
-	var ingestErr *IngestError
-	if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
-		t.Fatalf("err=%v want chunk-stage IngestError", err)
-	}
-	if !strings.Contains(err.Error(), "doc#0") {
-		t.Fatalf("err=%v missing colliding ID", err)
-	}
-	if len(res.Ingested) != 0 {
-		t.Fatalf("collision rejection returned ingested outcomes: %+v", res.Ingested)
-	}
-	for _, id := range []string{"doc", "doc#0"} {
-		if raw, _ := col.Get([]byte(id)); len(raw) != 0 {
-			t.Fatalf("collision rejection mutated %q", id)
-		}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, col := openIngestTestCollection(t, 8)
+			cfg := ingestTestCfg(8)
+			sources := []SourceDocument{
+				ingestTestSource(tc.parentIDs[0], 0),
+				ingestTestSource(tc.parentIDs[1], 1),
+			}
+			res, err := col.IngestSources(context.Background(), sources, cfg)
+			if err == nil {
+				t.Fatal("parent/child namespace collision accepted")
+			}
+			var ingestErr *IngestError
+			if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+				t.Fatalf("err=%v want chunk-stage IngestError", err)
+			}
+			if !strings.Contains(err.Error(), tc.collidingID) {
+				t.Fatalf("err=%v missing colliding ID", err)
+			}
+			if len(res.Ingested) != 0 {
+				t.Fatalf("collision rejection returned ingested outcomes: %+v", res.Ingested)
+			}
+			for _, id := range tc.parentIDs {
+				if raw, _ := col.Get([]byte(id)); len(raw) != 0 {
+					t.Fatalf("collision rejection mutated %q", id)
+				}
+			}
+		})
 	}
 }
 

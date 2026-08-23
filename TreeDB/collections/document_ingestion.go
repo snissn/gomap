@@ -20,6 +20,7 @@ package collections
 //     not started are untouched; sources that completed stay intact.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -295,6 +296,19 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			Err:         fmt.Errorf("collections: invalid vector index field %q: %w", vectorField, err),
 		}
 	}
+	for _, reserved := range []string{
+		chunking.MetaFieldParent,
+		chunking.MetaFieldOrdinal,
+		chunking.MetaFieldKind,
+	} {
+		if vectorPath[0] == reserved {
+			return result, &IngestError{
+				Stage:       IngestStageChunk,
+				SourceIndex: 0,
+				Err:         fmt.Errorf("collections: vector index field %q overlaps reserved chunk linkage metadata field %q", vectorField, reserved),
+			}
+		}
+	}
 	overlap := len(textPath) <= len(vectorPath)
 	if overlap {
 		for i := range textPath {
@@ -357,6 +371,21 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if err != nil {
 			result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
 			return result, &IngestError{SourceID: append([]byte(nil), sd.ID...), SourceIndex: i, Stage: IngestStageChunk, Err: err}
+		}
+	}
+	for i := range plans {
+		for j := range i {
+			previous := plans[j].parentID
+			current := plans[i].parentID
+			if ingestParentInChildNamespace(previous, current) || ingestParentInChildNamespace(current, previous) {
+				result.ChunkNanos = time.Since(chunkStart).Nanoseconds()
+				return result, &IngestError{
+					SourceID:    append([]byte(nil), current...),
+					SourceIndex: i,
+					Stage:       IngestStageChunk,
+					Err:         fmt.Errorf("collections: source parent ID %q overlaps parent %q child namespace", current, previous),
+				}
+			}
 		}
 	}
 	namespace := make(map[string]string)
@@ -576,6 +605,12 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 	}
 	return result, err
+}
+
+func ingestParentInChildNamespace(parent, candidate []byte) bool {
+	return len(candidate) > len(parent) &&
+		bytes.HasPrefix(candidate, parent) &&
+		candidate[len(parent)] == '#'
 }
 
 func storageIngestError(sourceID []byte, index int, action string, err error) *IngestError {
