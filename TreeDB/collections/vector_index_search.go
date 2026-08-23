@@ -1401,7 +1401,7 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 		}
 		response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
 		if err == nil {
-			_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
+			liveDocs, rebuildNeeded, fullRebuilds := index.publishedNativeSearchState()
 			response.Status.Loaded = true
 			response.Status.Registered = true
 			response.Status.RootName = load.RootName
@@ -1425,6 +1425,11 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
+		if c.nativeVectorIndexMutationActive() {
+			if status, ok := index.publishedNativeSearchLoadStatus(def); ok {
+				return index, status, nil
+			}
+		}
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 		if err != nil {
 			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {

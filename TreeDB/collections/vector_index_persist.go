@@ -1492,6 +1492,7 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.dirtyMeta = false
 	clear(idx.dirtyNodes)
 	clear(idx.dirtyDocs)
+	idx.publishSearchViewLocked(false)
 }
 
 func (idx *VectorIndex) needsNativeAutoPersist() bool {
@@ -1697,6 +1698,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.mutationSeq = 0
 		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 		idx.sourceDocumentRootsValid = true
+		idx.publishSearchViewLocked(true)
 		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
@@ -1818,6 +1820,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.mutationSeq = 0
 	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 	idx.sourceDocumentRootsValid = true
+	idx.publishSearchViewLocked(true)
 	return ""
 }
 

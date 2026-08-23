@@ -5601,7 +5601,7 @@ func TestSearchVectorIndexWithBufferNativeRuntimeMissingRootFailsClosed(t *testi
 	}
 }
 
-func TestSearchVectorIndexWithBufferWaitsForNativeCoverageReconciliation(t *testing.T) {
+func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageReconciliation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -5622,6 +5622,31 @@ func TestSearchVectorIndexWithBufferWaitsForNativeCoverageReconciliation(t *test
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+	index.mu.Lock()
+	graphSearchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		results, err := index.searchGraphOnlyWithBuffer([]float32{1, 0}, 1, 8, &buffer)
+		if err == nil && (len(results) != 1 || string(results[0].ID) != "a") {
+			err = fmt.Errorf("results=%+v want document a", results)
+		}
+		graphSearchDone <- err
+	}()
+	select {
+	case err := <-graphSearchDone:
+		if err != nil {
+			index.mu.Unlock()
+			t.Fatalf("search with graph mutation lock held: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		index.mu.Unlock()
+		t.Fatal("published native search waited on graph mutation lock")
+	}
+	index.mu.Unlock()
 	unlockCoverage := col.lockVectorIndexCoverageMutation()
 	coverageLocked := true
 	defer func() {
@@ -5644,24 +5669,13 @@ func TestSearchVectorIndexWithBufferWaitsForNativeCoverageReconciliation(t *test
 		response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 		searchDone <- searchResult{response: response, err: err}
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for col.writeDomain.nativeVectorCoverageMu.TryRLock() {
-		col.writeDomain.nativeVectorCoverageMu.RUnlock()
-		select {
-		case result := <-searchDone:
-			_ = col.notifyVectorIndexesUpsert(ids)
-			unlockCoverage()
-			coverageLocked = false
-			t.Fatalf("search escaped in-flight native reconciliation: response=%+v err=%v", result.response, result.err)
-		default:
+	select {
+	case result := <-searchDone:
+		if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" {
+			t.Fatalf("search during native reconciliation response=%+v err=%v want prior published document a", result.response, result.err)
 		}
-		if time.Now().After(deadline) {
-			_ = col.notifyVectorIndexesUpsert(ids)
-			unlockCoverage()
-			coverageLocked = false
-			t.Fatal("search did not wait on the native coverage barrier")
-		}
-		runtime.Gosched()
+	case <-time.After(5 * time.Second):
+		t.Fatal("search blocked on in-flight native reconciliation")
 	}
 
 	if err := col.notifyVectorIndexesUpsert(ids); err != nil {
@@ -5671,13 +5685,95 @@ func TestSearchVectorIndexWithBufferWaitsForNativeCoverageReconciliation(t *test
 	}
 	unlockCoverage()
 	coverageLocked = false
+	var buffer VectorIndexSearchBuffer
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+	if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" {
+		t.Fatalf("search after native reconciliation response=%+v err=%v", response, err)
+	}
+}
+
+func TestVectorIndexSearchViewReusesRetiredBufferWithoutBlockingCurrentSearch(t *testing.T) {
+	index := &VectorIndex{
+		name:                     "embedding_native",
+		field:                    "embedding",
+		metric:                   VectorMetricCosine,
+		dimensions:               2,
+		m:                        4,
+		efConstruction:           16,
+		efSearch:                 8,
+		entry:                    -1,
+		maxLevel:                 -1,
+		currentNode:              make(map[string]int),
+		sourceDocumentRootsValid: true,
+		rebuildDeletedRatio:      float64(defaultVectorIndexRebuildPPM) / 1_000_000,
+	}
+	insert := func(id string, vector []float32) {
+		t.Helper()
+		index.mu.Lock()
+		defer index.mu.Unlock()
+		if err := index.insertVectorLocked([]byte(id), vector); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+		index.publishSearchViewLocked(false)
+	}
+	insert("a", []float32{1, 0})
+	retired := index.acquireSearchView()
+	if retired == nil {
+		t.Fatal("initial published search view is nil")
+	}
+	insert("b", []float32{0, 1})
+	current := index.searchView.Load()
+	if current == nil || current == retired {
+		retired.mu.RUnlock()
+		t.Fatal("second publication did not install an independent current view")
+	}
+
+	publicationEntered := make(chan struct{})
+	publicationDone := make(chan error, 1)
+	go func() {
+		index.mu.Lock()
+		err := index.insertVectorLocked([]byte("c"), []float32{-1, 0})
+		close(publicationEntered)
+		if err == nil {
+			index.publishSearchViewLocked(false)
+		}
+		index.mu.Unlock()
+		publicationDone <- err
+	}()
+	<-publicationEntered
 	select {
-	case result := <-searchDone:
-		if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "b" {
-			t.Fatalf("search after native reconciliation response=%+v err=%v", result.response, result.err)
+	case err := <-publicationDone:
+		retired.mu.RUnlock()
+		t.Fatalf("retired view was reused while still read-locked: %v", err)
+	default:
+	}
+	searchDone := make(chan error, 1)
+	go func() {
+		var buffer VectorIndexSearchBuffer
+		results, err := index.searchGraphOnlyWithBuffer([]float32{0, 1}, 1, 8, &buffer)
+		if err == nil && (len(results) != 1 || string(results[0].ID) != "b") {
+			err = fmt.Errorf("results=%+v want document b", results)
+		}
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		if err != nil {
+			retired.mu.RUnlock()
+			t.Fatalf("search while retired view waits for reuse: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("search remained blocked after native reconciliation")
+		retired.mu.RUnlock()
+		t.Fatal("current search blocked behind retired view reuse")
+	}
+	retired.mu.RUnlock()
+	select {
+	case err := <-publicationDone:
+		if err != nil {
+			t.Fatalf("third publication: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("third publication did not resume after retired reader released")
 	}
 }
 
