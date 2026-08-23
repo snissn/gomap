@@ -711,7 +711,13 @@ func (c *Collection) currentVectorIndexDocumentGenerationForAdmission() (uint64,
 		return 0, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	return vectorIndexDocumentGenerationForCollection(snap, c.collectionName())
+	collection := c.collectionName()
+	if collection == "" && c.writeDomain != nil {
+		c.writeDomain.mu.RLock()
+		collection = c.writeDomain.meta.Name
+		c.writeDomain.mu.RUnlock()
+	}
+	return vectorIndexDocumentGenerationForCollection(snap, collection)
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
@@ -1138,6 +1144,14 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	}
 	unlockMutation := c.lockVectorIndexMutation()
 	defer unlockMutation()
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorActiveMu.Lock()
+		rebuildCurrentDocuments := c.writeDomain.nativeVectorActive != 0 && !c.writeDomain.nativeVectorSearchActive.Load()
+		c.writeDomain.nativeVectorActiveMu.Unlock()
+		if rebuildCurrentDocuments {
+			c.invalidateRegisteredVectorIndexDocumentCoverage()
+		}
+	}
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverage()
@@ -1229,6 +1243,22 @@ func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverage() {
 func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverageLocked() {
 	for _, index := range c.registeredVectorIndexes() {
 		index.invalidateSourceDocumentRoots()
+	}
+}
+
+func (c *Collection) invalidateSharedVectorIndexDocumentCoverage() {
+	if c == nil || c.writeDomain == nil {
+		return
+	}
+	domains := []*collectionWriteDomain{c.writeDomain}
+	if coord := c.writeDomain.schemaCoordinator; coord != nil {
+		domains = coord.snapshotDomains()
+	}
+	for _, domain := range domains {
+		domain.nativeVectorMutationMu.Lock()
+		domain.nativeVectorSearchActive.Store(false)
+		(&Collection{db: c.db, writeDomain: domain}).invalidateRegisteredVectorIndexDocumentCoverage()
+		domain.nativeVectorMutationMu.Unlock()
 	}
 }
 

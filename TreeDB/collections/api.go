@@ -3136,10 +3136,10 @@ func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *col
 	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
 	err := collection.flushBufferedWritesLocked(domain)
 	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-	if err == nil && publishedPrimary {
-		err = collection.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
-	}
 	domain.mu.Unlock()
+	if err == nil && publishedPrimary {
+		collection.invalidateSharedVectorIndexDocumentCoverage()
+	}
 	return err
 }
 
@@ -8968,6 +8968,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+		unlockCoverage := c.lockVectorIndexCoverageMutation()
+		defer unlockCoverage()
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -8994,6 +8996,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)

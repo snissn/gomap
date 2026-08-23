@@ -1859,6 +1859,15 @@ func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t 
 	if stale.coversSourceDocumentGeneration(current) {
 		t.Fatal("unreconciled stale admission certified the external write")
 	}
+	if _, err := first.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}); err != nil {
+		t.Fatalf("insert through stale manager: %v", err)
+	}
+	refreshed := first.registeredVectorIndex(def.Name)
+	results, _, err := refreshed.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after stale-manager rebuild: %v", err)
+	}
+	requireVectorResultIDs(t, results, "seed", "local", "external")
 }
 
 func TestNativeVectorCoverageAdmissionSerializesAcrossManagers(t *testing.T) {
@@ -1893,6 +1902,88 @@ func TestNativeVectorCoverageAdmissionSerializesAcrossManagers(t *testing.T) {
 		t.Fatal("second manager did not acquire native vector admission")
 	}
 	secondAdmission.Unlock()
+}
+
+func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	writerManager := NewCollectionManager(d)
+	if _, err := writerManager.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 100,
+		},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := writerManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.insertBatch([][]byte{[]byte("async")}, [][]byte{[]byte(`{"kind":"a","embedding":[1,0]}`)}, false, nil); err != nil {
+		t.Fatalf("buffer writer document: %v", err)
+	}
+	work, err := writer.prepareIndexedAsyncPublish()
+	if err != nil || work == nil {
+		t.Fatalf("prepare indexed flush work=%v err=%v", work, err)
+	}
+	defer collectionTestCloseIndexedFlushWork(work)
+
+	unlockReader := reader.lockVectorIndexCoverageMutation()
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- writer.publishPreparedIndexedFlush(work) }()
+	select {
+	case err := <-publishDone:
+		unlockReader()
+		t.Fatalf("prepared indexed flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockReader()
+	if err := <-publishDone; err != nil {
+		t.Fatalf("publish prepared indexed flush: %v", err)
+	}
+	if _, err := writer.insertBatch([][]byte{[]byte("sync")}, [][]byte{[]byte(`{"kind":"s","embedding":[1,1]}`)}, false, nil); err != nil {
+		t.Fatalf("buffer synchronous writer document: %v", err)
+	}
+	unlockReader = reader.lockVectorIndexCoverageMutation()
+	syncDone := make(chan error, 1)
+	go func() { syncDone <- flushCollectionWriteDomain(d, writer.writeDomain) }()
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			unlockReader()
+			t.Fatalf("publish synchronous indexed flush: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		unlockReader()
+		t.Fatal("synchronous indexed flush deadlocked with held vector admission")
+	}
+	if reader.registeredVectorIndex(def.Name).hasValidSourceDocumentRoots() {
+		unlockReader()
+		t.Fatal("synchronous indexed flush did not invalidate stale vector coverage")
+	}
+	unlockReader()
+
+	if _, err := reader.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"kind":"b","embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert through stale reader: %v", err)
+	}
+	index := reader.registeredVectorIndex(def.Name)
+	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after stale-reader rebuild: %v", err)
+	}
+	requireVectorResultIDs(t, results, "async", "sync", "local")
 }
 
 func TestNativeVectorCoverageAdmissionSeesIndexCreatedByAnotherManager(t *testing.T) {
