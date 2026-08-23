@@ -7678,6 +7678,58 @@ func stagePrimaryDocumentCacheEntriesLocked(domain *collectionWriteDomain, meta 
 	domain.primaryCacheDirty = true
 }
 
+// replacePrimaryDocumentCacheAfterInsert keeps only the just-committed
+// no-index insert batch in the existing root-bound primary cache. The cache
+// owns its bytes because InsertBatch callers may reuse their input as soon as
+// the call returns.
+func (c *Collection) replacePrimaryDocumentCacheAfterInsert(systemRoot uint64, meta CollectionMeta, entries []noIndexBatchEntry) {
+	if c == nil || c.writeDomain == nil || systemRoot == 0 || len(entries) == 0 ||
+		normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON ||
+		columnStoreNeedsRetainedPayloadTransform(meta) {
+		return
+	}
+	hasNativeVectorIndex := false
+	for _, def := range meta.VectorIndexes {
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			hasNativeVectorIndex = true
+			break
+		}
+	}
+	if !hasNativeVectorIndex {
+		return
+	}
+	maxInt := int(^uint(0) >> 1)
+	totalBytes := 0
+	for _, entry := range entries {
+		if len(entry.id) > maxInt-totalBytes || len(entry.document) > maxInt-totalBytes-len(entry.id) {
+			return
+		}
+		totalBytes += len(entry.id) + len(entry.document)
+	}
+	arena := make([]byte, 0, totalBytes)
+	cacheEntries := make([]directBufferedRootEntry, 0, len(entries))
+	for _, entry := range entries {
+		keyStart := len(arena)
+		arena = append(arena, entry.id...)
+		key := arena[keyStart:len(arena):len(arena)]
+		valueStart := len(arena)
+		arena = append(arena, entry.document...)
+		value := arena[valueStart:len(arena):len(arena)]
+		cacheEntries = append(cacheEntries, directBufferedRootEntry{
+			key:   key,
+			value: value,
+			flags: node.FlagInline,
+		})
+	}
+
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	clearPrimaryDocumentCacheLocked(domain)
+	stagePrimaryDocumentCacheEntriesLocked(domain, meta, systemRoot, cacheEntries)
+	retainPrimaryDocumentCacheForCatalogLocked(domain, meta, systemRoot)
+}
+
 func snapshotUpdateBatchPrimaryCache(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem) updateBatchBufferedRead {
 	if domain == nil || baseSystemRoot == 0 || len(items) == 0 {
 		return updateBatchBufferedRead{}
@@ -11692,6 +11744,7 @@ func (c *Collection) insertBatchNoIndex(
 		c.meta = publishMeta
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, publishMeta, entries)
 		c.setLastInsertStats(stats)
 		return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 	}
@@ -11719,6 +11772,7 @@ func (c *Collection) insertBatchNoIndex(
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.replacePrimaryDocumentCacheAfterInsert(newSystemRoot, c.meta, entries)
 	c.setLastInsertStats(stats)
 	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }
