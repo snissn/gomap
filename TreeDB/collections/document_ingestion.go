@@ -470,7 +470,13 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, cfg.Embedding.Provider, def.Name)
-		if embedErr != nil {
+		var outputErr error
+		if embedErr == nil {
+			outputErr = validateEmbeddingOutput(vectors, len(plan.texts), def)
+		}
+		if embedErr != nil || outputErr != nil {
+			// Publish failure before another queued call can acquire the shared
+			// provider lock and start unnecessary work.
 			cancel()
 		}
 		unlockProvider()
@@ -480,12 +486,12 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if embedErr != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: embedErr}
 		}
-		if err := validateEmbeddingOutput(vectors, len(plan.texts), def); err != nil {
+		if outputErr != nil {
 			return &IngestError{
 				SourceID:    plan.parentID,
 				SourceIndex: i,
 				Stage:       IngestStageEmbed,
-				Err:         fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Embedding.Provider, def.Name, err),
+				Err:         fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Embedding.Provider, def.Name, outputErr),
 			}
 		}
 		if err := wctx.Err(); err != nil {

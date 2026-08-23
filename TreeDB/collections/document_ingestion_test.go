@@ -601,6 +601,38 @@ func TestIngestSourcesProviderErrorCancelsBeforeUnlock(t *testing.T) {
 	}
 }
 
+type malformedCountingEmbedder struct {
+	dims  int
+	calls atomic.Int32
+}
+
+func (e *malformedCountingEmbedder) Dimensions() int { return e.dims }
+func (e *malformedCountingEmbedder) EmbedBatch(context.Context, [][]byte) ([][]float32, error) {
+	e.calls.Add(1)
+	return nil, nil
+}
+
+func TestIngestSourcesMalformedOutputCancelsBeforeUnlock(t *testing.T) {
+	const provider = "ingest-test-malformed-output-cancel"
+	emb := &malformedCountingEmbedder{dims: 16}
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("register malformed embedder: %v", err)
+	}
+	_, _, col := openIngestTestCollection(t, 16)
+	cfg := ingestTestCfg(16)
+	cfg.Embedding.Provider = provider
+	cfg.Concurrency = 4
+	_, err := col.IngestSources(context.Background(), ingestTestSources(8), cfg)
+	if !errors.Is(err, embedding.ErrInvalidOutput) {
+		t.Fatalf("IngestSources err=%v want ErrInvalidOutput", err)
+	}
+	if calls := emb.calls.Load(); calls != 1 {
+		t.Fatalf("EmbedBatch calls=%d want 1; queued calls must observe malformed-output cancellation before provider unlock", calls)
+	}
+}
+
 // TestIngestSourcesChunkFailureFailClosedBeforeMutation proves plan validation
 // runs up front across the whole batch: one invalid source leaves the entire
 // collection untouched, with the typed chunk-stage error naming that source.
