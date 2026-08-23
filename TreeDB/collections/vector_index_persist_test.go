@@ -1642,7 +1642,7 @@ type acceptedVectorMutationErrorForTest struct {
 	error
 }
 
-func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
+func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1676,45 +1676,81 @@ func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
 			unlockFirst()
 		}
 	}()
-	unlockSecond := c.lockVectorIndexCoverageMutation()
+	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("publish first mutation: %v", err)
+	}
+	if err := c.reconcileVectorIndexes(firstIDs); err != nil {
+		t.Fatalf("reconcile first mutation: %v", err)
+	}
+	afterFirst, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("generation after first mutation: %v", err)
+	}
+	if afterFirst == before || index.coversSourceDocumentGeneration(afterFirst) {
+		t.Fatalf("first reconciliation advanced coverage from %d to %d before acknowledgment", before, afterFirst)
+	}
+
+	secondStarted := make(chan struct{})
+	secondAcquired := make(chan func(), 1)
+	go func() {
+		close(secondStarted)
+		secondAcquired <- c.lockVectorIndexCoverageMutation()
+	}()
+	<-secondStarted
+	select {
+	case unlockSecond := <-secondAcquired:
+		unlockSecond()
+		t.Fatal("second mutation entered before the first was acknowledged")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlockFirst()
+	firstLocked = false
+	var unlockSecond func()
+	select {
+	case unlockSecond = <-secondAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second mutation remained blocked after the first was acknowledged")
+	}
 	secondLocked := true
 	defer func() {
 		if secondLocked {
 			unlockSecond()
 		}
 	}()
-	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
-	if err != nil {
-		t.Fatalf("publish first overlapping mutation: %v", err)
+	if !index.coversSourceDocumentGeneration(afterFirst) {
+		t.Fatalf("first acknowledgment did not publish generation %d", afterFirst)
 	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after first acknowledgment: %v", err)
+	}
+	requireVectorResultIDs(t, results, "overlap-first", "seed")
+
 	secondIDs, err := c.insertBatch([][]byte{[]byte("overlap-second")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}, false, nil)
 	if err != nil {
-		t.Fatalf("publish second overlapping mutation: %v", err)
-	}
-	if err := c.reconcileVectorIndexes(firstIDs); err != nil {
-		t.Fatalf("reconcile first overlapping mutation: %v", err)
+		t.Fatalf("publish second mutation: %v", err)
 	}
 	if err := c.reconcileVectorIndexes(secondIDs); err != nil {
-		t.Fatalf("reconcile second overlapping mutation: %v", err)
+		t.Fatalf("reconcile second mutation: %v", err)
 	}
-	after, err := c.currentVectorIndexDocumentGeneration()
+	afterSecond, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
-		t.Fatalf("generation after overlap: %v", err)
+		t.Fatalf("generation after second mutation: %v", err)
 	}
-	if after == before || index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("overlapping reconciliation advanced coverage from %d to %d", before, after)
-	}
-
-	unlockFirst()
-	firstLocked = false
-	if index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("coverage advanced before the final overlapping mutation completed")
+	if afterSecond == afterFirst || index.coversSourceDocumentGeneration(afterSecond) {
+		t.Fatalf("second reconciliation advanced coverage from %d to %d before acknowledgment", afterFirst, afterSecond)
 	}
 	unlockSecond()
 	secondLocked = false
-	if !index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("final overlapping mutation did not cover generation %d", after)
+	if !index.coversSourceDocumentGeneration(afterSecond) {
+		t.Fatalf("second acknowledgment did not publish generation %d", afterSecond)
 	}
+	results, _, err = index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after second acknowledgment: %v", err)
+	}
+	requireVectorResultIDs(t, results, "overlap-first", "overlap-second", "seed")
 }
 
 func TestNativeVectorCoverageFinalizerOrdersDomainBeforeActive(t *testing.T) {

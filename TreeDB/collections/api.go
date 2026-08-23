@@ -1402,6 +1402,9 @@ type collectionWriteDomain struct {
 	primaryIDIndex           *bufferedUniqueValueIndex
 	nativeVectorIndexLoadMu  sync.Mutex
 	nativeVectorMutationMu   sync.Mutex
+	// ponytail: share non-vector admission but serialize vector writes so every
+	// acknowledgment is published; use cohorts only if vector writes prove limiting.
+	nativeVectorAdmissionMu  sync.RWMutex
 	nativeVectorCoverageMu   sync.RWMutex
 	nativeVectorActiveMu     sync.Mutex
 	nativeVectorActive       int
@@ -3978,6 +3981,10 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorAdmissionMu.Lock()
+		defer c.writeDomain.nativeVectorAdmissionMu.Unlock()
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -4067,6 +4074,10 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorAdmissionMu.Lock()
+		defer c.writeDomain.nativeVectorAdmissionMu.Unlock()
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()

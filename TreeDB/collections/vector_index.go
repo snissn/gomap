@@ -1237,6 +1237,24 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		return func() {}
 	}
 	domain := c.writeDomain
+	domain.nativeVectorAdmissionMu.RLock()
+	domain.mu.RLock()
+	hasMaintainedVectorIndexes := false
+	for _, def := range domain.meta.VectorIndexes {
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			hasMaintainedVectorIndexes = true
+			break
+		}
+	}
+	domain.mu.RUnlock()
+	if !hasMaintainedVectorIndexes {
+		hasMaintainedVectorIndexes = len(c.registeredVectorIndexes()) != 0
+	}
+	exclusiveAdmission := hasMaintainedVectorIndexes
+	if exclusiveAdmission {
+		domain.nativeVectorAdmissionMu.RUnlock()
+		domain.nativeVectorAdmissionMu.Lock()
+	}
 	domain.nativeVectorCoverageMu.RLock()
 	domain.nativeVectorActiveMu.Lock()
 	domain.nativeVectorActive++
@@ -1262,6 +1280,11 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		domain.nativeVectorCoverageMu.RUnlock()
 		domain.nativeVectorActiveMu.Unlock()
 		domain.mu.RUnlock()
+		if exclusiveAdmission {
+			domain.nativeVectorAdmissionMu.Unlock()
+		} else {
+			domain.nativeVectorAdmissionMu.RUnlock()
+		}
 	}
 }
 
