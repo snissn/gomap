@@ -1240,6 +1240,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain.nativeVectorCoverageMu.RLock()
 	domain.nativeVectorActiveMu.Lock()
 	domain.nativeVectorActive++
+	domain.nativeVectorSearchActive.Store(true)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
 		domain.mu.RLock()
@@ -1256,6 +1257,7 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 					}
 				}
 			}
+			domain.nativeVectorSearchActive.Store(false)
 		}
 		domain.nativeVectorCoverageMu.RUnlock()
 		domain.nativeVectorActiveMu.Unlock()
@@ -1307,6 +1309,8 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	if domain.nativeVectorActive != 0 {
 		return nil
 	}
+	domain.nativeVectorSearchActive.Store(true)
+	defer domain.nativeVectorSearchActive.Store(false)
 	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()

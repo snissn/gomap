@@ -1405,6 +1405,7 @@ type collectionWriteDomain struct {
 	nativeVectorCoverageMu   sync.RWMutex
 	nativeVectorActiveMu     sync.Mutex
 	nativeVectorActive       int
+	nativeVectorSearchActive atomic.Bool
 	nativeVectorIndexesMu    sync.RWMutex
 	nativeVectorIndexes      map[string]*VectorIndex
 	nativeVectorPublishMu    sync.RWMutex

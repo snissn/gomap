@@ -228,10 +228,7 @@ func (c *Collection) nativeVectorIndexMutationActive() bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	c.writeDomain.nativeVectorActiveMu.Lock()
-	active := c.writeDomain.nativeVectorActive != 0
-	c.writeDomain.nativeVectorActiveMu.Unlock()
-	return active
+	return c.writeDomain.nativeVectorSearchActive.Load()
 }
 
 func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {

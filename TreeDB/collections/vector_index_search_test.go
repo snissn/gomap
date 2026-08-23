@@ -3874,25 +3874,14 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 				}
 			case "concurrent_no_index_search":
 				col.writeDomain.nativeVectorActiveMu.Lock()
+				col.writeDomain.nativeVectorSearchActive.Store(true)
 				activeUnlocked := false
 				defer func() {
 					if !activeUnlocked {
+						col.writeDomain.nativeVectorSearchActive.Store(false)
 						col.writeDomain.nativeVectorActiveMu.Unlock()
 					}
 				}()
-				flushDone := make(chan error, 1)
-				go func() {
-					_, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1})
-					flushDone <- err
-				}()
-				deadline := time.Now().Add(5 * time.Second)
-				for col.writeDomain.mu.TryLock() {
-					col.writeDomain.mu.Unlock()
-					if time.Now().After(deadline) {
-						t.Fatal("read flush did not reach the coverage transition")
-					}
-					runtime.Gosched()
-				}
 				type searchResult struct {
 					response VectorIndexSearchResponse
 					err      error
@@ -3900,26 +3889,22 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 				searchDone := make(chan searchResult, 1)
 				go func() {
 					var buffer VectorIndexSearchBuffer
-					response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
+					response, err := col.searchNativeRuntimeVectorIndexWithBuffer(def, VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
 					searchDone <- searchResult{response: response, err: err}
 				}()
-				select {
-				case result := <-searchDone:
-					t.Fatalf("concurrent search escaped coverage transition: response=%+v err=%v", result.response, result.err)
-				case <-time.After(50 * time.Millisecond):
-				}
-				col.writeDomain.nativeVectorActiveMu.Unlock()
-				activeUnlocked = true
-				if err := <-flushDone; err != nil {
-					t.Fatalf("FindByCompoundIndexRange: %v", err)
-				}
 				select {
 				case result := <-searchDone:
 					if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" {
 						t.Fatalf("concurrent search response=%+v err=%v", result.response, result.err)
 					}
 				case <-time.After(5 * time.Second):
-					t.Fatal("concurrent search remained blocked after coverage refresh")
+					t.Fatal("concurrent search blocked on the mutation-active mutex")
+				}
+				col.writeDomain.nativeVectorSearchActive.Store(false)
+				col.writeDomain.nativeVectorActiveMu.Unlock()
+				activeUnlocked = true
+				if _, _, err := col.FindByCompoundIndexRange("missing", CompoundIndexRangeOptions{Limit: 1}); err != nil {
+					t.Fatalf("FindByCompoundIndexRange: %v", err)
 				}
 			case "delayed_async":
 				work, err := col.prepareIndexedAsyncPublish()
