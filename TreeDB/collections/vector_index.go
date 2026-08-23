@@ -1247,9 +1247,9 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 		}
 	}
 	domain.mu.RUnlock()
-	if !hasMaintainedVectorIndexes {
-		hasMaintainedVectorIndexes = len(c.registeredVectorIndexes()) != 0
-	}
+	domain.nativeVectorIndexesMu.RLock()
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
+	domain.nativeVectorIndexesMu.RUnlock()
 	exclusiveAdmission := hasMaintainedVectorIndexes
 	if exclusiveAdmission {
 		domain.nativeVectorAdmissionMu.RUnlock()

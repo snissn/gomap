@@ -1753,6 +1753,48 @@ func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
 	requireVectorResultIDs(t, results, "overlap-first", "overlap-second", "seed")
 }
 
+func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	c, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := c.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyColumnGraph,
+	}); err != nil {
+		t.Fatalf("create column graph: %v", err)
+	}
+	if len(c.registeredVectorIndexes()) != 1 {
+		t.Fatal("empty column graph did not register its runtime")
+	}
+
+	unlockFirst := c.lockVectorIndexCoverageMutation()
+	firstLocked := true
+	defer func() {
+		if firstLocked {
+			unlockFirst()
+		}
+	}()
+	secondAcquired := make(chan func(), 1)
+	go func() { secondAcquired <- c.lockVectorIndexCoverageMutation() }()
+	select {
+	case unlockSecond := <-secondAcquired:
+		unlockSecond()
+	case <-time.After(5 * time.Second):
+		t.Fatal("column-graph write admission was serialized")
+	}
+	unlockFirst()
+	firstLocked = false
+}
+
 func TestNativeVectorCoverageFinalizerOrdersDomainBeforeActive(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
