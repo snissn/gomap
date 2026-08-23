@@ -501,6 +501,9 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 				return nil, storageIngestError(plan.parentID, i, "lock collection mutation", err)
 			}
 			defer unlockMutation()
+			if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+				return nil, storageIngestError(plan.parentID, i, "publish sibling write domains before child enumeration", err)
+			}
 			oldChildren, _, err := c.chunkChildrenUnlocked(plan.parentID)
 			if err != nil {
 				return nil, storageIngestError(plan.parentID, i, "enumerate stale chunk children", err)

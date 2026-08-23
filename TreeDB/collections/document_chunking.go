@@ -258,6 +258,9 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	}
 	defer unlockMutation()
 
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return result, fmt.Errorf("collections: publish chunk write domains before replacement: %w", err)
+	}
 	oldChildren, _, err := c.chunkChildrenUnlocked(parentID)
 	if err != nil {
 		return result, err
