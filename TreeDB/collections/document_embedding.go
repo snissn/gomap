@@ -23,6 +23,9 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {
 		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, ErrIndexNotFound)
@@ -34,6 +37,14 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 	emb, err := embedding.DefaultRegistry().Create(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+	}
+	unlockProvider, err := embedding.DefaultRegistry().LockProvider(ctx, cfg.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("collections: provider %q embed into vector index %q: %w", cfg.Provider, def.Name, err)
+	}
+	defer unlockProvider()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("collections: provider %q embed into vector index %q: %w", cfg.Provider, def.Name, err)
 	}
 	vectors, err := emb.EmbedBatch(ctx, texts)
 	if err != nil {

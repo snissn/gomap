@@ -470,29 +470,33 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, cfg.Embedding.Provider, def.Name)
-		var outputErr error
-		if embedErr == nil {
-			outputErr = validateEmbeddingOutput(vectors, len(plan.texts), def)
+		var providerStageErr *IngestError
+		switch {
+		case embedErr != nil:
+			providerStageErr = &IngestError{
+				SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: embedErr,
+			}
+		default:
+			if outputErr := validateEmbeddingOutput(vectors, len(plan.texts), def); outputErr != nil {
+				providerStageErr = &IngestError{
+					SourceID:    plan.parentID,
+					SourceIndex: i,
+					Stage:       IngestStageEmbed,
+					Err:         fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Embedding.Provider, def.Name, outputErr),
+				}
+			}
 		}
-		if embedErr != nil || outputErr != nil {
-			// Publish failure before another queued call can acquire the shared
-			// provider lock and start unnecessary work.
-			cancel()
+		if providerStageErr != nil {
+			// Store the originating failure and broadcast cancellation before
+			// a queued caller can acquire the provider lock.
+			fail(i, providerStageErr)
 		}
 		unlockProvider()
 		mu.Lock()
 		result.EmbedNanos += time.Since(embedStart).Nanoseconds()
 		mu.Unlock()
-		if embedErr != nil {
-			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: embedErr}
-		}
-		if outputErr != nil {
-			return &IngestError{
-				SourceID:    plan.parentID,
-				SourceIndex: i,
-				Stage:       IngestStageEmbed,
-				Err:         fmt.Errorf("collections: validate provider %q output for vector index %q: %w", cfg.Embedding.Provider, def.Name, outputErr),
-			}
+		if providerStageErr != nil {
+			return providerStageErr
 		}
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,

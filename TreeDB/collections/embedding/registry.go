@@ -60,6 +60,11 @@ func (r *Registry) Create(cfg Config) (Embedder, error) {
 	if !ok {
 		return nil, fmt.Errorf("embedding: provider %q: %w", cfg.Provider, ErrUnknownProvider)
 	}
+	unlockProvider, err := r.LockProvider(context.Background(), cfg.Provider)
+	if err != nil {
+		return nil, err
+	}
+	defer unlockProvider()
 	emb, err := factory(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)

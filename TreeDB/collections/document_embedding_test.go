@@ -216,6 +216,36 @@ func TestValidateEmbedderForVectorIndex(t *testing.T) {
 	}
 }
 
+func TestEmbedForIngestSerializesProviderAcrossCalls(t *testing.T) {
+	const provider = "direct-embed-serial-cross-call"
+	col, _ := openEmbeddingTestCollection(t, 16)
+	emb := &serialGuardEmbedder{dims: 16}
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("register serial provider: %v", err)
+	}
+	cfg := embedding.Config{Provider: provider, Dimensions: 16}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, err := col.EmbedForIngest(context.Background(), "embedding", [][]byte{[]byte("alpha")}, cfg)
+			errs <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("EmbedForIngest: %v", err)
+		}
+	}
+	if emb.concurrent.Load() {
+		t.Fatal("direct EmbedForIngest calls overlapped one provider")
+	}
+}
+
 type stubDimsEmbedder struct{ dims int }
 
 func (s stubDimsEmbedder) Dimensions() int { return s.dims }
