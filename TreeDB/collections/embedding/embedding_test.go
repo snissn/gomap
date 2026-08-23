@@ -80,6 +80,28 @@ func TestRegistryCreateRejectsNilAndTypedNilEmbedders(t *testing.T) {
 	}
 }
 
+func TestRegistryCreateReleasesProviderLockAfterFactoryPanic(t *testing.T) {
+	reg := NewRegistry()
+	var panicFactory atomic.Bool
+	panicFactory.Store(true)
+	if err := reg.Register("panic-once", func(Config) (Embedder, error) {
+		if panicFactory.Swap(false) {
+			panic("factory exploded")
+		}
+		return stubEmbedder{dims: 4}, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	cfg := Config{Provider: "panic-once", Dimensions: 4}
+	if _, err := reg.Create(cfg); !errors.Is(err, ErrInvalidEmbedder) {
+		t.Fatalf("panic Create err=%v want ErrInvalidEmbedder", err)
+	}
+	emb, err := reg.Create(cfg)
+	if err != nil || emb == nil {
+		t.Fatalf("Create after panic=(%v, %v), provider lock was not released", emb, err)
+	}
+}
+
 func TestRegistryCreatePreservesFactoryCauseAndProviderContext(t *testing.T) {
 	cause := errors.New("provider credentials unavailable")
 	reg := NewRegistry()

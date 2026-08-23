@@ -88,7 +88,7 @@ func (r *Registry) CreateLocked(ctx context.Context, cfg Config) (Embedder, func
 		unlockProvider()
 		return nil, nil, err
 	}
-	emb, err := factory(cfg)
+	emb, err := callFactory(factory, cfg)
 	if err != nil {
 		unlockProvider()
 		return nil, nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
@@ -104,6 +104,16 @@ func (r *Registry) CreateLocked(ctx context.Context, cfg Config) (Embedder, func
 			cfg.Provider, dimensions, cfg.Dimensions, ErrDimensionMismatch)
 	}
 	return emb, unlockProvider, nil
+}
+
+func callFactory(factory Factory, cfg Config) (emb Embedder, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			emb = nil
+			err = fmt.Errorf("%w: factory panic: %v", ErrInvalidEmbedder, recovered)
+		}
+	}()
+	return factory(cfg)
 }
 
 // ValidateEmbedder rejects nil and typed-nil provider results before any
