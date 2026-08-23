@@ -2,27 +2,19 @@ package collections
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections/embedding"
 )
 
-// Fail-closed ingest-embedding errors. Callers should test with errors.Is.
-var (
-	// errCollectionEmbedderUnknownVectorIndex is returned when an embed
-	// request names no vector index defined on the collection.
-	errCollectionEmbedderUnknownVectorIndex = errors.New("collections: unknown vector index")
-)
-
 // EmbedForIngest resolves the configured embedder against the named vector
 // index definition and returns one vector per text, index-aligned.
 //
-// This is the ingest-path dimension gate, mirroring the chunked-ingest
-// plan-before-mutation pattern: every failure — unknown vector index,
-// dimension mismatch against the declared definition, unknown provider, or
-// batch/cancellation failure — happens here, before the caller writes
-// anything. A failed call leaves the collection untouched by construction:
+// This is the ingest-path provider and output gate, mirroring the chunked-
+// ingest plan-before-mutation pattern: every failure — unknown vector index,
+// dimension mismatch, unknown provider, invalid output, or batch/cancellation
+// failure — happens here, before the caller writes anything. A failed call
+// leaves the collection untouched by construction:
 // this method performs no mutations of its own.
 func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string, texts [][]byte, cfg embedding.Config) ([][]float32, error) {
 	if c == nil {
@@ -33,7 +25,7 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {
-		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, errCollectionEmbedderUnknownVectorIndex)
+		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, ErrIndexNotFound)
 	}
 	if cfg.Dimensions != def.Dimensions {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
@@ -45,6 +37,9 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 	}
 	vectors, err := emb.EmbedBatch(ctx, texts)
 	if err != nil {
+		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+	}
+	if err := validateEmbeddingOutput(vectors, len(texts), def); err != nil {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
 	}
 	return vectors, nil
@@ -66,11 +61,12 @@ func (c *Collection) ValidateEmbedderForVectorIndex(vectorIndexName string, emb 
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {
-		return fmt.Errorf("collections: validate embedder for %q: %w", vectorIndexName, errCollectionEmbedderUnknownVectorIndex)
+		return fmt.Errorf("collections: validate embedder for %q: %w", vectorIndexName, ErrIndexNotFound)
 	}
-	if emb.Dimensions() != def.Dimensions {
+	dimensions := emb.Dimensions()
+	if dimensions != def.Dimensions {
 		return fmt.Errorf("collections: vector index %q declares %d dims, embedder builds %d: %w",
-			def.Name, def.Dimensions, emb.Dimensions(), embedding.ErrDimensionMismatch)
+			def.Name, def.Dimensions, dimensions, embedding.ErrDimensionMismatch)
 	}
 	return nil
 }
@@ -91,7 +87,7 @@ func (c *Collection) EmbedderForIngest(vectorIndexName string, cfg embedding.Con
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {
-		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, errCollectionEmbedderUnknownVectorIndex)
+		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, ErrIndexNotFound)
 	}
 	if cfg.Dimensions != def.Dimensions {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",

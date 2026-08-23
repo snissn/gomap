@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -361,6 +362,9 @@ func TestIngestSourcesEmbedFailureTaxonomy(t *testing.T) {
 		t.Fatalf("error text %q does not name the failed source ID", err.Error())
 	}
 
+	if !errors.Is(err, emb.err) {
+		t.Fatalf("error %v does not preserve provider cause %v", err, emb.err)
+	}
 	// Sources before N are fully intact.
 	for i := 0; i < n; i++ {
 		children, err := col.ChunkChildren(sources[i].ID)
@@ -391,6 +395,94 @@ func TestIngestSourcesEmbedFailureTaxonomy(t *testing.T) {
 	// Result reports only fully committed sources.
 	if len(res.Ingested) != n {
 		t.Fatalf("res.Ingested=%d want %d (only pre-failure sources)", len(res.Ingested), n)
+	}
+}
+
+type outputFuncEmbedder struct {
+	dims int
+	fn   func([][]byte) [][]float32
+}
+
+func (e outputFuncEmbedder) Dimensions() int { return e.dims }
+func (e outputFuncEmbedder) EmbedBatch(ctx context.Context, texts [][]byte) ([][]float32, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return e.fn(texts), nil
+}
+
+func TestIngestSourcesRejectsMalformedProviderOutputBeforeMutation(t *testing.T) {
+	const dims = 8
+	tests := []struct {
+		name             string
+		output           func([][]byte) [][]float32
+		wantDimensionErr bool
+	}{
+		{
+			name: "wrong count",
+			output: func(texts [][]byte) [][]float32 {
+				return makeVectors(len(texts)-1, dims)
+			},
+		},
+		{
+			name: "wrong width",
+			output: func(texts [][]byte) [][]float32 {
+				return makeVectors(len(texts), dims-1)
+			},
+			wantDimensionErr: true,
+		},
+		{
+			name: "non-finite",
+			output: func(texts [][]byte) [][]float32 {
+				out := makeVectors(len(texts), dims)
+				out[0][0] = float32(math.NaN())
+				return out
+			},
+		},
+		{
+			name: "zero cosine vector",
+			output: func(texts [][]byte) [][]float32 {
+				out := make([][]float32, len(texts))
+				for i := range out {
+					out[i] = make([]float32, dims)
+				}
+				return out
+			},
+		},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := fmt.Sprintf("ingest-malformed-output-%d", i)
+			if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+				return outputFuncEmbedder{dims: dims, fn: tc.output}, nil
+			}); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+			_, _, col := openIngestTestCollection(t, dims)
+			cfg := ingestTestCfg(dims)
+			cfg.Embedding.Provider = provider
+			source := ingestTestSource("malformed-output", 1)
+			res, err := col.IngestSources(context.Background(), []SourceDocument{source}, cfg)
+			if !errors.Is(err, embedding.ErrInvalidOutput) {
+				t.Fatalf("IngestSources error=%v want ErrInvalidOutput", err)
+			}
+			if tc.wantDimensionErr && !errors.Is(err, embedding.ErrDimensionMismatch) {
+				t.Fatalf("IngestSources error=%v want ErrDimensionMismatch", err)
+			}
+			var ingestErr *IngestError
+			if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageEmbed {
+				t.Fatalf("IngestSources error=%v want embed-stage IngestError", err)
+			}
+			if len(res.Ingested) != 0 {
+				t.Fatalf("malformed output returned ingested outcomes: %+v", res.Ingested)
+			}
+			if raw, getErr := col.Get(source.ID); getErr != nil || len(raw) != 0 {
+				t.Fatalf("malformed output mutated parent: len=%d err=%v", len(raw), getErr)
+			}
+			if children, childrenErr := col.ChunkChildren(source.ID); childrenErr != nil || len(children) != 0 {
+				t.Fatalf("malformed output mutated children: %q err=%v", children, childrenErr)
+			}
+		})
 	}
 }
 
@@ -744,6 +836,51 @@ func TestIngestSourcesCancelBetweenSources(t *testing.T) {
 	}
 }
 
+type cancelCountingEmbedder struct {
+	dims    int
+	calls   atomic.Int32
+	entered chan struct{}
+}
+
+func (e *cancelCountingEmbedder) Dimensions() int { return e.dims }
+func (e *cancelCountingEmbedder) EmbedBatch(ctx context.Context, _ [][]byte) ([][]float32, error) {
+	if e.calls.Add(1) == 1 {
+		close(e.entered)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestIngestSourcesCancellationSkipsQueuedProviderCalls(t *testing.T) {
+	const provider = "ingest-cancel-counting"
+	emb := &cancelCountingEmbedder{dims: 16, entered: make(chan struct{})}
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		return emb, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	_, _, col := openIngestTestCollection(t, 16)
+	cfg := ingestTestCfg(16)
+	cfg.Embedding.Provider = provider
+	cfg.Concurrency = 4
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-emb.entered
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	res, err := col.IngestSources(ctx, ingestTestSources(8), cfg)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("IngestSources error=%v want context.Canceled", err)
+	}
+	if calls := emb.calls.Load(); calls != 1 {
+		t.Fatalf("EmbedBatch calls=%d want 1; queued calls must stop after cancellation", calls)
+	}
+	if len(res.Ingested) != 0 {
+		t.Fatalf("canceled provider returned ingested outcomes: %+v", res.Ingested)
+	}
+}
+
 // TestIngestSourcesFlushCheckpointReopenMatrix walks the flush/checkpoint/
 // reopen matrix over an ingested corpus and asserts index parity at every step.
 func TestIngestSourcesFlushCheckpointReopenMatrix(t *testing.T) {
@@ -1076,6 +1213,104 @@ func TestIngestSourcesProgressCompletionNumbersMonotonic(t *testing.T) {
 		if p.SourcesCompleted != i+1 || p.SourcesTotal != len(sources) {
 			t.Fatalf("progress[%d]=%+v want completion=%d total=%d", i, p, i+1, len(sources))
 		}
+	}
+}
+
+func TestIngestSourcesHashingOutputBitIdenticalAcrossWorkerCounts(t *testing.T) {
+	sources := ingestTestSources(8)
+	fingerprints := make(map[int]string, 2)
+	for _, workers := range []int{1, 4} {
+		t.Run(fmt.Sprintf("workers_%d", workers), func(t *testing.T) {
+			_, _, col := openIngestTestCollection(t, 16)
+			cfg := ingestTestCfg(16)
+			cfg.Concurrency = workers
+			res, err := col.IngestSources(context.Background(), sources, cfg)
+			if err != nil {
+				t.Fatalf("IngestSources: %v", err)
+			}
+			if len(res.Ingested) != len(sources) {
+				t.Fatalf("Ingested=%d want %d", len(res.Ingested), len(sources))
+			}
+			for i := range sources {
+				if string(res.Ingested[i].ID) != string(sources[i].ID) {
+					t.Fatalf("Ingested[%d]=%q want %q", i, res.Ingested[i].ID, sources[i].ID)
+				}
+			}
+			fingerprints[workers] = ingestionFingerprint(t, col, sources)
+			t.Logf("workers=%d output_sha256=%s", workers, fingerprints[workers])
+		})
+	}
+	if fingerprints[1] != fingerprints[4] {
+		t.Fatalf("hashing ingestion fingerprints differ: workers=1 %s workers=4 %s", fingerprints[1], fingerprints[4])
+	}
+}
+
+func ingestionFingerprint(t *testing.T, col *Collection, sources []SourceDocument) string {
+	t.Helper()
+	h := sha256.New()
+	for _, source := range sources {
+		parent, err := col.Get(source.ID)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", source.ID, err)
+		}
+		_, _ = h.Write(source.ID)
+		_, _ = h.Write([]byte{0})
+		_, _ = h.Write(parent)
+		_, _ = h.Write([]byte{0})
+		children, err := col.ChunkChildren(source.ID)
+		if err != nil {
+			t.Fatalf("ChunkChildren(%q): %v", source.ID, err)
+		}
+		sort.Slice(children, func(i, j int) bool { return string(children[i]) < string(children[j]) })
+		for _, childID := range children {
+			child, err := col.Get(childID)
+			if err != nil {
+				t.Fatalf("Get(%q): %v", childID, err)
+			}
+			_, _ = h.Write(childID)
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write(child)
+			_, _ = h.Write([]byte{0})
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// BenchmarkIngestSourcesProviderBoundary measures one full 32-document hashing
+// ingest at 256 dimensions with one and four collection workers. Stage shares
+// are reported from the pipeline's wall counters.
+func BenchmarkIngestSourcesProviderBoundary(b *testing.B) {
+	sources := make([]SourceDocument, 32)
+	for i := range sources {
+		sources[i] = SourceDocument{
+			ID:     []byte(fmt.Sprintf("bench-%d", i)),
+			Fields: map[string]any{"body": "benchmark ingestion document with enough text for one chunk"},
+		}
+	}
+	for _, workers := range []int{1, 4} {
+		b.Run(fmt.Sprintf("workers_%d", workers), func(b *testing.B) {
+			_, _, col := openIngestTestCollection(b, 256)
+			cfg := ingestTestCfg(256)
+			cfg.Concurrency = workers
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				start := time.Now()
+				res, err := col.IngestSources(context.Background(), sources, cfg)
+				elapsed := time.Since(start)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportMetric(float64(len(sources))/elapsed.Seconds(), "docs/sec")
+				b.ReportMetric(float64(res.EmbedNanos)/1e6, "embed-ms")
+				stageTotal := res.ChunkNanos + res.EmbedNanos + res.IndexNanos
+				if stageTotal > 0 {
+					b.ReportMetric(float64(res.ChunkNanos)/float64(stageTotal)*100, "chunk-%")
+					b.ReportMetric(float64(res.EmbedNanos)/float64(stageTotal)*100, "embed-%")
+					b.ReportMetric(float64(res.IndexNanos)/float64(stageTotal)*100, "index-%")
+				}
+			}
+		})
 	}
 }
 

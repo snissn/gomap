@@ -26,11 +26,22 @@ cfg := collections.IngestSourcesConfig{
 result, err := collection.IngestSources(ctx, sources, cfg)
 ```
 
-The configured vector index must exist and its dimensions must exactly match the embedder configuration. Every source is validated and chunk-planned before mutation. Embedding also completes before that source is changed, so chunk or embed errors fail closed. A successful result contains one `Ingested` outcome per source, including deterministic child IDs (`<sourceID>#<ordinal>`).
+The configured vector index must exist and its dimensions must exactly match
+both the embedder configuration and the created provider. Every source is
+validated and chunk-planned before mutation. Provider output count, width,
+finiteness, and cosine magnitude are checked before that source is changed, so
+chunk, provider, or output errors fail closed. A successful result contains one
+`Ingested` outcome per source, including deterministic child IDs
+(`<sourceID>#<ordinal>`).
 
 ## Failure and retry behavior
 
-`*collections.IngestError` identifies the source ID, input index, and stage (`chunk`, `embed`, or `storage`); use `errors.As` and `errors.Is` to inspect it. The worker pool is bounded by `Concurrency` (zero defaults to four), and cancellation stops unstarted work while preserving completed sources.
+`*collections.IngestError` identifies the source ID, input index, and stage
+(`chunk`, `embed`, or `storage`); use `errors.As` and `errors.Is` to inspect it.
+The worker pool is bounded by `Concurrency` (zero defaults to four), but calls
+to its one shared provider instance are serialized because providers need not
+be thread-safe. Cancellation prevents queued provider calls and source
+mutations from starting while preserving already completed sources.
 
 Child deletion and insertion are separate collection mutation boundaries. A storage error after one boundary is therefore commit-ambiguous for that source; the source may still have its old children, its new children, or be between those states. Retry the same source to converge. Child IDs are deterministic, so retries do not duplicate children. The built-in test fault boundary runs before either mutation and leaves the source unchanged.
 

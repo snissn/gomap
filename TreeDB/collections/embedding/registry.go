@@ -2,6 +2,7 @@ package embedding
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 )
 
@@ -55,11 +56,28 @@ func (r *Registry) Create(cfg Config) (Embedder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
 	}
-	if emb.Dimensions() != cfg.Dimensions {
+	if isNilEmbedder(emb) {
+		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, ErrInvalidEmbedder)
+	}
+	dimensions := emb.Dimensions()
+	if dimensions != cfg.Dimensions {
 		return nil, fmt.Errorf("embedding: provider %q builds %d dims, config declares %d: %w",
-			cfg.Provider, emb.Dimensions(), cfg.Dimensions, ErrDimensionMismatch)
+			cfg.Provider, dimensions, cfg.Dimensions, ErrDimensionMismatch)
 	}
 	return emb, nil
+}
+
+func isNilEmbedder(emb Embedder) bool {
+	if emb == nil {
+		return true
+	}
+	value := reflect.ValueOf(emb)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 var (

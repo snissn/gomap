@@ -163,8 +163,9 @@ type IngestSourcesConfig struct {
 	// TextField names the parent field holding text to chunk. Empty defaults
 	// to "body" (matching ChunkedIngestOptions).
 	TextField string
-	// Concurrency bounds the worker pool. Zero defaults to 4; values larger
-	// than the source count clamp down.
+	// Concurrency bounds the source worker pool. Zero defaults to 4; values
+	// larger than the source count clamp down. Calls to the one shared Embedder
+	// instance remain serialized because providers need not be thread-safe.
 	Concurrency int
 	// Progress is invoked after each committed source. Callbacks are serialized
 	// so callers can update a single progress display without their own lock.
@@ -464,6 +465,10 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			}
 		}
 		embedMu.Lock()
+		if err := wctx.Err(); err != nil {
+			embedMu.Unlock()
+			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: err}
+		}
 		embedStart := time.Now()
 		vectors, embedErr := c.embedIngestChildren(wctx, emb, plan, vectorField)
 		embedMu.Unlock()
@@ -473,7 +478,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if embedErr != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed, Err: embedErr}
 		}
-		if err := validateIngestVectors(vectors, def); err != nil {
+		if err := validateEmbeddingOutput(vectors, len(plan.texts), def); err != nil {
 			return &IngestError{
 				SourceID:    plan.parentID,
 				SourceIndex: i,
@@ -631,11 +636,17 @@ func (c *Collection) embedIngestChildren(ctx context.Context, emb embedding.Embe
 	if err != nil {
 		return nil, fmt.Errorf("collections: embed chunk children of %q into %q: %w", plan.parentID, vectorField, err)
 	}
-	if len(vectors) != len(plan.texts) {
-		return nil, fmt.Errorf("collections: embed chunk children of %q: got %d vectors for %d texts",
-			plan.parentID, len(vectors), len(plan.texts))
-	}
 	return vectors, nil
+}
+
+func validateEmbeddingOutput(vectors [][]float32, wantCount int, def VectorIndexDefinition) error {
+	if len(vectors) != wantCount {
+		return fmt.Errorf("%w: got %d vectors for %d texts", embedding.ErrInvalidOutput, len(vectors), wantCount)
+	}
+	if err := validateIngestVectors(vectors, def); err != nil {
+		return fmt.Errorf("%w: %w", embedding.ErrInvalidOutput, err)
+	}
+	return nil
 }
 
 // validateIngestVectors applies the target index's document-vector contract
@@ -653,7 +664,7 @@ func validateIngestVectors(vectors [][]float32, def VectorIndexDefinition) error
 	}
 	for i, vector := range vectors {
 		if len(vector) != def.Dimensions {
-			return fmt.Errorf("vector[%d] dimensions=%d want %d", i, len(vector), def.Dimensions)
+			return fmt.Errorf("vector[%d] dimensions=%d want %d: %w", i, len(vector), def.Dimensions, embedding.ErrDimensionMismatch)
 		}
 		if err := validateFloat32Vector(vector); err != nil {
 			return fmt.Errorf("vector[%d]: %w", i, err)

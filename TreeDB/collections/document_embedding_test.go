@@ -3,6 +3,8 @@ package collections
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -89,8 +91,8 @@ func TestEmbedForIngestUnknownVectorIndexFailsClosed(t *testing.T) {
 	col, _ := openEmbeddingTestCollection(t, 16)
 	_, err := col.EmbedForIngest(context.Background(), "not-an-index",
 		[][]byte{[]byte("hello world")}, embedding.Config{Provider: embedding.ProviderHashing, Dimensions: 16})
-	if !errors.Is(err, errCollectionEmbedderUnknownVectorIndex) {
-		t.Fatalf("EmbedForIngest=%v want errCollectionEmbedderUnknownVectorIndex", err)
+	if !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("EmbedForIngest=%v want ErrIndexNotFound", err)
 	}
 }
 
@@ -127,6 +129,67 @@ func TestEmbedForIngestHappyPath(t *testing.T) {
 	}
 }
 
+func TestEmbedForIngestRejectsMalformedProviderOutput(t *testing.T) {
+	const dims = 16
+	texts := [][]byte{[]byte("alpha"), []byte("beta")}
+	valid := func(n, width int) [][]float32 {
+		out := make([][]float32, n)
+		for i := range out {
+			out[i] = make([]float32, width)
+			if width > 0 {
+				out[i][0] = 1
+			}
+		}
+		return out
+	}
+	tests := []struct {
+		name             string
+		vectors          [][]float32
+		wantDimensionErr bool
+	}{
+		{name: "wrong count", vectors: valid(1, dims)},
+		{name: "wrong width", vectors: valid(len(texts), dims-1), wantDimensionErr: true},
+		{name: "non-finite", vectors: func() [][]float32 {
+			out := valid(len(texts), dims)
+			out[1][3] = float32(math.Inf(1))
+			return out
+		}()},
+		{name: "zero cosine vector", vectors: make([][]float32, len(texts))},
+	}
+	for i := range tests {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			for j := range tc.vectors {
+				if tc.vectors[j] == nil {
+					tc.vectors[j] = make([]float32, dims)
+				}
+			}
+			provider := fmt.Sprintf("embed-output-test-%d", i)
+			if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+				return staticOutputEmbedder{dims: dims, vectors: tc.vectors}, nil
+			}); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+			col, _ := openEmbeddingTestCollection(t, dims)
+			before := documentCount(t, col)
+			vectors, err := col.EmbedForIngest(context.Background(), "embedding", texts,
+				embedding.Config{Provider: provider, Dimensions: dims})
+			if !errors.Is(err, embedding.ErrInvalidOutput) {
+				t.Fatalf("EmbedForIngest=(%v, %v) want ErrInvalidOutput", vectors, err)
+			}
+			if tc.wantDimensionErr && !errors.Is(err, embedding.ErrDimensionMismatch) {
+				t.Fatalf("EmbedForIngest error %v want ErrDimensionMismatch", err)
+			}
+			if vectors != nil {
+				t.Fatalf("EmbedForIngest returned malformed vectors: %v", vectors)
+			}
+			if after := documentCount(t, col); after != before {
+				t.Fatalf("document count %d -> %d on malformed output", before, after)
+			}
+		})
+	}
+}
+
 // TestValidateEmbedderForVectorIndex proves the standalone dimension gate.
 func TestValidateEmbedderForVectorIndex(t *testing.T) {
 	col, _ := openEmbeddingTestCollection(t, 16)
@@ -137,8 +200,8 @@ func TestValidateEmbedderForVectorIndex(t *testing.T) {
 	if !errors.Is(err, embedding.ErrDimensionMismatch) {
 		t.Fatalf("ValidateEmbedderForVectorIndex(mismatch)=%v want ErrDimensionMismatch", err)
 	}
-	if err := col.ValidateEmbedderForVectorIndex("missing", stubDimsEmbedder{dims: 16}); !errors.Is(err, errCollectionEmbedderUnknownVectorIndex) {
-		t.Fatalf("ValidateEmbedderForVectorIndex(missing index)=%v", err)
+	if err := col.ValidateEmbedderForVectorIndex("missing", stubDimsEmbedder{dims: 16}); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("ValidateEmbedderForVectorIndex(missing index)=%v want ErrIndexNotFound", err)
 	}
 	if err := col.ValidateEmbedderForVectorIndex("embedding", nil); err == nil {
 		t.Fatal("nil embedder accepted")
@@ -154,4 +217,14 @@ func (s stubDimsEmbedder) EmbedBatch(ctx context.Context, texts [][]byte) ([][]f
 		out[i] = make([]float32, s.dims)
 	}
 	return out, nil
+}
+
+type staticOutputEmbedder struct {
+	dims    int
+	vectors [][]float32
+}
+
+func (s staticOutputEmbedder) Dimensions() int { return s.dims }
+func (s staticOutputEmbedder) EmbedBatch(context.Context, [][]byte) ([][]float32, error) {
+	return s.vectors, nil
 }
