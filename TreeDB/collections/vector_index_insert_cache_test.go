@@ -196,6 +196,10 @@ func TestNativeParallelReciprocalLinksPersistExactTopology4243(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("native parallel index=%v", index)
 	}
+	if index.frozenPrefixBatches == 0 {
+		_ = d.Close()
+		t.Fatal("native InsertBatch did not use frozen-prefix construction")
+	}
 	wantTopology := snapshotVectorIndexTopology4257(index)
 	if status, err := index.SaveNativeSnapshot(); err != nil || !status.Loaded {
 		_ = d.Close()
