@@ -1407,6 +1407,30 @@ func (c *Collection) lockVectorIndexPublicationAdmission() func() {
 	return admissionMu.Unlock
 }
 
+func (c *Collection) lockVectorIndexSynchronousPublicationAdmission() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	domains := []*collectionWriteDomain{c.writeDomain}
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		domains = coord.snapshotDomains()
+	}
+	for {
+		for _, domain := range domains {
+			domain.waitIndexedAsyncFlush()
+		}
+		unlock := c.lockVectorIndexPublicationAdmission()
+		running := false
+		for _, domain := range domains {
+			running = running || domain.indexedAsyncFlushRunning()
+		}
+		if !running {
+			return unlock
+		}
+		unlock()
+	}
+}
+
 func (c *Collection) nativeVectorPublishedBaselineCovers(generation uint64) bool {
 	domain := c.writeDomain
 	domain.nativeVectorIndexesMu.RLock()

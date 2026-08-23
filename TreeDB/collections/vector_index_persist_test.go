@@ -1961,19 +1961,22 @@ func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T)
 	go func() { syncDone <- flushCollectionWriteDomain(d, writer.writeDomain) }()
 	select {
 	case err := <-syncDone:
-		if err != nil {
-			unlockReader()
-			t.Fatalf("publish synchronous indexed flush: %v", err)
-		}
-	case <-time.After(2 * time.Second):
 		unlockReader()
-		t.Fatal("synchronous indexed flush deadlocked with held vector admission")
-	}
-	if reader.registeredVectorIndex(def.Name).hasValidSourceDocumentRoots() {
-		unlockReader()
-		t.Fatal("synchronous indexed flush did not invalidate stale vector coverage")
+		t.Fatalf("synchronous indexed flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
 	}
 	unlockReader()
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			t.Fatalf("publish synchronous indexed flush: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("synchronous indexed flush remained blocked after vector admission released")
+	}
+	if reader.registeredVectorIndex(def.Name).hasValidSourceDocumentRoots() {
+		t.Fatal("synchronous indexed flush did not invalidate stale vector coverage")
+	}
 
 	if _, err := reader.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"kind":"b","embedding":[0,1]}`)}); err != nil {
 		t.Fatalf("insert through stale reader: %v", err)
@@ -1984,6 +1987,93 @@ func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T)
 		t.Fatalf("search after stale-reader rebuild: %v", err)
 	}
 	requireVectorResultIDs(t, results, "async", "sync", "local")
+}
+
+func TestNativeVectorSchemaMutationWaitsBeforeAsyncFlushAdmission(t *testing.T) {
+	for _, operation := range []string{"create", "drop"} {
+		t.Run(operation, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name: "docs",
+				Options: CollectionOptions{
+					BufferedIndexedWrites:            true,
+					BufferedIndexedWriteMaxDocuments: 100,
+				},
+				Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+				VectorIndexes: []VectorIndexDefinition{def},
+			}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.insertBatch([][]byte{[]byte("async")}, [][]byte{[]byte(`{"kind":"a","embedding":[1,0]}`)}, false, nil); err != nil {
+				t.Fatalf("buffer document: %v", err)
+			}
+			work, err := col.prepareIndexedAsyncPublish()
+			if err != nil || work == nil {
+				t.Fatalf("prepare indexed flush work=%v err=%v", work, err)
+			}
+			defer collectionTestCloseIndexedFlushWork(work)
+			if !col.writeDomain.beginIndexedAsyncFlush() {
+				t.Fatal("begin indexed async flush returned false")
+			}
+			var finishOnce sync.Once
+			finishAsync := func(err error) {
+				finishOnce.Do(func() {
+					col.writeDomain.finishIndexedAsyncFlush(err)
+				})
+			}
+			defer func() { finishAsync(errors.New("test cleanup")) }()
+
+			waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
+			schemaDone := make(chan error, 1)
+			go func() {
+				if operation == "create" {
+					_, err := col.CreateVectorIndex(VectorIndexDefinition{Name: "embedding_2", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4})
+					schemaDone <- err
+					return
+				}
+				_, err := col.DropVectorIndex(def.Name)
+				schemaDone <- err
+			}()
+			select {
+			case <-waitEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("schema mutation did not wait for announced async flush")
+			}
+			releaseWait()
+			publishDone := make(chan error, 1)
+			go func() {
+				err := col.publishPreparedIndexedFlush(work)
+				finishAsync(err)
+				publishDone <- err
+			}()
+			select {
+			case err := <-publishDone:
+				if err != nil {
+					t.Fatalf("publish indexed flush: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("async publish deadlocked behind schema admission")
+			}
+			select {
+			case err := <-schemaDone:
+				if err != nil {
+					t.Fatalf("%s vector index: %v", operation, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s vector index remained blocked after async publish", operation)
+			}
+		})
+	}
 }
 
 func TestNativeVectorCoverageAdmissionSeesIndexCreatedByAnotherManager(t *testing.T) {

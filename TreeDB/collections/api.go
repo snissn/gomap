@@ -3126,6 +3126,8 @@ func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *col
 		return nil
 	}
 	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked}
+	unlockAdmission := collection.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation.Unlock()
 	domain.waitIndexedAsyncFlush()
@@ -3990,10 +3992,8 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	if admissionMu := c.nativeVectorAdmissionMutex(); admissionMu != nil {
-		admissionMu.Lock()
-		defer admissionMu.Unlock()
-	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -4087,10 +4087,8 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
-	if admissionMu := c.nativeVectorAdmissionMutex(); admissionMu != nil {
-		admissionMu.Lock()
-		defer admissionMu.Unlock()
-	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -4347,11 +4345,7 @@ func (c *Collection) Flush() error {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	if c.writeDomain != nil {
-		unlockMutation := c.lockMutation()
-		c.writeDomain.waitIndexedAsyncFlush()
-		err := c.flushBufferedWrites()
-		unlockMutation.Unlock()
-		if err != nil {
+		if err := flushCollectionWriteDomain(c.db, c.writeDomain); err != nil {
 			return err
 		}
 		return c.persistDirtyNativeVectorIndexes()
