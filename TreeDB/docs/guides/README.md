@@ -17,6 +17,9 @@ directories when moving between branches.
 - [Document embedding](document-embedding.md) — the pluggable embedder seam,
   the deterministic reference `hashing` embedder with committed parity
   fixtures, and the ingest-time dimension gate over vector index definitions.
+- [One-call document ingestion](document-ingestion.md) — compose chunking,
+  embedding, and text/scalar/vector indexing with bounded concurrency,
+  fail-closed validation, retry semantics, and a 10K benchmark baseline.
 - [Collections quickstart](collections-quickstart.md) — choose document-only,
   typed-row, typed-column, or hybrid layouts; insert fixture data; point-get;
   run a typed-column int64 aggregate; checkpoint/reopen when durability matters.
