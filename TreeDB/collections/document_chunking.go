@@ -211,7 +211,7 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 	}
 	prefix := append(append([]byte(nil), parentID...), '#')
 	ordinals := map[int][]byte{}
-	truncated, err := c.scanChunkDocumentsByParentPrefix(prefix, func(record DocumentRecord) (bool, error) {
+	inspect := func(record DocumentRecord) (bool, error) {
 		id := record.ID
 		meta, err := chunking.ParseChildMeta(record.Document)
 		if err != nil {
@@ -230,7 +230,14 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 		}
 		ordinals[meta.Ordinal] = append([]byte(nil), id...)
 		return true, nil
-	})
+	}
+	var truncated bool
+	var err error
+	if columnStoreCanReconstructDocument(c.meta) {
+		truncated, err = c.ScanDocumentsFunc(chunkingScanMaxDocuments, inspect)
+	} else {
+		truncated, err = c.scanChunkDocumentsByParentPrefix(prefix, inspect)
+	}
 	if err != nil {
 		return nil, err
 	}
