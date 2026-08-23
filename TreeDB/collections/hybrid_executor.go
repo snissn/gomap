@@ -420,6 +420,17 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	}
 	hybridMergeStats(&stats, textResponse.Stats)
 	hybridMergeStats(&stats, vectorResponse.Stats)
+	if plan.scalarFilterStrategy == HybridScalarFilterStrategyVectorFirst {
+		if vectorErr != nil {
+			return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceVector, err: vectorErr}
+		}
+		if textErr != nil {
+			return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceText, err: textErr}
+		}
+		out = appendHybridSearchCandidates(out, vectorResponse.Candidates)
+		out = appendHybridSearchCandidates(out, textResponse.Candidates)
+		return out, stats, nil
+	}
 	if textErr != nil {
 		return nil, stats, hybridCandidateSourceError{source: HybridCandidateSourceText, err: textErr}
 	}
