@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -354,6 +355,9 @@ type VectorIndex struct {
 	maxLevel            int
 	insertScratch       vectorIndexSearchScratch
 	searchScratch       sync.Pool
+	searchView          atomic.Pointer[vectorIndexSearchView]
+	searchViewSpare     atomic.Pointer[vectorIndexSearchView]
+	searchViewDirty     map[int]struct{}
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
 	// untraced offline column graph builder. Traced and partition builds stay
 	// serial.
@@ -545,10 +549,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
-	return c.buildVectorIndexPrepared(opts, register, true, false)
+	return c.buildVectorIndexPrepared(opts, register, true, false, false)
 }
 
-func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild bool) (*VectorIndex, error) {
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild, admissionLocked bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -560,7 +564,13 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 		return nil, err
 	}
 	if flushBuffered {
-		if err := c.flushBufferedWrites(); err != nil {
+		var err error
+		if admissionLocked {
+			err = c.flushBufferedWritesWithVectorAdmissionLocked()
+		} else {
+			err = c.flushBufferedWrites()
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -591,7 +601,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	}
 	defer func() { _ = materializer.Close() }()
 
-	_, err = c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+	_, err = c.scanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, index.fieldPath)
 		if err != nil {
 			return false, fmt.Errorf("collections: vector field %q in document %q: %w", index.field, record.ID, err)
@@ -603,7 +613,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return false, err
 		}
 		return true, nil
-	})
+	}, admissionLocked)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +624,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if currentDocumentGeneration != sourceDocumentGeneration {
 		return nil, ErrConcurrentMutation
 	}
-	index.recordSourceDocumentState(sourceDocumentGeneration, currentDocumentState)
+	index.recordSourceDocumentStateUnpublished(sourceDocumentGeneration, currentDocumentState)
 	if liveANNFullRebuild {
 		index.markLiveANNFullRebuild()
 	}
@@ -681,7 +691,11 @@ func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collection
 	if snap == nil || catalog == nil {
 		return 0, errCollectionNotFound
 	}
-	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(catalog.meta.Name))
+	return vectorIndexDocumentGenerationForCollection(snap, catalog.meta.Name)
+}
+
+func vectorIndexDocumentGenerationForCollection(snap *backenddb.Snapshot, collection string) (uint64, error) {
+	raw, ok, err := getSystemValue(snap, systemCollectionDocumentGenerationKey(collection))
 	if err != nil {
 		return 0, err
 	}
@@ -689,6 +703,27 @@ func vectorIndexDocumentGeneration(snap *backenddb.Snapshot, catalog *collection
 		return 0, nil
 	}
 	return decodeRootID(raw)
+}
+
+func (c *Collection) currentVectorIndexDocumentGenerationForAdmission() (uint64, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	collection := c.collectionName()
+	if collection == "" && c.writeDomain != nil {
+		c.writeDomain.mu.RLock()
+		collection = c.writeDomain.meta.Name
+		c.writeDomain.mu.RUnlock()
+	}
+	return vectorIndexDocumentGenerationForCollection(snap, collection)
 }
 
 func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error) {
@@ -781,6 +816,9 @@ func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
 func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
+	}
+	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
+		index.publishSearchView()
 	}
 	index.collection = c
 	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
@@ -1014,7 +1052,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 				continue
 			}
 			if !index.hasValidSourceDocumentRoots() {
-				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 				if err != nil {
 					return nil, err
 				}
@@ -1033,7 +1071,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
-			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 			if err != nil {
 				return nil, err
 			}
@@ -1112,6 +1150,14 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 	}
 	unlockMutation := c.lockVectorIndexMutation()
 	defer unlockMutation()
+	if c.writeDomain != nil {
+		c.writeDomain.nativeVectorActiveMu.Lock()
+		rebuildCurrentDocuments := c.writeDomain.nativeVectorActive != 0 && !c.writeDomain.nativeVectorSearchActive.Load()
+		c.writeDomain.nativeVectorActiveMu.Unlock()
+		if rebuildCurrentDocuments {
+			c.invalidateRegisteredVectorIndexDocumentCoverage()
+		}
+	}
 	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
 	if err != nil {
 		c.invalidateRegisteredVectorIndexDocumentCoverage()
@@ -1165,7 +1211,7 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 					return err
 				}
 			}
-			if err := index.insertStoredDocument(materializer, documentID, document); err != nil {
+			if err := index.insertStoredDocumentUnpublished(materializer, documentID, document); err != nil {
 				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 				return err
 			}
@@ -1206,6 +1252,21 @@ func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverageLocked() {
 	}
 }
 
+func (c *Collection) invalidateOtherVectorIndexDocumentCoverage() {
+	if c == nil || c.writeDomain == nil || c.writeDomain.schemaCoordinator == nil {
+		return
+	}
+	for _, domain := range c.writeDomain.schemaCoordinator.snapshotDomains() {
+		if domain == c.writeDomain {
+			continue
+		}
+		domain.nativeVectorMutationMu.Lock()
+		domain.nativeVectorSearchActive.Store(false)
+		(&Collection{db: c.db, writeDomain: domain}).invalidateRegisteredVectorIndexDocumentCoverage()
+		domain.nativeVectorMutationMu.Unlock()
+	}
+}
+
 func (c *Collection) invalidateVectorIndexCoverageOnAcceptedMutation(err error) error {
 	if backenddb.CommitPublicationAccepted(err) {
 		c.invalidateRegisteredVectorIndexDocumentCoverage()
@@ -1225,35 +1286,169 @@ func (c *Collection) lockVectorIndexMutation() func() {
 	return c.vectorIndexMutationMu.Unlock
 }
 
+func (c *Collection) nativeVectorAdmissionMutex() *sync.RWMutex {
+	if c == nil || c.writeDomain == nil {
+		return nil
+	}
+	if coord := c.writeDomain.schemaCoordinator; coord != nil {
+		return &coord.nativeVectorAdmissionMu
+	}
+	return &c.writeDomain.nativeVectorAdmissionMu
+}
+
+func collectionMetaHasNativeVectorIndexes(meta CollectionMeta) bool {
+	for _, def := range meta.VectorIndexes {
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	if c == nil || c.writeDomain == nil {
 		return func() {}
 	}
 	domain := c.writeDomain
+	admissionMu := c.nativeVectorAdmissionMutex()
+	coord := domain.schemaCoordinator
+	var hasMaintainedVectorIndexes bool
+	var exclusiveAdmission bool
+	for {
+		admissionMu.RLock()
+		hasMaintainedVectorIndexes = coord != nil && coord.hasNativeVectorIndexes.Load()
+		domain.mu.RLock()
+		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
+		domain.mu.RUnlock()
+		domain.nativeVectorIndexesMu.RLock()
+		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
+		domain.nativeVectorIndexesMu.RUnlock()
+		if !hasMaintainedVectorIndexes {
+			break
+		}
+		admissionMu.RUnlock()
+		domain.waitIndexedAsyncFlush()
+		admissionMu.Lock()
+		if !domain.indexedAsyncFlushRunning() {
+			exclusiveAdmission = true
+			break
+		}
+		admissionMu.Unlock()
+	}
+	var baselineGeneration uint64
+	var baselineErr error
+	if hasMaintainedVectorIndexes {
+		baselineGeneration, baselineErr = c.currentVectorIndexDocumentGenerationForAdmission()
+	}
+	if exclusiveAdmission && coord != nil {
+		coord.nativeVectorBaseline.Store(nil)
+		if baselineErr == nil {
+			coord.nativeVectorBaseline.Store(&baselineGeneration)
+		}
+	}
 	domain.nativeVectorCoverageMu.RLock()
+	publishedBaselineCurrent := !hasMaintainedVectorIndexes || baselineErr == nil && c.nativeVectorPublishedBaselineCovers(baselineGeneration)
 	domain.nativeVectorActiveMu.Lock()
+	if domain.nativeVectorActive == 0 {
+		domain.nativeVectorReconciled = false
+	}
 	domain.nativeVectorActive++
+	domain.nativeVectorSearchActive.Store(hasMaintainedVectorIndexes && publishedBaselineCurrent)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
 		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
 		if domain.nativeVectorActive == 0 {
-			indexes := c.registeredVectorIndexes()
-			if len(indexes) != 0 {
-				if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
-					for _, index := range indexes {
-						if index.hasValidSourceDocumentRoots() {
-							index.recordSourceDocumentState(generation, state)
+			if publishedBaselineCurrent || domain.nativeVectorReconciled {
+				indexes := c.registeredVectorIndexes()
+				if len(indexes) != 0 {
+					if generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true); err == nil {
+						for _, index := range indexes {
+							if index.hasValidSourceDocumentRoots() {
+								index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
+							}
 						}
 					}
 				}
 			}
+			domain.nativeVectorReconciled = false
+			domain.nativeVectorSearchActive.Store(false)
 		}
 		domain.nativeVectorCoverageMu.RUnlock()
 		domain.nativeVectorActiveMu.Unlock()
 		domain.mu.RUnlock()
+		if exclusiveAdmission {
+			if coord != nil {
+				coord.nativeVectorBaseline.Store(nil)
+			}
+			admissionMu.Unlock()
+		} else {
+			admissionMu.RUnlock()
+		}
 	}
+}
+
+func (c *Collection) lockVectorIndexPublicationAdmission() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	domain := c.writeDomain
+	admissionMu := c.nativeVectorAdmissionMutex()
+	admissionMu.RLock()
+	coord := domain.schemaCoordinator
+	hasMaintainedVectorIndexes := coord != nil && coord.hasNativeVectorIndexes.Load()
+	domain.mu.RLock()
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
+	domain.mu.RUnlock()
+	domain.nativeVectorIndexesMu.RLock()
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
+	domain.nativeVectorIndexesMu.RUnlock()
+	if !hasMaintainedVectorIndexes {
+		return admissionMu.RUnlock
+	}
+	admissionMu.RUnlock()
+	admissionMu.Lock()
+	return admissionMu.Unlock
+}
+
+func (c *Collection) lockVectorIndexSynchronousPublicationAdmission() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	domains := []*collectionWriteDomain{c.writeDomain}
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		domains = coord.snapshotDomains()
+	}
+	for {
+		for _, domain := range domains {
+			domain.waitIndexedAsyncFlush()
+		}
+		unlock := c.lockVectorIndexPublicationAdmission()
+		running := false
+		for _, domain := range domains {
+			running = running || domain.indexedAsyncFlushRunning()
+		}
+		if !running {
+			return unlock
+		}
+		unlock()
+	}
+}
+
+func (c *Collection) nativeVectorPublishedBaselineCovers(generation uint64) bool {
+	domain := c.writeDomain
+	domain.nativeVectorIndexesMu.RLock()
+	defer domain.nativeVectorIndexesMu.RUnlock()
+	if len(domain.nativeVectorIndexes) == 0 {
+		return false
+	}
+	for _, index := range domain.nativeVectorIndexes {
+		if !index.publishedSearchViewCoversSourceDocumentGeneration(generation) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Collection) lockVectorIndexCoveragePersistence() func() {
@@ -1284,7 +1479,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		}
 		for _, index := range indexes {
 			if c.isRegisteredVectorIndex(index) {
-				index.recordSourceDocumentState(generation, state)
+				index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
 			}
 		}
 		return nil
@@ -1297,7 +1492,8 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	}
 	domain.nativeVectorActiveMu.Lock()
 	defer domain.nativeVectorActiveMu.Unlock()
-	if domain.nativeVectorActive > 1 {
+	if domain.nativeVectorActive != 0 {
+		domain.nativeVectorReconciled = true
 		return nil
 	}
 	generation, state, err := c.currentVectorIndexDocumentStateWithWriteDomainLockState(true)
@@ -1305,9 +1501,11 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 		return err
 	}
+	domain.nativeVectorSearchActive.Store(c.nativeVectorPublishedBaselineCovers(generation))
+	defer domain.nativeVectorSearchActive.Store(false)
 	for _, index := range indexes {
 		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
-			index.recordSourceDocumentState(generation, state)
+			index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
 		}
 	}
 	return nil
@@ -1506,6 +1704,14 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 }
 
 func (idx *VectorIndex) insertStoredDocument(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
+	return idx.insertStoredDocumentWithPublication(materializer, documentID, document, true)
+}
+
+func (idx *VectorIndex) insertStoredDocumentUnpublished(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
+	return idx.insertStoredDocumentWithPublication(materializer, documentID, document, false)
+}
+
+func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *StoredDocumentJSONMaterializer, documentID, document []byte, publish bool) error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
@@ -1513,7 +1719,13 @@ func (idx *VectorIndex) insertStoredDocument(materializer *StoredDocumentJSONMat
 		return errors.New("collections: document id cannot be empty")
 	}
 	if document == nil {
-		idx.TombstoneDocumentID(documentID)
+		idx.mu.Lock()
+		beforeMutation := idx.mutationSeq
+		idx.tombstoneDocumentIDLocked(documentID)
+		if publish && idx.mutationSeq != beforeMutation {
+			idx.publishSearchViewLocked(false)
+		}
+		idx.mu.Unlock()
 		return nil
 	}
 	vector, ok, err := vectorFromStoredDocument(materializer, document, idx.fieldPath)
@@ -1521,12 +1733,25 @@ func (idx *VectorIndex) insertStoredDocument(materializer *StoredDocumentJSONMat
 		return fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, documentID, err)
 	}
 	if !ok {
-		idx.TombstoneDocumentID(documentID)
+		idx.mu.Lock()
+		beforeMutation := idx.mutationSeq
+		idx.tombstoneDocumentIDLocked(documentID)
+		if publish && idx.mutationSeq != beforeMutation {
+			idx.publishSearchViewLocked(false)
+		}
+		idx.mu.Unlock()
 		return nil
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	return idx.insertVectorLocked(documentID, vector)
+	beforeMutation := idx.mutationSeq
+	if err := idx.insertVectorLocked(documentID, vector); err != nil {
+		return err
+	}
+	if publish && idx.mutationSeq != beforeMutation {
+		idx.publishSearchViewLocked(false)
+	}
+	return nil
 }
 
 // TombstoneDocumentID marks the current indexed version of documentID deleted.
@@ -1537,7 +1762,11 @@ func (idx *VectorIndex) TombstoneDocumentID(documentID []byte) {
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
+	beforeMutation := idx.mutationSeq
 	idx.tombstoneDocumentIDLocked(documentID)
+	if idx.mutationSeq != beforeMutation {
+		idx.publishSearchViewLocked(false)
+	}
 }
 
 func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) error {
@@ -1950,6 +2179,7 @@ func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 		return
 	}
 	idx.mu.Lock()
+	wasValid := idx.sourceDocumentRootsValid
 	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
 	idx.sourceDocumentRootsValid = true
 	idx.sourceDocumentGeneration = generation
@@ -1957,14 +2187,59 @@ func (idx *VectorIndex) recordSourceDocumentGeneration(generation uint64) {
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
+	if !wasValid {
+		idx.publishSearchViewLocked(false)
+	}
 	idx.mu.Unlock()
 }
 
 func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backenddb.StateToken) {
+	idx.recordSourceDocumentStateWithPublication(generation, state, true)
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateUnpublished(generation uint64, state backenddb.StateToken) {
+	idx.recordSourceDocumentStateWithPublication(generation, state, false)
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateWithPublication(generation uint64, state backenddb.StateToken, publish bool) {
 	if idx == nil {
 		return
 	}
 	idx.mu.Lock()
+	wasValid := idx.recordSourceDocumentStateLocked(generation, state)
+	if publish && !wasValid {
+		idx.publishSearchViewLocked(false)
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateAndPublish(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.recordSourceDocumentStateLocked(generation, state)
+	idx.publishSearchViewLocked(false)
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateAndPublishIfChanged(generation uint64, state backenddb.StateToken) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	view := idx.searchView.Load()
+	publish := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation ||
+		view == nil || view.mutationSeq != idx.mutationSeq
+	idx.recordSourceDocumentStateLocked(generation, state)
+	if publish {
+		idx.publishSearchViewLocked(false)
+	}
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordSourceDocumentStateLocked(generation uint64, state backenddb.StateToken) bool {
+	wasValid := idx.sourceDocumentRootsValid
 	changed := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation
 	idx.sourceDocumentRootsValid = true
 	idx.sourceDocumentGeneration = generation
@@ -1973,7 +2248,7 @@ func (idx *VectorIndex) recordSourceDocumentState(generation uint64, state backe
 	if changed && idx.nativePersistent {
 		idx.dirtyMeta = true
 	}
-	idx.mu.Unlock()
+	return wasValid
 }
 
 func (idx *VectorIndex) invalidateSourceDocumentRoots() {
@@ -1983,6 +2258,7 @@ func (idx *VectorIndex) invalidateSourceDocumentRoots() {
 	idx.mu.Lock()
 	idx.sourceDocumentRootsValid = false
 	idx.sourceDocumentStateValid = false
+	idx.publishSearchViewLocked(false)
 	idx.mu.Unlock()
 }
 
@@ -2016,6 +2292,30 @@ func (idx *VectorIndex) coversSourceDocumentState(state backenddb.StateToken) bo
 	return covers
 }
 
+func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentState(state backenddb.StateToken) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	view := idx.searchView.Load()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state &&
+		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+	idx.mu.RUnlock()
+	return covers
+}
+
+func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentGeneration(generation uint64) bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	view := idx.searchView.Load()
+	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation &&
+		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+	idx.mu.RUnlock()
+	return covers
+}
+
 func (idx *VectorIndex) sourceDocumentCoverage() (uint64, bool) {
 	if idx == nil {
 		return 0, false
@@ -2034,7 +2334,16 @@ func (idx *VectorIndex) markVectorMetaDirtyLocked() {
 }
 
 func (idx *VectorIndex) markVectorNodeDirtyLocked(nodeID int) {
-	if !idx.nativePersistent || nodeID < 0 {
+	if nodeID < 0 {
+		return
+	}
+	if view := idx.searchView.Load(); view != nil && nodeID < len(view.nodes) {
+		if idx.searchViewDirty == nil {
+			idx.searchViewDirty = make(map[int]struct{})
+		}
+		idx.searchViewDirty[nodeID] = struct{}{}
+	}
+	if !idx.nativePersistent {
 		return
 	}
 	if idx.dirtyNodes == nil {
@@ -2419,19 +2728,25 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	return results, nil
 }
 
-func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, vectorIndexNativeSearchState, error) {
 	if idx == nil {
-		return nil, errors.New("collections: vector index is nil")
+		return nil, vectorIndexNativeSearchState{}, errors.New("collections: vector index is nil")
 	}
 	if buffer == nil {
-		return nil, errors.New("collections: nil vector index search buffer")
+		return nil, vectorIndexNativeSearchState{}, errors.New("collections: nil vector index search buffer")
 	}
 	buffer.Reset()
+	if view := idx.acquireSearchView(); view != nil {
+		results, err := view.searchGraphOnlyWithBuffer(query, topK, efSearch, buffer)
+		state := view.nativeSearchState()
+		idx.releaseSearchView(view)
+		return results, state, err
+	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
 	if err != nil {
-		return nil, err
+		return nil, vectorIndexNativeSearchState{}, err
 	}
 	resultCount := 0
 	idByteCount := 0
@@ -2452,7 +2767,7 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 		}
 		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(node.documentID), math.MaxInt, "result id")
 		if err != nil {
-			return nil, err
+			return nil, vectorIndexNativeSearchState{}, err
 		}
 		resultCount++
 	}
@@ -2479,13 +2794,22 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 		resultIndex++
 		idOffset = nextIDOffset
 	}
-	return buffer.results, nil
+	deletedDocs := len(idx.nodes) - len(idx.currentNode)
+	return buffer.results, vectorIndexNativeSearchState{
+		liveDocs:      len(idx.currentNode),
+		rebuildNeeded: deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
+		fullRebuilds:  idx.liveANNFullRebuilds,
+	}, nil
 }
 
 func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, efSearch int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
 	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
 		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
 	}
+	return idx.searchGraphOnlyCandidatesWithLiveDocsLocked(query, topK, efSearch, len(idx.currentNode), scratch)
+}
+
+func (idx *VectorIndex) searchGraphOnlyCandidatesWithLiveDocsLocked(query []float32, topK, efSearch, liveDocs int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
 	if topK < 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
 	}
@@ -2516,7 +2840,6 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, e
 	if topK == 0 {
 		return nil, nil
 	}
-	liveDocs := len(idx.currentNode)
 	if liveDocs == 0 {
 		return nil, nil
 	}
@@ -2530,7 +2853,7 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, e
 	if limit > liveDocs {
 		limit = liveDocs
 	}
-	candidates := idx.searchCurrentCandidatesLocked(query, queryNorm, prepared, limit, scratch)
+	candidates := idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNorm, prepared, limit, liveDocs, scratch)
 	if target := minInt(topK, liveDocs); len(candidates) < target {
 		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
 	}
@@ -2878,10 +3201,14 @@ func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared
 }
 
 func (idx *VectorIndex) searchCurrentCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	return idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNormSquared, prepared, limit, len(idx.currentNode), scratch)
+}
+
+func (idx *VectorIndex) searchCurrentCandidatesWithLiveDocsLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit, liveDocs int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
 	}
-	stale := len(idx.nodes) - len(idx.currentNode)
+	stale := len(idx.nodes) - liveDocs
 	if stale == 0 {
 		entryPoint := idx.entry
 		for layer := idx.maxLevel; layer > 0; layer-- {
@@ -4381,6 +4708,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
 	idx.requireFullNativeSnapshotLocked()
+	idx.publishSearchViewLocked(true)
 	idx.mu.Unlock()
 	c.RegisterVectorIndex(idx)
 	if c.manager != nil && idx.needsNativeAutoPersist() {

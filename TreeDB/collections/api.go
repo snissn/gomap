@@ -1402,9 +1402,14 @@ type collectionWriteDomain struct {
 	primaryIDIndex           *bufferedUniqueValueIndex
 	nativeVectorIndexLoadMu  sync.Mutex
 	nativeVectorMutationMu   sync.Mutex
+	// ponytail: share non-vector admission but serialize vector writes so every
+	// acknowledgment is published; use cohorts only if vector writes prove limiting.
+	nativeVectorAdmissionMu  sync.RWMutex
 	nativeVectorCoverageMu   sync.RWMutex
 	nativeVectorActiveMu     sync.Mutex
 	nativeVectorActive       int
+	nativeVectorReconciled   bool
+	nativeVectorSearchActive atomic.Bool
 	nativeVectorIndexesMu    sync.RWMutex
 	nativeVectorIndexes      map[string]*VectorIndex
 	nativeVectorPublishMu    sync.RWMutex
@@ -3121,21 +3126,11 @@ func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *col
 		return nil
 	}
 	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked}
+	unlockAdmission := collection.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation.Unlock()
-	domain.waitIndexedAsyncFlush()
-	domain.mu.Lock()
-	if hasBufferedIndexedRootRuns(domain) {
-		domain.observeIndexedFlushForcedDrain()
-	}
-	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
-	err := collection.flushBufferedWritesLocked(domain)
-	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-	if err == nil && publishedPrimary {
-		err = collection.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
-	}
-	domain.mu.Unlock()
-	return err
+	return collection.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, true)
 }
 
 func flushCollectionWriteDomainAsync(db *backenddb.DB, domain *collectionWriteDomain) error {
@@ -3589,6 +3584,11 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 		}
 		return collection, nil
 	}
+	schemaCoord := collectionSchemaCoordinatorForDBCollection(m.db, name)
+	if schemaCoord != nil {
+		schemaCoord.nativeVectorAdmissionMu.RLock()
+		defer schemaCoord.nativeVectorAdmissionMu.RUnlock()
+	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -3600,6 +3600,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	}
 	if catalog == nil {
 		return nil, errCollectionNotFound
+	}
+	if schemaCoord != nil && collectionMetaHasNativeVectorIndexes(catalog.meta) {
+		schemaCoord.hasNativeVectorIndexes.Store(true)
 	}
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, catalog.meta.Options.ColumnStore, "open"); err != nil {
@@ -3977,9 +3980,11 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return nil, err
 	}
 
@@ -4044,6 +4049,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+	}
 	if registerEmptyRuntime {
 		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
 			runtime.recordSourceDocumentGeneration(sourceDocumentGeneration)
@@ -4067,9 +4075,11 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return nil, err
 	}
 
@@ -4135,6 +4145,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+	}
 	c.UnregisterVectorIndex(name)
 	return newMeta.copy(), nil
 }
@@ -4320,11 +4333,7 @@ func (c *Collection) Flush() error {
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	if c.writeDomain != nil {
-		unlockMutation := c.lockMutation()
-		c.writeDomain.waitIndexedAsyncFlush()
-		err := c.flushBufferedWrites()
-		unlockMutation.Unlock()
-		if err != nil {
+		if err := flushCollectionWriteDomain(c.db, c.writeDomain); err != nil {
 			return err
 		}
 		return c.persistDirtyNativeVectorIndexes()
@@ -4901,42 +4910,77 @@ func (c *Collection) persistedDocumentExists(rootID uint64, id []byte) (bool, er
 }
 
 func (c *Collection) flushBufferedNoIndex() error {
+	return c.flushBufferedNoIndexWithAdmissionState(false)
+}
+
+func (c *Collection) flushBufferedNoIndexWithVectorAdmissionLocked() error {
+	return c.flushBufferedNoIndexWithAdmissionState(true)
+}
+
+func (c *Collection) flushBufferedNoIndexWithAdmissionState(admissionLocked bool) error {
 	domain := c.writeDomain
 	if domain == nil {
 		return nil
 	}
-	domain.mu.Lock()
-	if hasBufferedIndexedPendingWrites(domain) {
+	var unlockAdmission func()
+	defer func() {
+		if unlockAdmission != nil {
+			unlockAdmission()
+		}
+	}()
+	for {
+		domain.mu.Lock()
+		if hasBufferedIndexedPendingWrites(domain) {
+			domain.mu.Unlock()
+			return nil
+		}
+		publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
+		if publishedPrimary && !admissionLocked {
+			domain.mu.Unlock()
+			unlockAdmission = c.lockVectorIndexSynchronousPublicationAdmission()
+			admissionLocked = true
+			continue
+		}
+		err := c.flushBufferedNoIndexLocked(domain)
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+		if err == nil && publishedPrimary {
+			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+		}
 		domain.mu.Unlock()
-		return nil
+		if err == nil && publishedPrimary {
+			c.invalidateOtherVectorIndexDocumentCoverage()
+		}
+		return err
 	}
-	publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
-	err := c.flushBufferedNoIndexLocked(domain)
-	domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-	if err == nil && publishedPrimary {
-		err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
-	}
-	domain.mu.Unlock()
-	return err
 }
 
 func (c *Collection) flushBufferedWrites() error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, false)
 }
 
 func (c *Collection) flushBufferedWritesWithRawPublishState(rawPublishLocked bool) error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, false, false)
 }
 
 func (c *Collection) flushBufferedWritesWithCoverageLocked() error {
-	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, true)
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, true, true)
 }
 
-func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked bool) error {
+func (c *Collection) flushBufferedWritesWithVectorAdmissionLocked() error {
+	return c.flushBufferedWritesWithRawPublishStateAndCoverage(false, false, true)
+}
+
+func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked bool) error {
 	domain := c.writeDomain
 	if domain == nil {
 		return nil
 	}
+	var unlockAdmission func()
+	defer func() {
+		if unlockAdmission != nil {
+			unlockAdmission()
+		}
+	}()
 	for {
 		domain.waitIndexedAsyncFlush()
 		domain.mu.Lock()
@@ -4948,14 +4992,25 @@ func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublis
 			domain.observeIndexedFlushForcedDrain()
 		}
 		publishedPrimary := hasBufferedPrimaryWritesLocked(domain, domain.meta.Name)
+		if publishedPrimary && !admissionLocked {
+			domain.mu.Unlock()
+			unlockAdmission = c.lockVectorIndexSynchronousPublicationAdmission()
+			admissionLocked = true
+			continue
+		}
 		err := c.flushBufferedWritesLockedWithRawPublishState(domain, rawPublishLocked)
 		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
-		if err == nil && coverageLocked {
-			err = c.recordReconciledVectorIndexCoverageWithWriteDomainLocked(c.registeredVectorIndexes())
-		} else if err == nil && publishedPrimary {
-			err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+		if err == nil && publishedPrimary {
+			if coverageLocked {
+				err = c.recordReconciledVectorIndexCoverageWithWriteDomainLocked(c.registeredVectorIndexes())
+			} else {
+				err = c.recordVectorIndexCoverageAfterBufferedDocumentPublishWithWriteDomainLocked()
+			}
 		}
 		domain.mu.Unlock()
+		if err == nil && publishedPrimary {
+			c.invalidateOtherVectorIndexDocumentCoverage()
+		}
 		return err
 	}
 }
@@ -8941,6 +8996,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+		unlockAdmission := c.lockVectorIndexPublicationAdmission()
+		defer unlockAdmission()
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -8967,6 +9024,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
+	unlockAdmission := c.lockVectorIndexPublicationAdmission()
+	defer unlockAdmission()
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
@@ -10574,17 +10633,17 @@ func (c *Collection) insertBatchOnceWithLockState(
 		skipInitialNoIndexFlush = true
 	}
 	if !skipInitialNoIndexFlush {
-		if err := c.flushBufferedNoIndex(); err != nil {
+		if err := c.flushBufferedNoIndexWithVectorAdmissionLocked(); err != nil {
 			return nil, err
 		}
 	}
 	if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() && !commandWALNoIndexBufferCandidate {
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return nil, err
 		}
 	}
 	if c.hasBufferedIndexedDeletesOnly() {
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return nil, err
 		}
 	}
@@ -10647,7 +10706,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	if skipInitialNoIndexFlush &&
 		(len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || !canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON)) {
-		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
+		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndexWithVectorAdmissionLocked)
 		if err != nil {
 			return nil, err
 		}
@@ -10660,7 +10719,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	bufferIndexedInserts := (!commandWALActive && c.shouldBufferIndexedInsertBatch(meta, len(documents))) || commandWALBufferedMode
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
 		closePlanningSnapshot()
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return nil, err
 		}
 		snap = c.db.AcquireSnapshot()
@@ -11831,7 +11890,7 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 		}
 	}()
 	if c.commandWALActive(nil) || c.shouldFlushBeforeIndexedDelete(c.meta) {
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return false, err
 		}
 	}
@@ -11841,7 +11900,7 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 		deleted, err := c.deleteDocumentOnce(documentID, predicate, nil)
 		if isRetriableCollectionMutationError(err) {
 			lastErr = err
-			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+			if flushErr := c.flushBufferedWritesWithVectorAdmissionLocked(); flushErr != nil {
 				return false, flushErr
 			}
 			waitBeforeCollectionMutationRetry(attempt)
@@ -11907,7 +11966,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		}
 	}()
 	if c.commandWALActive(nil) || c.shouldFlushBeforeIndexedDelete(c.meta) {
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return 0, err
 		}
 	}
@@ -11965,7 +12024,7 @@ func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, comma
 		}
 	}()
 	if c.commandWALActive(commandWALIntent) || c.shouldFlushBeforeIndexedDelete(c.meta) {
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return 0, err
 		}
 	}
@@ -11984,7 +12043,7 @@ func (c *Collection) deleteBatchWithCommandWALIntent(ids [][]byte, commandWALInt
 		deleted, err := c.deleteBatchOnce(ids, commandWALIntent)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
-			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+			if flushErr := c.flushBufferedWritesWithVectorAdmissionLocked(); flushErr != nil {
 				return 0, flushErr
 			}
 			waitBeforeCollectionMutationRetry(attempt)
@@ -12676,7 +12735,7 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 	// PR2b pins no-index Update as synchronous: pending no-index inserts or
 	// indexed buffered writes are drained before reading/planning the update,
 	// and a modified no-index replacement publishes before this call returns.
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return false, false, err
 	}
 
@@ -12696,7 +12755,7 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return false, false, err
 	}
 
@@ -16193,7 +16252,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					replan = true
 					return nil
 				}
-				if err := c.flushBufferedWrites(); err != nil {
+				if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 					return err
 				}
 				replanWaitAttempt = maxUpdateBatchBufferedReadReplans
@@ -16257,7 +16316,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					}
 					if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 						if plan.bufferedReadBlocked && useBufferedRead {
-							if err := c.flushBufferedWrites(); err != nil {
+							if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 								return err
 							}
 							useBufferedRead = false
@@ -16301,7 +16360,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 								// buffered snapshot.
 								return replanBufferedRead()
 							}
-							if err := c.flushBufferedWrites(); err != nil {
+							if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 								return err
 							}
 							useBufferedRead = false
@@ -16317,7 +16376,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					}
 					if plan.directBufferedUpdate != nil {
 						if !c.canBufferDirectUpdateAck() {
-							if err := c.flushBufferedWrites(); err != nil {
+							if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 								return err
 							}
 						}
@@ -16325,7 +16384,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						replan = true
 						return nil
 					}
-					if err := c.flushBufferedWrites(); err != nil {
+					if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 						return err
 					}
 					if useBufferedRead {
@@ -16366,7 +16425,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 	}
 
 	if err := c.withMutationLock(func() error {
-		return c.flushBufferedWrites()
+		return c.flushBufferedWritesWithVectorAdmissionLocked()
 	}); err != nil {
 		return nil, err
 	}
@@ -16381,7 +16440,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 	defer plan.close()
 	if len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil {
 		if err := c.withMutationLock(func() error {
-			if err := c.flushBufferedWrites(); err != nil {
+			if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 				return err
 			}
 			if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
@@ -16429,7 +16488,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			}
 			if plan.directBufferedUpdate != nil {
 				if !c.canBufferDirectUpdateAck() {
-					if err := c.flushBufferedWrites(); err != nil {
+					if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 						return err
 					}
 				}
@@ -16437,7 +16496,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			}
 		}
 		var publishErr error
-		if err := c.flushBufferedWrites(); err != nil {
+		if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 			return err
 		}
 		publishIntent := commandWALIntent
@@ -22058,6 +22117,10 @@ func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte)
 // collection is exhausted, or fn returns false. The returned boolean is true
 // only when additional documents were present beyond the maxDocuments limit.
 func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	return c.scanDocumentsFunc(maxDocuments, fn, false)
+}
+
+func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -22072,7 +22135,13 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	}
 	var scanStats CollectionDocumentScanStats
 	defer func() { c.setLastDocumentScanStats(scanStats) }()
-	if err := c.flushBufferedWrites(); err != nil {
+	var err error
+	if admissionLocked {
+		err = c.flushBufferedWritesWithVectorAdmissionLocked()
+	} else {
+		err = c.flushBufferedWrites()
+	}
+	if err != nil {
 		return false, err
 	}
 	snap := c.db.AcquireSnapshot()
