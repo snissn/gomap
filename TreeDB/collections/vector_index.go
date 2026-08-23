@@ -1374,6 +1374,29 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	}
 }
 
+func (c *Collection) lockVectorIndexPublicationAdmission() func() {
+	if c == nil || c.writeDomain == nil {
+		return func() {}
+	}
+	domain := c.writeDomain
+	admissionMu := c.nativeVectorAdmissionMutex()
+	admissionMu.RLock()
+	coord := domain.schemaCoordinator
+	hasMaintainedVectorIndexes := coord != nil && coord.hasNativeVectorIndexes.Load()
+	domain.mu.RLock()
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
+	domain.mu.RUnlock()
+	domain.nativeVectorIndexesMu.RLock()
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
+	domain.nativeVectorIndexesMu.RUnlock()
+	if !hasMaintainedVectorIndexes {
+		return admissionMu.RUnlock
+	}
+	admissionMu.RUnlock()
+	admissionMu.Lock()
+	return admissionMu.Unlock
+}
+
 func (c *Collection) nativeVectorPublishedBaselineCovers(generation uint64) bool {
 	domain := c.writeDomain
 	domain.nativeVectorIndexesMu.RLock()

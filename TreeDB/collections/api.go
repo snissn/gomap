@@ -8968,8 +8968,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
-		unlockCoverage := c.lockVectorIndexCoverageMutation()
-		defer unlockCoverage()
+		unlockAdmission := c.lockVectorIndexPublicationAdmission()
+		defer unlockAdmission()
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -8996,8 +8996,8 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
 	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
+	unlockAdmission := c.lockVectorIndexPublicationAdmission()
+	defer unlockAdmission()
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
