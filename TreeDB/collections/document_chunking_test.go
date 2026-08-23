@@ -3,7 +3,9 @@ package collections
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 
@@ -395,5 +397,153 @@ func TestFullChunkedIngestReopenAtomic(t *testing.T) {
 	after := childIDsFor(t, col2, parent)
 	if len(after) != len(res.ChildIDs) {
 		t.Fatalf("after reopen children=%d want %d (all-or-nothing batch atomicity)", len(after), len(res.ChildIDs))
+	}
+}
+
+func TestChunkedIngestRejectsUnsafeParentIDsBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name string
+		id   []byte
+	}{
+		{name: "child namespace separator", id: []byte("unsafe#parent")},
+		{name: "invalid UTF-8", id: []byte{0xff, 'p'}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, col := openChunkingTestCollection(t)
+			if _, err := col.IngestChunkedDocument(tc.id, parentDoc(t, "unsafe", "body text", nil), fixedWindowCfg(8, 1), ChunkedIngestOptions{}); err == nil {
+				t.Fatalf("IngestChunkedDocument(%x) succeeded", tc.id)
+			}
+			if got, err := col.Get(tc.id); err != nil {
+				t.Fatalf("Get rejected parent: %v", err)
+			} else if got != nil {
+				t.Fatalf("rejected parent mutated collection: %s", got)
+			}
+		})
+	}
+}
+
+func TestChunkedIngestRejectsReservedTextFieldBeforeMutation(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	parentID := []byte("reserved-text")
+	raw, err := json.Marshal(map[string]any{chunking.MetaFieldParent: "text that must not be overwritten"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.IngestChunkedDocument(parentID, raw, fixedWindowCfg(8, 1), ChunkedIngestOptions{TextField: chunking.MetaFieldParent}); err == nil {
+		t.Fatal("reserved linkage field accepted as chunk text destination")
+	}
+	if got, err := col.Get(parentID); err != nil {
+		t.Fatalf("Get rejected parent: %v", err)
+	} else if got != nil {
+		t.Fatalf("rejected parent mutated collection: %s", got)
+	}
+}
+
+func TestChunkedIngestRejectsCrossCallParentChildCollision(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	cfg := fixedWindowCfg(8, 1)
+	if _, err := col.IngestChunkedDocument([]byte("parent"), parentDoc(t, "parent", "first parent body", nil), cfg, ChunkedIngestOptions{}); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	before, err := col.Get([]byte("parent#0"))
+	if err != nil || before == nil {
+		t.Fatalf("seed child: document=%s err=%v", before, err)
+	}
+	if _, err := col.IngestChunkedDocument([]byte("parent#0"), parentDoc(t, "collision", "second parent body", nil), cfg, ChunkedIngestOptions{}); err == nil {
+		t.Fatal("child ID accepted as a parent in a separate ingest call")
+	}
+	after, err := col.Get([]byte("parent#0"))
+	if err != nil {
+		t.Fatalf("Get original child: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("collision mutated original child\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestChunkedIngestSerializesSameParentAcrossCollectionHandles(t *testing.T) {
+	_, d, first := openChunkingTestCollection(t)
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	parentID := []byte("same-parent")
+	cfg := fixedWindowCfg(12, 2)
+	if _, err := first.IngestChunkedDocument(parentID, parentDoc(t, "seed", "seed content long enough to chunk", nil), cfg, ChunkedIngestOptions{}); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+
+	firstAfterDelete := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondAfterDelete := make(chan struct{})
+	firstOpts := ChunkedIngestOptions{hooks: &chunkedIngestHooks{afterDelete: func() {
+		close(firstAfterDelete)
+		<-releaseFirst
+	}}}
+	secondOpts := ChunkedIngestOptions{hooks: &chunkedIngestHooks{afterDelete: func() {
+		close(secondAfterDelete)
+	}}}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := first.IngestChunkedDocument(parentID, parentDoc(t, "first", strings.Repeat("first ", 12), nil), cfg, firstOpts)
+		errs <- err
+	}()
+	<-firstAfterDelete
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := second.IngestChunkedDocument(parentID, parentDoc(t, "second", strings.Repeat("second ", 12), nil), cfg, secondOpts)
+		errs <- err
+	}()
+
+	interleaved := false
+	select {
+	case <-secondAfterDelete:
+		interleaved = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent ingest: %v", err)
+		}
+	}
+	if interleaved {
+		t.Fatal("same-parent lifecycle reached child insertion concurrently")
+	}
+
+	parentRaw, err := first.Get(parentID)
+	if err != nil {
+		t.Fatalf("Get parent: %v", err)
+	}
+	var parent map[string]any
+	if err := json.Unmarshal(parentRaw, &parent); err != nil {
+		t.Fatalf("decode parent: %v", err)
+	}
+	children, err := first.ChunkChildren(parentID)
+	if err != nil {
+		t.Fatalf("ChunkChildren: %v", err)
+	}
+	for _, id := range children {
+		raw, err := first.Get(id)
+		if err != nil {
+			t.Fatalf("Get child %q: %v", id, err)
+		}
+		var child map[string]any
+		if err := json.Unmarshal(raw, &child); err != nil {
+			t.Fatalf("decode child %q: %v", id, err)
+		}
+		title := parent["title"].(string)
+		body := child["body"].(string)
+		if !strings.Contains(body, title) {
+			t.Fatalf("parent title=%q does not match child %q body=%q", title, id, body)
+		}
 	}
 }

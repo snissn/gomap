@@ -172,6 +172,60 @@ func TestRecursiveOversizedUnitFallsBackToHardSplit(t *testing.T) {
 	}
 }
 
+func TestRecursiveOverlapAppliesAcrossSeparatorChunks(t *testing.T) {
+	text := "alpha beta gamma delta epsilon zeta"
+	cfg := Config{
+		Strategy: StrategyRecursive, SizeUnit: SizeUnitRunes,
+		Size: 12, Overlap: 3, Separators: []string{" ", ""},
+	}
+	chunks := mustChunk(t, "p", text, cfg)
+	if len(chunks) < 2 {
+		t.Fatalf("chunks=%+v want multiple separator chunks", chunks)
+	}
+	runes := []rune(text)
+	for i, ch := range chunks {
+		if ch.Text == "" {
+			t.Fatalf("chunk %d is empty", i)
+		}
+		if got := string(runes[ch.StartOffset:ch.EndOffset]); got != ch.Text {
+			t.Fatalf("chunk %d text=%q offsets select %q", i, ch.Text, got)
+		}
+		if i > 0 {
+			if got := chunks[i-1].EndOffset - ch.StartOffset; got != cfg.Overlap {
+				t.Fatalf("chunks %d/%d overlap=%d want %d: %#v / %#v", i-1, i, got, cfg.Overlap, chunks[i-1], ch)
+			}
+		}
+	}
+}
+
+func TestRecursiveEmptySeparatorTakesImmediatePrecedence(t *testing.T) {
+	text := "aaaa bbbb cccc"
+	cfg := Config{
+		Strategy: StrategyRecursive, SizeUnit: SizeUnitRunes,
+		Size: 5, Overlap: 1, Separators: []string{"", " "},
+	}
+	got := mustChunk(t, "p", text, cfg)
+	want := mustChunk(t, "p", text, Config{
+		Strategy: StrategyFixedWindow, SizeUnit: SizeUnitRunes,
+		Size: 5, Overlap: 1,
+	})
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("empty separator did not hard split immediately\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+func TestRecursiveTrailingSeparatorProducesNoEmptyChunk(t *testing.T) {
+	chunks := mustChunk(t, "p", "abc|", Config{
+		Strategy: StrategyRecursive, SizeUnit: SizeUnitRunes,
+		Size: 3, Overlap: 0, Separators: []string{"|", ""},
+	})
+	for i, ch := range chunks {
+		if ch.Text == "" || ch.StartOffset == ch.EndOffset {
+			t.Fatalf("chunk %d is empty: %+v", i, ch)
+		}
+	}
+}
+
 func chunkStreamDigest(t *testing.T, parentID, text string, cfg Config) string {
 	t.Helper()
 	chunks := mustChunk(t, parentID, text, cfg)

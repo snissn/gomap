@@ -19,6 +19,11 @@ type ChunkedIngestOptions struct {
 	// TextField names the parent document field holding the text to chunk.
 	// Empty defaults to "body".
 	TextField string
+	hooks     *chunkedIngestHooks
+}
+
+type chunkedIngestHooks struct {
+	afterDelete func()
 }
 
 func (o ChunkedIngestOptions) textField() string {
@@ -161,6 +166,9 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 		if _, err := c.DeleteBatch(oldChildren); err != nil {
 			return result, fmt.Errorf("collections: tombstone stale chunk children of %q: %w", parentID, err)
 		}
+	}
+	if opts.hooks != nil && opts.hooks.afterDelete != nil {
+		opts.hooks.afterDelete()
 	}
 	if len(plan.children) > 0 {
 		if _, err := c.InsertBatch(chunkPlanIDs(plan.children), chunkPlanDocs(plan.children)); err != nil {
