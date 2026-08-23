@@ -549,10 +549,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
-	return c.buildVectorIndexPrepared(opts, register, true, false)
+	return c.buildVectorIndexPrepared(opts, register, true, false, false)
 }
 
-func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild bool) (*VectorIndex, error) {
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered, liveANNFullRebuild, admissionLocked bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -564,7 +564,13 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 		return nil, err
 	}
 	if flushBuffered {
-		if err := c.flushBufferedWrites(); err != nil {
+		var err error
+		if admissionLocked {
+			err = c.flushBufferedWritesWithVectorAdmissionLocked()
+		} else {
+			err = c.flushBufferedWrites()
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -595,7 +601,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	}
 	defer func() { _ = materializer.Close() }()
 
-	_, err = c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+	_, err = c.scanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, index.fieldPath)
 		if err != nil {
 			return false, fmt.Errorf("collections: vector field %q in document %q: %w", index.field, record.ID, err)
@@ -607,7 +613,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return false, err
 		}
 		return true, nil
-	})
+	}, admissionLocked)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,7 +1052,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 				continue
 			}
 			if !index.hasValidSourceDocumentRoots() {
-				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+				_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 				if err != nil {
 					return nil, err
 				}
@@ -1065,7 +1071,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 			continue
 		}
 		if status.ExactFallbackReason != "" {
-			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true)
+			_, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), true, true, true, true)
 			if err != nil {
 				return nil, err
 			}
@@ -1246,15 +1252,14 @@ func (c *Collection) invalidateRegisteredVectorIndexDocumentCoverageLocked() {
 	}
 }
 
-func (c *Collection) invalidateSharedVectorIndexDocumentCoverage() {
-	if c == nil || c.writeDomain == nil {
+func (c *Collection) invalidateOtherVectorIndexDocumentCoverage() {
+	if c == nil || c.writeDomain == nil || c.writeDomain.schemaCoordinator == nil {
 		return
 	}
-	domains := []*collectionWriteDomain{c.writeDomain}
-	if coord := c.writeDomain.schemaCoordinator; coord != nil {
-		domains = coord.snapshotDomains()
-	}
-	for _, domain := range domains {
+	for _, domain := range c.writeDomain.schemaCoordinator.snapshotDomains() {
+		if domain == c.writeDomain {
+			continue
+		}
 		domain.nativeVectorMutationMu.Lock()
 		domain.nativeVectorSearchActive.Store(false)
 		(&Collection{db: c.db, writeDomain: domain}).invalidateRegisteredVectorIndexDocumentCoverage()

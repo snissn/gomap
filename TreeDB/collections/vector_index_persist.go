@@ -92,6 +92,8 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	return idx.saveNativeSnapshotWithCoverageLocked()
@@ -414,6 +416,8 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {

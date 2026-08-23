@@ -4019,11 +4019,27 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 					status VectorIndexLoadStatus
 					err    error
 				}
+				waited := make(chan struct{})
+				var waitOnce sync.Once
+				restoreWaitHook := setCollectionWaitIndexedAsyncFlushHookForTest(func() {
+					waitOnce.Do(func() { close(waited) })
+				})
+				defer restoreWaitHook()
 				saveDone := make(chan saveResult, 1)
 				go func() {
 					status, err := stale.SaveNativeSnapshot()
 					saveDone <- saveResult{status: status, err: err}
 				}()
+				select {
+				case <-waited:
+				case <-time.After(5 * time.Second):
+					t.Fatal("stale snapshot did not wait for delayed async publication")
+				}
+				if err := col.publishPreparedIndexedFlush(work); err != nil {
+					t.Fatalf("publishPreparedIndexedFlush: %v", err)
+				}
+				col.writeDomain.finishIndexedAsyncFlush(nil)
+				finished = true
 				deadline := time.Now().Add(5 * time.Second)
 				for col.writeDomain.nativeVectorCoverageMu.TryRLock() {
 					col.writeDomain.nativeVectorCoverageMu.RUnlock()
@@ -4032,11 +4048,6 @@ func TestBufferedPrimaryPublicationRefreshesNativeCoverage(t *testing.T) {
 					}
 					runtime.Gosched()
 				}
-				if err := col.publishPreparedIndexedFlush(work); err != nil {
-					t.Fatalf("publishPreparedIndexedFlush: %v", err)
-				}
-				col.writeDomain.finishIndexedAsyncFlush(nil)
-				finished = true
 				heldMutation.Unlock()
 				mutationReleased = true
 				select {

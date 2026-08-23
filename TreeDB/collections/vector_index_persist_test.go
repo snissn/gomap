@@ -1953,12 +1953,15 @@ func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T)
 	if err := <-publishDone; err != nil {
 		t.Fatalf("publish prepared indexed flush: %v", err)
 	}
-	if _, err := writer.insertBatch([][]byte{[]byte("sync")}, [][]byte{[]byte(`{"kind":"s","embedding":[1,1]}`)}, false, nil); err != nil {
+	if _, err := writer.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		t.Fatalf("load writer runtime before synchronous flush: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("sync")}, [][]byte{[]byte(`{"kind":"s","embedding":[1,1]}`)}); err != nil {
 		t.Fatalf("buffer synchronous writer document: %v", err)
 	}
 	unlockReader = reader.lockVectorIndexCoverageMutation()
 	syncDone := make(chan error, 1)
-	go func() { syncDone <- flushCollectionWriteDomain(d, writer.writeDomain) }()
+	go func() { syncDone <- writer.Flush() }()
 	select {
 	case err := <-syncDone:
 		unlockReader()
@@ -1977,16 +1980,53 @@ func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T)
 	if reader.registeredVectorIndex(def.Name).hasValidSourceDocumentRoots() {
 		t.Fatal("synchronous indexed flush did not invalidate stale vector coverage")
 	}
+	writerIndex := writer.registeredVectorIndex(def.Name)
+	if !writerIndex.hasValidSourceDocumentRoots() {
+		t.Fatal("synchronous indexed flush invalidated its reconciled vector coverage")
+	}
+	results, _, err := writerIndex.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search publishing runtime after Flush: %v", err)
+	}
+	requireVectorResultIDs(t, results, "async", "sync")
+
+	if _, err := writer.InsertBatch([][]byte{[]byte("read")}, [][]byte{[]byte(`{"kind":"r","embedding":[0.25,0.75]}`)}); err != nil {
+		t.Fatalf("buffer read-triggered document: %v", err)
+	}
+	unlockReader = reader.lockVectorIndexCoverageMutation()
+	readDone := make(chan error, 1)
+	go func() {
+		view, err := writer.OpenCollectionReadView()
+		if view != nil {
+			err = errors.Join(err, view.Close())
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		unlockReader()
+		t.Fatalf("read-triggered flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockReader()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("read-triggered flush: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read-triggered flush remained blocked after vector admission released")
+	}
 
 	if _, err := reader.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"kind":"b","embedding":[0,1]}`)}); err != nil {
 		t.Fatalf("insert through stale reader: %v", err)
 	}
 	index := reader.registeredVectorIndex(def.Name)
-	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 4, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search after stale-reader rebuild: %v", err)
 	}
-	requireVectorResultIDs(t, results, "async", "sync", "local")
+	requireVectorResultIDs(t, results, "async", "sync", "read", "local")
 }
 
 func TestNativeVectorSchemaMutationWaitsBeforeAsyncFlushAdmission(t *testing.T) {
