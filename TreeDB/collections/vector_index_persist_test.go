@@ -1866,6 +1866,38 @@ func TestNativeVectorCoverageAdmissionSerializesAcrossManagers(t *testing.T) {
 	secondAdmission.Unlock()
 }
 
+func TestNativeVectorCoverageAdmissionSeesIndexCreatedByAnotherManager(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale second handle: %v", err)
+	}
+	if _, err := first.CreateVectorIndex(VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+
+	unlock := second.lockVectorIndexCoverageMutation()
+	admission := second.nativeVectorAdmissionMutex()
+	if admission.TryRLock() {
+		admission.RUnlock()
+		unlock()
+		t.Fatal("stale manager admitted a shared write after native index creation")
+	}
+	unlock()
+}
+
 func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -1242,6 +1242,15 @@ func (c *Collection) nativeVectorAdmissionMutex() *sync.RWMutex {
 	return &c.writeDomain.nativeVectorAdmissionMu
 }
 
+func collectionMetaHasNativeVectorIndexes(meta CollectionMeta) bool {
+	for _, def := range meta.VectorIndexes {
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	if c == nil || c.writeDomain == nil {
 		return func() {}
@@ -1249,14 +1258,10 @@ func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	domain := c.writeDomain
 	admissionMu := c.nativeVectorAdmissionMutex()
 	admissionMu.RLock()
+	coord := domain.schemaCoordinator
+	hasMaintainedVectorIndexes := coord != nil && coord.hasNativeVectorIndexes.Load()
 	domain.mu.RLock()
-	hasMaintainedVectorIndexes := false
-	for _, def := range domain.meta.VectorIndexes {
-		if vectorIndexDefinitionUsesNativeRuntime(def) {
-			hasMaintainedVectorIndexes = true
-			break
-		}
-	}
+	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
 	domain.mu.RUnlock()
 	domain.nativeVectorIndexesMu.RLock()
 	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0

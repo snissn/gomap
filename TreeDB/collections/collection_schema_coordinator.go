@@ -2,6 +2,7 @@ package collections
 
 import (
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -9,6 +10,7 @@ import (
 type collectionSchemaCoordinator struct {
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
+	hasNativeVectorIndexes  atomic.Bool
 	legacyVectorSidecarMu   sync.Mutex
 	domainsMu               sync.Mutex
 	domains                 map[*collectionWriteDomain]struct{}

@@ -3594,6 +3594,11 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 		}
 		return collection, nil
 	}
+	schemaCoord := collectionSchemaCoordinatorForDBCollection(m.db, name)
+	if schemaCoord != nil {
+		schemaCoord.nativeVectorAdmissionMu.RLock()
+		defer schemaCoord.nativeVectorAdmissionMu.RUnlock()
+	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -3605,6 +3610,9 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	}
 	if catalog == nil {
 		return nil, errCollectionNotFound
+	}
+	if schemaCoord != nil && collectionMetaHasNativeVectorIndexes(catalog.meta) {
+		schemaCoord.hasNativeVectorIndexes.Store(true)
 	}
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, catalog.meta.Options.ColumnStore, "open"); err != nil {
@@ -4053,6 +4061,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+	}
 	if registerEmptyRuntime {
 		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
 			runtime.recordSourceDocumentGeneration(sourceDocumentGeneration)
@@ -4148,6 +4159,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+	}
 	c.UnregisterVectorIndex(name)
 	return newMeta.copy(), nil
 }
