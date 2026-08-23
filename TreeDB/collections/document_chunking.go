@@ -213,6 +213,9 @@ func (c *Collection) ChunkChildren(parentID []byte) ([][]byte, error) {
 	ordinals := map[int][]byte{}
 	inspect := func(record DocumentRecord) (bool, error) {
 		id := record.ID
+		if !bytes.HasPrefix(id, prefix) {
+			return true, nil
+		}
 		meta, err := chunking.ParseChildMeta(record.Document)
 		if err != nil {
 			return false, fmt.Errorf("collections: chunk child %q metadata: %w", id, err)
