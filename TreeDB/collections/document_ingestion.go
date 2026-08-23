@@ -269,7 +269,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	if cfg.VectorIndexName == "" {
 		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: errors.New("collections: ingest requires VectorIndexName")}
 	}
-	emb, err := c.EmbedderForIngest(cfg.VectorIndexName, cfg.Embedding)
+	emb, err := c.EmbedderForIngestContext(ctx, cfg.VectorIndexName, cfg.Embedding)
 	if err != nil {
 		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: err}
 	}

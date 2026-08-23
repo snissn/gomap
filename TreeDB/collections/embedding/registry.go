@@ -48,9 +48,17 @@ func (r *Registry) Register(name string, factory Factory) error {
 	return nil
 }
 
-// Create validates cfg and resolves its provider into an Embedder. Unknown
-// providers fail with ErrUnknownProvider wrapped alongside the requested name.
+// Create validates cfg and resolves its provider with a background context.
 func (r *Registry) Create(cfg Config) (Embedder, error) {
+	return r.CreateContext(context.Background(), cfg)
+}
+
+// CreateContext resolves a provider while honoring cancellation during any
+// wait for that provider's serialized factory/dimension boundary.
+func (r *Registry) CreateContext(ctx context.Context, cfg Config) (Embedder, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -60,11 +68,14 @@ func (r *Registry) Create(cfg Config) (Embedder, error) {
 	if !ok {
 		return nil, fmt.Errorf("embedding: provider %q: %w", cfg.Provider, ErrUnknownProvider)
 	}
-	unlockProvider, err := r.LockProvider(context.Background(), cfg.Provider)
+	unlockProvider, err := r.LockProvider(ctx, cfg.Provider)
 	if err != nil {
 		return nil, err
 	}
 	defer unlockProvider()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	emb, err := factory(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)

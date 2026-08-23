@@ -113,6 +113,26 @@ func TestRegistryCreateRejectsFactoryDimensionMismatch(t *testing.T) {
 	}
 }
 
+func TestRegistryCreateContextHonorsProviderLockCancellation(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register("blocked", func(Config) (Embedder, error) {
+		return stubEmbedder{dims: 4}, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	unlock, err := reg.LockProvider(context.Background(), "blocked")
+	if err != nil {
+		t.Fatalf("LockProvider: %v", err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = reg.CreateContext(ctx, Config{Provider: "blocked", Dimensions: 4})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CreateContext err=%v want context deadline", err)
+	}
+}
+
 func TestRegistryRegisterRejectsDuplicateAndInvalid(t *testing.T) {
 	reg := NewRegistry()
 	factory := func(Config) (Embedder, error) { return stubEmbedder{dims: 4}, nil }

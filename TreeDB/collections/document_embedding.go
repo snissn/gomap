@@ -34,7 +34,7 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
 			def.Name, def.Dimensions, cfg.Dimensions, embedding.ErrDimensionMismatch)
 	}
-	emb, err := embedding.DefaultRegistry().Create(cfg)
+	emb, err := embedding.DefaultRegistry().CreateContext(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
 	}
@@ -82,14 +82,14 @@ func (c *Collection) ValidateEmbedderForVectorIndex(vectorIndexName string, emb 
 	return nil
 }
 
-// EmbedderForIngest resolves the configured embedder against the named vector
-// index definition and returns it for repeated batch use, applying the same
-// fail-closed gates as EmbedForIngest — unknown vector index, config/provider
-// dimension agreement, and declared-vs-index dimension agreement — without
-// embedding anything. Batch composition paths (see IngestSources) call this
-// once per batch and then drive EmbedBatch per source through the returned
-// embedder.
+// EmbedderForIngest resolves with a background context for compatibility.
 func (c *Collection) EmbedderForIngest(vectorIndexName string, cfg embedding.Config) (embedding.Embedder, error) {
+	return c.EmbedderForIngestContext(context.Background(), vectorIndexName, cfg)
+}
+
+// EmbedderForIngestContext resolves the configured embedder against the named
+// vector index while honoring cancellation during provider creation/lock wait.
+func (c *Collection) EmbedderForIngestContext(ctx context.Context, vectorIndexName string, cfg embedding.Config) (embedding.Embedder, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -104,7 +104,7 @@ func (c *Collection) EmbedderForIngest(vectorIndexName string, cfg embedding.Con
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
 			def.Name, def.Dimensions, cfg.Dimensions, embedding.ErrDimensionMismatch)
 	}
-	emb, err := embedding.DefaultRegistry().Create(cfg)
+	emb, err := embedding.DefaultRegistry().CreateContext(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
 	}
