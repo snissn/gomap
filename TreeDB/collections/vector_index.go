@@ -2492,24 +2492,25 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	return results, nil
 }
 
-func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearch int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, vectorIndexNativeSearchState, error) {
 	if idx == nil {
-		return nil, errors.New("collections: vector index is nil")
+		return nil, vectorIndexNativeSearchState{}, errors.New("collections: vector index is nil")
 	}
 	if buffer == nil {
-		return nil, errors.New("collections: nil vector index search buffer")
+		return nil, vectorIndexNativeSearchState{}, errors.New("collections: nil vector index search buffer")
 	}
 	buffer.Reset()
 	if view := idx.acquireSearchView(); view != nil {
 		results, err := view.searchGraphOnlyWithBuffer(query, topK, efSearch, buffer)
+		state := view.nativeSearchState()
 		idx.releaseSearchView(view)
-		return results, err
+		return results, state, err
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
 	if err != nil {
-		return nil, err
+		return nil, vectorIndexNativeSearchState{}, err
 	}
 	resultCount := 0
 	idByteCount := 0
@@ -2530,7 +2531,7 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 		}
 		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(node.documentID), math.MaxInt, "result id")
 		if err != nil {
-			return nil, err
+			return nil, vectorIndexNativeSearchState{}, err
 		}
 		resultCount++
 	}
@@ -2557,7 +2558,12 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 		resultIndex++
 		idOffset = nextIDOffset
 	}
-	return buffer.results, nil
+	deletedDocs := len(idx.nodes) - len(idx.currentNode)
+	return buffer.results, vectorIndexNativeSearchState{
+		liveDocs:      len(idx.currentNode),
+		rebuildNeeded: deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
+		fullRebuilds:  idx.liveANNFullRebuilds,
+	}, nil
 }
 
 func (idx *VectorIndex) searchGraphOnlyCandidatesLocked(query []float32, topK, efSearch int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {

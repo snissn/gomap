@@ -1399,19 +1399,19 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			publicationMu.RUnlock()
 			continue
 		}
-		response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		var searchState vectorIndexNativeSearchState
+		response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
 		if err == nil {
-			liveDocs, rebuildNeeded, fullRebuilds := index.publishedNativeSearchState()
 			response.Status.Loaded = true
 			response.Status.Registered = true
 			response.Status.RootName = load.RootName
 			response.Status.RootID = load.RootID
 			response.Status.NativeRootLoaded = load.RootID != 0
 			response.Status.NativeRootBytes = load.BytesDisk
-			response.Status.RebuildNeeded = rebuildNeeded
+			response.Status.RebuildNeeded = searchState.rebuildNeeded
 			response.Stats.SearchRouteNativeRuntime = 1
-			response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
-			response.Stats.CandidateRows = uint64(liveDocs)
+			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
+			response.Stats.CandidateRows = uint64(searchState.liveDocs)
 		} else if !index.hasValidSourceDocumentRoots() {
 			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}

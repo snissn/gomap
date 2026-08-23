@@ -46,6 +46,12 @@ type vectorIndexSearchPersistedMetadata struct {
 	bytesDisk int64
 }
 
+type vectorIndexNativeSearchState struct {
+	liveDocs      int
+	rebuildNeeded bool
+	fullRebuilds  uint64
+}
+
 func (idx *VectorIndex) publishSearchView() {
 	if idx == nil {
 		return
@@ -209,20 +215,13 @@ func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinitio
 	return status, true
 }
 
-func (idx *VectorIndex) publishedNativeSearchState() (liveDocs int, rebuildNeeded bool, fullRebuilds uint64) {
-	if idx == nil {
-		return 0, false, 0
-	}
-	view := idx.acquireSearchView()
-	if view == nil {
-		_, _, liveDocs, rebuildNeeded, fullRebuilds = idx.nativeSearchState()
-		return liveDocs, rebuildNeeded, fullRebuilds
-	}
+func (view *vectorIndexSearchView) nativeSearchState() vectorIndexNativeSearchState {
 	deletedDocs := len(view.nodes) - view.liveDocs
-	rebuildNeeded = deletedDocs > 0 && len(view.nodes) > 0 && float64(deletedDocs)/float64(len(view.nodes)) >= view.rebuildDeletedRatio
-	liveDocs, fullRebuilds = view.liveDocs, view.fullRebuilds
-	idx.releaseSearchView(view)
-	return liveDocs, rebuildNeeded, fullRebuilds
+	return vectorIndexNativeSearchState{
+		liveDocs:      view.liveDocs,
+		rebuildNeeded: deletedDocs > 0 && len(view.nodes) > 0 && float64(deletedDocs)/float64(len(view.nodes)) >= view.rebuildDeletedRatio,
+		fullRebuilds:  view.fullRebuilds,
+	}
 }
 
 func (c *Collection) nativeVectorIndexMutationActive() bool {

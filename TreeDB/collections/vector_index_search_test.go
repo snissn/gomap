@@ -5494,7 +5494,7 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 
 	query := []float32{1, 0}
 	var buffer VectorIndexSearchBuffer
-	if _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
+	if _, _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
 		t.Fatalf("warm searchGraphOnlyWithBuffer: %v", err)
 	}
 	if collectionsRaceEnabled {
@@ -5505,7 +5505,7 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 	}
 	var sink int
 	allocs := testing.AllocsPerRun(1000, func() {
-		results, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer)
+		results, _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer)
 		if err != nil {
 			panic(err)
 		}
@@ -5630,9 +5630,11 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	graphSearchDone := make(chan error, 1)
 	go func() {
 		var buffer VectorIndexSearchBuffer
-		results, err := index.searchGraphOnlyWithBuffer([]float32{1, 0}, 1, 8, &buffer)
+		results, state, err := index.searchGraphOnlyWithBuffer([]float32{1, 0}, 1, 8, &buffer)
 		if err == nil && (len(results) != 1 || string(results[0].ID) != "a") {
 			err = fmt.Errorf("results=%+v want document a", results)
+		} else if err == nil && state.liveDocs != 1 {
+			err = fmt.Errorf("search state=%+v want one live document", state)
 		}
 		graphSearchDone <- err
 	}()
@@ -5671,7 +5673,7 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	}()
 	select {
 	case result := <-searchDone:
-		if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" {
+		if result.err != nil || len(result.response.Results) != 1 || string(result.response.Results[0].ID) != "a" || result.response.Stats.CandidateRows != 1 {
 			t.Fatalf("search during native reconciliation response=%+v err=%v want prior published document a", result.response, result.err)
 		}
 	case <-time.After(5 * time.Second):
@@ -5685,14 +5687,14 @@ func TestSearchVectorIndexWithBufferServesPublishedViewDuringNativeCoverageRecon
 	}
 	var beforeUnlockBuffer VectorIndexSearchBuffer
 	beforeUnlock, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &beforeUnlockBuffer)
-	if err != nil || len(beforeUnlock.Results) != 1 || string(beforeUnlock.Results[0].ID) != "a" {
+	if err != nil || len(beforeUnlock.Results) != 1 || string(beforeUnlock.Results[0].ID) != "a" || beforeUnlock.Stats.CandidateRows != 1 {
 		t.Fatalf("search before coverage certification response=%+v err=%v want prior published document a", beforeUnlock, err)
 	}
 	unlockCoverage()
 	coverageLocked = false
 	var buffer VectorIndexSearchBuffer
 	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer)
-	if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" {
+	if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" || response.Stats.CandidateRows != 2 {
 		t.Fatalf("search after native reconciliation response=%+v err=%v", response, err)
 	}
 }
