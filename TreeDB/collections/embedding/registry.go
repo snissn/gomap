@@ -56,39 +56,54 @@ func (r *Registry) Create(cfg Config) (Embedder, error) {
 // CreateContext resolves a provider while honoring cancellation during any
 // wait for that provider's serialized factory/dimension boundary.
 func (r *Registry) CreateContext(ctx context.Context, cfg Config) (Embedder, error) {
+	emb, unlock, err := r.CreateLocked(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	unlock()
+	return emb, nil
+}
+
+// CreateLocked resolves a provider and retains its serialization token.
+// Callers that need factory configuration and EmbedBatch to form one provider
+// transaction must release the returned function exactly once.
+func (r *Registry) CreateLocked(ctx context.Context, cfg Config) (Embedder, func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r.mu.RLock()
 	factory, ok := r.factories[cfg.Provider]
 	r.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("embedding: provider %q: %w", cfg.Provider, ErrUnknownProvider)
+		return nil, nil, fmt.Errorf("embedding: provider %q: %w", cfg.Provider, ErrUnknownProvider)
 	}
 	unlockProvider, err := r.LockProvider(ctx, cfg.Provider)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer unlockProvider()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		unlockProvider()
+		return nil, nil, err
 	}
 	emb, err := factory(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
+		unlockProvider()
+		return nil, nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
 	}
 	if err := ValidateEmbedder(emb); err != nil {
-		return nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
+		unlockProvider()
+		return nil, nil, fmt.Errorf("embedding: provider %q create: %w", cfg.Provider, err)
 	}
 	dimensions := emb.Dimensions()
 	if dimensions != cfg.Dimensions {
-		return nil, fmt.Errorf("embedding: provider %q builds %d dims, config declares %d: %w",
+		unlockProvider()
+		return nil, nil, fmt.Errorf("embedding: provider %q builds %d dims, config declares %d: %w",
 			cfg.Provider, dimensions, cfg.Dimensions, ErrDimensionMismatch)
 	}
-	return emb, nil
+	return emb, unlockProvider, nil
 }
 
 // ValidateEmbedder rejects nil and typed-nil provider results before any

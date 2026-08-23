@@ -34,13 +34,9 @@ func (c *Collection) EmbedForIngest(ctx context.Context, vectorIndexName string,
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
 			def.Name, def.Dimensions, cfg.Dimensions, embedding.ErrDimensionMismatch)
 	}
-	emb, err := embedding.DefaultRegistry().CreateContext(ctx, cfg)
+	emb, unlockProvider, err := embedding.DefaultRegistry().CreateLocked(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
-	}
-	unlockProvider, err := embedding.DefaultRegistry().LockProvider(ctx, cfg.Provider)
-	if err != nil {
-		return nil, fmt.Errorf("collections: provider %q embed into vector index %q: %w", cfg.Provider, def.Name, err)
 	}
 	defer unlockProvider()
 	if err := ctx.Err(); err != nil {
@@ -87,26 +83,37 @@ func (c *Collection) EmbedderForIngest(vectorIndexName string, cfg embedding.Con
 	return c.EmbedderForIngestContext(context.Background(), vectorIndexName, cfg)
 }
 
-// EmbedderForIngestContext resolves the configured embedder against the named
-// vector index while honoring cancellation during provider creation/lock wait.
+// EmbedderForIngestContext resolves and releases the provider serialization
+// token after creation. Callers embedding a batch should use the locked form.
 func (c *Collection) EmbedderForIngestContext(ctx context.Context, vectorIndexName string, cfg embedding.Config) (embedding.Embedder, error) {
+	emb, unlock, err := c.EmbedderForIngestLocked(ctx, vectorIndexName, cfg)
+	if err != nil {
+		return nil, err
+	}
+	unlock()
+	return emb, nil
+}
+
+// EmbedderForIngestLocked resolves the configured provider and retains its
+// serialization token for the caller's complete embedding operation.
+func (c *Collection) EmbedderForIngestLocked(ctx context.Context, vectorIndexName string, cfg embedding.Config) (embedding.Embedder, func(), error) {
 	if c == nil {
-		return nil, errCollectionNil
+		return nil, nil, errCollectionNil
 	}
 	if c.db == nil {
-		return nil, errCollectionDBNil
+		return nil, nil, errCollectionDBNil
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexName)
 	if !ok {
-		return nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, ErrIndexNotFound)
+		return nil, nil, fmt.Errorf("collections: ingest embed into %q: %w", vectorIndexName, ErrIndexNotFound)
 	}
 	if cfg.Dimensions != def.Dimensions {
-		return nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
+		return nil, nil, fmt.Errorf("collections: ingest embed into vector index %q wants %d dims, config declares %d: %w",
 			def.Name, def.Dimensions, cfg.Dimensions, embedding.ErrDimensionMismatch)
 	}
-	emb, err := embedding.DefaultRegistry().CreateContext(ctx, cfg)
+	emb, unlock, err := embedding.DefaultRegistry().CreateLocked(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
+		return nil, nil, fmt.Errorf("collections: ingest embed into vector index %q: %w", def.Name, err)
 	}
-	return emb, nil
+	return emb, unlock, nil
 }

@@ -269,8 +269,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 	if cfg.VectorIndexName == "" {
 		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: errors.New("collections: ingest requires VectorIndexName")}
 	}
-	emb, err := c.EmbedderForIngestContext(ctx, cfg.VectorIndexName, cfg.Embedding)
-	if err != nil {
+	if _, err := c.EmbedderForIngestContext(ctx, cfg.VectorIndexName, cfg.Embedding); err != nil {
 		return result, &IngestError{Stage: IngestStageEmbed, SourceIndex: 0, Err: err}
 	}
 	def, ok := findVectorIndex(c.meta.VectorIndexes, cfg.VectorIndexName)
@@ -458,7 +457,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 					Err: fmt.Errorf("collections: before source %q: %w", plan.parentID, err)}
 			}
 		}
-		unlockProvider, lockErr := embedding.DefaultRegistry().LockProvider(wctx, cfg.Embedding.Provider)
+		emb, unlockProvider, lockErr := embedding.DefaultRegistry().CreateLocked(wctx, cfg.Embedding)
 		if lockErr != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageEmbed,
 				Err: fmt.Errorf("collections: provider %q embed for vector index %q: %w", cfg.Embedding.Provider, def.Name, lockErr)}
@@ -487,8 +486,8 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			}
 		}
 		if providerStageErr != nil {
-			// Store the originating failure and broadcast cancellation before
-			// a queued caller can acquire the provider lock.
+			// Store the originating failure and cancel queued provider work
+			// before releasing the factory+batch serialization token.
 			fail(i, providerStageErr)
 		}
 		unlockProvider()
