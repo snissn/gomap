@@ -532,7 +532,11 @@ func TestIngestSourcesSerializesSharedEmbedder(t *testing.T) {
 
 func TestIngestSourcesSerializesProviderAcrossInvocations(t *testing.T) {
 	const provider = "ingest-test-serial-guard-cross-call"
-	_, _, col := openIngestTestCollection(t, 16)
+	_, d, col := openIngestTestCollection(t, 16)
+	sibling, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open sibling collection handle: %v", err)
+	}
 	emb := &serialGuardEmbedder{dims: 16}
 	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
 		return emb, nil
@@ -544,10 +548,11 @@ func TestIngestSourcesSerializesProviderAcrossInvocations(t *testing.T) {
 	cfg.Concurrency = 1
 	start := make(chan struct{})
 	errs := make(chan error, 2)
+	handles := []*Collection{col, sibling}
 	for i := range 2 {
 		go func(i int) {
 			<-start
-			_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource(fmt.Sprintf("src-cross-%d", i), i)}, cfg)
+			_, err := handles[i].IngestSources(context.Background(), []SourceDocument{ingestTestSource(fmt.Sprintf("src-cross-%d", i), i)}, cfg)
 			errs <- err
 		}(i)
 	}
