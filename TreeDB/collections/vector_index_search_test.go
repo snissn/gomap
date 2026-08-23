@@ -5777,7 +5777,7 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	insert("b", []float32{0, 1})
 	current := index.searchView.Load()
 	if current == nil || current == retired {
-		retired.mu.RUnlock()
+		index.releaseSearchView(retired)
 		t.Fatal("second publication did not install an independent current view")
 	}
 
@@ -5794,14 +5794,17 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	select {
 	case err := <-publicationDone:
 		if err != nil {
-			retired.mu.RUnlock()
+			index.releaseSearchView(retired)
 			t.Fatalf("third publication: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		retired.mu.RUnlock()
+		index.releaseSearchView(retired)
 		t.Fatal("third publication blocked behind a retired reader")
 	}
-	retired.mu.RUnlock()
+	index.releaseSearchView(retired)
+	if retired.reuseState.Load() != vectorIndexSearchViewPooled {
+		t.Fatal("retired view was not returned for reuse after its reader released it")
+	}
 
 	large := index.acquireSearchView()
 	if large == nil {
@@ -5814,22 +5817,22 @@ func TestVectorIndexSearchViewReusesAndClearsRetiredBuffer(t *testing.T) {
 	index.maxLevel = index.nodes[0].level
 	index.publishSearchViewLocked(true)
 	index.mu.Unlock()
-	if index.searchViewSpare != nil {
-		large.mu.RUnlock()
+	if large.reuseState.Load() != vectorIndexSearchViewDiscarded {
+		index.releaseSearchView(large)
 		t.Fatal("shrinking publication retained the larger retired graph")
 	}
-	large.mu.RUnlock()
+	index.releaseSearchView(large)
 	shrunk := index.acquireSearchView()
 	if shrunk == nil {
 		t.Fatal("shrunk search view is nil")
 	}
 	for i, node := range shrunk.nodes[len(shrunk.nodes):cap(shrunk.nodes)] {
 		if node.documentID != nil || node.vector != nil || node.quantized != nil || node.neighbors != nil {
-			shrunk.mu.RUnlock()
+			index.releaseSearchView(shrunk)
 			t.Fatalf("retained search view tail node %d was not cleared", i+len(shrunk.nodes))
 		}
 	}
-	shrunk.mu.RUnlock()
+	index.releaseSearchView(shrunk)
 
 	index.setNativePersistent(true)
 	index.recordPersistedSnapshot(99, 123, index.nativeMutationSequence())

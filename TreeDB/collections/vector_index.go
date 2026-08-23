@@ -356,7 +356,7 @@ type VectorIndex struct {
 	insertScratch       vectorIndexSearchScratch
 	searchScratch       sync.Pool
 	searchView          atomic.Pointer[vectorIndexSearchView]
-	searchViewSpare     *vectorIndexSearchView
+	searchViewPool      sync.Pool
 	searchViewDirty     map[int]struct{}
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
 	// untraced offline column graph builder. Traced and partition builds stay
@@ -2502,7 +2502,7 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 	buffer.Reset()
 	if view := idx.acquireSearchView(); view != nil {
 		results, err := view.searchGraphOnlyWithBuffer(query, topK, efSearch, buffer)
-		view.mu.RUnlock()
+		idx.releaseSearchView(view)
 		return results, err
 	}
 	idx.mu.RLock()

@@ -6,6 +6,14 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
+)
+
+const (
+	vectorIndexSearchViewActive uint32 = iota
+	vectorIndexSearchViewRetired
+	vectorIndexSearchViewPooled
+	vectorIndexSearchViewDiscarded
 )
 
 // vectorIndexSearchView is the last fully reconciled native graph. Node vectors
@@ -13,6 +21,7 @@ import (
 // are copied when a new view is published.
 type vectorIndexSearchView struct {
 	mu                       sync.RWMutex
+	reuseState               atomic.Uint32
 	nodes                    []vectorIndexNode
 	name                     string
 	field                    string
@@ -44,11 +53,18 @@ func (idx *VectorIndex) publishSearchView() {
 
 func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	previous := idx.searchView.Load()
-	next := idx.searchViewSpare
-	if next == nil || !next.mu.TryLock() {
+	next, _ := idx.searchViewPool.Get().(*vectorIndexSearchView)
+	if next != nil && !next.mu.TryLock() {
+		if next.reuseState.CompareAndSwap(vectorIndexSearchViewPooled, vectorIndexSearchViewRetired) {
+			idx.recycleSearchView(next)
+		}
+		next = nil
+	}
+	if next == nil {
 		next = &vectorIndexSearchView{}
 		next.mu.Lock()
 	}
+	next.reuseState.Store(vectorIndexSearchViewActive)
 	nodes := next.nodes
 	if cap(nodes) < len(idx.nodes) {
 		capacity := maxInt(len(idx.nodes), cap(nodes)*2)
@@ -98,12 +114,32 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.fullRebuilds = idx.liveANNFullRebuilds
 	next.mu.Unlock()
 	idx.searchView.Store(next)
-	if previous != nil && len(previous.nodes) > len(next.nodes) {
-		idx.searchViewSpare = nil
-	} else {
-		idx.searchViewSpare = previous
+	if previous != nil {
+		if len(previous.nodes) > len(next.nodes) {
+			previous.reuseState.Store(vectorIndexSearchViewDiscarded)
+		} else {
+			previous.reuseState.Store(vectorIndexSearchViewRetired)
+			idx.recycleSearchView(previous)
+		}
 	}
 	clear(idx.searchViewDirty)
+}
+
+func (idx *VectorIndex) releaseSearchView(view *vectorIndexSearchView) {
+	view.mu.RUnlock()
+	idx.recycleSearchView(view)
+}
+
+func (idx *VectorIndex) recycleSearchView(view *vectorIndexSearchView) {
+	if idx == nil || view == nil || view.reuseState.Load() != vectorIndexSearchViewRetired || !view.mu.TryLock() {
+		return
+	}
+	if view.reuseState.CompareAndSwap(vectorIndexSearchViewRetired, vectorIndexSearchViewPooled) {
+		view.mu.Unlock()
+		idx.searchViewPool.Put(view)
+		return
+	}
+	view.mu.Unlock()
 }
 
 func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {
@@ -128,7 +164,7 @@ func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
 		if idx.searchView.Load() == view {
 			return view
 		}
-		view.mu.RUnlock()
+		idx.releaseSearchView(view)
 	}
 	return nil
 }
@@ -148,7 +184,7 @@ func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinitio
 	view := idx.acquireSearchView()
 	if !view.matchesDefinition(def) {
 		if view != nil {
-			view.mu.RUnlock()
+			idx.releaseSearchView(view)
 		}
 		return VectorIndexLoadStatus{}, false
 	}
@@ -159,7 +195,7 @@ func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinitio
 		Epoch:     view.epoch,
 		BytesDisk: view.bytesDisk,
 	}
-	view.mu.RUnlock()
+	idx.releaseSearchView(view)
 	return status, true
 }
 
@@ -175,7 +211,7 @@ func (idx *VectorIndex) publishedNativeSearchState() (liveDocs int, rebuildNeede
 	deletedDocs := len(view.nodes) - view.liveDocs
 	rebuildNeeded = deletedDocs > 0 && len(view.nodes) > 0 && float64(deletedDocs)/float64(len(view.nodes)) >= view.rebuildDeletedRatio
 	liveDocs, fullRebuilds = view.liveDocs, view.fullRebuilds
-	view.mu.RUnlock()
+	idx.releaseSearchView(view)
 	return liveDocs, rebuildNeeded, fullRebuilds
 }
 
