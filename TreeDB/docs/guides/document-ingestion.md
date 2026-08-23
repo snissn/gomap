@@ -85,16 +85,17 @@ ingestion-stage improvement. The existing C4 one-run result (34.35 docs/sec)
 is within the same single-run noise envelope; the limiter classification is
 unchanged.
 
-The CPU profile (`/tmp/c8-before.cpu`) attributes the measured wall time to
-the durable storage boundary rather than the ingestion handoff: `InsertBatch`
-is 59.79% cumulative, durable value-log reference capture is 53.19%
-cumulative, and `maintenanceReachabilityScan` is 51.33% cumulative. The
-profile's direct hot symbols are `Node.GetLeafValueView` (14.07% flat),
-`pthread_cond_signal` (12.13%), and `syscall.rawsyscalln` (11.15%). This
-classifies the limiter as **checkpoint/value-log and durable root-publication
-interaction**, with per-source mutation serialization, not embedding or
-chunking allocation churn. The 0.008--0.011% embed share also rules out an
-embed batching/concurrency lane for this fixture.
+The CPU profile (`/tmp/c8-before.cpu`) samples on-CPU time; it does not
+attribute time blocked on locks or waiting in maintenance. It identifies the
+dominant CPU work inside the measured storage boundary: `InsertBatch` is
+59.79% cumulative, durable value-log reference capture is 53.19% cumulative,
+and `maintenanceReachabilityScan` is 51.33% cumulative. The profile's direct
+hot symbols are `Node.GetLeafValueView` (14.07% flat), `pthread_cond_signal`
+(12.13%), and `syscall.rawsyscalln` (11.15%). Combined with the 99.98% index
+stage share, this supports a **checkpoint/value-log and durable root-publication
+interaction** classification, but is not by itself a wall-time attribution.
+The 0.008--0.011% embed share also rules out an embed batching/concurrency lane
+for this fixture.
 
 The heap profile (`/tmp/c8-before.mem`) corroborates the same boundary:
 `maintenanceReachabilityScan` accounts for 60.52% cumulative allocation
