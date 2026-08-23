@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -54,10 +55,22 @@ func TestConfigValidationFailClosed(t *testing.T) {
 	}
 }
 
-func TestChunkEmptyParentIDFailsClosed(t *testing.T) {
+func TestChunkParentIDPolicyFailsClosedWithTypedError(t *testing.T) {
 	cfg := Config{Strategy: StrategyFixedWindow, SizeUnit: SizeUnitRunes, Size: 8, Overlap: 0}
-	if _, err := SplitChunks("", "hello world", cfg); err == nil {
-		t.Fatal("empty parent ID: expected fail-closed error")
+	tests := []struct {
+		id     string
+		reason ParentIDErrorReason
+	}{
+		{id: "", reason: ParentIDEmpty},
+		{id: "parent#child", reason: ParentIDReservedSeparator},
+		{id: string([]byte{0xff, 'p'}), reason: ParentIDInvalidUTF8},
+	}
+	for _, tc := range tests {
+		_, err := SplitChunks(tc.id, "hello world", cfg)
+		var idErr *ParentIDError
+		if !errors.As(err, &idErr) || idErr.Reason != tc.reason {
+			t.Fatalf("SplitChunks(%x) error=%v typed=%+v want reason %q", []byte(tc.id), err, idErr, tc.reason)
+		}
 	}
 }
 
@@ -110,6 +123,18 @@ func TestFixedWindowShortInputSingleChunk(t *testing.T) {
 	chunks := mustChunk(t, "p", "short text", Config{Strategy: StrategyFixedWindow, SizeUnit: SizeUnitRunes, Size: 64, Overlap: 8})
 	if len(chunks) != 1 || chunks[0].Text != "short text" || chunks[0].Ordinal != 0 {
 		t.Fatalf("chunks=%+v", chunks)
+	}
+}
+
+func TestFixedWindowUnicodeRuneOffsets(t *testing.T) {
+	chunks := mustChunk(t, "unicode", "a界b🙂c", Config{
+		Strategy: StrategyFixedWindow, SizeUnit: SizeUnitRunes,
+		Size: 3, Overlap: 1,
+	})
+	if len(chunks) != 2 ||
+		chunks[0].Text != "a界b" || chunks[0].StartOffset != 0 || chunks[0].EndOffset != 3 ||
+		chunks[1].Text != "b🙂c" || chunks[1].StartOffset != 2 || chunks[1].EndOffset != 5 {
+		t.Fatalf("unicode chunks=%+v", chunks)
 	}
 }
 
@@ -211,6 +236,21 @@ func TestRecursiveEmptySeparatorTakesImmediatePrecedence(t *testing.T) {
 	})
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("empty separator did not hard split immediately\ngot:  %+v\nwant: %+v", got, want)
+	}
+}
+
+func TestRecursiveGoldenOffsetsIDsAndText(t *testing.T) {
+	chunks := mustChunk(t, "golden", "alpha beta gamma", Config{
+		Strategy: StrategyRecursive, SizeUnit: SizeUnitRunes,
+		Size: 8, Overlap: 2, Separators: []string{" ", ""},
+	})
+	want := []Chunk{
+		{ID: "golden#0", ParentID: "golden", Ordinal: 0, Kind: KindChunk, Text: "alpha ", StartOffset: 0, EndOffset: 6},
+		{ID: "golden#1", ParentID: "golden", Ordinal: 1, Kind: KindChunk, Text: "a beta ", StartOffset: 4, EndOffset: 11},
+		{ID: "golden#2", ParentID: "golden", Ordinal: 2, Kind: KindChunk, Text: "a gamma", StartOffset: 9, EndOffset: 16},
+	}
+	if fmt.Sprint(chunks) != fmt.Sprint(want) {
+		t.Fatalf("recursive golden changed\ngot:  %+v\nwant: %+v", chunks, want)
 	}
 }
 

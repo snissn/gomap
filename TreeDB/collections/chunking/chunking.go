@@ -22,8 +22,10 @@ package chunking
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Strategy selects the chunking algorithm.
@@ -33,10 +35,10 @@ const (
 	// StrategyFixedWindow slices text into overlapping windows of exactly
 	// `size` runes (the final window may be shorter).
 	StrategyFixedWindow Strategy = "fixed_window"
-	// StrategyRecursive splits text on structural separators (paragraphs,
-	// lines, sentence ends, spaces, in that order) and keeps separator-bounded
-	// units whole whenever they fit within `size`; oversized units fall back to
-	// progressively finer separators and finally to overlapped hard splits.
+	// StrategyRecursive fills each size window at the furthest boundary of the
+	// first configured separator present, then advances by end-overlap. It
+	// falls through progressively finer separators; an empty separator causes
+	// an immediate hard split for that window.
 	StrategyRecursive Strategy = "recursive"
 )
 
@@ -60,6 +62,49 @@ const (
 
 // childIDSep joins a parent ID and a chunk ordinal into a derived child ID.
 const childIDSep = "#"
+
+// ParentIDErrorReason classifies an unsupported chunk parent ID.
+type ParentIDErrorReason string
+
+const (
+	ParentIDEmpty             ParentIDErrorReason = "empty"
+	ParentIDInvalidUTF8       ParentIDErrorReason = "invalid_utf8"
+	ParentIDReservedSeparator ParentIDErrorReason = "reserved_separator"
+)
+
+// ParentIDError reports a parent ID that cannot be represented losslessly in
+// JSON linkage metadata or would overlap the derived child namespace.
+type ParentIDError struct {
+	ID     string
+	Reason ParentIDErrorReason
+}
+
+func (e *ParentIDError) Error() string {
+	switch e.Reason {
+	case ParentIDEmpty:
+		return "chunking: parent ID must be non-empty"
+	case ParentIDInvalidUTF8:
+		return fmt.Sprintf("chunking: parent ID %x is not valid UTF-8", []byte(e.ID))
+	case ParentIDReservedSeparator:
+		return fmt.Sprintf("chunking: parent ID %q contains reserved child separator %q", e.ID, childIDSep)
+	default:
+		return fmt.Sprintf("chunking: unsupported parent ID %q", e.ID)
+	}
+}
+
+// ValidateParentID enforces the lossless, disjoint parent/child namespace.
+func ValidateParentID(parentID string) error {
+	switch {
+	case parentID == "":
+		return &ParentIDError{ID: parentID, Reason: ParentIDEmpty}
+	case !utf8.ValidString(parentID):
+		return &ParentIDError{ID: parentID, Reason: ParentIDInvalidUTF8}
+	case strings.Contains(parentID, childIDSep):
+		return &ParentIDError{ID: parentID, Reason: ParentIDReservedSeparator}
+	default:
+		return nil
+	}
+}
 
 // Chunk is one derived child of a parent source document. StartOffset and
 // EndOffset are rune offsets into the parent text, and Text is always exactly
@@ -179,8 +224,8 @@ func ParseChildMeta(document []byte) (*ChildMeta, error) {
 	if err := json.Unmarshal(rawParent, &parent); err != nil {
 		return nil, fmt.Errorf("chunking: field %q must be a string: %w", MetaFieldParent, err)
 	}
-	if parent == "" {
-		return nil, fmt.Errorf("chunking: field %q must be non-empty", MetaFieldParent)
+	if err := ValidateParentID(parent); err != nil {
+		return nil, fmt.Errorf("chunking: field %q: %w", MetaFieldParent, err)
 	}
 	var ordinal json.Number
 	if err := json.Unmarshal(rawOrdinal, &ordinal); err != nil {
@@ -227,26 +272,47 @@ func SplitChunks(parentID, text string, cfg Config) ([]Chunk, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if parentID == "" {
-		return nil, fmt.Errorf("chunking: parent ID must be non-empty")
+	if err := ValidateParentID(parentID); err != nil {
+		return nil, err
 	}
 	if text == "" {
 		return nil, nil
 	}
+	runes := []rune(text)
 	var spans []span
 	if cfg.Strategy == StrategyFixedWindow {
-		spans = fixedWindowSpans([]rune(text), cfg.Size, cfg.Overlap)
+		spans = fixedWindowSpans(runes, cfg.Size, cfg.Overlap)
 	} else {
-		spans = recursiveSpans([]rune(text), cfg.normalizedSeparators(), cfg.Size, cfg.Overlap)
+		spans = recursiveSpans(runes, cfg.normalizedSeparators(), cfg.Size, cfg.Overlap)
+	}
+	validText := utf8.ValidString(text)
+	var byteOffsets []int
+	if validText && len(runes) != len(text) {
+		byteOffsets = make([]int, len(runes)+1)
+		i := 0
+		for offset := range text {
+			byteOffsets[i] = offset
+			i++
+		}
+		byteOffsets[len(runes)] = len(text)
 	}
 	chunks := make([]Chunk, 0, len(spans))
 	for i, s := range spans {
+		chunkText := ""
+		switch {
+		case !validText:
+			chunkText = string(runes[s.start:s.end])
+		case byteOffsets == nil:
+			chunkText = text[s.start:s.end]
+		default:
+			chunkText = text[byteOffsets[s.start]:byteOffsets[s.end]]
+		}
 		chunks = append(chunks, Chunk{
 			ID:          ChildDocumentID(parentID, i),
 			ParentID:    parentID,
 			Ordinal:     i,
 			Kind:        KindChunk,
-			Text:        string(s.runes),
+			Text:        chunkText,
 			StartOffset: s.start,
 			EndOffset:   s.end,
 		})
@@ -254,10 +320,8 @@ func SplitChunks(parentID, text string, cfg Config) ([]Chunk, error) {
 	return chunks, nil
 }
 
-// span is a rune range of the parent text. runes always equals text[start:end]
-// in rune space.
+// span is a rune range of the parent text.
 type span struct {
-	runes      []rune
 	start, end int
 }
 
@@ -269,7 +333,7 @@ func fixedWindowSpans(runes []rune, size, overlap int) []span {
 		if end > len(runes) {
 			end = len(runes)
 		}
-		spans = append(spans, span{runes: runes[start:end], start: start, end: end})
+		spans = append(spans, span{start: start, end: end})
 		if end == len(runes) {
 			break
 		}
@@ -278,95 +342,47 @@ func fixedWindowSpans(runes []rune, size, overlap int) []span {
 	return spans
 }
 
-// recursiveSpans splits [0,len) on the first separator present; oversized
-// pieces recurse with the remaining separators; sibling pieces that fit merge
-// greedily without crossing a recursion boundary.
+// recursiveSpans chooses the furthest boundary for the first configured
+// separator that occurs inside each size window. The next window starts at the
+// prior end minus overlap, so every path has identical overlap semantics.
 func recursiveSpans(runes []rune, seps []string, size, overlap int) []span {
-	spans, _ := splitRange(runes, 0, len(runes), seps, size, overlap)
-	return spans
-}
-
-func splitRange(runes []rune, lo, hi int, seps []string, size, overlap int) ([]span, bool) {
-	if hi-lo <= size {
-		return []span{{runes: runes[lo:hi], start: lo, end: hi}}, true
-	}
-	if len(seps) == 0 {
-		return hardSplitSpans(runes, lo, hi, size, overlap), false
-	}
-	pieces := splitBySeparator(runes, lo, hi, seps[0])
-	if len(pieces) <= 1 {
-		return splitRange(runes, lo, hi, seps[1:], size, overlap)
-	}
-	var out []span
-	var pending []span // adjacent leaf siblings buffered for greedy merge
-	flush := func() {
-		if len(pending) == 0 {
-			return
-		}
-		out = append(out, mergeSpans(runes, pending))
-		pending = nil
-	}
-	for _, p := range pieces {
-		subs, leaf := splitRange(runes, p.lo, p.hi, seps[1:], size, overlap)
-		if !leaf {
-			flush()
-			out = append(out, subs...)
-			continue
-		}
-		for _, s := range subs {
-			if len(pending) > 0 && s.end-pending[0].start > size {
-				flush()
-			}
-			pending = append(pending, s)
-		}
-	}
-	flush()
-	return out, false
-}
-
-func hardSplitSpans(runes []rune, lo, hi int, size, overlap int) []span {
-	step := size - overlap
 	var spans []span
-	for start := lo; start < hi; {
-		end := start + size
-		if end > hi {
-			end = hi
+	for start := 0; start < len(runes); {
+		capEnd := start + size
+		if capEnd >= len(runes) {
+			capEnd = len(runes)
 		}
-		spans = append(spans, span{runes: runes[start:end], start: start, end: end})
-		if end == hi {
+		end := recursiveChunkEnd(runes, start, capEnd, overlap, seps)
+		spans = append(spans, span{start: start, end: end})
+		if end == len(runes) {
 			break
 		}
-		start += step
+		start = end - overlap
 	}
 	return spans
 }
 
-// splitBySeparator cuts [lo,hi) after every occurrence of sep. A separator not
-// present yields a single piece; empty pieces are dropped.
-func splitBySeparator(runes []rune, lo, hi int, sep string) []struct{ lo, hi int } {
-	if sep == "" {
-		return []struct{ lo, hi int }{{lo, hi}}
-	}
-	sepr := []rune(sep)
-	var pieces []struct{ lo, hi int }
-	start := lo
-	for i := lo; i <= hi-len(sepr); {
-		if string(runes[i:i+len(sepr)]) == sep {
-			if start < i+len(sepr) {
-				pieces = append(pieces, struct{ lo, hi int }{start, i + len(sepr)})
-			}
-			start = i + len(sepr)
-			i = start
-			continue
+func recursiveChunkEnd(runes []rune, start, capEnd, overlap int, seps []string) int {
+	for _, sep := range seps {
+		if sep == "" {
+			return capEnd
 		}
-		i++
+		separator := []rune(sep)
+		last := 0
+		for i := start; i <= capEnd-len(separator); {
+			if slices.Equal(runes[i:i+len(separator)], separator) {
+				candidate := i + len(separator)
+				if candidate > start+overlap {
+					last = candidate
+				}
+				i = candidate
+				continue
+			}
+			i++
+		}
+		if last != 0 {
+			return last
+		}
 	}
-	pieces = append(pieces, struct{ lo, hi int }{start, hi})
-	return pieces
-}
-
-func mergeSpans(runes []rune, spans []span) span {
-	merged := span{start: spans[0].start, end: spans[len(spans)-1].end}
-	merged.runes = runes[merged.start:merged.end]
-	return merged
+	return capEnd
 }

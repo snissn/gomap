@@ -2,6 +2,8 @@ package collections
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +46,42 @@ func openChunkingTestCollection(t *testing.T) (string, *backenddb.DB, *Collectio
 		StorePositions: true,
 	}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	return dir, d, col
+}
+
+func openChunkingColumnTestCollection(t *testing.T) (string, *backenddb.DB, *Collection) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	t.Cleanup(func() { _ = d.Close() })
+	cfg := &ColumnStoreConfig{
+		Enabled:         true,
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "body", Path: "body", ValueType: ColumnStoreValueString, Nullable: true},
+			{Name: chunking.MetaFieldParent, Path: chunking.MetaFieldParent, ValueType: ColumnStoreValueString, Nullable: true},
+			{Name: chunking.MetaFieldOrdinal, Path: chunking.MetaFieldOrdinal, ValueType: ColumnStoreValueInt64, Nullable: true},
+			{Name: chunking.MetaFieldKind, Path: chunking.MetaFieldKind, ValueType: ColumnStoreValueString, Nullable: true},
+		},
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "chunk_column_docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("chunk_column_docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
 	}
 	return dir, d, col
 }
@@ -402,17 +440,20 @@ func TestFullChunkedIngestReopenAtomic(t *testing.T) {
 
 func TestChunkedIngestRejectsUnsafeParentIDsBeforeMutation(t *testing.T) {
 	tests := []struct {
-		name string
-		id   []byte
+		name   string
+		id     []byte
+		reason chunking.ParentIDErrorReason
 	}{
-		{name: "child namespace separator", id: []byte("unsafe#parent")},
-		{name: "invalid UTF-8", id: []byte{0xff, 'p'}},
+		{name: "child namespace separator", id: []byte("unsafe#parent"), reason: chunking.ParentIDReservedSeparator},
+		{name: "invalid UTF-8", id: []byte{0xff, 'p'}, reason: chunking.ParentIDInvalidUTF8},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, col := openChunkingTestCollection(t)
-			if _, err := col.IngestChunkedDocument(tc.id, parentDoc(t, "unsafe", "body text", nil), fixedWindowCfg(8, 1), ChunkedIngestOptions{}); err == nil {
-				t.Fatalf("IngestChunkedDocument(%x) succeeded", tc.id)
+			_, err := col.IngestChunkedDocument(tc.id, parentDoc(t, "unsafe", "body text", nil), fixedWindowCfg(8, 1), ChunkedIngestOptions{})
+			var idErr *chunking.ParentIDError
+			if !errors.As(err, &idErr) || idErr.Reason != tc.reason {
+				t.Fatalf("IngestChunkedDocument(%x) error=%v typed=%+v want reason %q", tc.id, err, idErr, tc.reason)
 			}
 			if got, err := col.Get(tc.id); err != nil {
 				t.Fatalf("Get rejected parent: %v", err)
@@ -459,6 +500,32 @@ func TestChunkedIngestRejectsCrossCallParentChildCollision(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("collision mutated original child\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
+func TestChunkedIngestRejectsExistingChildNamespaceRowBeforeMutation(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	collision := []byte(`{"body":"ordinary row"}`)
+	if _, err := col.Insert([]byte("parent#0"), collision); err != nil {
+		t.Fatalf("seed ordinary namespace row: %v", err)
+	}
+	if _, err := col.IngestChunkedDocument(
+		[]byte("parent"),
+		[]byte(`{"body":"new parent body"}`),
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	); err == nil {
+		t.Fatal("ordinary child-namespace row accepted")
+	}
+	if got, err := col.Get([]byte("parent")); err != nil {
+		t.Fatalf("Get rejected parent: %v", err)
+	} else if got != nil {
+		t.Fatalf("parent mutated before namespace rejection: %s", got)
+	}
+	if got, err := col.Get([]byte("parent#0")); err != nil {
+		t.Fatalf("Get collision row: %v", err)
+	} else if string(got) != string(collision) {
+		t.Fatalf("collision row mutated: %s", got)
 	}
 }
 
@@ -542,8 +609,221 @@ func TestChunkedIngestSerializesSameParentAcrossCollectionHandles(t *testing.T) 
 		}
 		title := parent["title"].(string)
 		body := child["body"].(string)
-		if !strings.Contains(body, title) {
-			t.Fatalf("parent title=%q does not match child %q body=%q", title, id, body)
+		other := map[string]string{"first": "second", "second": "first"}[title]
+		if strings.Contains(body, other) {
+			t.Fatalf("parent title=%q conflicts with child %q body=%q", title, id, body)
+		}
+	}
+}
+
+func TestChunkChildrenPrefixBoundedStructuralEvidence(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(*testing.T) (*backenddb.DB, *Collection)
+	}{
+		{name: "ordinary JSON", open: func(t *testing.T) (*backenddb.DB, *Collection) {
+			_, d, col := openChunkingTestCollection(t)
+			return d, col
+		}},
+		{name: "reconstructable column store", open: func(t *testing.T) (*backenddb.DB, *Collection) {
+			_, d, col := openChunkingColumnTestCollection(t)
+			return d, col
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, col := tc.open(t)
+			const unrelated = 10_000
+			ids := make([][]byte, unrelated)
+			docs := make([][]byte, unrelated)
+			for i := range ids {
+				ids[i] = []byte(fmt.Sprintf("unrelated-%06d", i))
+				docs[i] = []byte(`{"body":"unrelated"}`)
+			}
+			if _, err := col.InsertBatch(ids, docs); err != nil {
+				t.Fatalf("InsertBatch unrelated documents: %v", err)
+			}
+			result, err := col.IngestChunkedDocument(
+				[]byte("target"),
+				[]byte(`{"body":"target text repeated target text repeated target text repeated"}`),
+				fixedWindowCfg(16, 4),
+				ChunkedIngestOptions{},
+			)
+			if err != nil {
+				t.Fatalf("IngestChunkedDocument target: %v", err)
+			}
+			children, stats, err := col.ChunkChildrenWithStats([]byte("target"))
+			if err != nil {
+				t.Fatalf("ChunkChildrenWithStats: %v", err)
+			}
+			if len(children) != len(result.ChildIDs) {
+				t.Fatalf("children=%d want %d", len(children), len(result.ChildIDs))
+			}
+			if stats.ScannedPrimaryRows != len(children) {
+				t.Fatalf("stats=%+v children=%d unrelated=%d", stats, len(children), unrelated)
+			}
+			if tc.name == "reconstructable column store" &&
+				(stats.ReconstructedDocuments != len(children) ||
+					stats.RowLocatorLookups != len(children) ||
+					stats.PointRowFetches != len(children)) {
+				t.Fatalf("column stats=%+v want %d bounded row lookups", stats, len(children))
+			}
+			if tc.name == "ordinary JSON" &&
+				(stats.ReconstructedDocuments != 0 || stats.RowLocatorLookups != 0 || stats.PointRowFetches != 0) {
+				t.Fatalf("ordinary JSON stats=%+v", stats)
+			}
+		})
+	}
+}
+
+func TestChunkChildrenColumnStoreReopenPrefixParity(t *testing.T) {
+	dir, d, col := openChunkingColumnTestCollection(t)
+	result, err := col.IngestChunkedDocument(
+		[]byte("reopen-target"),
+		[]byte(`{"body":"reopen target body repeated reopen target body repeated"}`),
+		fixedWindowCfg(14, 3),
+		ChunkedIngestOptions{},
+	)
+	if err != nil {
+		t.Fatalf("IngestChunkedDocument: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d2 := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d2.Close() }()
+	col2, err := NewCollectionManager(d2).OpenCollection("chunk_column_docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after reopen: %v", err)
+	}
+	children, stats, err := col2.ChunkChildrenWithStats([]byte("reopen-target"))
+	if err != nil {
+		t.Fatalf("ChunkChildrenWithStats after reopen: %v", err)
+	}
+	if len(children) != len(result.ChildIDs) ||
+		stats.ScannedPrimaryRows != len(children) ||
+		stats.ReconstructedDocuments != len(children) ||
+		stats.RowLocatorLookups != len(children) ||
+		stats.PointRowFetches != len(children) {
+		t.Fatalf("children=%d want=%d stats=%+v", len(children), len(result.ChildIDs), stats)
+	}
+	for i := range children {
+		if string(children[i]) != string(result.ChildIDs[i]) {
+			t.Fatalf("child %d=%q want %q", i, children[i], result.ChildIDs[i])
+		}
+	}
+}
+
+func TestChunkChildrenPrefixScanTruncationAndOrdinalGapFailClosed(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	result, err := col.IngestChunkedDocument(
+		[]byte("target"),
+		[]byte(`{"body":"one two three four five six seven eight nine ten"}`),
+		fixedWindowCfg(10, 2),
+		ChunkedIngestOptions{},
+	)
+	if err != nil {
+		t.Fatalf("IngestChunkedDocument: %v", err)
+	}
+	if len(result.ChildIDs) < 3 {
+		t.Fatalf("children=%d want at least 3", len(result.ChildIDs))
+	}
+	truncated, stats, err := col.scanChunkDocumentsByParentPrefix([]byte("target#"), 1, func(DocumentRecord) (bool, error) {
+		return true, nil
+	})
+	if err != nil || !truncated || stats.ScannedPrimaryRows != 1 {
+		t.Fatalf("bounded prefix scan truncated=%t stats=%+v err=%v", truncated, stats, err)
+	}
+	if err := col.Delete(result.ChildIDs[1]); err != nil {
+		t.Fatalf("Delete ordinal 1: %v", err)
+	}
+	if _, err := col.ChunkChildren([]byte("target")); err == nil || !strings.Contains(err.Error(), "ordinal gap 1") {
+		t.Fatalf("ChunkChildren gap error=%v", err)
+	}
+}
+
+func BenchmarkChunkChildrenBoundedUnrelatedParents(b *testing.B) {
+	for _, columnStore := range []bool{false, true} {
+		layout := "json"
+		if columnStore {
+			layout = "column"
+		}
+		for _, unrelated := range []int{10_000, 100_000} {
+			b.Run(fmt.Sprintf("%s/%d", layout, unrelated), func(b *testing.B) {
+				dir := b.TempDir()
+				if columnStore {
+					if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+						b.Fatal(err)
+					}
+				}
+				var d *backenddb.DB
+				var err error
+				if columnStore {
+					d = openCollectionCommandWALDB(b, dir)
+				} else {
+					d, err = backenddb.Open(backenddb.Options{Dir: dir})
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				defer func() { _ = d.Close() }()
+				meta := &CollectionMeta{Name: "chunk_bench"}
+				if columnStore {
+					meta.Options = CollectionOptions{
+						DocumentFormat: DocumentFormatJSON,
+						ColumnStore: &ColumnStoreConfig{
+							Enabled:         true,
+							RetainedPayload: ColumnRetainedPayloadNonColumn,
+							Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+							Columns: []ColumnStoreColumn{
+								{Name: "body", Path: "body", ValueType: ColumnStoreValueString, Nullable: true},
+								{Name: chunking.MetaFieldParent, Path: chunking.MetaFieldParent, ValueType: ColumnStoreValueString, Nullable: true},
+								{Name: chunking.MetaFieldOrdinal, Path: chunking.MetaFieldOrdinal, ValueType: ColumnStoreValueInt64, Nullable: true},
+								{Name: chunking.MetaFieldKind, Path: chunking.MetaFieldKind, ValueType: ColumnStoreValueString, Nullable: true},
+							},
+						},
+					}
+				}
+				mgr := NewCollectionManager(d)
+				if _, err := mgr.CreateCollection(meta); err != nil {
+					b.Fatal(err)
+				}
+				col, err := mgr.OpenCollection("chunk_bench")
+				if err != nil {
+					b.Fatal(err)
+				}
+				ids := make([][]byte, unrelated)
+				docs := make([][]byte, unrelated)
+				for i := range ids {
+					ids[i] = []byte(fmt.Sprintf("unrelated-%06d", i))
+					docs[i] = []byte(`{"body":"unrelated"}`)
+				}
+				if _, err := col.InsertBatch(ids, docs); err != nil {
+					b.Fatal(err)
+				}
+				result, err := col.IngestChunkedDocument(
+					[]byte("target"),
+					[]byte(`{"body":"target text repeated target text repeated target text repeated"}`),
+					fixedWindowCfg(16, 4),
+					ChunkedIngestOptions{},
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					children, stats, err := col.ChunkChildrenWithStats([]byte("target"))
+					if err != nil || len(children) != len(result.ChildIDs) || stats.ScannedPrimaryRows != len(children) {
+						b.Fatalf("children=%d stats=%+v err=%v", len(children), stats, err)
+					}
+				}
+				b.ReportMetric(float64(unrelated), "unrelated_parents/op")
+				b.ReportMetric(float64(len(result.ChildIDs)), "scanned_rows/op")
+			})
 		}
 	}
 }

@@ -6,11 +6,18 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+type chunkLifecycleLock struct {
+	mu   sync.Mutex
+	refs int
+}
 type collectionSchemaCoordinator struct {
 	schemaMu              sync.RWMutex
 	legacyVectorSidecarMu sync.Mutex
 	domainsMu             sync.Mutex
 	domains               map[*collectionWriteDomain]struct{}
+	chunkLifecycleMu      sync.Mutex
+	chunkLifecycles       map[string]*chunkLifecycleLock
+	chunkMutationMu       sync.Mutex
 }
 
 type collectionDBSchemaCoordinators struct {
@@ -196,6 +203,31 @@ func (coord *collectionSchemaCoordinator) snapshotDomains() []*collectionWriteDo
 		}
 	}
 	return out
+}
+
+func (coord *collectionSchemaCoordinator) lockChunkLifecycle(parentID string) func() {
+	coord.chunkLifecycleMu.Lock()
+	if coord.chunkLifecycles == nil {
+		coord.chunkLifecycles = make(map[string]*chunkLifecycleLock)
+	}
+	entry := coord.chunkLifecycles[parentID]
+	if entry == nil {
+		entry = &chunkLifecycleLock{}
+		coord.chunkLifecycles[parentID] = entry
+	}
+	entry.refs++
+	coord.chunkLifecycleMu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		coord.chunkLifecycleMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(coord.chunkLifecycles, parentID)
+		}
+		coord.chunkLifecycleMu.Unlock()
+	}
 }
 
 func (c *Collection) collectionSchemaCoordinator() *collectionSchemaCoordinator {
