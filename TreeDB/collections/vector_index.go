@@ -1387,7 +1387,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 		}
 		for _, index := range indexes {
 			if c.isRegisteredVectorIndex(index) {
-				index.recordSourceDocumentStateAndPublish(generation, state)
+				index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
 			}
 		}
 		return nil
@@ -1413,7 +1413,7 @@ func (c *Collection) recordReconciledVectorIndexCoverageWithWriteDomainLockState
 	defer domain.nativeVectorSearchActive.Store(false)
 	for _, index := range indexes {
 		if c.isRegisteredVectorIndex(index) && index.hasValidSourceDocumentRoots() {
-			index.recordSourceDocumentStateAndPublish(generation, state)
+			index.recordSourceDocumentStateAndPublishIfChanged(generation, state)
 		}
 	}
 	return nil

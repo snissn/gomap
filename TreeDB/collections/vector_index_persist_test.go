@@ -1792,6 +1792,18 @@ func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
 	if after := index.searchView.Load(); after != before {
 		t.Fatal("direct absent tombstone republished the unchanged native graph")
 	}
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		t.Fatalf("save unchanged native snapshot: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("native snapshot persistence republished the unchanged graph")
+	}
+	if _, err := index.SaveNativeDeltaSnapshot(); err != nil {
+		t.Fatalf("save unchanged native delta snapshot: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("native delta persistence republished the unchanged graph")
+	}
 }
 
 func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t *testing.T) {
