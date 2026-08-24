@@ -14,6 +14,9 @@ func recallAtK(ranked []string, relevant map[string]bool, k int) (float64, error
 	if k <= 0 {
 		return 0, fmt.Errorf("recall: non-positive k=%d", k)
 	}
+	if len(ranked) < k {
+		return 0, fmt.Errorf("recall@%d: ranking depth=%d is below k", k, len(ranked))
+	}
 	hits := 0
 	for i, id := range ranked {
 		if i >= k {
@@ -58,17 +61,12 @@ func accumulateQuality(row *rowResult, ranked []string, rel map[string]bool) err
 	if err != nil {
 		return err
 	}
-	r100, err := recallAtK(ranked, rel, 100)
-	if err != nil {
-		return err
-	}
 	mrr, err := mrrAtK(ranked, rel, 10)
 	if err != nil {
 		return err
 	}
 	row.RecallAt5 += r5
 	row.RecallAt10 += r10
-	row.RecallAt100 += r100
 	row.MRRAt10 += mrr
 	return nil
 }

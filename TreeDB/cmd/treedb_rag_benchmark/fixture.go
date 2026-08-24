@@ -157,11 +157,11 @@ func ragDocText(i int) (topic ragTopic, title string, bodies [chunksPerDoc]strin
 	return topic, title, bodies
 }
 
-func ragChunksForDoc(i int) []ragChunk {
+func ragChunksForDoc(i, dims int) []ragChunk {
 	topic, title, bodies := ragDocText(i)
 	id := docID(i)
 	chunks := make([]ragChunk, 0, chunksPerDoc)
-	for c := 0; c < chunksPerDoc; c++ {
+	for c := range chunksPerDoc {
 		text := title + " " + bodies[c]
 		chunks = append(chunks, ragChunk{
 			ID:        fmt.Sprintf("%s#chunk-%d", id, c),
@@ -173,7 +173,7 @@ func ragChunksForDoc(i int) []ragChunk {
 			Body:      bodies[c],
 			Tenant:    tenantForDoc(i),
 			Region:    regionForDoc(i),
-			Embedding: ragEmbed(text, ragFixtureDims),
+			Embedding: ragEmbed(text, dims),
 		})
 	}
 	return chunks
@@ -281,8 +281,8 @@ func buildRagCorpus(docs, dims int) (*ragCorpus, corpusBuildStats, error) {
 	}
 	embedStart := ragClock()
 	chunks := make([]ragChunk, 0, docs*chunksPerDoc)
-	for i := 0; i < docs; i++ {
-		chunks = append(chunks, ragChunksForDoc(i)...)
+	for i := range docs {
+		chunks = append(chunks, ragChunksForDoc(i, dims)...)
 	}
 	queries := make([]ragQuery, len(ragCommittedQueries))
 	for qi, cq := range ragCommittedQueries {
@@ -293,6 +293,7 @@ func buildRagCorpus(docs, dims int) (*ragCorpus, corpusBuildStats, error) {
 			Embedding: ragEmbed(cq.Text, dims),
 		}
 	}
+	stats.EmbedSeconds = ragSince(embedStart)
 	corpus := &ragCorpus{
 		CorpusVersion: ragCorpusVersion,
 		Dims:          dims,
@@ -301,7 +302,6 @@ func buildRagCorpus(docs, dims int) (*ragCorpus, corpusBuildStats, error) {
 		Queries:       queries,
 	}
 	groundTruth := deriveGroundTruth(corpus)
-	stats.EmbedSeconds = ragSince(embedStart)
 
 	// Fail closed on degenerate label sets.
 	chunksByTopic := map[string]int{}

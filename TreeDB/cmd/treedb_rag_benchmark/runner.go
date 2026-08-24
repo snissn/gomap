@@ -48,7 +48,7 @@ const (
 type rowKey struct {
 	Route      string `json:"route"`       // text_only | vector_only | hybrid
 	ResultMode string `json:"result_mode"` // score_only | fetch_topk
-	Filter     string `json:"filter"`      // none_100pct | rare_06pct | narrow_25pct
+	Filter     string `json:"filter"`      // legacy hashing regression retains unfiltered only
 }
 
 var ragRoutes = []string{"text_only", "vector_only", "hybrid"}
@@ -59,8 +59,6 @@ var ragFilterCases = []struct {
 	Tenant string
 }{
 	{"none_100pct", ""},
-	{"rare_06pct", ragTenantRare},
-	{"narrow_25pct", ragTenantNarrow},
 }
 
 func filterTenant(name string) string {
@@ -82,7 +80,6 @@ type rowResult struct {
 	Reps                int                `json:"reps"`
 	RecallAt5           float64            `json:"recall_at_5"`
 	RecallAt10          float64            `json:"recall_at_10"`
-	RecallAt100         float64            `json:"recall_at_100"`
 	MRRAt10             float64            `json:"mrr_at_10"`
 	LatencyMSMean       float64            `json:"latency_ms_mean"`
 	LatencyMSP50        float64            `json:"latency_ms_p50"`
@@ -91,20 +88,20 @@ type rowResult struct {
 }
 
 type ingestStats struct {
-	EmbedSeconds      float64 `json:"embed_seconds"`
-	EmbedDocsPerSec   float64 `json:"embed_docs_per_sec"`
-	IngestSeconds     float64 `json:"ingest_seconds"`
-	IngestDocsPerSec  float64 `json:"ingest_docs_per_sec"`
-	IndexBuildSeconds float64 `json:"index_build_seconds"`
-	StorageBytes      int64   `json:"storage_bytes"`
-	StorageBytesPerD  float64 `json:"storage_bytes_per_doc"`
-	Docs              int     `json:"docs"`
-	Chunks            int     `json:"chunks"`
-	Dims              int     `json:"dims"`
-	VectorM           int     `json:"vector_m"`
-	VectorEfSearch    int     `json:"vector_ef_search"`
-	TopK              int     `json:"top_k"`
-	CandidateLimit    int     `json:"candidate_limit"`
+	EmbedSeconds             float64 `json:"embed_seconds"`
+	EmbeddedChunksPerSec     float64 `json:"embedded_chunks_per_sec"`
+	ChunkRowInsertSeconds    float64 `json:"chunk_row_insert_seconds"`
+	GeneratedChunkRowsPerSec float64 `json:"generated_chunk_rows_per_sec"`
+	IndexBuildSeconds        float64 `json:"index_build_seconds"`
+	StorageBytes             int64   `json:"storage_bytes"`
+	StorageBytesPerD         float64 `json:"storage_bytes_per_doc"`
+	Docs                     int     `json:"docs"`
+	Chunks                   int     `json:"chunks"`
+	Dims                     int     `json:"dims"`
+	VectorM                  int     `json:"vector_m"`
+	VectorEfSearch           int     `json:"vector_ef_search"`
+	TopK                     int     `json:"top_k"`
+	CandidateLimit           int     `json:"candidate_limit"`
 }
 
 type runOutput struct {
@@ -207,20 +204,20 @@ func runBenchmark(cfg benchConfig) (*runOutput, error) {
 	}
 
 	out.Ingest = ingestStats{
-		EmbedSeconds:      corpusStats.EmbedSeconds,
-		EmbedDocsPerSec:   float64(len(corpus.Chunks)) / corpusStats.EmbedSeconds,
-		IngestSeconds:     ingestSeconds,
-		IngestDocsPerSec:  float64(len(corpus.Chunks)) / ingestSeconds,
-		IndexBuildSeconds: indexBuildSeconds,
-		StorageBytes:      storageBytes,
-		StorageBytesPerD:  float64(storageBytes) / float64(len(corpus.Chunks)),
-		Docs:              corpus.Docs,
-		Chunks:            len(corpus.Chunks),
-		Dims:              cfg.Dims,
-		VectorM:           cfg.M,
-		VectorEfSearch:    cfg.EfSearch,
-		TopK:              cfg.TopK,
-		CandidateLimit:    cfg.CandidateLimit,
+		EmbedSeconds:             corpusStats.EmbedSeconds,
+		EmbeddedChunksPerSec:     float64(len(corpus.Chunks)) / corpusStats.EmbedSeconds,
+		ChunkRowInsertSeconds:    ingestSeconds,
+		GeneratedChunkRowsPerSec: float64(len(corpus.Chunks)) / ingestSeconds,
+		IndexBuildSeconds:        indexBuildSeconds,
+		StorageBytes:             storageBytes,
+		StorageBytesPerD:         float64(storageBytes) / float64(len(corpus.Chunks)),
+		Docs:                     corpus.Docs,
+		Chunks:                   len(corpus.Chunks),
+		Dims:                     cfg.Dims,
+		VectorM:                  cfg.M,
+		VectorEfSearch:           cfg.EfSearch,
+		TopK:                     cfg.TopK,
+		CandidateLimit:           cfg.CandidateLimit,
 	}
 	out.SetupSeconds = setupSeconds
 
@@ -423,7 +420,6 @@ func runRow(cfg benchConfig, col *collections.Collection, corpus *ragCorpus, rou
 	samples := float64(cfg.Reps * len(corpus.Queries))
 	row.RecallAt5 /= samples
 	row.RecallAt10 /= samples
-	row.RecallAt100 /= samples
 	row.MRRAt10 /= samples
 	for k, v := range row.Counters {
 		row.Counters[k] = v / samples

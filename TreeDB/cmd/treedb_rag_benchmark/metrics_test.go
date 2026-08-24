@@ -21,7 +21,7 @@ func TestRecallAtKHandComputed(t *testing.T) {
 		{"hit_at_2_of_1", []string{"a", "b", "c"}, map[string]bool{"b": true}, 2, 1.0},
 		{"miss_beyond_k", []string{"a", "b", "c"}, map[string]bool{"b": true}, 1, 0.0},
 		{"two_relevant_partial", []string{"d", "c", "a", "b"}, map[string]bool{"a": true, "b": true, "c": true}, 2, 1.0 / 3.0},
-		{"all_in_topk", []string{"d", "c", "a", "b"}, map[string]bool{"a": true, "b": true, "c": true}, 10, 1.0},
+		{"all_in_topk", []string{"d", "c", "a", "b", "e", "f", "g", "h", "i", "j"}, map[string]bool{"a": true, "b": true, "c": true}, 10, 1.0},
 	}
 	for _, tc := range cases {
 		got, err := recallAtK(tc.ranked, tc.relevant, tc.k)
@@ -37,6 +37,9 @@ func TestRecallAtKHandComputed(t *testing.T) {
 	}
 	if _, err := recallAtK([]string{"a"}, map[string]bool{"a": true}, 0); err == nil {
 		t.Fatal("non-positive k must fail closed")
+	}
+	if _, err := recallAtK([]string{"a"}, map[string]bool{"a": true}, 5); err == nil {
+		t.Fatal("ranking depth below k must fail closed")
 	}
 }
 
@@ -93,30 +96,24 @@ func TestPercentileHandComputed(t *testing.T) {
 // issue: hand-computed expected recall/MRR on a tiny constructed fixture match
 // the harness accumulation path exactly.
 func TestAccumulateQualityTinyFixture(t *testing.T) {
-	// Tiny constructed fixture: 4 queries over one relevant set of 3 chunks.
+	// Tiny constructed fixture: 3 queries over one relevant set of 3 chunks.
 	rel := map[string]bool{"c1": true, "c2": true, "c3": true}
 	row := &rowResult{Counters: map[string]float64{}}
 
-	// Hand-computed per-query contributions:
-	//   q1 ranked [c1, x, y]:            r5=|{c1}|/3=1/3, r10=1/3, mrr@10=1
-	//   q2 ranked [x, c2, y, z]:         r5=1/3, r10=1/3, mrr@10=1/2
-	//   q3 ranked [x, y, z, w, v, c3]:   r5=0,   r10=1/3, mrr@10=1/6
-	queries := []struct {
-		ranked []string
-	}{
-		{[]string{"c1", "x", "y"}},
-		{[]string{"x", "c2", "y", "z"}},
-		{[]string{"x", "y", "z", "w", "v", "c3"}},
+	// Every ranking is at least 10 deep so recall@10 is a valid claim.
+	queries := [][]string{
+		{"c1", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"},
+		{"x1", "c2", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9"},
+		{"x1", "x2", "x3", "x4", "x5", "c3", "x6", "x7", "x8", "x9"},
 	}
-	for _, q := range queries {
-		if err := accumulateQuality(row, q.ranked, rel); err != nil {
+	for _, ranked := range queries {
+		if err := accumulateQuality(row, ranked, rel); err != nil {
 			t.Fatalf("accumulateQuality: %v", err)
 		}
 	}
-	samples := 3.0
+	samples := float64(len(queries))
 	row.RecallAt5 /= samples
 	row.RecallAt10 /= samples
-	row.RecallAt100 /= samples
 	row.MRRAt10 /= samples
 
 	wantR5 := (1.0/3.0 + 1.0/3.0 + 0) / 3
@@ -127,9 +124,6 @@ func TestAccumulateQualityTinyFixture(t *testing.T) {
 	}
 	if !almostEqual(row.RecallAt10, wantR10) {
 		t.Fatalf("recall@10=%f want %f", row.RecallAt10, wantR10)
-	}
-	if !almostEqual(row.RecallAt100, 1.0/3.0) {
-		t.Fatalf("recall@100=%f want %f", row.RecallAt100, 1.0/3.0)
 	}
 	if !almostEqual(row.MRRAt10, wantMRR) {
 		t.Fatalf("mrr@10=%f want %f", row.MRRAt10, wantMRR)
