@@ -1987,26 +1987,8 @@ type vectorIndexFrozenPrefixInsert struct {
 }
 
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
-	if len(documentIDs) != len(vectors) {
-		return errors.New("collections: vector index batch ids/vectors length mismatch")
-	}
-	dimensions := idx.dimensions
-	for row := range documentIDs {
-		if len(documentIDs[row]) == 0 {
-			return errors.New("collections: document id cannot be empty")
-		}
-		if dimensions == 0 {
-			dimensions = len(vectors[row])
-		}
-		if len(vectors[row]) != dimensions {
-			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
-		}
-		if err := validateFloat32Vector(vectors[row]); err != nil {
-			return err
-		}
-		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
-			return errors.New("collections: cosine vector cannot have zero magnitude")
-		}
+	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
+		return err
 	}
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
@@ -2060,6 +2042,31 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		}
 		idx.frozenPrefixBatches++
 		start = end
+	}
+	return nil
+}
+
+func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
+	if len(documentIDs) != len(vectors) {
+		return errors.New("collections: vector index batch ids/vectors length mismatch")
+	}
+	dimensions := idx.dimensions
+	for row := range documentIDs {
+		if len(documentIDs[row]) == 0 {
+			return errors.New("collections: document id cannot be empty")
+		}
+		if dimensions == 0 {
+			dimensions = len(vectors[row])
+		}
+		if len(vectors[row]) != dimensions {
+			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
+		}
+		if err := validateFloat32Vector(vectors[row]); err != nil {
+			return err
+		}
+		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
+			return errors.New("collections: cosine vector cannot have zero magnitude")
+		}
 	}
 	return nil
 }

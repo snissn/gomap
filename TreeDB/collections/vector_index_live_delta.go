@@ -38,29 +38,51 @@ func (idx *VectorIndex) insertLiveVectorBatchLocked(documentIDs [][]byte, vector
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
+	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
+		return err
+	}
+	if len(documentIDs) == 0 {
+		return nil
+	}
 	delta, err := idx.ensureLiveDeltaLocked()
 	if err != nil {
 		return err
 	}
 	beforeMutation := idx.mutationSeq
-	beforeDeltaMutation := delta.mutationSeq
-	if err := delta.insertVectorBatchLocked(documentIDs, vectors); err != nil {
-		return err
-	}
-	for _, documentID := range documentIDs {
-		idx.tombstoneDocumentIDLocked(documentID)
-	}
-	if delta.mutationSeq != beforeDeltaMutation && idx.mutationSeq == beforeMutation {
-		idx.markGraphChangedLocked()
-	}
-	if len(delta.currentNode) >= defaultVectorIndexLiveDeltaRows {
-		// Make the bounded delta visible before folding it into the base. Existing
-		// readers keep this immutable generation while construction proceeds.
-		idx.publishSearchViewLocked(false)
-		if err := idx.foldLiveDeltaLocked(); err != nil {
+	for start := 0; start < len(documentIDs); {
+		capacity := defaultVectorIndexLiveDeltaRows - len(delta.nodes)
+		if capacity <= 0 {
+			if err := idx.foldLiveDeltaLocked(); err != nil {
+				return err
+			}
+			delta, err = idx.ensureLiveDeltaLocked()
+			if err != nil {
+				return err
+			}
+			capacity = defaultVectorIndexLiveDeltaRows
+		}
+		end := minInt(start+capacity, len(documentIDs))
+		if err := delta.insertVectorBatchLocked(documentIDs[start:end], vectors[start:end]); err != nil {
 			return err
 		}
-		idx.publishSearchViewLocked(false)
+		for _, documentID := range documentIDs[start:end] {
+			idx.tombstoneDocumentIDLocked(documentID)
+		}
+		start = end
+		if len(delta.nodes) == defaultVectorIndexLiveDeltaRows {
+			if err := idx.foldLiveDeltaLocked(); err != nil {
+				return err
+			}
+			if start < len(documentIDs) {
+				delta, err = idx.ensureLiveDeltaLocked()
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if idx.mutationSeq == beforeMutation {
+		idx.markGraphChangedLocked()
 	}
 	return nil
 }
