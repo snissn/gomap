@@ -12,10 +12,8 @@ package collections
 //     every source. Any invalid source aborts the whole batch with a typed
 //     chunk-stage error naming that source; the collection is untouched.
 //  2. Sources execute through a bounded worker pool. Per source: embed the
-//     planned children (pure, no mutation), then apply mutations in this
-//     order — tombstone stale children (atomic DeleteBatch), insert new
-//     children (atomic InsertBatch), upsert the parent document last so an
-//     interrupted first ingest of a source leaves it fully absent.
+//     planned children (pure, no mutation), build the complete parent/child and
+//     index mutation set, then publish its dependency-closed roots atomically.
 //  3. The first failure cancels all remaining work. Sources whose batches had
 //     not started are untouched; sources that completed stay intact.
 
@@ -78,9 +76,8 @@ const (
 	// IngestStageEmbed covers embedder resolution and EmbedBatch failures,
 	// including context cancellation during embedding.
 	IngestStageEmbed
-	// IngestStageStorage covers collection mutation failures. A storage-stage
-	// error at a batch boundary is commit-ambiguous for the failing source:
-	// see the IngestSources durability contract.
+	// IngestStageStorage covers source candidate construction or durable
+	// publication failures; see the IngestSources durability contract.
 	IngestStageStorage
 )
 
@@ -174,18 +171,17 @@ type IngestSourcesConfig struct {
 	hooks *ingestFaultHooks
 }
 
-// ingestFaultHooks injects failures at per-source mutation boundaries without
-// touching production behavior. Tests construct it directly; nil callbacks
-// never fire.
+// ingestFaultHooks injects failures at per-source planning and publication
+// boundaries without touching production behavior. Tests construct it directly;
+// nil callbacks never fire.
 type ingestFaultHooks struct {
-	// beforeSource fires before any mutation of source i.
-	beforeSource func(i int) error
-	// beforeInsert fires before either mutation boundary, simulating a storage
-	// failure without leaving an orphaned child set.
-	beforeInsert func(i int) error
-	afterDelete  func(i int) error
-	afterInsert  func(i int) error
-	afterParent  func(i int) error
+	beforeSource  func(i int) error
+	beforeInsert  func(i int) error
+	afterDelete   func(i int) error
+	afterInsert   func(i int) error
+	afterParent   func(i int) error
+	beforePublish func(i int) error
+	afterPublish  func(i int) error
 }
 
 // textField resolves the effective text field name.
@@ -227,15 +223,14 @@ type ingestPlan struct {
 // before that source mutates, so a chunk/embed failure preserves its prior
 // state. Per-parent locks shared across collection handles cover the complete
 // plan-through-replace lifecycle; independent parents do not share that lock.
-// Each child insert/delete batch is itself atomic and maintains text, scalar,
-// and vector indexes together.
 //
-// A source replacement uses separate stale-child delete, new-child insert, and
-// parent-upsert commits. A storage error after a boundary is therefore
-// commit-ambiguous: durable state may be old, new, or between those states.
-// The typed error identifies the source and storage stage; retrying converges
-// without duplicates because child IDs are deterministic. This function does
-// not claim atomic durable publication; #4284 owns that stronger contract.
+// Each source replacement is planned from one pinned collection snapshot. Its
+// parent, children, text/scalar/vector index state, retained/typed-column roots,
+// and catalog descriptors publish under one storage-owned durable root group.
+// Any failure before publication leaves the old source state. Once publication
+// is accepted, every dependency is durable before success is acknowledged; a
+// later reporting failure is commit-ambiguous only between the complete old and
+// complete new source states, never an intermediate parent/index combination.
 //
 // # Idempotency
 //
@@ -507,8 +502,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		}
 
 		indexStart := time.Now()
-		// Fault injection is deliberately before either mutation boundary. This
-		// keeps the normal test fault path free of orphaned child rows.
+		// Fail before candidate construction when the test seam rejects storage.
 		if cfg.hooks != nil && cfg.hooks.beforeInsert != nil {
 			if err := cfg.hooks.beforeInsert(i); err != nil {
 				return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage,
@@ -518,55 +512,56 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		if err := wctx.Err(); err != nil {
 			return &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage, Err: err}
 		}
-		apply := func() ([][]byte, *IngestError) {
-			unlockMutation, err := c.lockChunkMutation(wctx)
-			if err != nil {
-				return nil, storageIngestError(plan.parentID, i, "lock collection mutation", err)
-			}
-			defer unlockMutation()
-			if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
-				return nil, storageIngestError(plan.parentID, i, "publish sibling write domains before child enumeration", err)
-			}
-			oldChildren, _, err := c.chunkChildrenUnlocked(plan.parentID)
-			if err != nil {
-				return nil, storageIngestError(plan.parentID, i, "enumerate stale chunk children", err)
-			}
-			if err := wctx.Err(); err != nil {
-				return nil, &IngestError{SourceID: plan.parentID, SourceIndex: i, Stage: IngestStageStorage, Err: err}
-			}
-			if len(oldChildren) > 0 {
-				if _, err := c.DeleteBatch(oldChildren); err != nil {
-					return nil, storageIngestError(plan.parentID, i, "tombstone stale chunk children", err)
+		insertIDs := make([][]byte, 0, len(plan.children)+1)
+		insertIDs = append(insertIDs, chunkPlanIDs(plan.children)...)
+		insertIDs = append(insertIDs, plan.parentID)
+		insertDocs := make([][]byte, 0, len(childDocs)+1)
+		insertDocs = append(insertDocs, childDocs...)
+		insertDocs = append(insertDocs, plan.parent)
+		publicationHooks := &sourcePublicationHooks{}
+		if cfg.hooks != nil {
+			publicationHooks.afterDeletePlan = func() error {
+				if cfg.hooks.afterDelete == nil {
+					return nil
 				}
+				return cfg.hooks.afterDelete(i)
 			}
-			if cfg.hooks != nil && cfg.hooks.afterDelete != nil {
-				if err := cfg.hooks.afterDelete(i); err != nil {
-					return nil, storageIngestError(plan.parentID, i, "after stale-child delete boundary", err)
+			publicationHooks.afterInsertPlan = func() error {
+				if cfg.hooks.afterInsert == nil {
+					return nil
 				}
+				return cfg.hooks.afterInsert(i)
 			}
-			if len(plan.children) > 0 {
-				if _, err := c.InsertBatch(chunkPlanIDs(plan.children), childDocs); err != nil {
-					return nil, storageIngestError(plan.parentID, i, "insert chunk children", err)
+			publicationHooks.afterParentPlan = func() error {
+				if cfg.hooks.afterParent == nil {
+					return nil
 				}
+				return cfg.hooks.afterParent(i)
 			}
-			if cfg.hooks != nil && cfg.hooks.afterInsert != nil {
-				if err := cfg.hooks.afterInsert(i); err != nil {
-					return nil, storageIngestError(plan.parentID, i, "after child insert boundary", err)
+			publicationHooks.afterPublish = func() error {
+				if cfg.hooks.afterPublish == nil {
+					return nil
 				}
+				return cfg.hooks.afterPublish(i)
 			}
-			if err := c.upsertParentDocument(plan.parentID, plan.parent); err != nil {
-				return nil, storageIngestError(plan.parentID, i, "upsert parent document", err)
-			}
-			if cfg.hooks != nil && cfg.hooks.afterParent != nil {
-				if err := cfg.hooks.afterParent(i); err != nil {
-					return nil, storageIngestError(plan.parentID, i, "after parent upsert boundary", err)
-				}
-			}
-			return oldChildren, nil
 		}
-		oldChildren, applyErr := apply()
-		if applyErr != nil {
-			return applyErr
+		publicationHooks.beforePublish = func() error {
+			if err := wctx.Err(); err != nil {
+				return err
+			}
+			if cfg.hooks == nil || cfg.hooks.beforePublish == nil {
+				return nil
+			}
+			return cfg.hooks.beforePublish(i)
+		}
+		unlockChunkMutation, err := c.lockChunkMutation(wctx)
+		if err != nil {
+			return storageIngestError(plan.parentID, i, "lock collection mutation", err)
+		}
+		replaced, err := c.replaceChunkSourceDocuments(plan.parentID, insertIDs, insertDocs, publicationHooks)
+		unlockChunkMutation()
+		if err != nil {
+			return storageIngestError(plan.parentID, i, "publish atomic source replacement", err)
 		}
 		indexNanos := time.Since(indexStart).Nanoseconds()
 		lifecycleLocks.release(plan.parentID)
@@ -575,7 +570,7 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 		for j, ch := range plan.children {
 			childIDs[j] = append([]byte(nil), ch.id...)
 		}
-		outcome := SourceIngestOutcome{ID: append([]byte(nil), plan.parentID...), ChildIDs: childIDs, Replaced: len(oldChildren)}
+		outcome := SourceIngestOutcome{ID: append([]byte(nil), plan.parentID...), ChildIDs: childIDs, Replaced: replaced}
 		if cfg.Progress != nil {
 			// Assign the completion number and deliver its callback under the
 			// same lock. Release this parent's lifecycle lock after its commit

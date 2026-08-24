@@ -91,14 +91,14 @@ res, err := col.IngestChunkedDocument(parentID, parentDocJSON,
   collection handles and ingestion calls. Different parents do not share that
   lock; the collection's index publication seam may still serialize their
   brief mutation sections.
-- `IngestChunkedDocument` publishes the parent upsert, stale-child
+- `IngestChunkedDocument` still publishes the parent upsert, stale-child
   `DeleteBatch`, and replacement `InsertBatch` as three separate durable
-  boundaries. `IngestSources` publishes delete, insert, then parent upsert.
-  Each individual batch is atomic, but the complete lifecycle is **not**:
-  an error can report a source whose durable state is old, new, or between
-  those boundaries. Retry the same deterministic ingest to converge. Atomic
-  durable publication is owned by
-  [#4284](https://github.com/snissn/gomap/issues/4284).
+  boundaries. Its error can therefore describe an old, new, or intermediate
+  direct chunk-ingest state; retry the deterministic ingest to converge.
+- Current behavior: `IngestSources` instead plans the old-row removals and complete new
+  parent/child/index state, then publishes every affected collection root and
+  catalog descriptor under one durable root group. Its storage outcome is a
+  complete old or complete new source, never an intermediate child/parent view.
 - Children are ordinary documents to the index layer: text, scalar, and vector
   indexes maintain them through the normal batch paths and resolve only live
   children after a successful re-chunk.

@@ -76,6 +76,7 @@ const (
 	CommandKindCollectionDeleteBatchByID    CommandKind = 101
 	CommandKindCollectionUpdateBatchByID    CommandKind = 102
 	CommandKindCollectionRebuildVectorIndex CommandKind = 103
+	CommandKindCollectionReplaceSourceByID  CommandKind = 104
 	CommandKindCatalogCreateCollection      CommandKind = 200
 	CommandKindCatalogMutationPlaceholder   CommandKind = CommandKindCatalogCreateCollection
 	CommandKindDurablePrefixBarrier         CommandKind = 300
@@ -104,6 +105,7 @@ const (
 	PayloadFormatCollectionRebuildVectorIndexV1 PayloadFormat = 7
 	PayloadFormatDurablePrefixBarrierV1         PayloadFormat = 8
 	PayloadFormatRawKVBatchV2                   PayloadFormat = 9
+	PayloadFormatCollectionReplaceSourceByIDV1  PayloadFormat = 10
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -1702,6 +1704,12 @@ type CollectionUpdateBatchByIDPayload struct {
 	Documents  []CollectionDocument
 }
 
+type CollectionReplaceSourceByIDPayload struct {
+	Collection string
+	DeleteIDs  [][]byte
+	Documents  []CollectionDocument
+}
+
 type CollectionRebuildVectorIndexPayload struct {
 	Collection string
 	IndexName  string
@@ -2158,6 +2166,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionReplaceSourceByID:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionReplaceSourceByIDV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCollectionRebuildVectorIndex:
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
 			return ErrCorrupt
@@ -2184,6 +2196,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionUpdateBatchByID:
 		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionReplaceSourceByID:
+		_, err := DecodeCollectionReplaceSourceByIDPayload(env.Payload)
 		return err
 	case CommandKindCollectionRebuildVectorIndex:
 		_, err := DecodeCollectionRebuildVectorIndexPayload(env.Payload)
@@ -3097,6 +3112,60 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 		return CollectionDeleteBatchByIDPayload{}, err
 	}
 	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+}
+
+func EncodeCollectionReplaceSourceByIDPayload(collection string, deleteIDs [][]byte, docs []CollectionDocument) ([]byte, error) {
+	deletePayload, err := EncodeCollectionDeleteBatchByIDPayload(collection, deleteIDs)
+	if err != nil {
+		return nil, err
+	}
+	insertPayload, err := EncodeCollectionInsertBatchByIDPayload(collection, docs)
+	if err != nil {
+		return nil, err
+	}
+	if commandFrameIntExceedsUint32(len(deletePayload)) {
+		return nil, ErrRecordTooLarge
+	}
+	total, err := addCommandFrameEncodedSectionLen(4, len(deletePayload))
+	if err != nil {
+		return nil, err
+	}
+	total, err = addCommandFrameEncodedSectionLen(total, len(insertPayload))
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint32(payload[:4], uint32(len(deletePayload)))
+	copy(payload[4:], deletePayload)
+	copy(payload[4+len(deletePayload):], insertPayload)
+	return payload, nil
+}
+
+func DecodeCollectionReplaceSourceByIDPayload(payload []byte) (CollectionReplaceSourceByIDPayload, error) {
+	if len(payload) < 4 {
+		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
+	}
+	deleteLenRaw := binary.LittleEndian.Uint32(payload[:4])
+	if uint64(deleteLenRaw) > uint64(len(payload)-4) {
+		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
+	}
+	deleteLen := int(deleteLenRaw)
+	deleted, err := DecodeCollectionDeleteBatchByIDPayload(payload[4 : 4+deleteLen])
+	if err != nil {
+		return CollectionReplaceSourceByIDPayload{}, err
+	}
+	inserted, err := DecodeCollectionInsertBatchByIDPayload(payload[4+deleteLen:])
+	if err != nil {
+		return CollectionReplaceSourceByIDPayload{}, err
+	}
+	if deleted.Collection != inserted.Collection {
+		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
+	}
+	return CollectionReplaceSourceByIDPayload{
+		Collection: deleted.Collection,
+		DeleteIDs:  deleted.IDs,
+		Documents:  inserted.Documents,
+	}, nil
 }
 
 func EncodeCollectionRebuildVectorIndexPayload(collection, indexName string) ([]byte, error) {

@@ -711,8 +711,8 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
-	lifecycle.FaultBoundary = "source ingestion storage publication remains commit-ambiguous until #4284"
-	lifecycle.FaultEvidence = capabilityEvidence{ErrorType: capabilityErrorType, Code: "storage_boundary_fault_injection_unavailable", Message: "external benchmark cannot inject private storage boundary hooks; #4284 owns atomic durable publication", RequiredIssues: []int{4284}, ResultsReturned: 0, FailClosed: true}
+	lifecycle.FaultBoundary = "IngestSources publishes each source replacement as one dependency-closed durable root selection"
+	lifecycle.FaultEvidence = capabilityEvidence{ErrorType: capabilityErrorType, Code: "storage_boundary_fault_injection_out_of_process", Message: "the external application harness verifies public lifecycle and reopen parity; package fault tests cover private publication and command-WAL cuts", ResultsReturned: 0, FailClosed: true}
 	server := httptest.NewServer(documentservice.NewHandler(service))
 	env := &applicationEnvironment{db: db, col: queryCol, service: service, server: server, client: server.Client(), storageStats: relevantStorageStats(db.Stats())}
 	return env, lifecycle, nil

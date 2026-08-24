@@ -48,17 +48,19 @@ sources.
 
 The shared per-parent lock covers the complete plan through replacement across
 concurrent calls and collection handles; independent parents do not share that
-lifecycle lock. A separate collection-wide lock serializes each source's
-enumerate/delete/insert/parent-upsert mutation section, so `Concurrency`
-parallelizes planning and embedding but not storage publication. Parent
-lifecycle locks are context-aware and release after a source commits, before
-its progress callback. Stale-child deletion, child insertion, and parent upsert
-remain separate durable boundaries. A storage error is therefore commit-
-ambiguous for that source: durable state may be old, new, or between those
-boundaries, including no children after delete or new children with the old
-parent after insert. Retry the same source to converge. Deterministic child IDs
-prevent duplicates. This is not an atomic-publication claim; #4284 owns that
-stronger durability contract.
+lifecycle lock. A short collection-wide lock protects enumeration, candidate
+construction, and publication, so `Concurrency` parallelizes planning and
+embedding while root publication remains serialized. Parent lifecycle locks are
+context-aware and release after a source commits, before its progress callback.
+
+For each source, stale child and old-parent removals plus the new parent,
+children, text/scalar/vector index entries, typed-column assets, row locators,
+and catalog descriptors are one dependency-closed durable root publication.
+Failures before publication leave the old source. A recoverable command-WAL
+frame may complete the whole new source during reopen; post-publication failures
+are commit-ambiguous only between complete old and complete new states. No
+intermediate parent/child/index state is certified. Retrying the same source
+converges because child IDs are deterministic.
 
 ## Quick smoke path
 

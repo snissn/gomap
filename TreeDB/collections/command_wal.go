@@ -23,6 +23,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionReplaceSourceByID, replayCollectionReplaceSourceByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL)
 	})
@@ -78,6 +79,25 @@ func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *b
 		commitlog.CommandKindCollectionDeleteBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionReplaceSourceCommandWALIntent(deleteIDs [][]byte, docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionReplaceSourceByIDPayload(c.meta.Name, deleteIDs, docs)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewTrustedCommandWALIntent(
+		commitlog.CommandKindCollectionReplaceSourceByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionReplaceSourceByIDV1,
 		payload,
 	)
 }
@@ -330,6 +350,29 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		return err
 	}
 	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, intent)
+	return err
+}
+
+func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionReplaceSourceByIDPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
+	collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+	if err != nil {
+		return err
+	}
+	ids := make([][]byte, len(payload.Documents))
+	documents := make([][]byte, len(payload.Documents))
+	for i := range payload.Documents {
+		ids[i] = payload.Documents[i].ID
+		documents[i] = payload.Documents[i].Document
+	}
+	_, err = collection.replaceSourceDocumentsWithCommandWALIntent(payload.DeleteIDs, ids, documents, intent, nil)
 	return err
 }
 

@@ -2341,6 +2341,7 @@ Current command kinds:
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
 | 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
+| 104 | `CollectionReplaceSourceByID` | collection | `CollectionReplaceSourceByIDV1` | one-source delete-and-reinsert command used by atomic `IngestSources` publication |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 | 300 | `DurablePrefixBarrier` | system | `DurablePrefixBarrierV1` | active V2 empty durable-frontier record used by explicit sync with no user mutation |
 
@@ -2357,6 +2358,7 @@ Current payload format IDs:
 | 7 | `CollectionRebuildVectorIndexV1` |
 | 8 | `DurablePrefixBarrierV1` |
 | 9 | `RawKVBatchV2` |
+| 10 | `CollectionReplaceSourceByIDV1` |
 
 `RawKVBatchV1` and `RawKVBatchV2` share this payload framing:
 
@@ -2619,6 +2621,19 @@ bytes ID[IDLen]
 Collection batch payloads require a non-empty collection name and non-empty
 document IDs. Encoders canonicalize entries by strictly increasing document ID
 before writing the payload, and decoders reject duplicate or out-of-order IDs.
+
+`CollectionReplaceSourceByIDV1` contains exactly one canonical delete payload
+and one canonical insert payload for the same collection:
+
+```text
+u32 DeletePayloadLen
+bytes CollectionDeleteBatchByIDV1[DeletePayloadLen]
+bytes CollectionInsertBatchByIDV1[remaining payload]
+```
+
+The frame is one logical source replacement. Recovery applies its delete set
+and complete parent/child document set through the same atomic multi-root
+publisher; it never exposes the nested operations as separate applied LSNs.
 
 `CollectionRebuildVectorIndexV1` payload:
 
