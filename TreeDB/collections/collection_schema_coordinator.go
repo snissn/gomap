@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -12,14 +13,17 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
-	schemaMu              sync.RWMutex
-	legacyVectorSidecarMu sync.Mutex
-	domainsMu             sync.Mutex
-	domains               map[*collectionWriteDomain]struct{}
-	chunkLifecycleMu      sync.Mutex
-	chunkLifecycles       map[string]*chunkLifecycleLock
-	chunkMutationOnce     sync.Once
-	chunkMutationToken    chan struct{}
+	schemaMu                sync.RWMutex
+	nativeVectorAdmissionMu sync.RWMutex
+	nativeVectorBaseline    atomic.Pointer[uint64]
+	hasNativeVectorIndexes  atomic.Bool
+	legacyVectorSidecarMu   sync.Mutex
+	domainsMu               sync.Mutex
+	domains                 map[*collectionWriteDomain]struct{}
+	chunkLifecycleMu        sync.Mutex
+	chunkLifecycles         map[string]*chunkLifecycleLock
+	chunkMutationOnce       sync.Once
+	chunkMutationToken      chan struct{}
 }
 
 type collectionDBSchemaCoordinators struct {

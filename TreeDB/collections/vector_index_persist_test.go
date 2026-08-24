@@ -1642,7 +1642,7 @@ type acceptedVectorMutationErrorForTest struct {
 	error
 }
 
-func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
+func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1676,45 +1676,518 @@ func TestNativeVectorCoverageTracksOverlappingMutations(t *testing.T) {
 			unlockFirst()
 		}
 	}()
-	unlockSecond := c.lockVectorIndexCoverageMutation()
+	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
+	if err != nil {
+		t.Fatalf("publish first mutation: %v", err)
+	}
+	if err := c.reconcileVectorIndexes(firstIDs); err != nil {
+		t.Fatalf("reconcile first mutation: %v", err)
+	}
+	afterFirst, err := c.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("generation after first mutation: %v", err)
+	}
+	if afterFirst == before || index.coversSourceDocumentGeneration(afterFirst) {
+		t.Fatalf("first reconciliation advanced coverage from %d to %d before acknowledgment", before, afterFirst)
+	}
+
+	secondStarted := make(chan struct{})
+	secondAcquired := make(chan func(), 1)
+	go func() {
+		close(secondStarted)
+		secondAcquired <- c.lockVectorIndexCoverageMutation()
+	}()
+	<-secondStarted
+	select {
+	case unlockSecond := <-secondAcquired:
+		unlockSecond()
+		t.Fatal("second mutation entered before the first was acknowledged")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlockFirst()
+	firstLocked = false
+	var unlockSecond func()
+	select {
+	case unlockSecond = <-secondAcquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second mutation remained blocked after the first was acknowledged")
+	}
 	secondLocked := true
 	defer func() {
 		if secondLocked {
 			unlockSecond()
 		}
 	}()
-	firstIDs, err := c.insertBatch([][]byte{[]byte("overlap-first")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil)
-	if err != nil {
-		t.Fatalf("publish first overlapping mutation: %v", err)
+	if !index.coversSourceDocumentGeneration(afterFirst) {
+		t.Fatalf("first acknowledgment did not publish generation %d", afterFirst)
 	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after first acknowledgment: %v", err)
+	}
+	requireVectorResultIDs(t, results, "overlap-first", "seed")
+
 	secondIDs, err := c.insertBatch([][]byte{[]byte("overlap-second")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}, false, nil)
 	if err != nil {
-		t.Fatalf("publish second overlapping mutation: %v", err)
-	}
-	if err := c.reconcileVectorIndexes(firstIDs); err != nil {
-		t.Fatalf("reconcile first overlapping mutation: %v", err)
+		t.Fatalf("publish second mutation: %v", err)
 	}
 	if err := c.reconcileVectorIndexes(secondIDs); err != nil {
-		t.Fatalf("reconcile second overlapping mutation: %v", err)
+		t.Fatalf("reconcile second mutation: %v", err)
 	}
-	after, err := c.currentVectorIndexDocumentGeneration()
+	afterSecond, err := c.currentVectorIndexDocumentGeneration()
 	if err != nil {
-		t.Fatalf("generation after overlap: %v", err)
+		t.Fatalf("generation after second mutation: %v", err)
 	}
-	if after == before || index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("overlapping reconciliation advanced coverage from %d to %d", before, after)
-	}
-
-	unlockFirst()
-	firstLocked = false
-	if index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("coverage advanced before the final overlapping mutation completed")
+	if afterSecond == afterFirst || index.coversSourceDocumentGeneration(afterSecond) {
+		t.Fatalf("second reconciliation advanced coverage from %d to %d before acknowledgment", afterFirst, afterSecond)
 	}
 	unlockSecond()
 	secondLocked = false
-	if !index.coversSourceDocumentGeneration(after) {
-		t.Fatalf("final overlapping mutation did not cover generation %d", after)
+	if !index.coversSourceDocumentGeneration(afterSecond) {
+		t.Fatalf("second acknowledgment did not publish generation %d", afterSecond)
 	}
+	results, _, err = index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after second acknowledgment: %v", err)
+	}
+	requireVectorResultIDs(t, results, "overlap-first", "overlap-second", "seed")
+}
+
+func TestNativeVectorCoverageNoopDoesNotRepublish(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	c, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := c.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := c.registeredVectorIndex(def.Name)
+	if index == nil || index.searchView.Load() == nil {
+		t.Fatal("seed insert did not publish native search view")
+	}
+	before := index.searchView.Load()
+	if ids, err := c.InsertBatch(nil, nil); err != nil || len(ids) != 0 {
+		t.Fatalf("empty insert ids=%q err=%v", ids, err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("empty insert republished the unchanged native graph")
+	}
+	if err := index.InsertDocument([]byte("seed")); err != nil {
+		t.Fatalf("direct idempotent insert: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("direct idempotent insert republished the unchanged native graph")
+	}
+	index.TombstoneDocumentID([]byte("missing"))
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("direct absent tombstone republished the unchanged native graph")
+	}
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		t.Fatalf("save unchanged native snapshot: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("native snapshot persistence republished the unchanged graph")
+	}
+	if _, err := index.SaveNativeDeltaSnapshot(); err != nil {
+		t.Fatalf("save unchanged native delta snapshot: %v", err)
+	}
+	if after := index.searchView.Load(); after != before {
+		t.Fatal("native delta persistence republished the unchanged graph")
+	}
+}
+
+func TestNativeVectorCoverageStaleAdmissionDoesNotServeOrCertifyPublishedView(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	stale := first.registeredVectorIndex(def.Name)
+	if stale == nil {
+		t.Fatal("seed insert did not build native index")
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second handle: %v", err)
+	}
+	if _, err := second.InsertBatch([][]byte{[]byte("external")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert through second manager: %v", err)
+	}
+	current, err := first.currentVectorIndexDocumentGeneration()
+	if err != nil {
+		t.Fatalf("current generation: %v", err)
+	}
+	if stale.coversSourceDocumentGeneration(current) {
+		t.Fatal("first manager runtime unexpectedly covers the external write")
+	}
+	unlockCurrent := second.lockVectorIndexCoverageMutation()
+	var staleBuffer VectorIndexSearchBuffer
+	_, searchErr := first.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8}, &staleBuffer)
+	unlockCurrent()
+	if !errors.Is(searchErr, ErrVectorIndexSearchUnavailable) {
+		t.Fatalf("stale cross-manager search error=%v want ErrVectorIndexSearchUnavailable", searchErr)
+	}
+
+	unlock := first.lockVectorIndexCoverageMutation()
+	if first.nativeVectorIndexMutationActive() {
+		unlock()
+		t.Fatal("stale admission exposed its published view to concurrent search")
+	}
+	unlock()
+	if stale.coversSourceDocumentGeneration(current) {
+		t.Fatal("unreconciled stale admission certified the external write")
+	}
+	if _, err := first.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"embedding":[1,1]}`)}); err != nil {
+		t.Fatalf("insert through stale manager: %v", err)
+	}
+	refreshed := first.registeredVectorIndex(def.Name)
+	results, _, err := refreshed.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after stale-manager rebuild: %v", err)
+	}
+	requireVectorResultIDs(t, results, "seed", "local", "external")
+}
+
+func TestNativeVectorCoverageAdmissionSerializesAcrossManagers(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second handle: %v", err)
+	}
+
+	unlockFirst := first.lockVectorIndexCoverageMutation()
+	secondAdmission := second.nativeVectorAdmissionMutex()
+	if secondAdmission.TryLock() {
+		secondAdmission.Unlock()
+		unlockFirst()
+		t.Fatal("native vector admission escaped the DB-wide collection barrier")
+	}
+	unlockFirst()
+	if !secondAdmission.TryLock() {
+		t.Fatal("second manager did not acquire native vector admission")
+	}
+	secondAdmission.Unlock()
+}
+
+func TestNativeVectorCoverageAdmissionIncludesPreparedIndexedFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	writerManager := NewCollectionManager(d)
+	if _, err := writerManager.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 100,
+		},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := writerManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.insertBatch([][]byte{[]byte("async")}, [][]byte{[]byte(`{"kind":"a","embedding":[1,0]}`)}, false, nil); err != nil {
+		t.Fatalf("buffer writer document: %v", err)
+	}
+	work, err := writer.prepareIndexedAsyncPublish()
+	if err != nil || work == nil {
+		t.Fatalf("prepare indexed flush work=%v err=%v", work, err)
+	}
+	defer collectionTestCloseIndexedFlushWork(work)
+
+	unlockReader := reader.lockVectorIndexCoverageMutation()
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- writer.publishPreparedIndexedFlush(work) }()
+	select {
+	case err := <-publishDone:
+		unlockReader()
+		t.Fatalf("prepared indexed flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockReader()
+	if err := <-publishDone; err != nil {
+		t.Fatalf("publish prepared indexed flush: %v", err)
+	}
+	if _, err := writer.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		t.Fatalf("load writer runtime before synchronous flush: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("sync")}, [][]byte{[]byte(`{"kind":"s","embedding":[1,1]}`)}); err != nil {
+		t.Fatalf("buffer synchronous writer document: %v", err)
+	}
+	unlockReader = reader.lockVectorIndexCoverageMutation()
+	syncDone := make(chan error, 1)
+	go func() { syncDone <- writer.Flush() }()
+	select {
+	case err := <-syncDone:
+		unlockReader()
+		t.Fatalf("synchronous indexed flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockReader()
+	select {
+	case err := <-syncDone:
+		if err != nil {
+			t.Fatalf("publish synchronous indexed flush: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("synchronous indexed flush remained blocked after vector admission released")
+	}
+	if reader.registeredVectorIndex(def.Name).hasValidSourceDocumentRoots() {
+		t.Fatal("synchronous indexed flush did not invalidate stale vector coverage")
+	}
+	writerIndex := writer.registeredVectorIndex(def.Name)
+	if !writerIndex.hasValidSourceDocumentRoots() {
+		t.Fatal("synchronous indexed flush invalidated its reconciled vector coverage")
+	}
+	results, _, err := writerIndex.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search publishing runtime after Flush: %v", err)
+	}
+	requireVectorResultIDs(t, results, "async", "sync")
+
+	if _, err := writer.InsertBatch([][]byte{[]byte("read")}, [][]byte{[]byte(`{"kind":"r","embedding":[0.25,0.75]}`)}); err != nil {
+		t.Fatalf("buffer read-triggered document: %v", err)
+	}
+	unlockReader = reader.lockVectorIndexCoverageMutation()
+	readDone := make(chan error, 1)
+	go func() {
+		view, err := writer.OpenCollectionReadView()
+		if view != nil {
+			err = errors.Join(err, view.Close())
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		unlockReader()
+		t.Fatalf("read-triggered flush escaped shared vector admission: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockReader()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("read-triggered flush: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read-triggered flush remained blocked after vector admission released")
+	}
+
+	if _, err := reader.InsertBatch([][]byte{[]byte("local")}, [][]byte{[]byte(`{"kind":"b","embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert through stale reader: %v", err)
+	}
+	index := reader.registeredVectorIndex(def.Name)
+	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 4, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after stale-reader rebuild: %v", err)
+	}
+	requireVectorResultIDs(t, results, "async", "sync", "read", "local")
+}
+
+func TestNativeVectorSchemaMutationWaitsBeforeAsyncFlushAdmission(t *testing.T) {
+	for _, operation := range []string{"create", "drop"} {
+		t.Run(operation, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name: "docs",
+				Options: CollectionOptions{
+					BufferedIndexedWrites:            true,
+					BufferedIndexedWriteMaxDocuments: 100,
+				},
+				Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+				VectorIndexes: []VectorIndexDefinition{def},
+			}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.insertBatch([][]byte{[]byte("async")}, [][]byte{[]byte(`{"kind":"a","embedding":[1,0]}`)}, false, nil); err != nil {
+				t.Fatalf("buffer document: %v", err)
+			}
+			work, err := col.prepareIndexedAsyncPublish()
+			if err != nil || work == nil {
+				t.Fatalf("prepare indexed flush work=%v err=%v", work, err)
+			}
+			defer collectionTestCloseIndexedFlushWork(work)
+			if !col.writeDomain.beginIndexedAsyncFlush() {
+				t.Fatal("begin indexed async flush returned false")
+			}
+			var finishOnce sync.Once
+			finishAsync := func(err error) {
+				finishOnce.Do(func() {
+					col.writeDomain.finishIndexedAsyncFlush(err)
+				})
+			}
+			defer func() { finishAsync(errors.New("test cleanup")) }()
+
+			waitEntered, releaseWait := collectionWaitIndexedAsyncFlushGateForTest(t)
+			schemaDone := make(chan error, 1)
+			go func() {
+				if operation == "create" {
+					_, err := col.CreateVectorIndex(VectorIndexDefinition{Name: "embedding_2", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4})
+					schemaDone <- err
+					return
+				}
+				_, err := col.DropVectorIndex(def.Name)
+				schemaDone <- err
+			}()
+			select {
+			case <-waitEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("schema mutation did not wait for announced async flush")
+			}
+			releaseWait()
+			publishDone := make(chan error, 1)
+			go func() {
+				err := col.publishPreparedIndexedFlush(work)
+				finishAsync(err)
+				publishDone <- err
+			}()
+			select {
+			case err := <-publishDone:
+				if err != nil {
+					t.Fatalf("publish indexed flush: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("async publish deadlocked behind schema admission")
+			}
+			select {
+			case err := <-schemaDone:
+				if err != nil {
+					t.Fatalf("%s vector index: %v", operation, err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s vector index remained blocked after async publish", operation)
+			}
+		})
+	}
+}
+
+func TestNativeVectorCoverageAdmissionSeesIndexCreatedByAnotherManager(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	firstManager := NewCollectionManager(d)
+	if _, err := firstManager.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := firstManager.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first handle: %v", err)
+	}
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale second handle: %v", err)
+	}
+	if _, err := first.CreateVectorIndex(VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+
+	unlock := second.lockVectorIndexCoverageMutation()
+	admission := second.nativeVectorAdmissionMutex()
+	if admission.TryRLock() {
+		admission.RUnlock()
+		unlock()
+		t.Fatal("stale manager admitted a shared write after native index creation")
+	}
+	unlock()
+}
+
+func TestColumnGraphCoverageAdmissionRemainsShared(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	c, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := c.CreateVectorIndex(VectorIndexDefinition{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyColumnGraph,
+	}); err != nil {
+		t.Fatalf("create column graph: %v", err)
+	}
+	if len(c.registeredVectorIndexes()) != 1 {
+		t.Fatal("empty column graph did not register its runtime")
+	}
+
+	unlockFirst := c.lockVectorIndexCoverageMutation()
+	firstLocked := true
+	defer func() {
+		if firstLocked {
+			unlockFirst()
+		}
+	}()
+	secondAcquired := make(chan func(), 1)
+	go func() { secondAcquired <- c.lockVectorIndexCoverageMutation() }()
+	select {
+	case unlockSecond := <-secondAcquired:
+		unlockSecond()
+	case <-time.After(5 * time.Second):
+		t.Fatal("column-graph write admission was serialized")
+	}
+	unlockFirst()
+	firstLocked = false
 }
 
 func TestNativeVectorCoverageFinalizerOrdersDomainBeforeActive(t *testing.T) {

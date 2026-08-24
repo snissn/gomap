@@ -92,6 +92,8 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	return idx.saveNativeSnapshotWithCoverageLocked()
@@ -414,6 +416,8 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
+	defer unlockAdmission()
 	unlockCoverage := c.lockVectorIndexCoveragePersistence()
 	defer unlockCoverage()
 	if idx.needsNativeFullSnapshotAutoPersist() {
@@ -1479,6 +1483,9 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 		clear(idx.dirtyNodes)
 		clear(idx.dirtyDocs)
 	}
+	if view := idx.searchView.Load(); idx.nativePersistent && view != nil {
+		view.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: bytesDisk})
+	}
 }
 
 func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
@@ -1492,6 +1499,7 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.dirtyMeta = false
 	clear(idx.dirtyNodes)
 	clear(idx.dirtyDocs)
+	idx.publishSearchViewLocked(false)
 }
 
 func (idx *VectorIndex) needsNativeAutoPersist() bool {
@@ -1697,6 +1705,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.mutationSeq = 0
 		idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 		idx.sourceDocumentRootsValid = true
+		idx.publishSearchViewLocked(true)
 		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
@@ -1818,6 +1827,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.mutationSeq = 0
 	idx.sourceDocumentGeneration = snapshot.Meta.SourceDocumentGeneration
 	idx.sourceDocumentRootsValid = true
+	idx.publishSearchViewLocked(true)
 	return ""
 }
 

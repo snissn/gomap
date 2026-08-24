@@ -1399,19 +1399,19 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			publicationMu.RUnlock()
 			continue
 		}
-		response.Results, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		var searchState vectorIndexNativeSearchState
+		response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
 		if err == nil {
-			_, _, liveDocs, rebuildNeeded, fullRebuilds := index.nativeSearchState()
 			response.Status.Loaded = true
 			response.Status.Registered = true
 			response.Status.RootName = load.RootName
 			response.Status.RootID = load.RootID
 			response.Status.NativeRootLoaded = load.RootID != 0
 			response.Status.NativeRootBytes = load.BytesDisk
-			response.Status.RebuildNeeded = rebuildNeeded
+			response.Status.RebuildNeeded = searchState.rebuildNeeded
 			response.Stats.SearchRouteNativeRuntime = 1
-			response.Stats.NativeRuntimeFullRebuilds = fullRebuilds
-			response.Stats.CandidateRows = uint64(liveDocs)
+			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
+			response.Stats.CandidateRows = uint64(searchState.liveDocs)
 		} else if !index.hasValidSourceDocumentRoots() {
 			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}
@@ -1425,9 +1425,15 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 
 func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if index := c.registeredVectorIndex(def.Name); index != nil {
+		if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
+			return index, status, nil
+		}
 		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
 		if err != nil {
 			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {
+				if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
+					return index, status, nil
+				}
 				unlockCoverage := c.lockVectorIndexCoveragePersistence()
 				current := c.registeredVectorIndex(def.Name)
 				if current != nil {
@@ -1454,6 +1460,42 @@ func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefini
 		return nil, status, err
 	}
 	return index, status, nil
+}
+
+func (c *Collection) publishedNativeSearchLoadStatusDuringMutation(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
+	if c == nil {
+		return VectorIndexLoadStatus{}, false
+	}
+	if c.nativeVectorIndexMutationActive() {
+		return c.publishedNativeSearchLoadStatus(def, index)
+	}
+	if c.writeDomain != nil {
+		if coord := c.writeDomain.schemaCoordinator; coord != nil {
+			if baseline := coord.nativeVectorBaseline.Load(); baseline != nil {
+				if !index.publishedSearchViewCoversSourceDocumentGeneration(*baseline) {
+					return VectorIndexLoadStatus{}, false
+				}
+				return c.publishedNativeSearchLoadStatus(def, index)
+			}
+		}
+	}
+	return VectorIndexLoadStatus{}, false
+}
+
+func (c *Collection) publishedNativeSearchLoadStatus(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
+	status, ok := index.publishedNativeSearchLoadStatus(def)
+	if !ok || c == nil || c.db == nil || status.RootName == "" {
+		return VectorIndexLoadStatus{}, false
+	}
+	state, ok := c.db.StateToken()
+	if !ok {
+		return VectorIndexLoadStatus{}, false
+	}
+	currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, status.RootName, state)
+	if !current || !found || !vectorIndexDefinitionValuesEqual(def, currentDef) || rootID != status.RootID {
+		return VectorIndexLoadStatus{}, false
+	}
+	return status, true
 }
 
 func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (VectorIndexDefinition, bool, bool) {
