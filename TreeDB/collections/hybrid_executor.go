@@ -578,7 +578,7 @@ func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limi
 	}
 	ids := make([][]byte, 0, min(limit, hybridScalarDefaultLookupLimit))
 	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, limit, shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), func(id []byte) (bool, error) {
-		ids = append(ids, bytes.Clone(id))
+		ids = append(ids, id)
 		return true, nil
 	})
 	inputIDs := uint64(len(ids))
