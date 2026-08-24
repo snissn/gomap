@@ -247,10 +247,10 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 	} else {
 		time.Sleep(duration)
 	}
-	elapsed := time.Since(started)
-	total := count.Load()
 	close(stop)
 	wg.Wait()
+	elapsed := time.Since(started)
+	total := count.Load()
 	close(errCh)
 	if workErr != nil {
 		b.Fatal(workErr)
