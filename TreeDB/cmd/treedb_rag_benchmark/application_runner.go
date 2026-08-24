@@ -1549,7 +1549,11 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, CGOEnabled: cgo,
 		Hostname: hostname, HostNote: cfg.HostNote, Command: cfg.Command,
 		RepetitionOrder: "query reps forward/reverse/forward; ingestion fresh DB reps 0..4; final candidate must use paired ABBA interleave",
-		Environment:     map[string]string{"GOROOT": runtime.GOROOT(), "GOMAXPROCS": fmt.Sprint(runtime.GOMAXPROCS(0))},
+		Environment: map[string]string{
+			"GOROOT": runtime.GOROOT(), "GOMAXPROCS": fmt.Sprint(runtime.GOMAXPROCS(0)),
+			"database_root":     cfg.Dir,
+			"resource_teardown": "every DB, document service, and HTTP server is closed; an explicit database root is retained for inspection",
+		},
 	}, nil
 }
 
