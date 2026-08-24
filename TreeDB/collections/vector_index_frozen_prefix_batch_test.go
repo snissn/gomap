@@ -121,6 +121,46 @@ func TestVectorIndexFrozenPrefixBatchUsesExactMinimum4297(t *testing.T) {
 	}
 }
 
+func TestVectorIndexFrozenPrefixBatchKeepsSmallMReachable4297(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	ids := make([][]byte, 0, nativeVectorFrozenPrefixBatchMinimum)
+	for candidate := 0; len(ids) < nativeVectorFrozenPrefixBatchMinimum; candidate++ {
+		id := []byte(fmt.Sprintf("doc-%04d", candidate))
+		if index.levelForDocumentID(id) == 0 {
+			ids = append(ids, id)
+		}
+	}
+	vectors := make([][]float32, len(ids))
+	for row := range vectors {
+		vectors[row] = []float32{1, float32(row+1) / 1000}
+	}
+	if err := index.insertVectorBatchLocked(ids, vectors); err != nil {
+		t.Fatal(err)
+	}
+	if index.frozenPrefixBatches != 0 {
+		t.Fatal("small-M batch used frozen-prefix construction")
+	}
+	reachable := map[int]bool{index.entry: true}
+	queue := []int{index.entry}
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		for _, neighbor := range index.nodes[nodeID].neighbors[0] {
+			if !reachable[neighbor.nodeID] {
+				reachable[neighbor.nodeID] = true
+				queue = append(queue, neighbor.nodeID)
+			}
+		}
+	}
+	if len(reachable) != len(index.nodes) {
+		t.Fatalf("entry reaches %d of %d nodes", len(reachable), len(index.nodes))
+	}
+}
+
 func BenchmarkVectorIndexFrozenPrefixBatch4297(b *testing.B) {
 	const dimensions = 768
 	rows := vectorIndexReciprocalParityRows4257(10_000, dimensions, false)

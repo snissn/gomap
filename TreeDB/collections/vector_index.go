@@ -2018,7 +2018,7 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 }
 
 func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) bool {
-	if !idx.nativePersistent || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || len(documentIDs) < 2 || idx.constructionTrace != nil || idx.layer0ConstructionPolicy != nil || idx.qualityPostfillCandidates != nil {
+	if !idx.nativePersistent || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || len(documentIDs) < 2 || idx.m < len(documentIDs) || idx.constructionTrace != nil || idx.layer0ConstructionPolicy != nil || idx.qualityPostfillCandidates != nil {
 		return false
 	}
 	for i, documentID := range documentIDs {
