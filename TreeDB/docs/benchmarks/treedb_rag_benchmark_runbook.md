@@ -184,10 +184,11 @@ matched-quality row. Base/final work, projection, quality, fixture, config, and
 vector digests must match exactly.
 
 Representative hashing c1 rows (QPS / p99 ms): text score
-`23,984 / 0.122`, vector score `65,866 / 0.045`, hybrid score
-`15,857 / 0.204`, and HTTP hybrid fetch `1,457 / 1.801`. Representative semantic
-c1 rows: text score `15,806 / 0.379`, vector score `58,650 / 0.042`, hybrid score
-`17,191 / 0.152`, and HTTP hybrid fetch `365 / 4.668`.
+`24,967.58 / 0.0631`, vector score `69,989.97 / 0.0269`, hybrid score
+`18,279.29 / 0.0734`, and HTTP hybrid fetch `1,634.47 / 1.0138`.
+Representative semantic c1 rows: text score `24,734.90 / 0.0683`, vector score
+`60,905.41 / 0.0199`, hybrid score `17,451.46 / 0.1527`, and HTTP hybrid fetch
+`409.96 / 4.5564`.
 
 ## Durable artifacts
 

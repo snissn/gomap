@@ -229,10 +229,14 @@ func isRevision(value string) bool {
 func validateProductAncestor(repo, productRevision, buildRevision string) error {
 	command := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", productRevision, buildRevision)
 	output, err := command.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s is not an ancestor of observed build %s: %w: %s", productRevision, buildRevision, err, strings.TrimSpace(string(output)))
+	if err == nil {
+		return nil
 	}
-	return nil
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) && exitError.ExitCode() == 1 {
+		return fmt.Errorf("%s is not an ancestor of observed build %s", productRevision, buildRevision)
+	}
+	return fmt.Errorf("git ancestry check failed for %s and %s: %w: %s", productRevision, buildRevision, err, strings.TrimSpace(string(output)))
 }
 
 func main() {
@@ -334,6 +338,15 @@ func runCoordinator(cfg config) error {
 		workers = make([]*worker, 0, len(cfg.Legs))
 		byName = make(map[string]*worker, len(cfg.Legs))
 		for _, leg := range cfg.Legs {
+			observedHash, err := hashFile(leg.Binary)
+			if err != nil {
+				stopWorkers(workers)
+				return fmt.Errorf("rehash %s epoch %d: %w", leg.Name, epoch, err)
+			}
+			if observedHash != binaryHashes[leg.Binary] {
+				stopWorkers(workers)
+				return fmt.Errorf("%s binary changed before epoch %d: got %s want %s", leg.Name, epoch, observedHash, binaryHashes[leg.Binary])
+			}
 			worker, err := startWorker(leg, cfg.Root, cfg.WorkerArgs, binaryHashes[leg.Binary], epoch, cfg.ReadyTimeout, cfg.CellTimeout)
 			if worker != nil {
 				workers = append(workers, worker)
