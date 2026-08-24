@@ -19,6 +19,9 @@ import (
 //	TREEDB_VECTOR_MIXED_MODE=current go test ./TreeDB/collections -run '^$' \
 //	  -bench '^BenchmarkVectorIndexMixedSearchInsert4300$' -benchtime=1x
 func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
+	if b.N != 1 {
+		b.Fatalf("run with -benchtime=1x; fixed mixed window got b.N=%d", b.N)
+	}
 	const (
 		baseRows   = 10_000
 		insertRows = 2_000
@@ -35,6 +38,14 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	}
 	if !validModes[mode] {
 		b.Fatalf("unknown TREEDB_VECTOR_MIXED_MODE %q", mode)
+	}
+	batchPace := 200 * time.Millisecond
+	if value := os.Getenv("TREEDB_VECTOR_MIXED_BATCH_PACE"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed < 0 {
+			b.Fatalf("invalid TREEDB_VECTOR_MIXED_BATCH_PACE %q", value)
+		}
+		batchPace = parsed
 	}
 
 	b.StopTimer()
@@ -90,7 +101,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 				index.publishSearchViewLocked(false)
 			}
 			index.mu.Unlock()
-			if wait := 200*time.Millisecond - time.Since(batchStarted); wait > 0 {
+			if wait := batchPace - time.Since(batchStarted); batchPace > 0 && wait > 0 {
 				time.Sleep(wait)
 			}
 		}
@@ -116,6 +127,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	b.ReportMetric(100*mixed.qps/baseline.qps, "mixed_qps_pct")
 	b.ReportMetric(float64(baseline.p99.Microseconds()), "baseline_p99_us")
 	b.ReportMetric(float64(mixed.p99.Microseconds()), "mixed_p99_us")
+	b.ReportMetric(float64(batchPace.Microseconds())/1000, "batch_pace_ms")
 	b.ReportMetric(float64(index.frozenPrefixBatches), "frozen_batches")
 	b.ReportMetric(float64(index.constructionWorkers), "worker_limit")
 	b.ReportMetric(float64(visibleDocs), "visible_docs")
@@ -162,6 +174,7 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 		time.Sleep(duration)
 	}
 	elapsed := time.Since(started)
+	total := count.Load()
 	close(stop)
 	wg.Wait()
 	close(errCh)
@@ -180,5 +193,5 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 		b.Fatal("no successful searches")
 	}
 	p99 := all[minInt(len(all)-1, (len(all)*99)/100)]
-	return vectorIndexMixedSearchWindow4300{qps: float64(count.Load()) / elapsed.Seconds(), p99: p99}
+	return vectorIndexMixedSearchWindow4300{qps: float64(total) / elapsed.Seconds(), p99: p99}
 }
