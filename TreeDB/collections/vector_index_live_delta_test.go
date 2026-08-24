@@ -89,6 +89,48 @@ func TestVectorIndexLiveDeltaVisibilityShadowingAndCutover(t *testing.T) {
 	}
 }
 
+func TestVectorIndexLiveDeltaBoundsAllocatedNodesWithoutPartialPublication(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	index.sourceDocumentRootsValid = true
+	index.mu.Lock()
+	if err := index.insertVectorBatchLocked([][]byte{[]byte("a")}, [][]float32{{1, 0}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.publishSearchViewLocked(false)
+	published := index.searchView.Load()
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("a")}, [][]float32{{0, 1}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	delta := index.liveDelta
+	delta.nodes = append(delta.nodes, make([]vectorIndexNode, defaultVectorIndexLiveDeltaRows-len(delta.nodes)-1)...)
+	for nodeID := 1; nodeID < len(delta.nodes); nodeID++ {
+		delta.nodes[nodeID].deleted = true
+	}
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("a")}, [][]float32{{-1, 0}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	if index.liveDelta != nil || index.liveDeltaCutovers != 1 {
+		index.mu.Unlock()
+		t.Fatalf("delta=%v cutovers=%d want nil,1", index.liveDelta != nil, index.liveDeltaCutovers)
+	}
+	if index.searchView.Load() != published {
+		index.mu.Unlock()
+		t.Fatal("cutover published a partially reconciled batch")
+	}
+	index.publishSearchViewLocked(false)
+	index.mu.Unlock()
+}
+
 func TestVectorIndexLiveDeltaSearchBudget(t *testing.T) {
 	for _, test := range []struct {
 		requested, deltaDocs, totalDocs, want int
