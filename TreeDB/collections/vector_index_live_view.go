@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -16,13 +17,14 @@ const (
 	vectorIndexSearchViewDiscarded
 )
 
-// vectorIndexSearchView is the last fully reconciled native graph. Node vectors
-// and document IDs are immutable after insertion; only changed adjacency rows
-// are copied when a new view is published.
+// vectorIndexSearchView is the last fully reconciled immutable search
+// generation. Node vectors and document IDs are immutable after insertion;
+// only changed adjacency rows are copied when a new view is published.
 type vectorIndexSearchView struct {
 	mu                       sync.RWMutex
 	reuseState               atomic.Uint32
 	nodes                    []vectorIndexNode
+	deltaNodes               []vectorIndexNode
 	name                     string
 	field                    string
 	metric                   VectorMetric
@@ -34,7 +36,10 @@ type vectorIndexSearchView struct {
 	schemaGeneration         uint64
 	entry                    int
 	maxLevel                 int
+	deltaEntry               int
+	deltaMaxLevel            int
 	liveDocs                 int
+	deltaLiveDocs            int
 	sourceDocumentRootsValid bool
 	rebuildDeletedRatio      float64
 	persisted                atomic.Pointer[vectorIndexSearchPersistedMetadata]
@@ -76,38 +81,28 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		next.mu.Lock()
 	}
 	next.reuseState.Store(vectorIndexSearchViewActive)
-	nodes := next.nodes
-	if len(idx.nodes) < cap(nodes)-len(idx.nodes) {
-		nodes = make([]vectorIndexNode, len(idx.nodes))
-	} else if cap(nodes) < len(idx.nodes) {
-		capacity := maxInt(len(idx.nodes), cap(nodes)*2)
-		nodes = make([]vectorIndexNode, len(idx.nodes), capacity)
-	} else {
-		if len(idx.nodes) < len(nodes) {
-			clear(nodes[len(idx.nodes):])
-		}
-		nodes = nodes[:len(idx.nodes)]
+	var previousNodes, previousDeltaNodes []vectorIndexNode
+	if previous != nil {
+		previousNodes = previous.nodes
+		previousDeltaNodes = previous.deltaNodes
 	}
-	if !forceFull && previous != nil && len(previous.nodes) <= len(nodes) {
-		copy(nodes, previous.nodes)
-		for nodeID := len(previous.nodes); nodeID < len(nodes); nodeID++ {
-			nodes[nodeID] = cloneVectorIndexSearchNode(idx.nodes[nodeID])
-		}
-		for nodeID := range idx.searchViewDirty {
-			if nodeID >= 0 && nodeID < len(previous.nodes) {
-				nodes[nodeID] = cloneVectorIndexSearchNode(idx.nodes[nodeID])
-			}
-		}
+	nodes := copyVectorIndexSearchNodes(next.nodes, previousNodes, idx.nodes, idx.searchViewDirty, forceFull)
+	var deltaNodes []vectorIndexNode
+	deltaEntry, deltaMaxLevel, deltaLiveDocs := -1, -1, 0
+	if idx.liveDelta != nil {
+		deltaNodes = copyVectorIndexSearchNodes(next.deltaNodes, previousDeltaNodes, idx.liveDelta.nodes, idx.liveDelta.searchViewDirty, forceFull)
+		deltaEntry = idx.liveDelta.entry
+		deltaMaxLevel = idx.liveDelta.maxLevel
+		deltaLiveDocs = len(idx.liveDelta.currentNode)
 	} else {
-		for nodeID := range idx.nodes {
-			nodes[nodeID] = cloneVectorIndexSearchNode(idx.nodes[nodeID])
-		}
+		deltaNodes = copyVectorIndexSearchNodes(next.deltaNodes, previousDeltaNodes, nil, nil, true)
 	}
 	epoch := idx.persistedEpoch
 	if epoch == 0 {
 		epoch = idx.fullSnapshotBaseEpoch
 	}
 	next.nodes = nodes
+	next.deltaNodes = deltaNodes
 	next.name = idx.name
 	next.field = idx.field
 	next.metric = idx.metric
@@ -119,7 +114,10 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.schemaGeneration = idx.schemaGeneration
 	next.entry = idx.entry
 	next.maxLevel = idx.maxLevel
-	next.liveDocs = len(idx.currentNode)
+	next.deltaEntry = deltaEntry
+	next.deltaMaxLevel = deltaMaxLevel
+	next.liveDocs = len(idx.currentNode) + deltaLiveDocs
+	next.deltaLiveDocs = deltaLiveDocs
 	next.sourceDocumentRootsValid = idx.sourceDocumentRootsValid
 	next.rebuildDeletedRatio = idx.rebuildDeletedRatio
 	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
@@ -128,7 +126,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.mu.Unlock()
 	idx.searchView.Store(next)
 	if previous != nil {
-		if len(previous.nodes) > len(next.nodes) {
+		if len(previous.nodes) > len(next.nodes) || len(previous.deltaNodes) > len(next.deltaNodes) {
 			previous.reuseState.Store(vectorIndexSearchViewDiscarded)
 		} else {
 			previous.reuseState.Store(vectorIndexSearchViewRetired)
@@ -136,6 +134,39 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		}
 	}
 	clear(idx.searchViewDirty)
+	if idx.liveDelta != nil {
+		clear(idx.liveDelta.searchViewDirty)
+	}
+}
+
+func copyVectorIndexSearchNodes(dst, previous, current []vectorIndexNode, dirty map[int]struct{}, forceFull bool) []vectorIndexNode {
+	if len(current) < cap(dst)-len(current) {
+		dst = make([]vectorIndexNode, len(current))
+	} else if cap(dst) < len(current) {
+		capacity := maxInt(len(current), cap(dst)*2)
+		dst = make([]vectorIndexNode, len(current), capacity)
+	} else {
+		if len(current) < len(dst) {
+			clear(dst[len(current):])
+		}
+		dst = dst[:len(current)]
+	}
+	if !forceFull && len(previous) <= len(dst) {
+		copy(dst, previous)
+		for nodeID := len(previous); nodeID < len(dst); nodeID++ {
+			dst[nodeID] = cloneVectorIndexSearchNode(current[nodeID])
+		}
+		for nodeID := range dirty {
+			if nodeID >= 0 && nodeID < len(previous) {
+				dst[nodeID] = cloneVectorIndexSearchNode(current[nodeID])
+			}
+		}
+	} else {
+		for nodeID := range current {
+			dst[nodeID] = cloneVectorIndexSearchNode(current[nodeID])
+		}
+	}
+	return dst
 }
 
 func (idx *VectorIndex) releaseSearchView(view *vectorIndexSearchView) {
@@ -220,10 +251,11 @@ func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinitio
 }
 
 func (view *vectorIndexSearchView) nativeSearchState() vectorIndexNativeSearchState {
-	deletedDocs := len(view.nodes) - view.liveDocs
+	nodes := len(view.nodes) + len(view.deltaNodes)
+	deletedDocs := nodes - view.liveDocs
 	return vectorIndexNativeSearchState{
 		liveDocs:      view.liveDocs,
-		rebuildNeeded: deletedDocs > 0 && len(view.nodes) > 0 && float64(deletedDocs)/float64(len(view.nodes)) >= view.rebuildDeletedRatio,
+		rebuildNeeded: deletedDocs > 0 && nodes > 0 && float64(deletedDocs)/float64(nodes) >= view.rebuildDeletedRatio,
 		fullRebuilds:  view.fullRebuilds,
 	}
 }
@@ -242,17 +274,55 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 	if !view.sourceDocumentRootsValid {
 		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
 	}
+	if len(view.deltaNodes) == 0 {
+		return searchVectorIndexViewPlane(query, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+	}
+	baseResults, err := searchVectorIndexViewPlane(query, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	if err != nil {
+		return nil, err
+	}
+	deltaTopK := vectorIndexLiveDeltaSearchBudget(topK, view.deltaLiveDocs, view.liveDocs)
+	deltaEfSearch := efSearch
+	if deltaEfSearch <= 0 {
+		deltaEfSearch = view.efSearch
+	}
+	deltaEfSearch = vectorIndexLiveDeltaSearchBudget(deltaEfSearch, view.deltaLiveDocs, view.liveDocs)
+	deltaResults, err := searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.deltaSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	if err != nil {
+		return nil, err
+	}
+	for deltaTopK < topK && len(deltaResults) == deltaTopK && (len(baseResults) < topK || vectorIndexSearchResultBefore(deltaResults[len(deltaResults)-1], baseResults[len(baseResults)-1])) {
+		deltaTopK = minInt(topK, deltaTopK*2)
+		deltaEfSearch = maxInt(deltaEfSearch, deltaTopK)
+		deltaResults, err = searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.deltaSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
+}
+
+func vectorIndexLiveDeltaSearchBudget(requested, deltaDocs, totalDocs int) int {
+	if requested <= 0 || deltaDocs <= 0 || totalDocs <= 0 {
+		return requested
+	}
+	budget := (requested*deltaDocs + totalDocs - 1) / totalDocs
+	budget = maxInt(budget, minInt(16, requested))
+	return minInt(budget, requested)
+}
+
+func searchVectorIndexViewPlane(query []float32, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
 	runtimeIndex := VectorIndex{
 		metric:     view.metric,
 		encoding:   view.encoding,
 		dimensions: view.dimensions,
 		m:          view.m,
 		efSearch:   view.efSearch,
-		nodes:      view.nodes,
-		entry:      view.entry,
-		maxLevel:   view.maxLevel,
+		nodes:      nodes,
+		entry:      entry,
+		maxLevel:   maxLevel,
 	}
-	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithLiveDocsLocked(query, topK, efSearch, view.liveDocs, &buffer.nativeSearchScratch)
+	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithLiveDocsLocked(query, topK, efSearch, liveDocs, scratch)
 	if err != nil {
 		return nil, err
 	}
@@ -262,33 +332,92 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 		if resultCount >= topK {
 			break
 		}
-		if candidate.nodeID < 0 || candidate.nodeID >= len(view.nodes) || view.nodes[candidate.nodeID].deleted {
+		if candidate.nodeID < 0 || candidate.nodeID >= len(nodes) || nodes[candidate.nodeID].deleted {
 			continue
 		}
 		var err error
-		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(view.nodes[candidate.nodeID].documentID), math.MaxInt, "result id")
+		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(nodes[candidate.nodeID].documentID), math.MaxInt, "result id")
 		if err != nil {
 			return nil, err
 		}
 		resultCount++
 	}
-	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
-	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	*results = resizeVectorIndexSearchResultBuffer(*results, resultCount)
+	*idBytes = resizeVectorIndexSearchByteBuffer(*idBytes, idByteCount)
 	resultIndex, idOffset := 0, 0
 	for _, candidate := range candidates {
 		if resultIndex >= resultCount {
 			break
 		}
-		node := view.nodes[candidate.nodeID]
+		node := nodes[candidate.nodeID]
 		if node.deleted {
 			continue
 		}
 		nextIDOffset := idOffset + len(node.documentID)
-		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		id := (*idBytes)[idOffset:nextIDOffset:nextIDOffset]
 		copy(id, node.documentID)
-		buffer.results[resultIndex] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
+		(*results)[resultIndex] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
 		resultIndex++
 		idOffset = nextIDOffset
 	}
+	return *results, nil
+}
+
+func mergeVectorIndexViewResults(base, delta []VectorIndexSearchResult, topK int, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	resultCount := minInt(topK, len(base)+len(delta))
+	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
+	idByteCount := 0
+	baseIndex, deltaIndex := 0, 0
+	for resultIndex := 0; resultIndex < resultCount; {
+		candidate, nextBase, nextDelta := nextVectorIndexViewResult(base, delta, baseIndex, deltaIndex)
+		baseIndex, deltaIndex = nextBase, nextDelta
+		if vectorIndexViewResultAlreadySelected(buffer.results[:resultIndex], candidate.ID) {
+			if baseIndex == len(base) && deltaIndex == len(delta) {
+				resultCount = resultIndex
+			}
+			continue
+		}
+		var err error
+		idByteCount, err = addVectorIndexSearchByteTotal(idByteCount, len(candidate.ID), math.MaxInt, "result id")
+		if err != nil {
+			return nil, err
+		}
+		buffer.results[resultIndex] = candidate
+		resultIndex++
+	}
+	buffer.results = buffer.results[:resultCount]
+	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	idOffset := 0
+	for resultIndex := range buffer.results {
+		nextIDOffset := idOffset + len(buffer.results[resultIndex].ID)
+		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		copy(id, buffer.results[resultIndex].ID)
+		buffer.results[resultIndex].ID = id
+		idOffset = nextIDOffset
+	}
 	return buffer.results, nil
+}
+
+func nextVectorIndexViewResult(base, delta []VectorIndexSearchResult, baseIndex, deltaIndex int) (VectorIndexSearchResult, int, int) {
+	if deltaIndex >= len(delta) || baseIndex < len(base) && vectorIndexSearchResultBefore(base[baseIndex], delta[deltaIndex]) {
+		return base[baseIndex], baseIndex + 1, deltaIndex
+	}
+	return delta[deltaIndex], baseIndex, deltaIndex + 1
+}
+
+func vectorIndexSearchResultBefore(left, right VectorIndexSearchResult) bool {
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	return bytes.Compare(left.ID, right.ID) < 0
+}
+
+func vectorIndexViewResultAlreadySelected(results []VectorIndexSearchResult, id []byte) bool {
+	// ponytail: top-K is small; add reusable ID-set scratch only if merge profiles demand it.
+	for resultIndex := range results {
+		if bytes.Equal(results[resultIndex].ID, id) {
+			return true
+		}
+	}
+	return false
 }
