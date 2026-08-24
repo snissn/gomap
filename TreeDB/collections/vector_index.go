@@ -2928,6 +2928,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	if err != nil {
 		return nil, trace, err
 	}
+	idx.liveDeltaEnabled.Store(true)
 	sortVectorSearchResults(results)
 	if len(results) > opts.TopK {
 		results = results[:opts.TopK]
