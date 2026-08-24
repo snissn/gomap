@@ -28,10 +28,17 @@ func TestVectorIndexFrozenPrefixBatchFallsBackForUpdates4297(t *testing.T) {
 	index := buildVectorIndexFrozenPrefixBatch4297(t, rows)
 	beforeBatches := index.frozenPrefixBatches
 	oldNode := index.currentNode["doc-0000"]
-	ids := [][]byte{[]byte("doc-0000"), []byte("new")}
-	vectors := [][]float32{append([]float32(nil), rows[1]...), append([]float32(nil), rows[2]...)}
-	vectors[0][0] += 7
-	vectors[1][0] += 11
+	ids := make([][]byte, nativeVectorFrozenPrefixBatchMinimum)
+	vectors := make([][]float32, len(ids))
+	for row := range ids {
+		vectors[row] = append([]float32(nil), rows[row+1]...)
+		if row%nativeVectorFrozenPrefixBatchWidth == 0 {
+			ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+			vectors[row][0] += 7 + float32(row)
+		} else {
+			ids[row] = []byte(fmt.Sprintf("new-%04d", row))
+		}
+	}
 	if err := index.insertVectorBatchLocked(ids, vectors); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +48,7 @@ func TestVectorIndexFrozenPrefixBatchFallsBackForUpdates4297(t *testing.T) {
 	if !index.nodes[oldNode].deleted || index.currentNode["doc-0000"] == oldNode {
 		t.Fatal("serial fallback did not replace the existing document")
 	}
-	if _, ok := index.currentNode["new"]; !ok {
+	if _, ok := index.currentNode["new-0001"]; !ok {
 		t.Fatal("serial fallback did not insert the new document")
 	}
 }
@@ -92,6 +99,25 @@ func TestVectorIndexFrozenPrefixBatchKeepsSmallBatchesSerial4297(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshotVectorIndexTopology4257(indexes[0]), snapshotVectorIndexTopology4257(indexes[1])) {
 		t.Fatal("small batch changed serial topology")
+	}
+}
+
+func TestVectorIndexFrozenPrefixBatchUsesExactMinimum4297(t *testing.T) {
+	rows := vectorIndexReciprocalParityRows4257(nativeVectorFrozenPrefixBatchMinimum, 8, false)
+	ids := make([][]byte, len(rows))
+	for row := range ids {
+		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+	}
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	if err := index.insertVectorBatchLocked(ids, rows); err != nil {
+		t.Fatal(err)
+	}
+	if index.frozenPrefixBatches == 0 {
+		t.Fatal("exact-minimum batch did not use frozen-prefix construction")
 	}
 }
 

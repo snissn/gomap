@@ -1997,7 +1997,6 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		errs := make([]error, len(plans))
 		var wg sync.WaitGroup
 		for worker := 1; worker < len(plans); worker++ {
-			worker := worker
 			wg.Go(func() {
 				plans[worker], errs[worker] = idx.planFrozenPrefixInsertLocked(documentIDs[start+worker], vectors[start+worker], entry, maxLevel)
 			})
@@ -2101,7 +2100,6 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	}
 	var wg sync.WaitGroup
 	for worker := 1; worker < workers; worker++ {
-		worker := worker
 		wg.Go(func() {
 			for neighbor := worker; neighbor < len(neighbors); neighbor += workers {
 				idx.linkLayerLocked(neighbors[neighbor], nodeID, layer, false)
