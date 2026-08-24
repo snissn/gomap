@@ -152,6 +152,18 @@ func TestApplicationTenantFilterRequestsAndLeakageAccounting(t *testing.T) {
 	}
 }
 
+func TestApplicationGateRetainsPreCandidateThresholds(t *testing.T) {
+	for _, summary := range []ingestionSummary{
+		{MedianDocsPerSec: 10, MedianBytesPerOp: 1, HistoricalReproduced: true},
+		{MedianDocsPerSec: 1000, MedianBytesPerOp: 1 << 40},
+	} {
+		gate := freezeApplicationGate(summary)
+		if gate.CandidateMinDocsPerSec != 325.45 || gate.CandidateMaxBytesPerOp != 1947235 {
+			t.Fatalf("gate changed with measured candidate summary: %+v", gate)
+		}
+	}
+}
+
 func TestFinalApplicationPolicyRejectsDiagnosticCounts(t *testing.T) {
 	cfg := defaultApplicationConfig()
 	cfg.FinalEvidence = true
