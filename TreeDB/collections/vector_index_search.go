@@ -1252,11 +1252,15 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, errCollectionDBNil
 	}
+	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	if found && catalogCurrent && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
-	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	def, found, catalogCurrent = c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
 	if !catalogCurrent {
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
