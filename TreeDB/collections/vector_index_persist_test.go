@@ -417,6 +417,56 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeSearchDoesNotFlushBufferedDocuments(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	pendingBefore := col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if pendingBefore != 1 {
+		t.Fatalf("pending documents before search=%d want 1", pendingBefore)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      1,
+		EfSearch:  8,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" {
+		t.Fatalf("search buffered native vector response=%+v err=%v", response, err)
+	}
+	col.writeDomain.mu.RLock()
+	pendingAfter := col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if pendingAfter != pendingBefore {
+		t.Fatalf("pending documents after search=%d want %d", pendingAfter, pendingBefore)
+	}
+}
+
 func TestCollectionVectorIndexRebuildClearsLiveDelta(t *testing.T) {
 	d := openCollectionCommandWALDB(t, t.TempDir())
 	defer func() { _ = d.Close() }()
