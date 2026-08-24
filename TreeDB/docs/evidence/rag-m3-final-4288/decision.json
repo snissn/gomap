@@ -1008,5 +1008,12 @@
     "all_named_m3_gates_pass": false,
     "close_tracker_4288": false,
     "blocker": "Thirty-five matched existing rows have positive p99 deltas in both exact ABBA pairs. The frozen policy supplies no prospective p99 noise threshold or exception contract; final independent review rejected post-hoc acceptance."
+  },
+  "null_abba_diagnostic": {
+    "summary": "null-abba/decision.json",
+    "summary_sha256": "636153e3c07b4a6e92375c69420e15bb776695752a1988351e041537ba7ada6d",
+    "identical_binary_repeat_positive_p99_rows": 96,
+    "identical_binary_repeat_stable_qps_regressions_over_10_percent": 9,
+    "disposition": "Literal performance gate is non-attributive under identical bytes; M3 remains failed rather than inventing a post-hoc exception."
   }
 }
