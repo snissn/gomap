@@ -322,6 +322,7 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 		prepared = &preparedQuery
 	}
 	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork = vectorIndexNativeSearchWork{}
 		buffer.nativeSearchWork.queryPreparations = 1
 	}
 	if len(view.deltaNodes) == 0 {

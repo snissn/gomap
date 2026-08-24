@@ -333,6 +333,12 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	if work.queryPreparations != 1 || work.baseVisited == 0 || work.deltaVisited == 0 || work.deltaVisited > len(deltaVectors) || !work.retryChangedMergedTopK {
 		t.Fatalf("delta work=%+v want one query preparation, bounded unique delta visits, and a changed merged top-K", work)
 	}
+	if _, _, err := index.searchGraphOnlyWithBuffer(query, 100, 200, &buffer); err != nil {
+		t.Fatal(err)
+	}
+	if got := buffer.nativeSearchWork; got != work {
+		t.Fatalf("reused buffer delta work=%+v want per-search work %+v", got, work)
+	}
 	view := index.acquireSearchView()
 	if view == nil {
 		t.Fatal("search view is unavailable")
