@@ -2579,6 +2579,20 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		return err
 	}
 
+	// Collection command-WAL writers buffer root deltas above the cached layer.
+	// Drain those buffers and prevent new ones from publishing against the old
+	// index generation until the replacement generation is installed.
+	// ponytail: this blocks those writers for one vacuum; add generation-aware
+	// buffer rebasing only if the measured maintenance pause requires it.
+	var unlockCommandWALPublish func()
+	if db.commandWALCached {
+		unlockCommandWALPublish, err = db.backend.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return err
+		}
+		defer unlockCommandWALPublish()
+	}
+
 	if err := db.reconcileCachedBackendMaintenance(db.backend.VacuumIndexOnline(ctx)); err != nil {
 		return err
 	}

@@ -10927,7 +10927,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				return nil, err
 			}
 		}
-		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, plan)
+		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, bufferedCommandWALIntent != nil, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -10993,7 +10993,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 	}
 
-	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, plan)
+	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, false, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
@@ -11310,6 +11310,7 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	persistedConflictsChecked bool,
 	preflightBaseCommitSeq uint64,
 	preflightBaseSystemRoot uint64,
+	refreshSnapshot bool,
 	plan *insertBatchPlan,
 ) (*backenddb.Snapshot, *collectionCatalog, uint64, uint64, error) {
 	plannedWithMutationLocked := *mutationLocked
@@ -11325,16 +11326,16 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 		rootNames:                 rootNames,
 		baseRootIDs:               baseRootIDs,
 		plan:                      plan,
-		allowRootDrift:            !plannedWithMutationLocked,
-		persistedConflictsChecked: persistedConflictsChecked,
+		allowRootDrift:            !plannedWithMutationLocked || refreshSnapshot,
+		persistedConflictsChecked: persistedConflictsChecked && !refreshSnapshot,
 		preflightBaseCommitSeq:    preflightBaseCommitSeq,
 		preflightBaseSystemRoot:   preflightBaseSystemRoot,
 	}
-	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, validation)
+	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked && !refreshSnapshot, validation)
 	if err != nil {
 		return nil, nil, 0, 0, err
 	}
-	if !plannedWithMutationLocked {
+	if !plannedWithMutationLocked || refreshSnapshot {
 		updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
 	}
 	return pin, currentCatalog, snapshotCommitSeq(pin), snapshotSystemRoot(pin), nil
@@ -11768,10 +11769,47 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	refreshCommandWALSnapshot := func() (*backenddb.Snapshot, error) {
+		current := c.db.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		currentCatalog, refreshErr := c.catalogForSnapshot(current)
+		if refreshErr != nil {
+			_ = current.Close()
+			return nil, refreshErr
+		}
+		if currentCatalog == nil {
+			_ = current.Close()
+			return nil, errCollectionNotFound
+		}
+		if !sameCollectionMeta(currentCatalog.meta, c.meta) {
+			_ = current.Close()
+			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", c.meta.Name)
+		}
+		for i, rootName := range rootNames {
+			rootID := currentCatalog.rootID(rootName)
+			baseRootIDs[rootName] = rootID
+			ordered[i].BaseRoot = rootID
+		}
+		catalog = currentCatalog
+		baseCommitSeq = snapshotCommitSeq(current)
+		baseSystemRoot = snapshotSystemRoot(current)
+		return current, nil
+	}
 	if columnStoreWriteEnabled(c.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
+			var current *backenddb.Snapshot
+			if commandWALIntent != nil {
+				var refreshErr error
+				current, refreshErr = refreshCommandWALSnapshot()
+				if refreshErr != nil {
+					return refreshErr
+				}
+				defer func() { _ = current.Close() }()
+			}
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 				meta:              c.meta,
 				catalog:           catalog,
@@ -11810,6 +11848,11 @@ func (c *Collection) insertBatchNoIndex(
 
 	if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
+			current, refreshErr := refreshCommandWALSnapshot()
+			if refreshErr != nil {
+				return refreshErr
+			}
+			defer func() { _ = current.Close() }()
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})

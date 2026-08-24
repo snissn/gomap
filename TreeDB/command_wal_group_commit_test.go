@@ -953,6 +953,57 @@ func TestPublicCommandWALGroupCommitPendingCollectionBarrierMakesProgress(t *tes
 	}
 }
 
+func TestPublicCommandWALVacuumDrainsPendingCollectionRoots(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	manager := collections.NewCollectionManager(database.backend)
+	meta := collections.CollectionMeta{
+		Name:    "vacuum-pending-docs",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+	}
+	if _, err := manager.CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	appliedBeforeInsert := database.backend.State().AppliedCommandLSN
+	if _, err := collection.Insert([]byte("doc-1"), []byte(`{"name":"before"}`)); err != nil {
+		t.Fatalf("collection Insert before vacuum: %v", err)
+	}
+	if got := database.backend.State().AppliedCommandLSN; got != appliedBeforeInsert {
+		t.Fatalf("collection insert published eagerly: AppliedCommandLSN=%d, want pending frontier %d", got, appliedBeforeInsert)
+	}
+
+	if err := database.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("VacuumIndexOnline: %v", err)
+	}
+	if got := database.backend.State().AppliedCommandLSN; got <= appliedBeforeInsert {
+		t.Fatalf("vacuum did not publish pending collection roots: AppliedCommandLSN=%d, want > %d", got, appliedBeforeInsert)
+	}
+	if _, err := collection.Insert([]byte("doc-2"), []byte(`{"name":"after"}`)); err != nil {
+		t.Fatalf("collection Insert after vacuum: %v", err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatalf("collection Flush after vacuum: %v", err)
+	}
+	for _, id := range []string{"doc-1", "doc-2"} {
+		if _, found, err := collection.GetInto([]byte(id), nil); err != nil || !found {
+			t.Fatalf("collection GetInto %q found=%t err=%v", id, found, err)
+		}
+	}
+}
+
 func TestPublicCommandWALGroupCommitCheckpointAndCloseWaitForFormingGroup(t *testing.T) {
 	for _, maintenance := range []string{"checkpoint", "close"} {
 		t.Run(maintenance, func(t *testing.T) {
