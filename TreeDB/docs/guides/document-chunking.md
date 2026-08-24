@@ -68,6 +68,17 @@ ill-typed chunk metadata is rejected rather than silently indexed, and a child
 whose ID does not match its own `<parent>#<ordinal>` metadata fails closed.
 Documents without any chunk metadata are ordinary documents.
 
+An optional top-level parent `meta` value must be a JSON object. The shared
+chunk plan copies that exact object value under `meta` on every child, with no
+projection, filtering, or key transformation. The plan owns its copy, so later
+caller-buffer changes cannot alter planned child bytes. Same-named keys such as
+`meta.chunk_parent` remain nested caller metadata; they cannot replace the
+authoritative top-level `chunk_parent`, `chunk_ordinal`, or `chunk_kind`.
+Likewise, caller-supplied top-level linkage values are not inherited into
+children. A missing `meta` field emits the same metadata-free child shape as
+before. A non-object or otherwise malformed `meta` value rejects the complete
+plan before parent or child mutation.
+
 Parent IDs must be non-empty valid UTF-8 and must not contain `#`. Rejection is
 a typed `*chunking.ParentIDError` before mutation. This minimal policy keeps the
 parent namespace disjoint from every child ID and preserves `chunk_parent`
@@ -102,6 +113,13 @@ res, err := col.IngestChunkedDocument(parentID, parentDocJSON,
 - Children are ordinary documents to the index layer: text, scalar, and vector
   indexes maintain them through the normal batch paths and resolve only live
   children after a successful re-chunk.
+
+Re-ingestion replaces the parent and child documents, so inherited metadata and
+its scalar-index values are replaced with the new `meta` object; stale values
+do not remain on live children. In reconstructable column-store layouts,
+`meta` follows the existing schema: declare selected paths as columns when
+needed, or preserve it through the configured retained non-column payload.
+Chunk ingestion does not implicitly widen the column schema.
 
 `ChunkChildren(parentID)` lists and validates the contiguous live ordinals.
 `ChunkChildrenWithStats` also returns `ScannedPrimaryRows`,

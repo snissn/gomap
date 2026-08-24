@@ -111,9 +111,9 @@ func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
 
 	t.Run("queried index results must match across reopen and fixture", func(t *testing.T) {
 		want := applicationIndexQuerySnapshot{
-			TextChildIDs:    []string{"source#0", "source#1"},
-			VectorChildIDs:  []string{"source#0", "source#1"},
-			ScalarParentIDs: []string{"source"},
+			TextChildIDs:      []string{"source#0", "source#1"},
+			VectorChildIDs:    []string{"source#0", "source#1"},
+			ScalarDocumentIDs: []string{"source", "source#0", "source#1"},
 		}
 		if err := validateApplicationIndexQueryParity(want, want, want); err != nil {
 			t.Fatalf("valid parity: %v", err)
@@ -121,13 +121,13 @@ func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
 		for name, mutate := range map[string]func(*applicationIndexQuerySnapshot){
 			"text stale":     func(s *applicationIndexQuerySnapshot) { s.TextChildIDs = append(s.TextChildIDs, "deleted#0") },
 			"vector missing": func(s *applicationIndexQuerySnapshot) { s.VectorChildIDs = s.VectorChildIDs[:1] },
-			"scalar corrupt": func(s *applicationIndexQuerySnapshot) { s.ScalarParentIDs = []string{"other"} },
+			"scalar corrupt": func(s *applicationIndexQuerySnapshot) { s.ScalarDocumentIDs = []string{"other"} },
 		} {
 			t.Run(name, func(t *testing.T) {
 				after := want
 				after.TextChildIDs = append([]string(nil), want.TextChildIDs...)
 				after.VectorChildIDs = append([]string(nil), want.VectorChildIDs...)
-				after.ScalarParentIDs = append([]string(nil), want.ScalarParentIDs...)
+				after.ScalarDocumentIDs = append([]string(nil), want.ScalarDocumentIDs...)
 				mutate(&after)
 				if err := validateApplicationIndexQueryParity(want, after, want); err == nil {
 					t.Fatal("bad queried index parity accepted")

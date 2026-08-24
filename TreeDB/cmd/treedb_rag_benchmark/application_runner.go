@@ -146,9 +146,9 @@ type qualityMetrics struct {
 }
 
 type applicationIndexQuerySnapshot struct {
-	TextChildIDs    []string
-	VectorChildIDs  []string
-	ScalarParentIDs []string
+	TextChildIDs      []string
+	VectorChildIDs    []string
+	ScalarDocumentIDs []string
 }
 
 type applicationRow struct {
@@ -528,7 +528,9 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 				for _, collapse := range []string{"disabled", "enabled_cap_2"} {
 					for _, surface := range applicationSurfaces {
 						for _, clients := range applicationClients {
-							rows = append(rows, applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, VectorRoute: "declared_column_graph_ann", Clients: clients})
+							cell := applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, Clients: clients}
+							cell.VectorRoute = applicationVectorRoute(cell)
+							rows = append(rows, cell)
 						}
 					}
 				}
@@ -538,16 +540,22 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 	return rows
 }
 
+func applicationVectorRoute(cell applicationCellIdentity) string {
+	if cell.Route == "text_only" {
+		return "none"
+	}
+	if cell.Surface == "http_service" && cell.Route == "vector_only" && cell.Filter == filterUnfiltered {
+		return "declared_column_graph_ann"
+	}
+	return "declared_column_graph_exact"
+}
+
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
 	issues := []int{}
 	codes := []string{}
-	if cell.Filter != filterUnfiltered {
-		issues = append(issues, 4290)
-		codes = append(codes, "source_metadata_not_propagated")
-		if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
-			issues = append(issues, 4292)
-			codes = append(codes, "multi_field_filter_unavailable")
-		}
+	if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
+		issues = append(issues, 4292)
+		codes = append(codes, "multi_field_filter_unavailable")
 	}
 	if cell.Collapse != "disabled" {
 		issues = append(issues, 4291)
@@ -672,7 +680,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 	lifecycle.ColdReopenParity = beforeDigest == afterDigest
 	lifecycle.TextIndexParity = equalStrings(beforeIndexes.TextChildIDs, afterIndexes.TextChildIDs)
 	lifecycle.VectorIndexParity = equalStrings(beforeIndexes.VectorChildIDs, afterIndexes.VectorChildIDs)
-	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarParentIDs, afterIndexes.ScalarParentIDs)
+	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarDocumentIDs, afterIndexes.ScalarDocumentIDs)
 	lifecycle.FinalSources = len(applicationSourceDocuments(fixture, true))
 	lifecycle.FinalChunks = len(childIDs)
 	if err := validateApplicationIndexQueryParity(beforeIndexes, afterIndexes, expectedIndexes); err != nil {
@@ -993,10 +1001,10 @@ func queryApplicationIndexes(col *collections.Collection, fixture *applicationFi
 			return snapshot, fmt.Errorf("scalar index query updated_year=%d: %w", year, err)
 		}
 		for _, id := range ids {
-			snapshot.ScalarParentIDs = append(snapshot.ScalarParentIDs, string(id))
+			snapshot.ScalarDocumentIDs = append(snapshot.ScalarDocumentIDs, string(id))
 		}
 	}
-	sort.Strings(snapshot.ScalarParentIDs)
+	sort.Strings(snapshot.ScalarDocumentIDs)
 	return snapshot, nil
 }
 
@@ -1006,13 +1014,14 @@ func expectedApplicationIndexQuerySnapshot(fixture *applicationFixture, childIDs
 	}
 	for i, id := range childIDs {
 		expected.TextChildIDs[i], expected.VectorChildIDs[i] = string(id), string(id)
+		expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, string(id))
 	}
 	for _, source := range fixture.Sources {
 		if !source.Deleted {
-			expected.ScalarParentIDs = append(expected.ScalarParentIDs, source.ID)
+			expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, source.ID)
 		}
 	}
-	sort.Strings(expected.ScalarParentIDs)
+	sort.Strings(expected.ScalarDocumentIDs)
 	return expected
 }
 
@@ -1020,7 +1029,7 @@ func validateApplicationIndexQueryParity(before, after, expected applicationInde
 	for name, values := range map[string][3][]string{
 		"text":   {before.TextChildIDs, after.TextChildIDs, expected.TextChildIDs},
 		"vector": {before.VectorChildIDs, after.VectorChildIDs, expected.VectorChildIDs},
-		"scalar": {before.ScalarParentIDs, after.ScalarParentIDs, expected.ScalarParentIDs},
+		"scalar": {before.ScalarDocumentIDs, after.ScalarDocumentIDs, expected.ScalarDocumentIDs},
 	} {
 		if !equalStrings(values[0], values[2]) {
 			return fmt.Errorf("%s index before reopen does not match fixture live set: got=%q want=%q", name, values[0], values[2])
@@ -1189,6 +1198,51 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 	return row, nil
 }
 
+func applicationDirectScalarFilter(cell applicationCellIdentity) *collections.HybridScalarFilter {
+	if cell.Filter == filterTenantAlpha {
+		return &collections.HybridScalarFilter{IndexName: "meta_tenant_id", Value: "alpha"}
+	}
+	return nil
+}
+
+func applicationServiceFilter(cell applicationCellIdentity) *documentservice.Filter {
+	if cell.Filter == filterTenantAlpha {
+		return &documentservice.Filter{Field: "meta.tenant_id", Operator: "==", Value: "alpha"}
+	}
+	return nil
+}
+
+func applicationScopeViolations(fixture *applicationFixture, filter string, ids []string) (int, int) {
+	if filter == filterUnfiltered {
+		return 0, 0
+	}
+	crossTenant, crossWorkspace := 0, 0
+	for _, id := range ids {
+		parentID := id
+		if parent, _, ok := chunking.ParseChildID(id); ok {
+			parentID = parent
+		}
+		var source *applicationSource
+		for i := range fixture.Sources {
+			if fixture.Sources[i].ID == parentID {
+				source = &fixture.Sources[i]
+				break
+			}
+		}
+		if source == nil {
+			crossTenant++
+			crossWorkspace++
+			continue
+		}
+		if source.Tenant != "alpha" {
+			crossTenant++
+		}
+		if (filter == filterTenantAlphaWorkspaceRed || filter == filterModerateRange) && source.Workspace != "red" {
+			crossWorkspace++
+		}
+	}
+	return crossTenant, crossWorkspace
+}
 func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
 	if rep%2 == 1 {
@@ -1258,6 +1312,7 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 
 func runDirectQuery(cfg applicationConfig, col *collections.Collection, query applicationQuery, vector []float32, cell applicationCellIdentity, attributionQuery bool) (queryResult, error) {
 	opts := collections.HybridSearchOptions{TopK: cfg.TopK}
+	opts.ScalarFilter = applicationDirectScalarFilter(cell)
 	if cell.Route == "text_only" || cell.Route == "hybrid" {
 		opts.Text = &collections.HybridTextQuery{IndexName: "content", Query: query.Text, CandidateLimit: cfg.CandidateLimit}
 	}
@@ -1297,16 +1352,20 @@ func runDirectQuery(cfg applicationConfig, col *collections.Collection, query ap
 func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query applicationQuery, vector []float32, cell applicationCellIdentity) (queryResult, error) {
 	var path string
 	var request any
-	switch cell.Route {
-	case "text_only":
+	filteredVectorEndpoint := cell.Route == "vector_only" && cell.Filter != filterUnfiltered
+	switch {
+	case cell.Route == "text_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/keyword"
-		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit}
-	case "vector_only":
+		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, Filter: applicationServiceFilter(cell)}
+	case filteredVectorEndpoint:
+		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
+		request = documentservice.HybridSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, Filter: applicationServiceFilter(cell)}
+	case cell.Route == "vector_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/vector"
 		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteAnn}
-	case "hybrid":
+	case cell.Route == "hybrid":
 		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
-		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch}
+		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, Filter: applicationServiceFilter(cell)}
 	default:
 		return queryResult{}, fmt.Errorf("unknown route %q", cell.Route)
 	}
@@ -1332,32 +1391,8 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 	if resp.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("http status %d: %s", resp.StatusCode, payload)
 	}
-	switch cell.Route {
-	case "text_only":
-		var parsed documentservice.KeywordSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{true, false}
-		}
-		result.Counters["documents_fetched"] = float64(parsed.Stats.DocumentsFetched)
-		result.Counters["documents_missing"] = float64(parsed.Stats.DocumentsMissing)
-		result.Counters["full_document_scan_fallbacks"] = float64(parsed.Stats.FullDocumentScanFallbacks)
-		result.Counters["text_postings_scanned"] = float64(parsed.Stats.PostingsScanned)
-		result.Counters["text_candidates_scored"] = float64(parsed.Stats.CandidatesScored)
-	case "vector_only":
-		var parsed documentservice.DenseVectorSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{false, true}
-		}
-		result.Counters["documents_fetched"] = float64(len(parsed.Documents))
-	case "hybrid":
+	switch {
+	case cell.Route == "hybrid" || filteredVectorEndpoint:
 		var parsed documentservice.HybridSearchResponse
 		if err := json.Unmarshal(payload, &parsed); err != nil {
 			return result, err
@@ -1371,6 +1406,30 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 			result.Sources[doc.ID] = attribution
 		}
 		accumulateCounters(result.Counters, parsed.Stats)
+	case cell.Route == "text_only":
+		var parsed documentservice.KeywordSearchResponse
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return result, err
+		}
+		for _, doc := range parsed.Documents {
+			result.IDs = append(result.IDs, doc.ID)
+			result.Sources[doc.ID] = [2]bool{true, false}
+		}
+		result.Counters["documents_fetched"] = float64(parsed.Stats.DocumentsFetched)
+		result.Counters["documents_missing"] = float64(parsed.Stats.DocumentsMissing)
+		result.Counters["full_document_scan_fallbacks"] = float64(parsed.Stats.FullDocumentScanFallbacks)
+		result.Counters["text_postings_scanned"] = float64(parsed.Stats.PostingsScanned)
+		result.Counters["text_candidates_scored"] = float64(parsed.Stats.CandidatesScored)
+	case cell.Route == "vector_only":
+		var parsed documentservice.DenseVectorSearchResponse
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return result, err
+		}
+		for _, doc := range parsed.Documents {
+			result.IDs = append(result.IDs, doc.ID)
+			result.Sources[doc.ID] = [2]bool{false, true}
+		}
+		result.Counters["documents_fetched"] = float64(len(parsed.Documents))
 	}
 	return result, nil
 }
@@ -1409,6 +1468,10 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		result, err := call(query)
 		if err != nil {
 			return total, err
+		}
+		crossTenant, crossWorkspace := applicationScopeViolations(fixture, filter, result.IDs)
+		if crossTenant != 0 || crossWorkspace != 0 {
+			return total, fmt.Errorf("quality query %s filter=%s leaked tenant/workspace results=%d/%d", query.ID, filter, crossTenant, crossWorkspace)
 		}
 		if len(result.IDs) < topK {
 			return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d", query.ID, len(result.IDs), topK)

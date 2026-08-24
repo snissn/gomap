@@ -91,9 +91,11 @@ type chunkedIngestPlan struct {
 }
 
 // buildChunkPlan derives the child rows for a chunked ingest without touching
-// the collection. Everything that can fail — config validation, text field
-// extraction, chunking, metadata encoding, and child linkage validation —
-// fails closed here, before any mutation.
+// the collection. A parent's optional "meta" object is copied into every
+// child; generated top-level chunk linkage remains authoritative even when
+// meta contains same-named keys. Everything that can fail — config validation,
+// text field extraction, chunking, metadata encoding, and child linkage
+// validation — fails closed here, before any mutation.
 func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg chunking.Config, opts ChunkedIngestOptions) (chunkedIngestPlan, error) {
 	var plan chunkedIngestPlan
 	if err := chunking.ValidateParentID(string(parentID)); err != nil {
@@ -109,6 +111,17 @@ func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg 
 	if err := json.Unmarshal(parentDocument, &fields); err != nil {
 		return plan, fmt.Errorf("collections: chunked ingest parse parent document: %w", err)
 	}
+	var inheritedMeta json.RawMessage
+	if rawMeta, ok := fields[ingestSourceMetaField]; ok {
+		var meta map[string]json.RawMessage
+		if err := json.Unmarshal(rawMeta, &meta); err != nil {
+			return plan, fmt.Errorf("collections: chunked ingest field %q must be an object: %w", ingestSourceMetaField, err)
+		}
+		if meta == nil {
+			return plan, fmt.Errorf("collections: chunked ingest field %q must be an object", ingestSourceMetaField)
+		}
+		inheritedMeta = append(json.RawMessage(nil), rawMeta...)
+	}
 	rawText, ok := fields[opts.textField()]
 	if !ok {
 		return plan, fmt.Errorf("collections: chunked ingest parent document has no %q field", opts.textField())
@@ -123,12 +136,16 @@ func (c *Collection) buildChunkPlan(parentID []byte, parentDocument []byte, cfg 
 	}
 	plan.children = make([]chunkChild, 0, len(chunks))
 	for _, ch := range chunks {
-		document, err := json.Marshal(map[string]any{
+		child := map[string]any{
 			opts.textField():          ch.Text,
 			chunking.MetaFieldParent:  ch.ParentID,
 			chunking.MetaFieldOrdinal: ch.Ordinal,
 			chunking.MetaFieldKind:    chunking.KindChunk,
-		})
+		}
+		if inheritedMeta != nil {
+			child[ingestSourceMetaField] = inheritedMeta
+		}
+		document, err := json.Marshal(child)
 		if err != nil {
 			return plan, fmt.Errorf("collections: encode chunk child %q: %w", ch.ID, err)
 		}
@@ -219,16 +236,19 @@ func (c *Collection) lockChunkMutation(ctx context.Context) (func(), error) {
 }
 
 // IngestChunkedDocument stores parentDocument under parentID and replaces its
-// chunk children with the stream derived from the configured text field.
+// chunk children with the stream derived from the configured text field. When
+// parentDocument contains a "meta" object, each child receives a detached copy
+// under "meta"; generated top-level chunk_parent, chunk_ordinal, and chunk_kind
+// fields are authoritative over same-named caller metadata.
 //
-// Lifecycle: parent ID, text field, and child plan validate before mutation.
-// A per-parent lock shared across collection handles serializes plan through
-// replacement. This direct chunk-ingest API keeps separate parent upsert,
-// stale-child DeleteBatch, and replacement InsertBatch durable commits: each
-// batch is atomic, but an error between boundaries is commit-ambiguous. The
-// source may be old, new, or between those states; retrying converges because
-// child IDs derive only from parent ID and ordinal. IngestSources uses the
-// stronger one-source atomic publication path.
+// Lifecycle: parent ID, text field, metadata, and child plan validate before
+// mutation. A per-parent lock shared across collection handles serializes plan
+// through replacement. This direct chunk-ingest API keeps separate parent
+// upsert, stale-child DeleteBatch, and replacement InsertBatch durable commits:
+// each batch is atomic, but an error between boundaries is commit-ambiguous.
+// The source may be old, new, or between those states; retrying converges
+// because child IDs derive only from parent ID and ordinal. IngestSources uses
+// the stronger one-source atomic publication path.
 //
 // Children are ordinary documents to the index layer: text, scalar, and vector
 // indexes maintain them through the normal InsertBatch/DeleteBatch paths, so
