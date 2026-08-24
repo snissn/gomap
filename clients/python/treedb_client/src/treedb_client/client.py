@@ -418,6 +418,7 @@ class TreeDBClient:
         text_candidate_limit: Optional[int] = None,
         vector_candidate_limit: Optional[int] = None,
         ef_search: Optional[int] = None,
+        max_chunks_per_parent: Optional[int] = None,
         fusion: Optional[Union[HybridFusionOptions, Mapping[str, Any]]] = None,
         filter: Optional[FilterLike] = None,
         return_embedding: bool = False,
@@ -426,10 +427,12 @@ class TreeDBClient:
         """Run TreeDB collection-native hybrid text/vector search.
 
         At least one of `query` or `query_embedding` must be supplied by the
-        caller/service. Since contract v1alpha2, metadata filters that resolve
-        to one bounded scalar allow-set over declared scalar fields are served
-        via prefilter; other shapes fail closed with typed errors. There is no
-        client-side text/vector fallback.
+        caller/service. `max_chunks_per_parent` is disabled when omitted or
+        zero; positive values cap built-in chunk children after fusion without
+        expanding candidate budgets. Since contract v1alpha2, metadata filters
+        that resolve to one bounded scalar allow-set over declared scalar fields
+        are served via prefilter; other shapes fail closed with typed errors.
+        There is no client-side text/vector fallback.
         """
 
         if not query and query_embedding is None:
@@ -444,6 +447,7 @@ class TreeDBClient:
             text_candidate_limit=text_candidate_limit,
             vector_candidate_limit=vector_candidate_limit,
             ef_search=ef_search,
+            max_chunks_per_parent=max_chunks_per_parent,
             fusion=fusion,
             filter=filter,
             return_embedding=return_embedding,

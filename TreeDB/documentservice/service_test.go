@@ -434,7 +434,7 @@ func TestServiceHybridSearchTextVectorAndOverlap(t *testing.T) {
 	if meta["type"] != "hybrid" || meta["fusion_method"] != string(collections.HybridFusionMethodRRF) || !searchMetaHasSources(meta, "text", "vector") {
 		t.Fatalf("overlap explanation meta=%+v", meta)
 	}
-	if overlap.Stats.FusionBoth == 0 || overlap.Stats.FullDocumentScanFallbacks != 0 || overlap.Stats.FailClosed != 0 || overlap.Plan.FusionMethod != collections.HybridFusionMethodRRF {
+	if overlap.Stats.FusionBoth == 0 || overlap.Stats.CollapseRejections != 0 || overlap.Stats.CollapseExhaustions != 0 || overlap.Stats.FullDocumentScanFallbacks != 0 || overlap.Stats.FailClosed != 0 || overlap.Plan.FusionMethod != collections.HybridFusionMethodRRF || overlap.Plan.MaxChunksPerParent != 0 {
 		t.Fatalf("overlap stats=%+v plan=%+v", overlap.Stats, overlap.Plan)
 	}
 }

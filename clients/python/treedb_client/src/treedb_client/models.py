@@ -961,6 +961,7 @@ class HybridSearchRequest:
     text_candidate_limit: Optional[int] = None
     vector_candidate_limit: Optional[int] = None
     ef_search: Optional[int] = None
+    max_chunks_per_parent: Optional[int] = None
     fusion: Any = None
     filter: Any = None
     return_embedding: bool = False
@@ -984,6 +985,8 @@ class HybridSearchRequest:
             out["vector_candidate_limit"] = _as_int(self.vector_candidate_limit, "hybrid request.vector_candidate_limit")
         if self.ef_search is not None:
             out["ef_search"] = _as_int(self.ef_search, "hybrid request.ef_search")
+        if self.max_chunks_per_parent is not None:
+            out["max_chunks_per_parent"] = _as_int(self.max_chunks_per_parent, "hybrid request.max_chunks_per_parent")
         if self.fusion is not None:
             if isinstance(self.fusion, HybridFusionOptions):
                 out["fusion"] = self.fusion.to_dict()
@@ -1004,6 +1007,7 @@ class HybridSearchPlan:
     fusion_tie_policy: str = ""
     text_candidate_limit: int = 0
     vector_candidate_limit: int = 0
+    max_chunks_per_parent: int = 0
     final_top_k: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -1016,6 +1020,7 @@ class HybridSearchPlan:
             "fusion_tie_policy",
             "text_candidate_limit",
             "vector_candidate_limit",
+            "max_chunks_per_parent",
             "final_top_k",
         ]
         return cls(
@@ -1024,6 +1029,9 @@ class HybridSearchPlan:
             fusion_tie_policy=_as_optional_str_default(data.get("fusion_tie_policy"), "hybrid plan.fusion_tie_policy"),
             text_candidate_limit=_as_optional_int_default(data.get("text_candidate_limit"), "hybrid plan.text_candidate_limit"),
             vector_candidate_limit=_as_optional_int_default(data.get("vector_candidate_limit"), "hybrid plan.vector_candidate_limit"),
+            max_chunks_per_parent=_as_optional_int_default(
+                data.get("max_chunks_per_parent"), "hybrid plan.max_chunks_per_parent"
+            ),
             final_top_k=_as_optional_int_default(data.get("final_top_k"), "hybrid plan.final_top_k"),
             extra=_copy_extra(data, allowed),
         )
@@ -1081,6 +1089,8 @@ class HybridSearchStats:
     fusion_vector_only: int = 0
     fusion_both: int = 0
     fusion_duplicate_candidates: int = 0
+    collapse_rejections: int = 0
+    collapse_exhaustions: int = 0
     candidates_after_filter: int = 0
     documents_fetched: int = 0
     documents_missing: int = 0
@@ -1111,6 +1121,8 @@ class HybridSearchStats:
             "fusion_text_only",
             "fusion_vector_only",
             "fusion_both",
+            "collapse_rejections",
+            "collapse_exhaustions",
             "fusion_duplicate_candidates",
             "candidates_after_filter",
             "documents_fetched",
@@ -1149,6 +1161,8 @@ class HybridSearchStats:
             fusion_duplicate_candidates=_as_optional_int_default(
                 data.get("fusion_duplicate_candidates"), "hybrid stats.fusion_duplicate_candidates"
             ),
+            collapse_rejections=_as_optional_int_default(data.get("collapse_rejections"), "hybrid stats.collapse_rejections"),
+            collapse_exhaustions=_as_optional_int_default(data.get("collapse_exhaustions"), "hybrid stats.collapse_exhaustions"),
             candidates_after_filter=_as_optional_int_default(data.get("candidates_after_filter"), "hybrid stats.candidates_after_filter"),
             documents_fetched=_as_optional_int_default(data.get("documents_fetched"), "hybrid stats.documents_fetched"),
             documents_missing=_as_optional_int_default(data.get("documents_missing"), "hybrid stats.documents_missing"),

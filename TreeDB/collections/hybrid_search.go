@@ -198,11 +198,15 @@ type HybridSearchOptions struct {
 	ScalarFilter         *HybridScalarFilter        `json:"scalar_filter,omitempty"`
 	ScalarFilterStrategy HybridScalarFilterStrategy `json:"scalar_filter_strategy,omitempty"`
 	Fusion               HybridFusionOptions        `json:"fusion,omitempty"`
-	ResultMode           HybridResultMode           `json:"result_mode,omitempty"`
-	IncludeDocuments     bool                       `json:"include_documents,omitempty"`
-	DocumentFetchOptions DocumentFetchOptions       `json:"document_fetch_options,omitempty"`
-	Consistency          HybridConsistencyOptions   `json:"consistency,omitempty"`
-	Debug                HybridSearchDebugOptions   `json:"debug,omitempty"`
+	// MaxChunksPerParent applies a deterministic cap to built-in chunk children
+	// after fusion and scalar filtering but before final document fetch. Zero
+	// disables collapse; negative values are invalid.
+	MaxChunksPerParent   int                      `json:"max_chunks_per_parent,omitempty"`
+	ResultMode           HybridResultMode         `json:"result_mode,omitempty"`
+	IncludeDocuments     bool                     `json:"include_documents,omitempty"`
+	DocumentFetchOptions DocumentFetchOptions     `json:"document_fetch_options,omitempty"`
+	Consistency          HybridConsistencyOptions `json:"consistency,omitempty"`
+	Debug                HybridSearchDebugOptions `json:"debug,omitempty"`
 }
 
 // HybridTextMatch carries text attribution when the lexical source can provide
@@ -259,6 +263,7 @@ type HybridSearchPlan struct {
 	ResultMode           HybridResultMode           `json:"result_mode,omitempty"`
 	TextCandidateLimit   int                        `json:"text_candidate_limit,omitempty"`
 	VectorCandidateLimit int                        `json:"vector_candidate_limit,omitempty"`
+	MaxChunksPerParent   int                        `json:"max_chunks_per_parent,omitempty"`
 	FinalTopK            int                        `json:"final_top_k,omitempty"`
 }
 
@@ -312,6 +317,8 @@ type HybridSearchStats struct {
 	FusionVectorOnly               uint64                          `json:"fusion_vector_only,omitempty"`
 	FusionBoth                     uint64                          `json:"fusion_both,omitempty"`
 	FusionDuplicateCandidates      uint64                          `json:"fusion_duplicate_candidates,omitempty"`
+	CollapseRejections             uint64                          `json:"collapse_rejections,omitempty"`
+	CollapseExhaustions            uint64                          `json:"collapse_exhaustions,omitempty"`
 	CandidatesAfterFilter          uint64                          `json:"candidates_after_filter,omitempty"`
 	DocumentsFetched               uint64                          `json:"documents_fetched,omitempty"`
 	DocumentsMissing               uint64                          `json:"documents_missing,omitempty"`

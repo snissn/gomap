@@ -216,6 +216,7 @@ hybrid = client.search_hybrid(
     text_candidate_limit=100,
     vector_candidate_limit=100,
     ef_search=64,
+    max_chunks_per_parent=2,
     fusion={
         "method": "rrf",
         "rrf_k": 60,
@@ -227,6 +228,15 @@ hybrid = client.search_hybrid(
 for doc in hybrid.documents:
     print(doc.id, doc.score, doc.meta.get("_treedb_search"))
 ```
+
+`max_chunks_per_parent` is optional and disabled when omitted or zero. A positive
+value preserves the service's fused order and source attribution while limiting
+canonical built-in `<parent>#<ordinal>` chunk IDs per parent before final
+document fetch. Malformed, extra-separator, and non-canonical IDs such as
+`parent#01` remain independent documents.
+Collapse stays within the supplied candidate limits, so
+`hybrid.stats.collapse_exhaustions == 1` can accompany fewer than `top_k`
+documents; `collapse_rejections` reports candidates skipped by the cap.
 
 ## Filters
 

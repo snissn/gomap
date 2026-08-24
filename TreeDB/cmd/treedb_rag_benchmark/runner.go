@@ -459,6 +459,8 @@ var ragCounterKeys = []struct {
 	{"fusion_vector_only", func(s collections.HybridSearchStats) uint64 { return s.FusionVectorOnly }},
 	{"fusion_both", func(s collections.HybridSearchStats) uint64 { return s.FusionBoth }},
 	{"truncated", func(s collections.HybridSearchStats) uint64 { return s.Truncated }},
+	{"collapse_rejections", func(s collections.HybridSearchStats) uint64 { return s.CollapseRejections }},
+	{"collapse_exhaustions", func(s collections.HybridSearchStats) uint64 { return s.CollapseExhaustions }},
 }
 
 func accumulateCounters(dst map[string]float64, s collections.HybridSearchStats) {

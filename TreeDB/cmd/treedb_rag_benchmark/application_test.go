@@ -13,12 +13,13 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 	if len(rows) != want {
 		t.Fatalf("matrix rows=%d want %d", len(rows), want)
 	}
-	seenSupported, seenTenantFilter, seenFilter, seenCollapse, seenHTTPScore := false, false, false, false, false
+	seenSupported, seenTenantFilter, seenFilter, seenCollapseSupported, seenHTTPVectorGap, seenHTTPScore := false, false, false, false, false, false
 	for _, row := range rows {
 		capability := unsupportedCapability(row)
 		if capability == nil {
 			seenSupported = true
 			seenTenantFilter = seenTenantFilter || row.Filter == filterTenantAlpha
+			seenCollapseSupported = seenCollapseSupported || row.Collapse == "enabled_cap_2"
 			continue
 		}
 		if strings.Contains(capability.Code, "source_metadata_not_propagated") {
@@ -27,11 +28,14 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 		if row.Filter == filterTenantAlphaWorkspaceRed || row.Filter == filterModerateRange {
 			seenFilter = seenFilter || strings.Contains(capability.Code, "multi_field_filter_unavailable")
 		}
-		seenCollapse = seenCollapse || strings.Contains(capability.Code, "parent_collapse_unavailable")
+		if strings.Contains(capability.Code, "parent_collapse_unavailable") && !strings.Contains(capability.Code, "http_vector_parent_collapse_unavailable") {
+			t.Fatalf("general parent collapse remains unsupported: %+v", row)
+		}
+		seenHTTPVectorGap = seenHTTPVectorGap || strings.Contains(capability.Code, "http_vector_parent_collapse_unavailable")
 		seenHTTPScore = seenHTTPScore || strings.Contains(capability.Code, "http_score_only_route_unavailable")
 	}
-	if !seenSupported || !seenTenantFilter || !seenFilter || !seenCollapse || !seenHTTPScore {
-		t.Fatalf("matrix capability coverage supported=%t tenant_filter=%t filter=%t collapse=%t http_score=%t", seenSupported, seenTenantFilter, seenFilter, seenCollapse, seenHTTPScore)
+	if !seenSupported || !seenTenantFilter || !seenFilter || !seenCollapseSupported || !seenHTTPVectorGap || !seenHTTPScore {
+		t.Fatalf("matrix capability coverage supported=%t tenant_filter=%t filter=%t collapse_supported=%t http_vector_gap=%t http_score=%t", seenSupported, seenTenantFilter, seenFilter, seenCollapseSupported, seenHTTPVectorGap, seenHTTPScore)
 	}
 }
 

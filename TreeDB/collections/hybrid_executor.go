@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -33,6 +34,7 @@ type hybridSearchExecutionPlan struct {
 	scalarFilterStrategy          HybridScalarFilterStrategy
 	fusion                        HybridFusionOptions
 	resultMode                    HybridResultMode
+	maxChunksPerParent            int
 	topK                          int
 	scalarLookupLimit             int
 }
@@ -115,10 +117,15 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, err)
 	}
 	if allowSet != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
-		results = hybridFilterResultsByScalarAllowSet(results, allowSet, plan.topK, &response.Stats)
+		filterTopK := plan.topK
+		if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
+			filterTopK = len(results)
+		}
+		results = hybridFilterResultsByScalarAllowSet(results, allowSet, filterTopK, &response.Stats)
 	} else if response.Stats.CandidatesAfterFilter == 0 {
 		response.Stats.CandidatesAfterFilter = uint64(len(results))
 	}
+	results = hybridCollapseResultsByParent(results, plan.topK, plan.maxChunksPerParent, &response.Stats)
 	if plan.resultMode == HybridResultModeScoreOnly {
 		hybridStripResultSources(results)
 	}
@@ -161,10 +168,15 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 		return plan, err
 	}
 
+	if opts.MaxChunksPerParent < 0 {
+		return plan, fmt.Errorf("%w: max_chunks_per_parent cannot be negative", ErrHybridSearchUnsupported)
+	}
 	plan.topK = opts.TopK
 	plan.fusion = opts.Fusion
 	plan.resultMode = resultMode
+	plan.maxChunksPerParent = opts.MaxChunksPerParent
 	plan.public.FinalTopK = opts.TopK
+	plan.public.MaxChunksPerParent = opts.MaxChunksPerParent
 	plan.public.ResultMode = resultMode
 	plan.public.FusionMethod = opts.Fusion.Method
 	if plan.public.FusionMethod == "" {
@@ -514,9 +526,13 @@ func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, 
 	return out
 }
 
+func hybridParentCollapseBinding(topK, maxChunksPerParent int) bool {
+	return maxChunksPerParent > 0 && maxChunksPerParent < topK
+}
+
 func hybridFusePlannedCandidates(candidates []HybridSearchCandidate, plan hybridSearchExecutionPlan) ([]HybridSearchResult, HybridSearchStats, error) {
 	topK := plan.topK
-	if plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) || (plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter) {
 		topK = len(candidates)
 	}
 	return FuseHybridSearchCandidates(candidates, plan.fusion, topK)
@@ -556,6 +572,43 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 	out := filtered[:limit]
 	for i := range out {
 		out[i].Rank = i + 1
+	}
+	return out
+}
+
+// hybridCollapseResultsByParent preserves fused order while enforcing the
+// canonical built-in <parent>#<ordinal> chunk identity. IDs that do not both
+// parse and round-trip through ChildDocumentID are independent documents and
+// never share a parent-count key.
+func hybridCollapseResultsByParent(results []HybridSearchResult, topK, maxChunksPerParent int, stats *HybridSearchStats) []HybridSearchResult {
+	if !hybridParentCollapseBinding(topK, maxChunksPerParent) {
+		return results
+	}
+	parentCounts := make(map[string]int, min(len(results), topK))
+	out := results[:0]
+	for _, result := range results {
+		if len(out) == topK {
+			break
+		}
+		id := string(result.ID)
+		parentID, ordinal, child := chunking.ParseChildID(id)
+		if child && chunking.ChildDocumentID(parentID, ordinal) == id && chunking.ValidateParentID(parentID) == nil {
+			if parentCounts[parentID] >= maxChunksPerParent {
+				if stats != nil {
+					stats.CollapseRejections++
+				}
+				continue
+			}
+			parentCounts[parentID]++
+		}
+		result.Rank = len(out) + 1
+		out = append(out, result)
+	}
+	if stats != nil {
+		stats.Truncated += uint64(len(results) - len(out))
+		if len(out) < topK {
+			stats.CollapseExhaustions++
+		}
 	}
 	return out
 }
@@ -658,6 +711,8 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.FusionTextOnly += src.FusionTextOnly
 	dst.FusionVectorOnly += src.FusionVectorOnly
 	dst.FusionBoth += src.FusionBoth
+	dst.CollapseRejections += src.CollapseRejections
+	dst.CollapseExhaustions += src.CollapseExhaustions
 	dst.FusionDuplicateCandidates += src.FusionDuplicateCandidates
 	dst.CandidatesAfterFilter += src.CandidatesAfterFilter
 	dst.DocumentsFetched += src.DocumentsFetched

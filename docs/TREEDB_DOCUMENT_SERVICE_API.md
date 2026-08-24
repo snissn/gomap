@@ -570,6 +570,7 @@ Request:
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
   "ef_search": 64,
+  "max_chunks_per_parent": 2,
   "filter": {"field": "meta.repo", "operator": "==", "value": "snissn/gomap"},
   "fusion": {
     "method": "rrf",
@@ -586,6 +587,17 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
+`max_chunks_per_parent` is disabled when omitted or zero and must otherwise be
+positive. When enabled, the executor walks the already-bounded fused order,
+keeps at most that many canonical `<parentID>#<ordinal>` built-in chunk IDs per
+parent, and only then fetches the final documents. It does not fetch before
+collapse, increase source candidate budgets, or scan for replacement results.
+An ID is a chunk only when it parses and round-trips exactly through the
+built-in child-ID constructor. IDs that are malformed, have extra separators,
+or use non-canonical ordinals such as `parent#01` are independent documents.
+Their literal IDs are never used as parent keys, so they cannot alias a valid
+chunk parent.
+
 `filter` is supported for fields declared in `scalar_fields`; undeclared fields
 return `invalid_request`, while an unrepresentable boolean/operator/field shape
 returns `unsupported`. A declared scalar allow-set that exceeds its lookup bound
@@ -625,6 +637,7 @@ object shown in the index metadata section):
     "fusion_tie_policy": "fused_score_best_rank_source_order_id",
     "text_candidate_limit": 100,
     "vector_candidate_limit": 100,
+    "max_chunks_per_parent": 2,
     "final_top_k": 10
   },
   "stats": {
@@ -634,10 +647,22 @@ object shown in the index metadata section):
     "vector_candidates_returned": 10,
     "candidates_fused": 20,
     "fusion_both": 1,
+    "collapse_rejections": 4,
+    "collapse_exhaustions": 0,
     "documents_fetched": 10
   }
 }
 ```
+
+Collapse preserves fused order, fused scores, text/vector source attribution,
+filter scope, and snapshot identity. `collapse_rejections` counts higher-ranked
+candidates skipped because their valid parent reached the cap.
+`collapse_exhaustions` is `1` when the bounded fused candidates are exhausted
+before `top_k` eligible results can be produced, otherwise `0`; exhaustion may
+therefore return fewer documents than `top_k`. `truncated` continues to count
+fused candidates omitted by the final bound, including cap rejections. With
+collapse disabled, both collapse counters are zero and IDs, scores, and source
+contributions retain their prior behavior.
 
 Missing/stale/unavailable text or vector indexes, text postings/candidate budget
 exhaustion, corrupt index state, and bounded document-fetch failures return a
