@@ -467,6 +467,69 @@ func TestCollectionVectorIndexNativeSearchDoesNotFlushBufferedDocuments(t *testi
 	}
 }
 
+func TestCollectionVectorIndexNativeSearchTracksBufferedUpdateAndDelete(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{BufferedIndexedWrites: true, DisableBufferedIndexedAsyncFlush: true},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"kind":"x","embedding":[0,1]}`), []byte(`{"kind":"x","embedding":[0.8,0.2]}`)},
+	); err != nil {
+		t.Fatalf("insert seed documents: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	search := func(want string) {
+		t.Helper()
+		response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != want {
+			t.Fatalf("search response=%+v err=%v want %s", response, err, want)
+		}
+	}
+	search("b")
+	if matched, err := col.Replace([]byte("a"), []byte(`{"kind":"x","embedding":[1,0]}`)); err != nil || !matched {
+		t.Fatalf("replace a matched=%v err=%v", matched, err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("replace did not remain buffered")
+	}
+	search("a")
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("search flushed buffered replacement")
+	}
+	if deleted, err := col.DeleteDocument([]byte("a")); err != nil || !deleted {
+		t.Fatalf("delete a deleted=%v err=%v", deleted, err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("delete did not remain buffered")
+	}
+	search("b")
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("search flushed buffered delete")
+	}
+}
+
 func TestCollectionVectorIndexRebuildClearsLiveDelta(t *testing.T) {
 	d := openCollectionCommandWALDB(t, t.TempDir())
 	defer func() { _ = d.Close() }()
