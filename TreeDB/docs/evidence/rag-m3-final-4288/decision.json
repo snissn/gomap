@@ -13,6 +13,14 @@
     "maximum_median_bytes_per_source": 1947235,
     "immutable_across_repeats": true
   },
+  "performance_baseline": {
+    "product_base_revision": "d8ad352965493f6a31a1d50ac70f5d783103c454",
+    "harness_revision": "30239761b1e7b90cf66fadf894921757f347c9b1",
+    "binary_sha256": "994e7b98e477a3b219dd4226648d7a3af316f364005837653b3a081253b724be",
+    "artifact_sha256": "b02905bec36e0877cdcf8a8eac95e9a2c39442940d502e8d88d75fd24fe036bd",
+    "raw_artifact": "baseline/treedb_rag_application_baseline.json",
+    "purpose": "Exact pre-#4292 integrated metadata+collapse control used for unaffected QPS/p99/allocation deltas."
+  },
   "repeats": [
     {
       "name": "A",
