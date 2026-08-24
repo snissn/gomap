@@ -1525,15 +1525,33 @@ func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (Ve
 
 func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
 	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
-	if c.catalog == nil || state.SystemRootPageID == 0 || c.catalogSystemRoot != state.SystemRootPageID || (c.catalogCommitSeq != state.CommitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+	catalog := c.catalog
+	current := catalog != nil &&
+		state.SystemRootPageID != 0 &&
+		c.catalogSystemRoot == state.SystemRootPageID &&
+		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
+	c.catalogMu.RUnlock()
+	if !current {
+		catalog = cachedWriteDomainCatalogForState(c.writeDomain, state.SystemRootPageID, state.CommitSeq)
+		if catalog == nil {
+			return VectorIndexDefinition{}, 0, false, false
+		}
+		c.catalogMu.Lock()
+		if c.catalogCommitSeq <= state.CommitSeq {
+			c.catalog = catalog
+			c.catalogSystemRoot = state.SystemRootPageID
+			c.catalogCommitSeq = state.CommitSeq
+		}
+		c.catalogMu.Unlock()
+	}
+	if catalog == nil {
 		return VectorIndexDefinition{}, 0, false, false
 	}
-	def, ok := findVectorIndex(c.catalog.meta.VectorIndexes, name)
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexDefinition{}, 0, false, true
 	}
-	return def, c.catalog.rootID(rootName), true, true
+	return def, catalog.rootID(rootName), true, true
 }
 
 func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {

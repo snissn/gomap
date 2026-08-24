@@ -4678,10 +4678,11 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	deltaNodes, deltaDocs := 0, 0
+	deltaNodes, deltaDocs, maxLevel := 0, 0, idx.maxLevel
 	if idx.liveDelta != nil {
 		deltaNodes = len(idx.liveDelta.nodes)
 		deltaDocs = len(idx.liveDelta.currentNode)
+		maxLevel = maxInt(maxLevel, idx.liveDelta.maxLevel)
 	}
 	stats := VectorIndexStats{
 		Name:                idx.name,
@@ -4694,7 +4695,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		EfSearch:            idx.efSearch,
 		Nodes:               len(idx.nodes) + deltaNodes,
 		LiveDocs:            len(idx.currentNode) + deltaDocs,
-		MaxLevel:            idx.maxLevel,
+		MaxLevel:            maxLevel,
 		Epoch:               idx.persistedEpoch,
 		BytesDisk:           idx.persistedBytesDisk,
 		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
