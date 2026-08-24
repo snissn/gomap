@@ -15,3 +15,4 @@ TreeDB/db/test-*
 .worktrees/
 artifacts/
 /collection_canonical_bench
+__pycache__/
