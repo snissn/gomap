@@ -7,7 +7,7 @@ product or ingestion claim. The authoritative artifact schema is
 
 Product base: `99929cdeb2ae2ec1e411236c853eb36942075d72` (accepted #4293 and
 #4294). Harness revision used by the committed baseline:
-`e3de4a6f1e7de8450081c7357a9ff5575cf847bd`.
+`43e9568e0059806b9a7f735a5e383800880d1865`.
 
 ## What the repaired harness proves
 
@@ -202,7 +202,7 @@ Representative semantic c1 rows: text score `24,734.90 / 0.0683`, vector score
   artifacts plus product/harness/binary/fixture/config/vector bindings.
 
 The retained explicit DB root is
-`/tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126`. All DB handles, document
+`/tmp/gomap-4289-rag-baseline-db-43e9568e0-go126`. All DB handles, document
 services, and HTTP servers are closed after collection. The DB root is retained
 only for local forensic inspection; the committed raw artifacts are the durable
 repository evidence.
