@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -115,13 +116,11 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			return nil, err
 		}
 		if err := validateLifecycleEvidence(embeddingCell, lifecycle); err != nil {
-			env.close()
-			return nil, err
+			return nil, errors.Join(err, env.closeWithError())
 		}
 		queryVectors, err := applicationQueryVectors(&fixture, bundle, embeddingCell, provider, dims)
 		if err != nil {
-			env.close()
-			return nil, err
+			return nil, errors.Join(err, env.closeWithError())
 		}
 		return &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors, dir: environmentDir}, nil
 	}
@@ -168,13 +167,18 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		var env *applicationEnvironment
 		var queryVectors map[string][]float32
 		if unsupportedCapability(cell) == nil {
-			state, err := openEnvironment(cell.Embedding, request.Ordinal, attempt)
-			if err != nil {
-				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: err.Error()}
-				_ = encoder.Encode(response)
-				_ = buffered.Flush()
+			opened, openErr := openEnvironment(cell.Embedding, request.Ordinal, attempt)
+			if openErr != nil {
+				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: openErr.Error()}
+				if err := encoder.Encode(response); err != nil {
+					return err
+				}
+				if err := buffered.Flush(); err != nil {
+					return err
+				}
 				continue
 			}
+			state = opened
 			env, queryVectors = state.env, state.queryVectors
 		}
 		row, err := runApplicationCell(cfg, &fixture, env, queryVectors, cell)
