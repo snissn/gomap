@@ -9,12 +9,12 @@ import (
 // tests; small enough to keep focused runs fast.
 func tinyBenchConfig(dir string) benchConfig {
 	return benchConfig{
-		Docs:           32,
+		Docs:           128,
 		Dims:           ragFixtureDims,
 		M:              4,
-		EfSearch:       32,
+		EfSearch:       64,
 		TopK:           10,
-		CandidateLimit: 32,
+		CandidateLimit: 64,
 		Reps:           1,
 		Warmup:         2,
 		BatchSize:      ragDefaultBatchSize,
@@ -60,10 +60,9 @@ func TestCounterContractEndToEnd(t *testing.T) {
 	// degenerate on the committed tiny fixture.
 	for _, row := range out.Rows {
 		for name, v := range map[string]float64{
-			"recall@5":   row.RecallAt5,
-			"recall@10":  row.RecallAt10,
-			"recall@100": row.RecallAt100,
-			"mrr@10":     row.MRRAt10,
+			"recall@5":  row.RecallAt5,
+			"recall@10": row.RecallAt10,
+			"mrr@10":    row.MRRAt10,
 		} {
 			if v < 0 || v > 1 {
 				t.Fatalf("row %s/%s/%s %s=%f outside [0,1]", row.Route, row.ResultMode, row.Filter, name, v)

@@ -40,15 +40,15 @@ type reportFixture struct {
 }
 
 type reportIngest struct {
-	EmbedSeconds      float64 `json:"embed_seconds"`
-	EmbedDocsPerSec   float64 `json:"embed_docs_per_sec"`
-	IngestSeconds     float64 `json:"ingest_seconds"`
-	IngestDocsPerSec  float64 `json:"ingest_docs_per_sec"`
-	IndexBuildSeconds float64 `json:"index_build_seconds"`
-	StorageBytes      int64   `json:"storage_bytes"`
-	StorageBytesPerD  float64 `json:"storage_bytes_per_doc"`
-	SetupSeconds      float64 `json:"setup_seconds_excluded_from_query_timing"`
-	SearchSeconds     float64 `json:"search_phase_seconds"`
+	EmbedSeconds             float64 `json:"embed_seconds"`
+	EmbeddedChunksPerSec     float64 `json:"embedded_chunks_per_sec"`
+	ChunkRowInsertSeconds    float64 `json:"chunk_row_insert_seconds"`
+	GeneratedChunkRowsPerSec float64 `json:"generated_chunk_rows_per_sec"`
+	IndexBuildSeconds        float64 `json:"index_build_seconds"`
+	StorageBytes             int64   `json:"storage_bytes"`
+	StorageBytesPerD         float64 `json:"storage_bytes_per_doc"`
+	SetupSeconds             float64 `json:"setup_seconds_excluded_from_query_timing"`
+	SearchSeconds            float64 `json:"search_phase_seconds"`
 }
 
 type counterValidation struct {
@@ -83,7 +83,6 @@ type reportRow struct {
 	Reps                int                `json:"reps"`
 	RecallAt5           float64            `json:"recall_at_5"`
 	RecallAt10          float64            `json:"recall_at_10"`
-	RecallAt100         float64            `json:"recall_at_100"`
 	MRRAt10             float64            `json:"mrr_at_10"`
 	LatencyMSMean       float64            `json:"latency_ms_mean"`
 	LatencyMSP50        float64            `json:"latency_ms_p50"`
@@ -99,9 +98,9 @@ type measurementContract struct {
 
 func defaultMeasurementContract() measurementContract {
 	return measurementContract{
-		QueryTimingBoundary: "per-query wall time around SearchHybrid only; fixture build, ingest, index build, checkpoint, and warmup queries are excluded",
-		EmbedReporting:      "embedding runs at fixture build; embed_seconds/embed_docs_per_sec are reported separately and excluded from ingest_docs_per_sec",
-		IngestBoundary:      "ingest_docs_per_sec covers InsertBatch + Flush only",
+		QueryTimingBoundary: "per-query wall time around SearchHybrid only; fixture build, chunk-row projection, index build, checkpoint, and warmup queries are excluded",
+		EmbedReporting:      "embedding runs at fixture build; judgment derivation starts only after the embedding timer stops",
+		IngestBoundary:      "generated_chunk_rows_per_sec covers InsertBatch + Flush of pre-generated rows and is not source ingestion",
 	}
 }
 
@@ -212,15 +211,15 @@ func buildReport(out *runOutput, cfg benchConfig, issue, hostNote string) (*ragB
 			Reps:           cfg.Reps,
 		},
 		Ingest: reportIngest{
-			EmbedSeconds:      out.Ingest.EmbedSeconds,
-			EmbedDocsPerSec:   out.Ingest.EmbedDocsPerSec,
-			IngestSeconds:     out.Ingest.IngestSeconds,
-			IngestDocsPerSec:  out.Ingest.IngestDocsPerSec,
-			IndexBuildSeconds: out.Ingest.IndexBuildSeconds,
-			StorageBytes:      out.Ingest.StorageBytes,
-			StorageBytesPerD:  out.Ingest.StorageBytesPerD,
-			SetupSeconds:      out.SetupSeconds,
-			SearchSeconds:     out.SearchSeconds,
+			EmbedSeconds:             out.Ingest.EmbedSeconds,
+			EmbeddedChunksPerSec:     out.Ingest.EmbeddedChunksPerSec,
+			ChunkRowInsertSeconds:    out.Ingest.ChunkRowInsertSeconds,
+			GeneratedChunkRowsPerSec: out.Ingest.GeneratedChunkRowsPerSec,
+			IndexBuildSeconds:        out.Ingest.IndexBuildSeconds,
+			StorageBytes:             out.Ingest.StorageBytes,
+			StorageBytesPerD:         out.Ingest.StorageBytesPerD,
+			SetupSeconds:             out.SetupSeconds,
+			SearchSeconds:            out.SearchSeconds,
 		},
 		Measurement: defaultMeasurementContract(),
 	}
@@ -239,7 +238,6 @@ func buildReport(out *runOutput, cfg benchConfig, issue, hostNote string) (*ragB
 			Reps:                row.Reps,
 			RecallAt5:           row.RecallAt5,
 			RecallAt10:          row.RecallAt10,
-			RecallAt100:         row.RecallAt100,
 			MRRAt10:             row.MRRAt10,
 			LatencyMSMean:       row.LatencyMSMean,
 			LatencyMSP50:        row.LatencyMSP50,
@@ -288,14 +286,14 @@ func renderMarkdown(report *ragBenchmarkReport) []byte {
 		report.Fixture.Docs, report.Fixture.Chunks, report.Fixture.ChunksPerDoc, report.Fixture.Dims, report.Fixture.Queries,
 		report.Fixture.TopK, report.Fixture.CandidateLimit, report.Fixture.Reps, report.Fixture.VectorM, report.Fixture.VectorEfSearch, report.Fixture.VectorMode)
 
-	fmt.Fprintf(&b, "## Ingest / storage\n\n")
-	fmt.Fprintf(&b, "| embed s | ingest docs/s | index build s | storage B | B/chunk |\n|---:|---:|---:|---:|---:|\n")
+	fmt.Fprintf(&b, "## Hashing regression setup / storage\n\n")
+	fmt.Fprintf(&b, "| embed s | generated chunk rows/s | index build s | storage B | B/chunk |\n|---:|---:|---:|---:|---:|\n")
 	fmt.Fprintf(&b, "| %.3f | %.0f | %.3f | %d | %.0f |\n\n",
-		report.Ingest.EmbedSeconds, report.Ingest.IngestDocsPerSec, report.Ingest.IndexBuildSeconds, report.Ingest.StorageBytes, report.Ingest.StorageBytesPerD)
+		report.Ingest.EmbedSeconds, report.Ingest.GeneratedChunkRowsPerSec, report.Ingest.IndexBuildSeconds, report.Ingest.StorageBytes, report.Ingest.StorageBytesPerD)
 
 	fmt.Fprintf(&b, "## Rows\n\n")
-	fmt.Fprintf(&b, "| route | mode | filter | sel%% | recall@5 | recall@10 | recall@100 | mrr@10 | p50 ms | p99 ms | mean ms | docs_fetched | postings_scanned | candidates_fused |\n")
-	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	fmt.Fprintf(&b, "| route | mode | filter | sel%% | recall@5 | recall@10 | mrr@10 | p50 ms | p99 ms | mean ms | docs_fetched | postings_scanned | candidates_fused |\n")
+	b.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	rows := append([]reportRow(nil), report.Rows...)
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].Route != rows[j].Route {
@@ -307,9 +305,9 @@ func renderMarkdown(report *ragBenchmarkReport) []byte {
 		return rows[i].Filter < rows[j].Filter
 	})
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %s | %s | %.2f | %.4f | %.4f | %.4f | %.4f | %.3f | %.3f | %.3f | %.2f | %.1f | %.1f |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s | %.2f | %.4f | %.4f | %.4f | %.3f | %.3f | %.3f | %.2f | %.1f | %.1f |\n",
 			r.Route, r.ResultMode, r.Filter, r.FilterSelectivityPc,
-			r.RecallAt5, r.RecallAt10, r.RecallAt100, r.MRRAt10,
+			r.RecallAt5, r.RecallAt10, r.MRRAt10,
 			r.LatencyMSP50, r.LatencyMSP99, r.LatencyMSMean,
 			r.Counters["documents_fetched"], r.Counters["text_postings_scanned"], r.Counters["candidates_fused"])
 	}

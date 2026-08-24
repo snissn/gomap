@@ -1,184 +1,221 @@
-# TreeDB RAG Retrieval Benchmark Runbook (#4267)
+# TreeDB retained RAG application baseline runbook (#4289)
 
-This runbook makes the TreeDB end-to-end RAG retrieval benchmark reproducible
-from committed commands only. It measures retrieval **quality and cost on the
-same fixture**: recall@k / MRR for text-only, vector-only, and hybrid rows;
-query p50/p99; ingest docs/sec; storage bytes/doc. It is a benchmark/docs
-contract, not an optimization task.
+This runbook reproduces the repaired M1 application baseline. The historical
+C1 code is retained only as an unfiltered hashing regression cell; it is not a
+product or ingestion claim. The authoritative artifact schema is
+`treedb_rag_application_baseline/v3`.
 
-Parent tracker: <https://github.com/snissn/gomap/issues/4266>. Issue:
-<https://github.com/snissn/gomap/issues/4267>.
+Product base: `99929cdeb2ae2ec1e411236c853eb36942075d72` (accepted #4293 and
+#4294). Harness revision used by the committed baseline:
+`e3de4a6f1e7de8450081c7357a9ff5575cf847bd`.
 
-Harness: `TreeDB/cmd/treedb_rag_benchmark` (new files only; no product code
-touched). Report artifact schema: `treedb_rag_benchmark/v1` (JSON + markdown).
+## What the repaired harness proves
 
-## Fixture contract
+- Recall claims fail unless the returned ranking depth is at least K. The
+  retained quality rows report only @5 and @10.
+- One declared dimension is checked against corpus, query, index, and vector
+  widths for each embedding cell.
+- Embedding timing stops before independently declared judgments are loaded.
+- Pre-generated child-row setup is never labeled source ingestion. The
+  ingestion rows time `Collection.IngestSources`, vector publication, and
+  checkpoint end to end on a fresh DB.
+- Judgments are committed separately for unfiltered, tenant, tenant+workspace,
+  and tenant+workspace+range contexts. Validation rejects a child or parent
+  outside the declared context.
+- Final QPS/p99 evidence requires at least 1,000 timed queries and three
+  repetitions. The committed rows use 1,008 samples and forward/reverse/forward
+  query order.
+- Artifact guards reject cross-tenant/workspace results, unbounded document
+  fetch, full-document-scan fallback, and parent-cap violations. Comparison
+  identities bind work, projection, and quality digests.
+- Final evidence reads `debug.ReadBuildInfo` and rejects an absent, dirty, or
+  mismatched `vcs.revision`; the CLI harness SHA is an assertion, not an
+  override. `config_sha256` covers only TopK/candidate/index parameters,
+  warmup/repetition/sample counts, and ingestion repetitions, so paths, command,
+  revisions, and host provenance cannot split matched workload identities.
+- Warmup query ordinal rotates through the complete committed query set,
+  independently of timed samples.
+- Direct score-only quality attribution comes from separate untimed compact
+  queries with identical work, route, and filter. Timed score-only rows retain
+  zero document fetches and never publish projection-stripped attribution as
+  zero.
 
-- Corpus `treedb-rag-corpus/v1`: deterministic topic vocabulary (8 topics × 12
-  terms), each document belongs to one topic and contributes exactly 2 indexed
-  chunks with stable IDs `doc-NNNNNN#chunk-{0,1}` and `parent_doc` linkage.
-- Embeddings: deterministic reference embedder — feature hashing of lowercase
-  alphanumeric tokens into 64 buckets (FNV-1a bucket index, sign from the hash
-  top bit), L2-normalized. No randomness, no external model, fully hermetic.
-- Scalar filters mirror the hybrid scoreboard: `tenant` with selectivity
-  ~6.25% (`tenant-rare-06pct`) and ~25% (`tenant-narrow-25pct`) plus an
-  unfiltered row.
-- Query set: 24 committed queries (3 per topic, 4 topic terms each), embedded
-  by the same embedder.
+## Application fixture
 
-### Ground-truth derivation (documented labeling scheme)
+`treedb-rag-application/v1` contains 19 initial sources and 57 chunks. One
+lifecycle-only source is deterministically deleted, leaving 18 sources and 54
+chunks. Every source has three 128-rune chunks, a valid #4293 parent ID,
+`tenant_id`, `workspace_id`, source URI/type, ACL tags, and update year. There
+are two tenants and two workspaces. Billing, outage, and access judgments are
+human-declared categorical labels rather than outputs of either scoring
+function. Each query has duplicate-heavy relevant chunks from the same parent.
 
-A chunk is **relevant** to a query iff
+The lifecycle performs unchanged re-ingest, an updated source replacement,
+source+children deletion, checkpoint, close, cold reopen, and byte-identical
+child snapshot validation. Before and after reopen it also executes the
+fixture-known `guidance` text query, exact native vector-index queries for every
+live child vector, and `updated_year` scalar-index lookups. Both sides must
+equal the exact live fixture set; stale, missing, corrupt, or false parity fails
+the M1 run and artifact writer. Parent metadata remains in the source-ingestion
+collection. Because #4290 has not propagated it to children, all tenant rows
+fail closed as typed capability evidence.
 
+Query rows use the exact stored child bytes produced by `IngestSources`.
+After the cold-reopen check those bytes are projected, without re-chunking or
+re-embedding, into the document-service column-graph collection used by both
+direct and HTTP cells. This insert-only query projection is setup, excluded
+from query timing, and is not reported as source ingestion.
+
+## Embedding cells
+
+### Hashing regression
+
+The built-in deterministic hashing provider remains the hermetic regression
+cell at 64 dimensions. Its digest binds the provider name, dimensions, and
+fixture digest.
+
+### Independent semantic cell
+
+- model: `sentence-transformers/all-MiniLM-L6-v2`
+- revision: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`
+- license: Apache-2.0
+- dimensions: 384
+- preprocessing: `SentenceTransformer.encode(normalize_embeddings=True)` with
+  the pinned model tokenizer and `max_seq_length=256`
+- corpus license: MIT (the repository-owned fixture)
+- input manifest: `cmd/treedb_rag_benchmark/testdata/semantic_inputs.json`
+- vectors: `cmd/treedb_rag_benchmark/testdata/semantic_vectors.json`
+- canonical vector digest:
+  `aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4`
+
+Regeneration has no Go/runtime dependency:
+
+```sh
+python3 TreeDB/cmd/treedb_rag_benchmark/testdata/generate_semantic_vectors.py \
+  --inputs TreeDB/cmd/treedb_rag_benchmark/testdata/semantic_inputs.json \
+  --output TreeDB/cmd/treedb_rag_benchmark/testdata/semantic_vectors.json
 ```
-|tokens(query.text) ∩ tokens(chunk.title + " " + chunk.body)| >= 2
-&& cosine(embed(query.text), embed(chunk.title + " " + chunk.body)) >= 0.35
-```
 
-using exactly the tokenizer and embedder above (constants
-`ragMinLexicalOverlap`, `ragMinQueryCosine` in `fixture.go`). This is
-synthetic-but-principled: the lexical gate proves shared vocabulary and the
-cosine gate proves the deterministic embedder places the chunk near the query
-centroid. The builder fails closed if any query has an empty relevant set or a
-fully-saturated topic.
+The committed generation used sentence-transformers 5.4.1, transformers 5.8.0,
+and torch 2.11.0. `TestApplicationFixtureAndSemanticVectorsAreStable` verifies
+model/revision/license/dimensions, fixture coverage, and the canonical digest.
+No model or tokenizer is loaded by the Go benchmark.
 
-**Scaling note:** the labeled set is topical, so |relevant| grows linearly
-with corpus size while per-chunk text composition stays fixed. Recall values
-are judgment-set-relative and are therefore comparable across routes/filters
-at a fixed corpus size, not across corpus sizes. Cross-size comparisons should
-use MRR@10, latency, and the domain counters.
+## Row matrix and unsupported capabilities
 
-## Benchmark rows
+The artifact retains the Cartesian matrix for text/vector/hybrid,
+score-only/fetch-topk, four filter contexts, collapse disabled/enabled cap 2,
+direct/HTTP, hashing/semantic, and c1/c4. Supported baseline cells are the 36
+unfiltered, collapse-disabled direct rows plus HTTP fetch rows. Every supported
+cell uses the declared column-graph ANN product route. Offline exhaustive
+cosine controls over the exact hash-bound vectors are reported separately and
+never counted as product QPS or fallback work.
 
-Routes `text_only`, `vector_only`, `hybrid` (RRF fusion), each ×
-`score_only` / `fetch_topk` result modes, each × filters
-`none_100pct` / `rare_06pct` / `narrow_25pct` — 18 rows. All rows run through
-the `Collection.SearchHybrid` public API (single-source rows pass only `Text`
-or only `Vector`). Vector route: column-graph exact score plane
-(`QueryMode=exact`), `M=8`, `ef_search=128`, dims=64. `TopK=10`,
-per-source `candidate_limit=64`.
+The remaining 348 rows have zero results and exact
+`*main.capabilityError` evidence:
 
-Metrics per row: recall@{5,10,100}, MRR@10, query p50/p99/mean, and averaged
-domain counters (`documents_fetched`, `text_postings_scanned`,
-`text_candidates_scored`, `vector_candidates_examined`, `candidates_fused`,
-fusion split, `scalar_prefilter_ids`, `truncated`, fail-closed counters).
-Ingest metrics: embed s and embed docs/s (embedder only), ingest docs/sec
-(`InsertBatch` + `Flush` only), vector index build seconds, storage bytes and
-bytes/chunk after checkpoint.
+- #4290: `source_metadata_not_propagated`
+- #4292: `multi_field_filter_unavailable`
+- #4291: `parent_collapse_unavailable`
+- service contract: `http_score_only_route_unavailable`
+- #4284 fault boundary: `storage_boundary_fault_injection_unavailable`
 
-## Measurement boundary
+No unsupported row is silently skipped, partially ranked, or substituted with
+an exact fallback.
 
-- **Query timing**: per-query wall time around the `SearchHybrid` call only.
-  Fixture build, collection create, ingest, index build, checkpoint, and
-  warmup queries are excluded. Each row runs `warmup` untimed queries before
-  the timed loop.
-- **Embedding**: runs at fixture build; `embed_seconds` / `embed_docs_per_sec`
-  are reported separately and excluded from `ingest_docs_per_sec`.
-- **Ingest**: `ingest_docs_per_sec` covers `InsertBatch` + `Flush` only.
-- **Index build**: `RebuildVectorIndex` duration reported separately.
-
-## Repetition policy
-
-Baseline runs use `-reps 3` (3 timed passes over all 24 queries per row, 72
-timed samples per row) after `-warmup 8` untimed queries, on a quiet host.
-p50/p99 are computed over all pooled per-query samples of the row. Re-run on
-the same host class before comparing against the published baselines; treat
-sub-0.1 ms p50 differences as noise.
-
-## Host context (published baseline)
-
-- Host: Apple MacBook (local), hostname `Michaels-Laptop.local`
-- macOS (darwin) arm64, Apple M3, 8 CPUs
-- Go 1.26.0 (`go1.26.0`), CGO_ENABLED=1
-- Date: 2026-08-22, repo commit at baseline: this PR's head
-
-## Exact baseline commands
+## Exact commands
 
 ```sh
 export PATH="$HOME/.gvm/gos/go1.26.0/bin:$PATH"
 export GOROOT="$HOME/.gvm/gos/go1.26.0"
 export CGO_ENABLED=1
-export GOCACHE="$HOME/orca/workspaces/gomap/.gocache-go126"
+export GOCACHE="$HOME/.cache/gomap-go126"
 export GOWORK=off
 
-go build -o /tmp/treedb_rag_benchmark ./TreeDB/cmd/treedb_rag_benchmark/
+SOURCE_ROOT="$PWD"
+rm -rf /tmp/gomap-rag-evidence-e3de4a6f1
+git clone --no-checkout "$SOURCE_ROOT" /tmp/gomap-rag-evidence-e3de4a6f1
+git -C /tmp/gomap-rag-evidence-e3de4a6f1 \
+  checkout e3de4a6f1e7de8450081c7357a9ff5575cf847bd
+cd /tmp/gomap-rag-evidence-e3de4a6f1
 
-# Small baseline (512 docs -> 1024 chunks)
-/tmp/treedb_rag_benchmark -docs 512  -reps 3 -warmup 8 \
-  -out-dir <outdir>/small \
-  -host-note "macOS arm64 Apple M3, quiet laptop, go1.26.0"
+go build -buildvcs=true -trimpath \
+  -o /tmp/treedb_rag_benchmark_e3de4a6f1 \
+  ./TreeDB/cmd/treedb_rag_benchmark
+go version -m /tmp/treedb_rag_benchmark_e3de4a6f1
 
-# Medium baseline (4096 docs -> 8192 chunks)
-/tmp/treedb_rag_benchmark -docs 4096 -reps 3 -warmup 8 \
-  -out-dir <outdir>/medium \
-  -host-note "macOS arm64 Apple M3, quiet laptop, go1.26.0"
+/tmp/treedb_rag_benchmark_e3de4a6f1 \
+  -out-dir "$SOURCE_ROOT/TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23" \
+  -dir /tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126 \
+  -product-base-sha 99929cdeb2ae2ec1e411236c853eb36942075d72 \
+  -harness-revision e3de4a6f1e7de8450081c7357a9ff5575cf847bd \
+  -host-note "Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1"
 ```
 
-Committed artifacts:
+A bounded diagnostic uses `-smoke`. Its authority is
+`DIAGNOSTIC_NOT_FINAL_EVIDENCE`; it cannot emit a final p99/QPS claim.
 
-- `treedb_rag_benchmark_baseline_small_2026-08-22.{md,json}` (fingerprint
-  `86bb3e34…`)
-- `treedb_rag_benchmark_baseline_medium_2026-08-22.{md,json}` (fingerprint
-  `34351633…`)
+## Frozen M1 numbers and #4284 gate
 
-## Published baseline (north-star targets)
+Host: Apple M3, Darwin arm64, 8 logical CPUs, Go 1.26.0, CGO enabled.
 
-Small: docs=512, chunks=1024, dims=64, queries=24, top_k=10, candidate_limit=64.
+Actual `IngestSources` fresh-DB source docs/s:
+`138.34, 234.42, 235.80, 238.99, 296.52` in execution order. Median/p95 are
+`235.80 / 285.02` docs/s. Median/p95 allocation is
+`2,164,257 / 2,565,956` B/source. Every repetition reopened with identical
+parent/child and queried text/vector/scalar index state.
 
-| metric | value |
-|---|---:|
-| ingest docs/s | 11,771 |
-| storage bytes/chunk | 4,217 |
-| vector index build s | 0.087 |
-| hybrid score_only p50 / p99 ms (none_100pct) | 0.150 / 0.222 |
-| hybrid fetch_topk p50 / p99 ms (none_100pct) | 0.447 / 0.638 |
-| vector_only score_only p50 ms (none_100pct) | 0.028 |
-| text_only score_only p50 ms (none_100pct) | 0.096 |
-| hybrid recall@10 / MRR@10 (none_100pct) | 0.1761 / 1.0000 |
+The historical 37.59 docs/s / 132 GiB-per-operation regime did not reproduce.
+Because the evidence-integrity repair required exact regeneration, the
+prospective #4284/#4288 handoff replaces the prior noisy M1 gate. Before any
+#4284 candidate is measured, the frozen attainable objective is:
 
-Medium: docs=4096, chunks=8192, dims=64, queries=24, top_k=10, candidate_limit=64.
+- source docs/s >= `271.17` (15% over the M1 median);
+- B/source <= `1,947,831` (10% below the M1 median);
+- all structural, durability, and matched-quality gates remain mandatory.
 
-| metric | value |
-|---|---:|
-| ingest docs/s | 12,557 |
-| storage bytes/chunk | 3,992 |
-| vector index build s | 0.591 |
-| hybrid score_only p50 / p99 ms (none_100pct) | 0.671 / 1.333 |
-| hybrid fetch_topk p50 / p99 ms (none_100pct) | 1.004 / 1.624 |
-| vector_only score_only p50 ms (none_100pct) | 0.028 |
-| text_only score_only p50 ms (none_100pct) | 0.577 |
-| hybrid recall@10 / MRR@10 (none_100pct) | 0.0222 / 1.0000 |
+Noise policy: fresh DB per ingestion repetition; median is the decision
+statistic and p95 is disclosed; query rows use three counterbalanced
+repetitions; an unexplained >10% QPS or p99 regression blocks an unaffected
+matched-quality row. Base/final work, projection, quality, fixture, config, and
+vector digests must match exactly.
 
-Full 18-row matrices (all filters, all counters) live in the committed
-artifacts. Filter rows behave as expected: rare ~6% selectivity cuts
-`candidates_fused` sharply and lowers recall proportionally to the judgment
-mass removed; `documents_fetched` stays bounded by TopK everywhere and stays 0
-on every score-only row.
+Representative hashing c1 rows (QPS / p99 ms): text score
+`23,984 / 0.122`, vector score `65,866 / 0.045`, hybrid score
+`15,857 / 0.204`, and HTTP hybrid fetch `1,457 / 1.801`. Representative semantic
+c1 rows: text score `15,806 / 0.379`, vector score `58,650 / 0.042`, hybrid score
+`17,191 / 0.152`, and HTTP hybrid fetch `365 / 4.668`.
 
-## Fail-closed counter contract
+## Durable artifacts
 
-Report generation fails closed when:
+`TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23/` contains:
 
-- any `score_only` row shows `documents_fetched > 0`;
-- any `fetch_topk` row exceeds `documents_fetched > top_k` per query on
-  average;
-- any row shows `full_document_scan_fallbacks > 0` or `fail_closed > 0`;
-- the corpus is empty, or any query derives an empty/saturated relevant set.
+- `treedb_rag_application_baseline.json`: raw rows, 1,008 latency samples per
+  supported cell, ingestion repetitions, counters, failures, lifecycle, and
+  frozen gates;
+- `treedb_rag_application_baseline.md`: the human summary;
+- `treedb_rag_application_manifest.json`: SHA-256 and byte length for both
+  artifacts plus product/harness/binary/fixture/config/vector bindings.
 
-Enforced by `validateCounterContract` + `buildReport`, and tested by
-`contract_test.go` (including doctored-row violations and zero-doc corpora).
+The retained explicit DB root is
+`/tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126`. All DB handles, document
+services, and HTTP servers are closed after collection. The DB root is retained
+only for local forensic inspection; the committed raw artifacts are the durable
+repository evidence.
 
-## Tests
+## Focused validation
 
 ```sh
-go vet ./TreeDB/cmd/treedb_rag_benchmark/
-go test ./TreeDB/cmd/treedb_rag_benchmark/ -count=1
+go test ./TreeDB/cmd/treedb_rag_benchmark -count=1
+go vet ./TreeDB/cmd/treedb_rag_benchmark
+go test ./TreeDB/collections \
+  -run 'TestIngestSources|TestChunkChildren|TestReopen' -count=1
+go test ./TreeDB/documentservice \
+  -run 'Test.*RAG|TestHTTP.*Search|Test.*Parity' -count=1
+python3 -m py_compile \
+  TreeDB/cmd/treedb_rag_benchmark/testdata/generate_semantic_vectors.py
 ```
 
-- `TestGoldenFixtureStability`: builder output byte-stable across runs.
-- `TestRecallAtKHandComputed` / `TestMRRAtKHandComputed` /
-  `TestPercentileHandComputed` / `TestAccumulateQualityTinyFixture`:
-  hand-computed metric validation.
-- `TestCounterContractEndToEnd`, `TestScoreOnlyDocFetchFailsReport`,
-  `TestFetchTopkBoundedByTopK`, `TestZeroDocCorpusFailsClosed`:
-  counter-contract fail-closed gates.
+These gates cover metric hand calculations, dimension/timing/filter corruption,
+fixture/vector stability, insufficient-sample rejection, counter corruption,
+source lifecycle/reopen, direct/service smoke, and artifact hashing.
