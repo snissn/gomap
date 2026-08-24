@@ -95,7 +95,7 @@ res, err := col.IngestChunkedDocument(parentID, parentDocJSON,
   `DeleteBatch`, and replacement `InsertBatch` as three separate durable
   boundaries. Its error can therefore describe an old, new, or intermediate
   direct chunk-ingest state; retry the deterministic ingest to converge.
-- `IngestSources` instead plans the old-row removals and complete new
+- Current behavior: `IngestSources` instead plans the old-row removals and complete new
   parent/child/index state, then publishes every affected collection root and
   catalog descriptor under one durable root group. Its storage outcome is a
   complete old or complete new source, never an intermediate child/parent view.

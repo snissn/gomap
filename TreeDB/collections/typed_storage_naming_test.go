@@ -339,6 +339,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// configuration API for typed-column collection setup; no new legacy
 	// terminology introduced.
 	{path: "TreeDB/cmd/treedb_rag_benchmark/runner.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
+	// Atomic source publication consumes the compatibility-retained
+	// ColumnStore configuration while preserving canonical typed-column assets.
+	{path: "TreeDB/collections/source_atomic.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
+	{path: "TreeDB/collections/source_atomic_column_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
 	{path: "TreeDB/collections/conditional_delete_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/collections/bson_set_update.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 22, occurrences: 24},
@@ -498,7 +502,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_column_semantics_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 30},
 	{path: "TreeDB/collections/typed_storage_layout.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 52},
 	{path: "TreeDB/collections/typed_storage_layout_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 41, occurrences: 41},
-	{path: "TreeDB/collections/typed_storage_naming_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 33, occurrences: 33},
+	{path: "TreeDB/collections/typed_storage_naming_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
 	{path: "TreeDB/collections/stable_resource_inventory_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 28},
 	{path: "TreeDB/collections/stable_resource_supported_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/stable_resource_windows_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 6},
