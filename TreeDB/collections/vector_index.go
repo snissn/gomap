@@ -1975,7 +1975,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 }
 
 const (
-	nativeVectorFrozenPrefixBatchWidth   = 8
+	nativeVectorFrozenPrefixBatchWidth   = 16
 	nativeVectorFrozenPrefixBatchMinimum = 32
 )
 
