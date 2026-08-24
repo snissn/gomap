@@ -128,6 +128,15 @@ func TestApplicationTenantFilterRequestsAndLeakageAccounting(t *testing.T) {
 	if tenant != 2 || workspace != 1 {
 		t.Fatalf("tenant/workspace violations=%d/%d want 2/1", tenant, workspace)
 	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterUnfiltered}); got != "declared_column_graph_ann" {
+		t.Fatalf("unfiltered HTTP vector route=%q", got)
+	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterTenantAlpha}); got != "declared_column_graph_exact" {
+		t.Fatalf("filtered HTTP vector route=%q", got)
+	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "direct_collection", Filter: filterUnfiltered}); got != "declared_column_graph_exact" {
+		t.Fatalf("direct vector route=%q", got)
+	}
 }
 
 func TestFinalApplicationPolicyRejectsDiagnosticCounts(t *testing.T) {

@@ -528,7 +528,9 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 				for _, collapse := range []string{"disabled", "enabled_cap_2"} {
 					for _, surface := range applicationSurfaces {
 						for _, clients := range applicationClients {
-							rows = append(rows, applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, VectorRoute: "declared_column_graph_exact", Clients: clients})
+							cell := applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, Clients: clients}
+							cell.VectorRoute = applicationVectorRoute(cell)
+							rows = append(rows, cell)
 						}
 					}
 				}
@@ -536,6 +538,16 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 		}
 	}
 	return rows
+}
+
+func applicationVectorRoute(cell applicationCellIdentity) string {
+	if cell.Route == "text_only" {
+		return "none"
+	}
+	if cell.Surface == "http_service" && cell.Route == "vector_only" && cell.Filter == filterUnfiltered {
+		return "declared_column_graph_ann"
+	}
+	return "declared_column_graph_exact"
 }
 
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
@@ -1346,14 +1358,18 @@ func runDirectQuery(cfg applicationConfig, col *collections.Collection, query ap
 func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query applicationQuery, vector []float32, cell applicationCellIdentity) (queryResult, error) {
 	var path string
 	var request any
-	switch cell.Route {
-	case "text_only":
+	filteredVectorEndpoint := cell.Route == "vector_only" && cell.Filter != filterUnfiltered
+	switch {
+	case cell.Route == "text_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/keyword"
 		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, Filter: applicationServiceFilter(cell)}
-	case "vector_only":
+	case filteredVectorEndpoint:
+		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
+		request = documentservice.HybridSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, Filter: applicationServiceFilter(cell)}
+	case cell.Route == "vector_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/vector"
-		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteExact, Filter: applicationServiceFilter(cell)}
-	case "hybrid":
+		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteAnn}
+	case cell.Route == "hybrid":
 		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
 		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, Filter: applicationServiceFilter(cell)}
 	default:
@@ -1381,32 +1397,8 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 	if resp.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("http status %d: %s", resp.StatusCode, payload)
 	}
-	switch cell.Route {
-	case "text_only":
-		var parsed documentservice.KeywordSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{true, false}
-		}
-		result.Counters["documents_fetched"] = float64(parsed.Stats.DocumentsFetched)
-		result.Counters["documents_missing"] = float64(parsed.Stats.DocumentsMissing)
-		result.Counters["full_document_scan_fallbacks"] = float64(parsed.Stats.FullDocumentScanFallbacks)
-		result.Counters["text_postings_scanned"] = float64(parsed.Stats.PostingsScanned)
-		result.Counters["text_candidates_scored"] = float64(parsed.Stats.CandidatesScored)
-	case "vector_only":
-		var parsed documentservice.DenseVectorSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{false, true}
-		}
-		result.Counters["documents_fetched"] = float64(len(parsed.Documents))
-	case "hybrid":
+	switch {
+	case cell.Route == "hybrid" || filteredVectorEndpoint:
 		var parsed documentservice.HybridSearchResponse
 		if err := json.Unmarshal(payload, &parsed); err != nil {
 			return result, err
@@ -1420,6 +1412,30 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 			result.Sources[doc.ID] = attribution
 		}
 		accumulateCounters(result.Counters, parsed.Stats)
+	case cell.Route == "text_only":
+		var parsed documentservice.KeywordSearchResponse
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return result, err
+		}
+		for _, doc := range parsed.Documents {
+			result.IDs = append(result.IDs, doc.ID)
+			result.Sources[doc.ID] = [2]bool{true, false}
+		}
+		result.Counters["documents_fetched"] = float64(parsed.Stats.DocumentsFetched)
+		result.Counters["documents_missing"] = float64(parsed.Stats.DocumentsMissing)
+		result.Counters["full_document_scan_fallbacks"] = float64(parsed.Stats.FullDocumentScanFallbacks)
+		result.Counters["text_postings_scanned"] = float64(parsed.Stats.PostingsScanned)
+		result.Counters["text_candidates_scored"] = float64(parsed.Stats.CandidatesScored)
+	case cell.Route == "vector_only":
+		var parsed documentservice.DenseVectorSearchResponse
+		if err := json.Unmarshal(payload, &parsed); err != nil {
+			return result, err
+		}
+		for _, doc := range parsed.Documents {
+			result.IDs = append(result.IDs, doc.ID)
+			result.Sources[doc.ID] = [2]bool{false, true}
+		}
+		result.Counters["documents_fetched"] = float64(len(parsed.Documents))
 	}
 	return result, nil
 }
