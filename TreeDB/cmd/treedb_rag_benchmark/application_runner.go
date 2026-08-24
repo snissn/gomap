@@ -583,7 +583,7 @@ func (e *applicationEnvironment) close() {
 	}
 }
 
-func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixture, _ *semanticVectorBundle, _ string, provider string, dims int, dir string) (*applicationEnvironment, lifecycleEvidence, error) {
+func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixture, bundle *semanticVectorBundle, embeddingCell string, provider string, dims int, dir string) (*applicationEnvironment, lifecycleEvidence, error) {
 	var lifecycle lifecycleEvidence
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, lifecycle, err
@@ -636,7 +636,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 	if err := db.Checkpoint(); err != nil {
 		return nil, lifecycle, err
 	}
-	beforeDigest, beforeChildIDs, beforeChildDocs, err := sourceChildSnapshot(sourceCol, fixture)
+	beforeDigest, beforeChildIDs, beforeChildDocs, err := sourceChildSnapshot(sourceCol, fixture, bundle, embeddingCell, provider, dims)
 	if err != nil {
 		return nil, lifecycle, err
 	}
@@ -658,7 +658,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
-	afterDigest, childIDs, childDocs, err := sourceChildSnapshot(sourceCol, fixture)
+	afterDigest, childIDs, childDocs, err := sourceChildSnapshot(sourceCol, fixture, bundle, embeddingCell, provider, dims)
 	if err != nil {
 		_ = db.Close()
 		return nil, lifecycle, err
@@ -791,11 +791,19 @@ func sourceMetadata(source applicationSource) map[string]any {
 	}
 }
 
-func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixture) (string, [][]byte, [][]byte, error) {
+func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixture, bundle *semanticVectorBundle, embeddingCell, provider string, dims int) (string, [][]byte, [][]byte, error) {
 	type childRow struct {
 		id, document []byte
 	}
 	rows := make([]childRow, 0, len(fixture.Sources)*applicationChunksPerSource)
+	var expectedEmbedder embedding.Embedder
+	if embeddingCell != "semantic_minilm" {
+		var err error
+		expectedEmbedder, err = embedding.DefaultRegistry().Create(embedding.Config{Provider: provider, Dimensions: dims})
+		if err != nil {
+			return "", nil, nil, err
+		}
+	}
 	for _, source := range fixture.Sources {
 		children, err := col.ChunkChildren([]byte(source.ID))
 		if err != nil {
@@ -822,6 +830,11 @@ func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixtur
 		if !ok || meta["tenant_id"] != source.Tenant || meta["workspace_id"] != source.Workspace {
 			return "", nil, nil, fmt.Errorf("source %q parent metadata mismatch", source.ID)
 		}
+		parentBody, ok := decoded[applicationTextField].(string)
+		if !ok || parentBody != source.FinalBody {
+			return "", nil, nil, fmt.Errorf("source %q parent body does not match final fixture bytes", source.ID)
+		}
+		finalRunes := []rune(source.FinalBody)
 		for _, childID := range children {
 			document, err := col.Get(childID)
 			if err != nil {
@@ -829,6 +842,45 @@ func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixtur
 			}
 			if document == nil {
 				return "", nil, nil, fmt.Errorf("source %q child %q missing", source.ID, childID)
+			}
+			parentID, ordinal, ok := chunking.ParseChildID(string(childID))
+			if !ok || parentID != source.ID {
+				return "", nil, nil, fmt.Errorf("source %q child ID %q is invalid", source.ID, childID)
+			}
+			start := ordinal * fixture.ChunkSize
+			end := min(start+fixture.ChunkSize, len(finalRunes))
+			if start < 0 || start >= end || end > len(finalRunes) {
+				return "", nil, nil, fmt.Errorf("source %q child %q ordinal is outside final fixture", source.ID, childID)
+			}
+			expectedText := string(finalRunes[start:end])
+			var decodedChild struct {
+				Content   string    `json:"content"`
+				Embedding []float32 `json:"embedding"`
+			}
+			if err := json.Unmarshal(document, &decodedChild); err != nil {
+				return "", nil, nil, fmt.Errorf("decode source %q child %q: %w", source.ID, childID, err)
+			}
+			if decodedChild.Content != expectedText {
+				return "", nil, nil, fmt.Errorf("source %q child %q content does not match final fixture bytes", source.ID, childID)
+			}
+			var expectedVector []float32
+			if embeddingCell == "semantic_minilm" {
+				if bundle == nil {
+					return "", nil, nil, fmt.Errorf("semantic fixture bundle unavailable")
+				}
+				expectedVector, ok = bundle.Vectors[expectedText]
+				if !ok {
+					return "", nil, nil, fmt.Errorf("semantic vector missing for source %q child %q", source.ID, childID)
+				}
+			} else {
+				vectors, embedErr := expectedEmbedder.EmbedBatch(context.Background(), [][]byte{[]byte(expectedText)})
+				if embedErr != nil || len(vectors) != 1 {
+					return "", nil, nil, fmt.Errorf("expected vector for source %q child %q: %w", source.ID, childID, embedErr)
+				}
+				expectedVector = vectors[0]
+			}
+			if !equalFloat32Bits(decodedChild.Embedding, expectedVector) {
+				return "", nil, nil, fmt.Errorf("source %q child %q embedding does not match final fixture vector", source.ID, childID)
 			}
 			if err := chunking.ValidateChunkChild(string(childID), document); err != nil {
 				return "", nil, nil, err
@@ -848,6 +900,18 @@ func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixtur
 		hash.Write([]byte{0xff})
 	}
 	return hex.EncodeToString(hash.Sum(nil)), ids, documents, nil
+}
+
+func equalFloat32Bits(left, right []float32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if math.Float32bits(left[i]) != math.Float32bits(right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func queryApplicationIndexes(col *collections.Collection, fixture *applicationFixture, childIDs, childDocs [][]byte, efSearch int) (applicationIndexQuerySnapshot, error) {
@@ -1300,11 +1364,42 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 		}
 		for _, doc := range parsed.Documents {
 			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{true, true}
+			attribution, err := httpHybridAttribution(doc)
+			if err != nil {
+				return result, err
+			}
+			result.Sources[doc.ID] = attribution
 		}
 		accumulateCounters(result.Counters, parsed.Stats)
 	}
 	return result, nil
+}
+
+func httpHybridAttribution(doc documentservice.Document) ([2]bool, error) {
+	var attribution [2]bool
+	searchMeta, ok := doc.Meta["_treedb_search"].(map[string]any)
+	if !ok {
+		return attribution, fmt.Errorf("HTTP hybrid document %q lacks _treedb_search metadata", doc.ID)
+	}
+	rawSources, ok := searchMeta["sources"].([]any)
+	if !ok || len(rawSources) == 0 {
+		return attribution, fmt.Errorf("HTTP hybrid document %q lacks source attribution", doc.ID)
+	}
+	for i, raw := range rawSources {
+		source, ok := raw.(map[string]any)
+		if !ok {
+			return attribution, fmt.Errorf("HTTP hybrid document %q source[%d] has invalid shape", doc.ID, i)
+		}
+		switch source["source"] {
+		case "text":
+			attribution[0] = true
+		case "vector":
+			attribution[1] = true
+		default:
+			return attribution, fmt.Errorf("HTTP hybrid document %q has unknown source %v", doc.ID, source["source"])
+		}
+	}
+	return attribution, nil
 }
 
 func measureApplicationQuality(fixture *applicationFixture, filter string, topK int, call func(applicationQuery) (queryResult, error)) (qualityMetrics, error) {
@@ -1599,7 +1694,7 @@ func runApplicationIngestionRep(cfg applicationConfig, fixture *applicationFixtu
 	row.BytesPerSource = float64(row.StorageBytes) / float64(row.SourceDocs)
 	row.BytesPerChunk = float64(row.StorageBytes) / float64(row.ChunkDocs)
 	row.StorageCounters = relevantStorageStats(db.Stats())
-	beforeDigest, _, _, err := sourceChildSnapshot(col, fixture)
+	beforeDigest, _, _, err := sourceChildSnapshot(col, fixture, nil, "hashing", embedding.ProviderHashing, 64)
 	if err != nil {
 		_ = db.Close()
 		return row, err
@@ -1619,7 +1714,7 @@ func runApplicationIngestionRep(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return row, err
 	}
-	afterDigest, _, _, err := sourceChildSnapshot(col, fixture)
+	afterDigest, _, _, err := sourceChildSnapshot(col, fixture, nil, "hashing", embedding.ProviderHashing, 64)
 	row.ReopenParity = err == nil && beforeDigest == afterDigest
 	_ = db.Close()
 	if err != nil {
