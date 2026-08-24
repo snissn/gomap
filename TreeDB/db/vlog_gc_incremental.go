@@ -293,15 +293,7 @@ func newValueLogRefTracker() *valueLogRefTracker {
 	}
 }
 
-func newValueLogRefTrackerForOptions(opts Options) *valueLogRefTracker {
-	if opts.IndexOuterLeavesInValueLog {
-		// The incremental tracker currently follows logical value-pointer deltas.
-		// Outer-leaf mode also rewrites physical leaf-page references in the value
-		// log, so commits cannot keep these counts exact without a broader delta.
-		// Leave the tracker disabled and let GC/rewrite planning do explicit reachability
-		// scans instead of forcing every open to rebuild stale metadata.
-		return nil
-	}
+func newValueLogRefTrackerForOptions(Options) *valueLogRefTracker {
 	return newValueLogRefTracker()
 }
 
@@ -395,7 +387,10 @@ func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, delta *valueLogRef
 	defer t.mu.Unlock()
 
 	if !t.valid {
-		return errors.New("treedb: value-log ref tracker invalid")
+		// Invalidation is the conservative fallback for commits without an exact
+		// delta. Later deltas cannot repair missing history, so leave the optional
+		// tracker invalid until a full rebuild instead of poisoning the DB.
+		return nil
 	}
 	if nextCommitSeq != t.commitSeq+1 {
 		return fmt.Errorf("treedb: value-log ref tracker sequence mismatch: have=%d next=%d", t.commitSeq, nextCommitSeq)
@@ -600,8 +595,14 @@ func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Contex
 	}
 	seq := db.currentCommitSeq()
 	var trackerRevisionBeforeScan uint64
+	// Outer-leaf maintenance needs both logical ValuePtrs and raw leaf-log
+	// segments. Publication only applies logical deltas, so GC/rewrite cannot
+	// serve outer-leaf maintenance from this tracker even after a full rebuild.
+	useTracker := db.valueLogRefTracker != nil && !db.indexOuterLeavesInValueLog
 	if db.valueLogRefTracker != nil {
 		trackerRevisionBeforeScan = db.valueLogRefTracker.revisionSnapshot()
+	}
+	if useTracker {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
 			return refs, valueLogRefResolutionSourceTracker, seq, nil
 		}

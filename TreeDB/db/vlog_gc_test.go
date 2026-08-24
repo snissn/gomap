@@ -73,7 +73,7 @@ func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
 	}
 }
 
-func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.T) {
+func TestValueLogRefTracker_OuterLeavesRebuildsStaleMetadata(t *testing.T) {
 	dir := t.TempDir()
 	stale := []byte("stale ref-count metadata from an older build")
 	metaPath := filepath.Join(dir, valueLogRefCountsFileName)
@@ -85,9 +85,10 @@ func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if db.valueLogRefTracker != nil {
-		t.Fatal("outer-leaf value-log mode should leave incremental ref tracker disabled")
+	if db.valueLogRefTracker == nil {
+		t.Fatal("outer-leaf value-log mode did not initialize the logical ref tracker")
 	}
+	requireValueLogRefTrackerValid(t, db)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -96,8 +97,11 @@ func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.
 	if err != nil {
 		t.Fatalf("read stale metadata: %v", err)
 	}
-	if !bytes.Equal(after, stale) {
-		t.Fatalf("stale metadata was unexpectedly rebuilt on open")
+	if bytes.Equal(after, stale) {
+		t.Fatal("stale metadata was not rebuilt on open")
+	}
+	if _, err := decodeValueLogRefCounts(after); err != nil {
+		t.Fatalf("decode rebuilt metadata: %v", err)
 	}
 }
 
