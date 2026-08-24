@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCommitPublicationAcceptedClassifiesOnlyPostAcceptanceErrors(t *testing.T) {
@@ -284,7 +285,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	defer releaseValueLogRefDelta(netZero)
 	netZero.add(netZeroFileID, 1)
 	netZero.add(netZeroFileID, -1)
-	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, netZero); err != nil {
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, database.meta, netZero); err != nil {
 		t.Fatalf("plan net-zero pointer replacement transition: %v", err)
 	} else if !reuse {
 		t.Fatal("net-zero pointer replacement did not reuse predecessor dependencies")
@@ -295,7 +296,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	destructive := newValueLogRefDelta()
 	defer releaseValueLogRefDelta(destructive)
 	destructive.add(leafLog.fileID, -1)
-	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, destructive); err != nil {
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, database.meta, destructive); err != nil {
 		t.Fatalf("plan destructive replacement-manifest transition: %v", err)
 	} else if reuse || references != nil {
 		t.Fatalf("destructive replacement-manifest transition reused references=%v reuse=%t", references, reuse)
@@ -310,7 +311,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	defer releaseValueLogRefDelta(rotated)
 	rotated.outerLeafDependencyReuse = true
 	rotated.addPositive(leafLog.fileID, 1)
-	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, rotated); err != nil {
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(plannerBase, plannerAdditional, database.meta, rotated); err != nil {
 		t.Fatalf("plan rotated outer-leaf transition: %v", err)
 	} else if !reuse {
 		t.Fatal("rotated outer-leaf transition did not reuse predecessor dependencies")
@@ -336,7 +337,7 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 	defer releaseValueLogRefDelta(emptyBase)
 	emptyBase.outerLeafDependencyReuse = true
 	emptyBase.allowEmptyDependencyReuse = true
-	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(nil, nil, emptyBase); err != nil {
+	if references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(nil, nil, database.meta, emptyBase); err != nil {
 		t.Fatalf("plan empty-base created/current transition: %v", err)
 	} else if !reuse {
 		t.Fatal("empty-base created/current transition did not reuse producer dependencies")
@@ -347,6 +348,79 @@ func TestOuterLeafReplacementManifestPreservesAppendOnlyBaseDependencyReuse(t *t
 		if _, ok := references[currentFileID]; !ok {
 			t.Fatalf("empty-base references=%v, want current file %d", references, currentFileID)
 		}
+	}
+}
+
+func TestOuterLeafLogicalReplacementUsesExactTrackerProjection(t *testing.T) {
+	database, err := Open(Options{
+		Dir:                        t.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	leafLog := &registeredLeafPageLog{db: database, dir: database.dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	database.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, database, leafLog)
+
+	oldValueFileID, err := valuelog.EncodeFileID(0, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newValueFileID, err := valuelog.EncodeFileID(0, 102)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleLeafFileID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, 103)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := stableContractResourceSet(t,
+		stableContractDescriptor{
+			generation: uint64(leafLog.fileID), kind: rootpublication.ResourceOuterLeafLog,
+			reachability: rootpublication.ReachabilityOuterLeafRawPointer, frontier: 4096,
+		},
+		stableContractDescriptor{
+			generation: uint64(oldValueFileID), kind: rootpublication.ResourceValueLog,
+			reachability: rootpublication.ReachabilityValueLogPointer, frontier: 4096,
+		},
+	)
+	defer base.Release()
+
+	baseSeq := database.currentCommitSeq()
+	database.valueLogRefTracker = newValueLogRefTracker()
+	database.valueLogRefTracker.replace(map[uint32]uint64{oldValueFileID: 1, staleLeafFileID: 1}, baseSeq, false)
+	delta := newValueLogRefDelta()
+	defer releaseValueLogRefDelta(delta)
+	delta.outerLeafDependencyReuse = true
+	delta.add(oldValueFileID, -1)
+	delta.add(newValueFileID, 1)
+
+	next := database.meta
+	next.CommitSeq = baseSeq + 1
+	references, reuse, err := database.planOuterLeafBaseDependencyReuseV1(base, nil, next, delta)
+	if err != nil {
+		t.Fatalf("plan logical replacement: %v", err)
+	}
+	if !reuse {
+		t.Fatal("exact logical replacement did not reuse raw predecessor dependencies")
+	}
+	if _, ok := references[oldValueFileID]; ok {
+		t.Fatalf("references=%v retained removed logical value-log file %d", references, oldValueFileID)
+	}
+	if _, ok := references[newValueFileID]; !ok {
+		t.Fatalf("references=%v omitted new logical value-log file %d", references, newValueFileID)
+	}
+	if _, ok := references[leafLog.fileID]; !ok {
+		t.Fatalf("references=%v omitted predecessor raw outer-leaf file %d", references, leafLog.fileID)
+	}
+	if _, ok := references[staleLeafFileID]; ok {
+		t.Fatalf("references=%v retained stale tracker-only outer-leaf file %d", references, staleLeafFileID)
 	}
 }
 

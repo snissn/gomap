@@ -29,6 +29,7 @@ const (
 	defaultVectorIndexRebuildPPM              = 250_000
 	defaultVectorIndexExactFilterMax          = 1024
 	defaultVectorRecallBatchCells             = 1 << 20
+	defaultVectorIndexLiveDeltaRows           = 128 << 10
 	maxVectorIndexEagerNeighborCap            = 64
 	minVectorIndexParallelReciprocalNeighbors = 4
 )
@@ -314,6 +315,9 @@ type VectorIndexStats struct {
 	LastRebuildDuration time.Duration
 	RebuildNeeded       bool
 	LiveANNFullRebuilds uint64
+	LiveDeltaNodes      int
+	LiveDeltaDocs       int
+	LiveDeltaCutovers   uint64
 }
 
 // VectorIndexRecall reports ANN overlap with exact search for sampled queries.
@@ -347,18 +351,22 @@ type VectorIndex struct {
 	rebuildDeletedRatio float64
 	schemaGeneration    uint64
 
-	mu                  sync.RWMutex
-	nativePublicationMu sync.RWMutex
-	nodes               []vectorIndexNode
-	currentNode         map[string]int
-	entry               int
-	maxLevel            int
-	insertScratch       vectorIndexSearchScratch
-	searchScratch       sync.Pool
-	searchView          atomic.Pointer[vectorIndexSearchView]
-	searchViewSpare     atomic.Pointer[vectorIndexSearchView]
-	searchViewDirty     map[int]struct{}
-	frozenPrefixBatches uint64
+	mu                   sync.RWMutex
+	nativePublicationMu  sync.RWMutex
+	nodes                []vectorIndexNode
+	currentNode          map[string]int
+	entry                int
+	maxLevel             int
+	insertScratch        vectorIndexSearchScratch
+	searchScratch        sync.Pool
+	searchView           atomic.Pointer[vectorIndexSearchView]
+	searchViewSpare      atomic.Pointer[vectorIndexSearchView]
+	searchViewDirty      map[int]struct{}
+	trackSearchViewDirty bool
+	frozenPrefixBatches  uint64
+	liveDelta            *VectorIndex
+	liveDeltaEnabled     atomic.Bool
+	liveDeltaCutovers    uint64
 	// constructionWorkers is a private benchmark seam; zero preserves the
 	// production worker choice.
 	constructionWorkers int
@@ -1765,14 +1773,28 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	if hasVector {
+		if idx.liveDeltaActiveLocked() {
+			return idx.insertLiveVectorBatchLocked(documentIDs, vectors)
+		}
 		return idx.insertVectorBatchLocked(documentIDs, vectors)
 	}
+	liveDelta := idx.liveDeltaActiveLocked()
 	for i := range documentIDs {
 		if vectors[i] == nil {
-			idx.tombstoneDocumentIDLocked(documentIDs[i])
+			if liveDelta {
+				idx.tombstoneLiveDocumentLocked(documentIDs[i])
+			} else {
+				idx.tombstoneDocumentIDLocked(documentIDs[i])
+			}
 			continue
 		}
-		if err := idx.insertVectorLocked(documentIDs[i], vectors[i]); err != nil {
+		var err error
+		if liveDelta {
+			err = idx.insertLiveVectorBatchLocked(documentIDs[i:i+1], vectors[i:i+1])
+		} else {
+			err = idx.insertVectorLocked(documentIDs[i], vectors[i])
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -1789,7 +1811,11 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	if document == nil {
 		idx.mu.Lock()
 		beforeMutation := idx.mutationSeq
-		idx.tombstoneDocumentIDLocked(documentID)
+		if idx.liveDeltaActiveLocked() {
+			idx.tombstoneLiveDocumentLocked(documentID)
+		} else {
+			idx.tombstoneDocumentIDLocked(documentID)
+		}
 		if publish && idx.mutationSeq != beforeMutation {
 			idx.publishSearchViewLocked(false)
 		}
@@ -1803,7 +1829,11 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	if !ok {
 		idx.mu.Lock()
 		beforeMutation := idx.mutationSeq
-		idx.tombstoneDocumentIDLocked(documentID)
+		if idx.liveDeltaActiveLocked() {
+			idx.tombstoneLiveDocumentLocked(documentID)
+		} else {
+			idx.tombstoneDocumentIDLocked(documentID)
+		}
 		if publish && idx.mutationSeq != beforeMutation {
 			idx.publishSearchViewLocked(false)
 		}
@@ -1813,7 +1843,12 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	beforeMutation := idx.mutationSeq
-	if err := idx.insertVectorLocked(documentID, vector); err != nil {
+	if idx.liveDeltaActiveLocked() {
+		err = idx.insertLiveVectorBatchLocked([][]byte{documentID}, [][]float32{vector})
+	} else {
+		err = idx.insertVectorLocked(documentID, vector)
+	}
+	if err != nil {
 		return err
 	}
 	if publish && idx.mutationSeq != beforeMutation {
@@ -1831,7 +1866,11 @@ func (idx *VectorIndex) TombstoneDocumentID(documentID []byte) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	beforeMutation := idx.mutationSeq
-	idx.tombstoneDocumentIDLocked(documentID)
+	if idx.liveDeltaActiveLocked() {
+		idx.tombstoneLiveDocumentLocked(documentID)
+	} else {
+		idx.tombstoneDocumentIDLocked(documentID)
+	}
 	if idx.mutationSeq != beforeMutation {
 		idx.publishSearchViewLocked(false)
 	}
@@ -1936,7 +1975,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 }
 
 const (
-	nativeVectorFrozenPrefixBatchWidth   = 8
+	nativeVectorFrozenPrefixBatchWidth   = 16
 	nativeVectorFrozenPrefixBatchMinimum = 32
 )
 
@@ -1948,26 +1987,8 @@ type vectorIndexFrozenPrefixInsert struct {
 }
 
 func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
-	if len(documentIDs) != len(vectors) {
-		return errors.New("collections: vector index batch ids/vectors length mismatch")
-	}
-	dimensions := idx.dimensions
-	for row := range documentIDs {
-		if len(documentIDs[row]) == 0 {
-			return errors.New("collections: document id cannot be empty")
-		}
-		if dimensions == 0 {
-			dimensions = len(vectors[row])
-		}
-		if len(vectors[row]) != dimensions {
-			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
-		}
-		if err := validateFloat32Vector(vectors[row]); err != nil {
-			return err
-		}
-		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
-			return errors.New("collections: cosine vector cannot have zero magnitude")
-		}
+	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
+		return err
 	}
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
@@ -2021,6 +2042,31 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		}
 		idx.frozenPrefixBatches++
 		start = end
+	}
+	return nil
+}
+
+func (idx *VectorIndex) validateVectorBatch(documentIDs [][]byte, vectors [][]float32) error {
+	if len(documentIDs) != len(vectors) {
+		return errors.New("collections: vector index batch ids/vectors length mismatch")
+	}
+	dimensions := idx.dimensions
+	for row := range documentIDs {
+		if len(documentIDs[row]) == 0 {
+			return errors.New("collections: document id cannot be empty")
+		}
+		if dimensions == 0 {
+			dimensions = len(vectors[row])
+		}
+		if len(vectors[row]) != dimensions {
+			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
+		}
+		if err := validateFloat32Vector(vectors[row]); err != nil {
+			return err
+		}
+		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
+			return errors.New("collections: cosine vector cannot have zero magnitude")
+		}
 	}
 	return nil
 }
@@ -2451,7 +2497,7 @@ func (idx *VectorIndex) recordSourceDocumentStateAndPublishIfChanged(generation 
 	idx.mu.Lock()
 	view := idx.searchView.Load()
 	publish := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation ||
-		view == nil || view.mutationSeq != idx.mutationSeq
+		view == nil || view.sourceDocumentGeneration != generation || view.mutationSeq != idx.mutationSeq
 	idx.recordSourceDocumentStateLocked(generation, state)
 	if publish {
 		idx.publishSearchViewLocked(false)
@@ -2520,7 +2566,8 @@ func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentState(state backe
 	idx.mu.RLock()
 	view := idx.searchView.Load()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state &&
-		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+		view != nil && view.sourceDocumentRootsValid && view.sourceDocumentGeneration == idx.sourceDocumentGeneration &&
+		view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers
 }
@@ -2532,7 +2579,8 @@ func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentGeneration(genera
 	idx.mu.RLock()
 	view := idx.searchView.Load()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation &&
-		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+		view != nil && view.sourceDocumentRootsValid && view.sourceDocumentGeneration == generation &&
+		view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers
 }
@@ -2558,7 +2606,7 @@ func (idx *VectorIndex) markVectorNodeDirtyLocked(nodeID int) {
 	if nodeID < 0 {
 		return
 	}
-	if view := idx.searchView.Load(); view != nil && nodeID < len(view.nodes) {
+	if view := idx.searchView.Load(); idx.trackSearchViewDirty || view != nil && nodeID < len(view.nodes) {
 		if idx.searchViewDirty == nil {
 			idx.searchViewDirty = make(map[int]struct{})
 		}
@@ -2826,57 +2874,88 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		trace.Strategy = "ann_postfilter"
 	}
-	idx.mu.RLock()
-	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
-		idx.mu.RUnlock()
-		return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
-	}
-	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
-	trace.CandidatesExamined = len(candidates)
 	filter := opts.Filter
 	if rangeFilter != nil {
 		filter = rangeFilter
 	}
-	fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
 	var results []VectorSearchResult
-	var resultNodeIDs []int
-	var resultNodeIDStack [64]int
-	var candidateIDs [][]byte
-	if fastRerank {
-		rerankLimit := len(candidates)
-		resultNodeIDs = resultNodeIDStack[:0]
-		if rerankLimit > len(resultNodeIDStack) {
-			resultNodeIDs = make([]int, 0, rerankLimit)
+	idx.mu.RLock()
+	if idx.liveDelta != nil {
+		idx.mu.RUnlock()
+		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
+		defer releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+		candidates, searchState, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, buffer)
+		if searchErr != nil {
+			return nil, trace, searchErr
 		}
-		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
-	} else {
-		candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
+		candidateIDs := make([][]byte, len(candidates))
+		for i := range candidates {
+			candidateIDs[i] = candidates[i].ID
+		}
+		trace.CandidatesExamined = len(candidateIDs)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
-	}
-	idx.putSearchScratch(scratch)
-	idx.mu.RUnlock()
+		if !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
+			trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		} else {
+			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+			if err == nil && !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
+				results = nil
+				trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+			}
+		}
+	} else {
+		if idx.nativePersistent && !idx.sourceDocumentRootsValid {
+			idx.mu.RUnlock()
+			return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
+		}
+		scratch := idx.getSearchScratch()
+		candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
+		trace.CandidatesExamined = len(candidates)
+		fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
+		var resultNodeIDs []int
+		var resultNodeIDStack [64]int
+		var candidateIDs [][]byte
+		if fastRerank {
+			rerankLimit := len(candidates)
+			resultNodeIDs = resultNodeIDStack[:0]
+			if rerankLimit > len(resultNodeIDStack) {
+				resultNodeIDs = make([]int, 0, rerankLimit)
+			}
+			results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
+		} else {
+			candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
+			trace.CandidatesAfterTombstone = len(candidateIDs)
+		}
+		idx.putSearchScratch(scratch)
+		idx.mu.RUnlock()
 
-	if fastRerank && err == nil {
-		results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
-	} else if !fastRerank {
-		results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+		if fastRerank && err == nil {
+			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+		} else if !fastRerank {
+			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+		}
 	}
 	if err != nil {
 		return nil, trace, err
 	}
+	if trace.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot && opts.DisableExactFallback {
+		return nil, trace, fmt.Errorf("%w: vector index %q document generation changed during rerank", ErrVectorIndexSearchUnavailable, idx.name)
+	}
+	idx.liveDeltaEnabled.Store(true)
 	sortVectorSearchResults(results)
 	if len(results) > opts.TopK {
 		results = results[:opts.TopK]
 	}
 	trace.ReturnedCount = len(results)
-	if len(results) < opts.TopK && !opts.DisableExactFallback {
+	if (trace.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot || len(results) < opts.TopK) && !opts.DisableExactFallback {
 		if opts.IndexRangeFilter != nil {
 			trace.Strategy = "ann_postfilter_exact_fallback"
 		} else {
 			trace.Strategy = "ann_graph_exact_fallback"
 		}
-		trace.ExactFallbackReason = "underfilled_results"
+		if trace.ExactFallbackReason == "" {
+			trace.ExactFallbackReason = "underfilled_results"
+		}
 		exact, err := idx.collection.SearchVectorsExact(query, VectorSearchOptions{
 			Field:            idx.field,
 			Metric:           idx.metric,
@@ -2961,10 +3040,16 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 		results, err := view.searchGraphOnlyWithBuffer(query, topK, efSearch, buffer)
 		state := view.nativeSearchState()
 		idx.releaseSearchView(view)
+		if err == nil {
+			idx.liveDeltaEnabled.Store(true)
+		}
 		return results, state, err
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+	if idx.liveDelta != nil {
+		return nil, vectorIndexNativeSearchState{}, fmt.Errorf("%w: native_runtime vector index %q has no published live generation", ErrVectorIndexSearchUnavailable, idx.name)
+	}
 	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
 	if err != nil {
 		return nil, vectorIndexNativeSearchState{}, err
@@ -3017,9 +3102,11 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 	}
 	deletedDocs := len(idx.nodes) - len(idx.currentNode)
 	return buffer.results, vectorIndexNativeSearchState{
-		liveDocs:      len(idx.currentNode),
-		rebuildNeeded: deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
-		fullRebuilds:  idx.liveANNFullRebuilds,
+		liveDocs:                 len(idx.currentNode),
+		rebuildNeeded:            deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
+		fullRebuilds:             idx.liveANNFullRebuilds,
+		mutationSeq:              idx.mutationSeq,
+		sourceDocumentGeneration: idx.sourceDocumentGeneration,
 	}, nil
 }
 
@@ -4609,6 +4696,12 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+	deltaNodes, deltaDocs, maxLevel := 0, 0, idx.maxLevel
+	if idx.liveDelta != nil {
+		deltaNodes = len(idx.liveDelta.nodes)
+		deltaDocs = len(idx.liveDelta.currentNode)
+		maxLevel = maxInt(maxLevel, idx.liveDelta.maxLevel)
+	}
 	stats := VectorIndexStats{
 		Name:                idx.name,
 		Field:               idx.field,
@@ -4618,14 +4711,17 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		M:                   idx.m,
 		EfConstruction:      idx.efConstruction,
 		EfSearch:            idx.efSearch,
-		Nodes:               len(idx.nodes),
-		LiveDocs:            len(idx.currentNode),
-		MaxLevel:            idx.maxLevel,
+		Nodes:               len(idx.nodes) + deltaNodes,
+		LiveDocs:            len(idx.currentNode) + deltaDocs,
+		MaxLevel:            maxLevel,
 		Epoch:               idx.persistedEpoch,
 		BytesDisk:           idx.persistedBytesDisk,
 		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
 		LiveANNFullRebuilds: idx.liveANNFullRebuilds,
+		LiveDeltaNodes:      deltaNodes,
+		LiveDeltaDocs:       deltaDocs,
+		LiveDeltaCutovers:   idx.liveDeltaCutovers,
 	}
 	var edges int
 	var vectorBytes int64
@@ -4639,6 +4735,19 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		}
 		vectorBytes += int64(node.vectorBytes())
 		vectorBytes += int64(len(node.documentID))
+	}
+	if idx.liveDelta != nil {
+		for i := range idx.liveDelta.nodes {
+			node := idx.liveDelta.nodes[i]
+			if node.deleted {
+				stats.DeletedDocs++
+			}
+			for _, layerNeighbors := range node.neighbors {
+				edges += len(layerNeighbors)
+			}
+			vectorBytes += int64(node.vectorBytes())
+			vectorBytes += int64(len(node.documentID))
+		}
 	}
 	if stats.Nodes > 0 {
 		stats.DeletedRatio = float64(stats.DeletedDocs) / float64(stats.Nodes)
@@ -4917,6 +5026,7 @@ func (idx *VectorIndex) Rebuild() error {
 	rebuilt.mu.RUnlock()
 
 	idx.mu.Lock()
+	idx.liveDelta = nil
 	idx.nodes = nodes
 	idx.currentNode = currentNode
 	idx.entry = entry

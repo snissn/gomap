@@ -122,11 +122,12 @@ type orderedRootPublishOptions struct {
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
-	idx     int
-	rootID  uint64
-	retired []uint64
-	metrics adaptive.Metrics
-	err     error
+	idx         int
+	rootID      uint64
+	retired     []uint64
+	metrics     adaptive.Metrics
+	applyResult zipper.ApplyResult
+	err         error
 }
 
 func (opts orderedRootPublishOptions) withSpanNativeRoute(route OrderedRootSpanNativeRoute, context string) orderedRootPublishOptions {
@@ -840,13 +841,14 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 	}
 	for iter.Valid() {
 		if iter.IsDeleted() {
+			_, _, _, revision := iterator.UnsafeEntryWithRevision(iter)
 			var err error
 			if borrowEntryViews && trustedSortedUnique {
-				err = delta.AppendDeleteViewTrustedSortedUnique(iter.UnsafeKey())
+				err = delta.AppendDeleteViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), revision)
 			} else if borrowEntryViews {
-				err = delta.DeleteView(iter.UnsafeKey())
+				err = delta.DeleteViewWithRevision(iter.UnsafeKey(), revision)
 			} else {
-				err = delta.Delete(iter.UnsafeKey())
+				err = delta.DeleteWithRevision(iter.UnsafeKey(), revision)
 			}
 			if err != nil {
 				_ = delta.Close()
@@ -1446,6 +1448,11 @@ func (db *DB) observeOrderedRootSpanNativeNoopFallback(opts orderedRootPublishOp
 }
 
 func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeDeletedOnColdBuild bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
+	newRoot, retired, metrics, _, err = db.publishOrderedRootDeltaBatchWithAllocatorResult(idx, baseRoot, delta, opts, alloc, coldBuildAlloc, includeDeletedOnColdBuild, false)
+	return
+}
+
+func (db *DB) publishOrderedRootDeltaBatchWithAllocatorResult(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeDeletedOnColdBuild, collectOldPointerRefs bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, applyResult zipper.ApplyResult, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -1468,7 +1475,7 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	}
 	if delta.IsEmpty() {
 		db.observeOrderedRootSpanNativeNoopFallback(opts, OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta batch no-op")
-		return baseRoot, nil, metrics, nil
+		return baseRoot, nil, metrics, applyResult, nil
 	}
 	if baseRoot == 0 {
 		route := OrderedRootSpanNativeRouteOverlayColdBuild
@@ -1500,29 +1507,29 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 
 	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 	if err != nil {
-		return 0, nil, metrics, err
+		return 0, nil, metrics, applyResult, err
 	}
 	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+	applyOpts.CollectOldPointerRefs = collectOldPointerRefs
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
 	}
 	if flushApplyUseOptions(applyOpts) {
-		result, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
-		db.observeFlushApplyPrepareResult(result, applyErr)
+		applyResult, err = rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
+		db.observeFlushApplyPrepareResult(applyResult, err)
 		route, context := opts.orderedRootSpanNativeRouteContext(OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta batch warm apply")
 		db.observeOrderedRootSpanNativeApplyResult(
 			route,
 			context,
-			result,
-			applyErr,
+			applyResult,
+			err,
 			applyOpts.SpanNativeForceFallbackReason,
 		)
-		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
-		newRoot = result.RootID
-		retired = result.PendingRetiredPages
-		metrics = result.Metrics
-		err = applyErr
+		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &applyResult)
+		newRoot = applyResult.RootID
+		retired = applyResult.PendingRetiredPages
+		metrics = applyResult.Metrics
 		return
 	}
 	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
@@ -2482,6 +2489,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 }
 
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithOptions(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if commandWALIntent != nil {
+		var commandBuilder OrderedRootGroupCommandWALSystemBuilder
+		if buildSystemDeltaIter != nil {
+			commandBuilder = func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return buildSystemDeltaIter(rootIDs)
+			}
+		}
+		return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, nil, commandBuilder, opts)
+	}
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(nil, ordered, preflight, commandWALIntent, buildSystemDeltaIter, mode, opts)
 }
 
@@ -2698,333 +2714,65 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if db.closing.Load() {
 		return 0, nil, ErrClosed
 	}
-	if !opts.teardownPinned {
-		db.teardownMu.RLock()
-		defer db.teardownMu.RUnlock()
-	}
 
-	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
-	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(commandWALIntent, syncCommandWAL) {
-		unlockCommandWALPublish, lockErr := db.lockCommandWALPublishWithBarriersTeardownPinned()
-		if lockErr != nil {
-			return 0, nil, lockErr
-		}
-		defer unlockCommandWALPublish()
-		opts.rawPublishLocked = true
-	}
-	timing := commandWALIntent.publishTiming
-	lockStart := time.Now()
-	db.writeMu.Lock()
-	holdStart := time.Now()
-	wait := holdStart.Sub(lockStart)
-	if timing != nil {
-		timing.WriteLockWait += wait
-	}
-	rootsObserved := 0
-	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
-	finished := false
-	writeLocked := true
-	var hold time.Duration
-	releaseWrite := func() {
-		if !writeLocked {
-			return
-		}
-		hold = time.Since(holdStart)
-		db.writeMu.Unlock()
-		writeLocked = false
-	}
-	finishPublish := func() {
-		if finished {
-			return
-		}
-		finished = true
-		releaseWrite()
-		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
-	}
-	allOrdered := ordered
-	orderedConsumed := make([]bool, len(allOrdered))
-	defer func() {
-		closeUnconsumedOrderedRootDeltaPublishIterators(allOrdered, orderedConsumed)
-	}()
-	defer finishPublish()
-	if err = db.checkWriteAdmissionLocked(); err != nil {
-		return 0, nil, err
-	}
-
-	if db.readOnly {
-		err = ErrReadOnly
-		return 0, nil, err
-	}
-	if !db.CommandWALEnabled() {
-		err = ErrCommandWALUnsupported
-		return 0, nil, err
-	}
-	idxGen := db.idx.Load()
-	if idxGen == nil {
-		err = errOrderedRootPublishMissingIndex
-		return 0, nil, err
-	}
-
-	db.mu.RLock()
-	userRoot := db.meta.UserRootPageID
-	baseSystemRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	db.mu.RUnlock()
-	if preflight != nil {
-		phaseStart := time.Now()
-		if err = preflight(); err != nil {
-			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-			if timing != nil {
-				timing.Preflight += time.Since(phaseStart)
+	materialize := func(inputs []OrderedRootDeltaPublishInput) ([]OrderedRootDeltaBatchPublishInput, func(), error) {
+		converted := make([]OrderedRootDeltaBatchPublishInput, len(inputs))
+		release := func() {
+			for idx := range converted {
+				if converted[idx].Delta != nil {
+					_ = converted[idx].Delta.Close()
+					converted[idx].Delta = nil
+				}
 			}
-			return 0, nil, err
+			closeUnconsumedOrderedRootDeltaPublishIterators(inputs, nil)
 		}
-		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		if timing != nil {
-			timing.Preflight += time.Since(phaseStart)
+		for idx := range inputs {
+			delta, convertErr := orderedRootDeltaBatchFromIterator(inputs[idx].Iter)
+			if convertErr != nil {
+				release()
+				return nil, nil, convertErr
+			}
+			converted[idx] = OrderedRootDeltaBatchPublishInput{
+				BaseRoot:      inputs[idx].BaseRoot,
+				Delta:         delta,
+				StoragePolicy: inputs[idx].StoragePolicy,
+			}
 		}
+		return converted, release, nil
 	}
 
-	db.commitMu.Lock()
-	commitLocked := true
-	commandAppended := false
-	defer func() {
-		if err != nil && commandAppended {
-			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
-		}
-		if commitLocked {
-			db.commitMu.Unlock()
-		}
-	}()
-	appendStart := time.Now()
-	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
-	if timing != nil {
-		timing.Append += time.Since(appendStart)
-	}
+	converted, release, err := materialize(ordered)
 	if err != nil {
 		return 0, nil, err
 	}
-	commandAppended = true
-	if lsn == 0 {
-		err = errCommandWALContextZeroLSN
-		return 0, nil, err
-	}
-	durableResourceBuilder := rootpublication.NewStableResourceSetBuilder()
-	defer durableResourceBuilder.Abandon()
-	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
-	durableResourceMutation := rootpublication.StableLogicalObligationMutation{}
-	ctx := CommandWALPublishContext{
-		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
-		durableResourceRequirements: &durableResourceRequirements,
-		durableResourceMutation:     &durableResourceMutation,
-	}
+	defer release()
 
+	var contextReleases []func()
+	defer func() {
+		for idx := len(contextReleases) - 1; idx >= 0; idx-- {
+			contextReleases[idx]()
+		}
+	}()
+	var batchContextBuilder OrderedRootDeltaBatchGroupCommandWALDeltaBuilder
 	if buildContextDeltas != nil {
-		contextBuildStart := time.Now()
-		contextOrdered, buildErr := buildContextDeltas(ctx)
-		if timing != nil {
-			timing.ContextBuild += time.Since(contextBuildStart)
-		}
-		if buildErr != nil {
-			closeUnconsumedOrderedRootDeltaPublishIterators(contextOrdered, nil)
-			err = buildErr
-			return 0, nil, err
-		}
-		if len(contextOrdered) != 0 {
-			nextOrdered := make([]OrderedRootDeltaPublishInput, 0, len(allOrdered)+len(contextOrdered))
-			nextOrdered = append(nextOrdered, allOrdered...)
-			nextOrdered = append(nextOrdered, contextOrdered...)
-			nextConsumed := make([]bool, len(nextOrdered))
-			copy(nextConsumed, orderedConsumed)
-			allOrdered = nextOrdered
-			orderedConsumed = nextConsumed
-		}
-	}
-
-	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root iterator context system delta apply")
-	var retired []uint64
-	var merged adaptive.Metrics
-	var touchedValueLogSegments []uint32
-	var vlogRefDelta *valueLogRefDelta
-	exactValueLogRefDelta := true
-	var ptrCollectors []*pendingValueLogAppendPtrCollectingIterator
-	defer func() {
-		if vlogRefDelta != nil {
-			releaseValueLogRefDelta(vlogRefDelta)
-		}
-		for _, collector := range ptrCollectors {
-			db.releasePendingValueLogAppendPtrCollector(collector)
-		}
-	}()
-	rootIDs = make([]uint64, len(allOrdered))
-	for idx := range allOrdered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
-		if err != nil {
-			return 0, nil, err
-		}
-		opts = opts.withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root iterator context root apply")
-		// publishOrderedRootDeltaIterator takes ownership and closes the
-		// iterator on every non-nil path; the deferred cleanup must not close it
-		// a second time if root publication fails after ownership transfer.
-		orderedConsumed[idx] = true
-		phaseStart := time.Now()
-		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(allOrdered[idx].Iter)
-		ptrCollectors = append(ptrCollectors, ptrCollector)
-		rootID, rootRetired, metrics, rootTouched, refDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(allOrdered[idx].BaseRoot, collectedIter, opts, baseSeq, true, false)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		if timing != nil {
-			timing.RootApply += time.Since(phaseStart)
-		}
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			if refDelta != nil {
-				releaseValueLogRefDelta(refDelta)
+		batchContextBuilder = func(ctx CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error) {
+			contextInputs, buildErr := buildContextDeltas(ctx)
+			if buildErr != nil {
+				closeUnconsumedOrderedRootDeltaPublishIterators(contextInputs, nil)
+				return nil, buildErr
 			}
-			return 0, nil, fmt.Errorf(
-				"treedb: command WAL ordered-root context apply root[%d] base=%d: %w",
-				idx,
-				allOrdered[idx].BaseRoot,
-				err,
-			)
-		}
-		if refDelta == nil {
-			exactValueLogRefDelta = false
-		} else {
-			mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
-			releaseValueLogRefDelta(refDelta)
-		}
-		touchedValueLogSegments = append(touchedValueLogSegments, rootTouched...)
-		rootIDs[idx] = rootID
-		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
-	}
-
-	phaseStart := time.Now()
-	iter, err := buildSystemDeltaIter(ctx, rootIDs)
-	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	if timing != nil {
-		timing.SystemBuild += time.Since(phaseStart)
-	}
-	if err != nil {
-		if iter != nil {
-			_ = iter.Close()
-		}
-		return 0, nil, err
-	}
-	if iter == nil {
-		err = errOrderedRootCommandWALContextNilSystemDeltaIterator()
-		return 0, nil, err
-	}
-	phaseStart = time.Now()
-	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
-	ptrCollectors = append(ptrCollectors, ptrCollector)
-	rootID, rootRetired, metrics, systemTouched, systemRefDelta, err := db.publishOrderedRootDeltaIteratorWithValueLogRefs(baseSystemRoot, collectedIter, systemOpts, baseSeq, true, true)
-	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	if timing != nil {
-		timing.SystemApply += time.Since(phaseStart)
-	}
-	phaseStats.systemApplyCalls++
-	if err != nil {
-		if systemRefDelta != nil {
-			releaseValueLogRefDelta(systemRefDelta)
-		}
-		return 0, nil, fmt.Errorf(
-			"treedb: command WAL ordered-root context apply system root base=%d: %w",
-			baseSystemRoot,
-			err,
-		)
-	}
-	if systemRefDelta == nil {
-		exactValueLogRefDelta = false
-	} else {
-		if systemRefDelta.requiresCandidateProjection {
-			baseRoots := make([]uint64, len(allOrdered))
-			for idx := range allOrdered {
-				baseRoots[idx] = allOrdered[idx].BaseRoot
+			contextConverted, contextRelease, convertErr := materialize(contextInputs)
+			if convertErr != nil {
+				return nil, convertErr
 			}
-			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
-				systemRefDelta.requiresCandidateProjection = false
-			} else {
-				exactValueLogRefDelta = false
-			}
+			contextReleases = append(contextReleases, contextRelease)
+			return contextConverted, nil
 		}
-		mergeValueLogRefDeltaInto(&vlogRefDelta, systemRefDelta)
-		releaseValueLogRefDelta(systemRefDelta)
 	}
-	touchedValueLogSegments = append(touchedValueLogSegments, systemTouched...)
-	newSystemRoot = rootID
-	retired = append(retired, rootRetired...)
-	mergeOrderedRootPublishMetrics(&merged, metrics)
-	phaseStats.systemApplyMetrics.add(metrics)
-
-	db.mu.RLock()
-	curUserRoot := db.meta.UserRootPageID
-	curSystemRoot := db.meta.SystemRootPageID
-	db.mu.RUnlock()
-	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		err = errOrderedRootCommandWALContextConcurrentModification(userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
-		return 0, nil, err
-	}
-
-	if !exactValueLogRefDelta {
-		releaseValueLogRefDelta(vlogRefDelta)
-		vlogRefDelta = nil
-	}
-	if err := addOrderedRootOuterLeafSegmentsToValueLogRefDelta(db.leafPageLog, vlogRefDelta); err != nil {
-		return 0, nil, err
-	}
-	phaseStart = time.Now()
-	durableResources, err := durableResourceBuilder.Freeze()
-	if err != nil {
-		return 0, nil, err
-	}
-	if durableResources.Len() == 0 {
-		durableResources.Release()
-		durableResources = nil
-	}
-	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(commandWALIntent)
-	finalizeOpts.publishTiming = timing
-	finalizeOpts.closeTeardownPinned = true
-	finalizeOpts.durableResources = durableResources
-	finalizeOpts.durableResourceRequirements = durableResourceRequirements
-	finalizeOpts.durableResourceMutation = durableResourceMutation
-	post, err := db.finalizeCommitReleasingRootSerialization(
-		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
-		true, vlogRefDelta, nil, nil, finalizeOpts,
-		baseSeq,
-		func() {
-			db.commitMu.Unlock()
-			commitLocked = false
-			releaseWrite()
-		},
-		func(error) {
-			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
-			commandAppended = false
-		},
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(
+		converted, preflight, commandWALIntent, batchContextBuilder, buildSystemDeltaIter, opts,
 	)
-	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-	if timing != nil {
-		timing.Finalize += time.Since(phaseStart)
-	}
-	phaseStats.finalizeCalls++
-	if post.accepted {
-		commandAppended = false
-		commandWALIntent.inner.staged = false
-	}
-	if err != nil {
-		return 0, nil, err
-	}
-	vlogRefDelta = nil
-	postStart := time.Now()
-	db.finalizeCommitPostWork(post)
-	if timing != nil {
-		timing.PostFinalize += time.Since(postStart)
-	}
-	return newSystemRoot, rootIDs, nil
 }
-
 func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if commandWALIntent == nil && preflight == nil && db != nil && !db.closing.Load() {
 		var retry bool
@@ -3157,7 +2905,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 	return nil
 }
 
-func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, defaultRoute OrderedRootSpanNativeRoute, defaultContext string) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
+func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, defaultRoute OrderedRootSpanNativeRoute, defaultContext string, collectOldPointerRefs bool) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
 		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
@@ -3168,10 +2916,11 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 		}
 		route, context := orderedRootDeltaBatchInputSpanNativeRoute(ordered[orderedIdx], defaultRoute, defaultContext)
 		opts = opts.withSpanNativeRoute(route, context)
-		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
+		rootID, retired, metrics, applyResult, err := db.publishOrderedRootDeltaBatchWithAllocatorResult(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild, collectOldPointerRefs)
 		result.rootID = rootID
 		result.retired = retired
 		result.metrics = metrics
+		result.applyResult = applyResult
 		result.err = err
 		return result
 	}
@@ -3324,7 +3073,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, false, err
 	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "multi-index ordered-root group root apply")
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "multi-index ordered-root group root apply", false)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -3629,7 +3378,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		defaultRoute = OrderedRootSpanNativeRouteCommandWALPublish
 		defaultContext = "command-WAL ordered-root group root apply"
 	}
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, idxGen.allocator, defaultRoute, defaultContext)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, idxGen.allocator, defaultRoute, defaultContext, false)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -3881,24 +3630,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats); err != nil {
 		return 0, nil, err
 	}
-	for idx := range allOrdered {
-		rootOpts, optsErr := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
-		if optsErr != nil {
-			return 0, nil, optsErr
-		}
-		refDelta, buildErr := db.buildOrderedRootDeltaBatchValueLogRefDelta(idxGen, allOrdered[idx].BaseRoot, baseSeq, allOrdered[idx].Delta, rootOpts.outerLeavesInValueLog)
-		if buildErr != nil {
-			return 0, nil, buildErr
-		}
-		if refDelta == nil {
-			exactValueLogRefDelta = false
-			continue
-		}
-		mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
-		releaseValueLogRefDelta(refDelta)
-	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply", true)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if timing != nil {
 		timing.RootApply += time.Since(phaseStart)
@@ -3914,7 +3647,51 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	for idx := range rootApplyResults {
 		result := rootApplyResults[idx]
 		if result.err != nil {
-			return 0, nil, result.err
+			return 0, nil, fmt.Errorf(
+				"treedb: command WAL ordered-root context apply root[%d] base=%d: %w",
+				idx,
+				allOrdered[idx].BaseRoot,
+				result.err,
+			)
+		}
+		rootOpts, optsErr := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
+		if optsErr != nil {
+			return 0, nil, optsErr
+		}
+		var refDelta *valueLogRefDelta
+		switch {
+		case allOrdered[idx].BaseRoot == 0:
+			refDelta, err = db.buildOrderedRootDeltaBatchValueLogRefDelta(idxGen, 0, baseSeq, allOrdered[idx].Delta, rootOpts.outerLeavesInValueLog)
+		case allOrdered[idx].Delta == nil || allOrdered[idx].Delta.IsEmpty():
+			refDelta = db.newNoopValueLogRefDeltaIfTrackable(baseSeq)
+		default:
+			entries, ranges := allOrdered[idx].Delta.ApplyPlan()
+			refPager := idxGen.pager
+			if result.applyResult.OldPointerRefsCollected {
+				refPager = nil
+			}
+			refDelta, err = db.buildValueLogRefDeltaWithOptions(
+				refPager, allOrdered[idx].BaseRoot, baseSeq, entries, ranges,
+				&result.applyResult.OldPointerRefs, result.applyResult.OldEntriesRemoved,
+				result.applyResult.OldPointerRefsCollected, rootOpts.outerLeavesInValueLog,
+			)
+		}
+		if err != nil {
+			return 0, nil, fmt.Errorf(
+				"treedb: command WAL ordered-root context ref delta root[%d] base=%d: %w",
+				idx,
+				allOrdered[idx].BaseRoot,
+				err,
+			)
+		}
+		if refDelta == nil {
+			exactValueLogRefDelta = false
+		} else {
+			refDelta.requiresCandidateProjection = false
+			refDelta.allowEmptyDependencyReuse = true
+			refDelta.outerLeafDependencyReuse = rootOpts.outerLeavesInValueLog
+			mergeValueLogRefDeltaInto(&vlogRefDelta, refDelta)
+			releaseValueLogRefDelta(refDelta)
 		}
 		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(allOrdered[idx].Delta, touchedValueLogSegments)
 		rootIDs[idx] = result.rootID
@@ -3941,6 +3718,17 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		err = errOrderedRootCommandWALContextNilSystemDeltaIterator()
 		return 0, nil, err
 	}
+	systemDelta, convertErr := orderedRootDeltaBatchFromIterator(iter)
+	_ = iter.Close()
+	if convertErr != nil {
+		return 0, nil, convertErr
+	}
+	defer systemDelta.Close()
+	var baseDescriptorEntries []collectionEntry
+	if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
+		baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
+	}
+	iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	phaseStart = time.Now()
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
 	ptrCollectors = append(ptrCollectors, ptrCollector)
@@ -3964,7 +3752,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			for idx := range allOrdered {
 				baseRoots[idx] = allOrdered[idx].BaseRoot
 			}
-			if db.orderedRootCollectionDescriptorTransitionsCovered(idxGen, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+			newDescriptorEntries, collectErr := vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, rootID)
+			if collectErr == nil && orderedRootCollectionDescriptorTransitionsCoveredEntries(baseDescriptorEntries, newDescriptorEntries, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 				systemRefDelta.requiresCandidateProjection = false
 			} else {
 				exactValueLogRefDelta = false

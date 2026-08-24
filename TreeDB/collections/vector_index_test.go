@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -50,6 +51,78 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	stats := index.Stats()
 	if stats.LiveDocs != 4 || stats.DeletedDocs != 0 || stats.Dimensions != 2 || stats.AvgDegree == 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestCollectionVectorIndexSearchRejectsMixedDocumentGenerationRerank(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 8}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DisableIndexedWriteMemtables: true},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[0.8,0.2]}`), []byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("insert seed documents: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if index == nil {
+		t.Fatal("registered native vector index is nil")
+	}
+	if _, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true}); err != nil {
+		t.Fatalf("prime live-delta search: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("d")}, [][]byte{[]byte(`{"embedding":[-1,0]}`)}); err != nil {
+		t.Fatalf("insert live-delta document: %v", err)
+	}
+	index.mu.RLock()
+	hasLiveDelta := index.liveDelta != nil
+	index.mu.RUnlock()
+	if !hasLiveDelta {
+		t.Fatal("expected live delta before stale-generation search")
+	}
+	published := index.searchView.Load()
+	if published == nil {
+		t.Fatal("published search view is nil")
+	}
+	index.mu.RLock()
+	publishedGeneration := index.sourceDocumentGeneration
+	index.mu.RUnlock()
+	if _, err := col.insertBatch([][]byte{[]byte("c")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}, false, nil); err != nil {
+		t.Fatalf("commit document before vector reconciliation: %v", err)
+	}
+	index.recordSourceDocumentGeneration(publishedGeneration + 1)
+	if index.searchView.Load() != published {
+		t.Fatal("unreconciled document generation unexpectedly replaced the immutable search view")
+	}
+	if _, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, FetchMultiplier: 1, DisableExactFallback: true}); !errors.Is(err, ErrVectorIndexSearchUnavailable) || trace.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("disabled exact fallback trace=%+v err=%v want stale-document unavailable", trace, err)
+	}
+
+	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, FetchMultiplier: 1})
+	if err != nil {
+		t.Fatalf("search stale immutable generation: %v", err)
+	}
+	requireVectorResultIDs(t, results, "c")
+	if trace.Strategy != "ann_graph_exact_fallback" || trace.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
+		t.Fatalf("search trace=%+v want stale-document exact fallback", trace)
 	}
 }
 

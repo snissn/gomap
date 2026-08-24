@@ -18,13 +18,15 @@ import (
 //
 //	TREEDB_VECTOR_MIXED_MODE=current go test ./TreeDB/collections -run '^$' \
 //	  -bench '^BenchmarkVectorIndexMixedSearchInsert4300$' -benchtime=1x
+//
+// Use live-delta-cutover only when the live-delta fold cost is the intended
+// measurement; it inserts enough rows to cross the production bound once.
 func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	if b.N != 1 {
 		b.Fatalf("run with -benchtime=1x; fixed mixed window got b.N=%d", b.N)
 	}
 	const (
 		baseRows   = 10_000
-		insertRows = 2_000
 		dimensions = 768
 		batchRows  = 100
 		searchers  = 10
@@ -34,10 +36,14 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		mode = "current"
 	}
 	validModes := map[string]bool{
-		"current": true, "serial-reciprocal": true, "no-publish": true,
+		"current": true, "serial-reciprocal": true, "no-publish": true, "live-delta": true, "live-delta-cutover": true,
 	}
 	if !validModes[mode] {
 		b.Fatalf("unknown TREEDB_VECTOR_MIXED_MODE %q", mode)
+	}
+	insertRows := 2_000
+	if mode == "live-delta-cutover" {
+		insertRows = defaultVectorIndexLiveDeltaRows + batchRows
 	}
 	batchPace := 200 * time.Millisecond
 	if value := os.Getenv("TREEDB_VECTOR_MIXED_BATCH_PACE"); value != "" {
@@ -93,7 +99,13 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 			batchStarted := time.Now()
 			end := minInt(start+batchRows, len(rows))
 			index.mu.Lock()
-			if err := index.insertVectorBatchLocked(ids[start:end], rows[start:end]); err != nil {
+			var err error
+			if mode == "live-delta" || mode == "live-delta-cutover" {
+				err = index.insertLiveVectorBatchLocked(ids[start:end], rows[start:end])
+			} else {
+				err = index.insertVectorBatchLocked(ids[start:end], rows[start:end])
+			}
+			if err != nil {
 				index.mu.Unlock()
 				return err
 			}
@@ -131,6 +143,12 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	b.ReportMetric(float64(index.frozenPrefixBatches), "frozen_batches")
 	b.ReportMetric(float64(index.constructionWorkers), "worker_limit")
 	b.ReportMetric(float64(visibleDocs), "visible_docs")
+	stats := index.Stats()
+	if mode == "live-delta-cutover" && stats.LiveDeltaCutovers == 0 {
+		b.Fatal("live-delta-cutover did not cross the configured bound")
+	}
+	b.ReportMetric(float64(stats.LiveDeltaDocs), "live_delta_docs")
+	b.ReportMetric(float64(stats.LiveDeltaCutovers), "live_delta_cutovers")
 	b.ReportMetric(1, "native_route")
 }
 
