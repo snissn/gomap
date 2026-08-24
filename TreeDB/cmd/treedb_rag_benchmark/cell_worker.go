@@ -1,0 +1,205 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+const applicationCellWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
+
+type applicationCellWorkerRequest struct {
+	Ordinal int `json:"ordinal"`
+}
+
+type applicationCellWorkerReady struct {
+	Ready                bool   `json:"ready"`
+	CellCount            int    `json:"cell_count"`
+	ProductBaseSHA       string `json:"product_base_sha"`
+	HarnessRevision      string `json:"harness_revision"`
+	EnvironmentPolicy    string `json:"environment_policy"`
+	FixtureSHA256        string `json:"fixture_sha256"`
+	ConfigSHA256         string `json:"config_sha256"`
+	SemanticVectorSHA256 string `json:"semantic_vector_sha256"`
+}
+
+type applicationCellWorkerResponse struct {
+	Ordinal int             `json:"ordinal"`
+	Row     *applicationRow `json:"row,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type applicationCellWorkerEnvironment struct {
+	env          *applicationEnvironment
+	queryVectors map[string][]float32
+	dir          string
+}
+
+func applicationCellCount() int {
+	count := 0
+	for _, embeddingCell := range applicationEmbeddings {
+		count += len(applicationCellMatrix(embeddingCell))
+	}
+	return count
+}
+
+func applicationCellByOrdinal(ordinal int) (applicationCellIdentity, bool) {
+	if ordinal < 0 {
+		return applicationCellIdentity{}, false
+	}
+	for _, embeddingCell := range applicationEmbeddings {
+		cells := applicationCellMatrix(embeddingCell)
+		if ordinal < len(cells) {
+			return cells[ordinal], true
+		}
+		ordinal -= len(cells)
+	}
+	return applicationCellIdentity{}, false
+}
+
+func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.Writer) error {
+	if err := validateApplicationConfig(cfg); err != nil {
+		return err
+	}
+	settings, buildInfoOK := runtimeBuildInfo()
+	resolvedRevision, err := resolveApplicationHarnessRevision(cfg, settings, buildInfoOK)
+	if err != nil {
+		return err
+	}
+	fixture := buildApplicationFixture()
+	if err := validateApplicationFixture(&fixture); err != nil {
+		return err
+	}
+	bundle, err := loadSemanticVectors()
+	if err != nil {
+		return err
+	}
+	if err := validateSemanticVectors(&fixture, bundle); err != nil {
+		return err
+	}
+	if err := registerSemanticProvider(bundle); err != nil {
+		return err
+	}
+
+	root := cfg.Dir
+	removeRoot := false
+	if root == "" {
+		root, err = os.MkdirTemp("", "treedb_rag_cell_worker_*")
+		if err != nil {
+			return err
+		}
+		removeRoot = !cfg.KeepDir
+	} else {
+		if err := os.RemoveAll(root); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return err
+		}
+	}
+	if removeRoot {
+		defer os.RemoveAll(root)
+	}
+
+	openEnvironment := func(embeddingCell string, ordinal, attempt int) (*applicationCellWorkerEnvironment, error) {
+		environmentDir := filepath.Join(root, embeddingCell, fmt.Sprintf("cell-%03d-attempt-%02d", ordinal, attempt))
+		if err := os.RemoveAll(environmentDir); err != nil {
+			return nil, err
+		}
+		dims, provider := embeddingCellConfig(embeddingCell, bundle)
+		env, lifecycle, err := openApplicationEnvironment(cfg, &fixture, bundle, embeddingCell, provider, dims, environmentDir)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateLifecycleEvidence(embeddingCell, lifecycle); err != nil {
+			return nil, errors.Join(err, env.closeWithError())
+		}
+		queryVectors, err := applicationQueryVectors(&fixture, bundle, embeddingCell, provider, dims)
+		if err != nil {
+			return nil, errors.Join(err, env.closeWithError())
+		}
+		return &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors, dir: environmentDir}, nil
+	}
+
+	buffered := bufio.NewWriter(output)
+	encoder := json.NewEncoder(buffered)
+	if err := encoder.Encode(applicationCellWorkerReady{
+		Ready: true, CellCount: applicationCellCount(), ProductBaseSHA: cfg.ProductBaseSHA,
+		HarnessRevision: resolvedRevision, EnvironmentPolicy: applicationCellWorkerEnvironmentPolicy,
+		FixtureSHA256: applicationFixtureDigest(&fixture), ConfigSHA256: applicationConfigDigest(cfg),
+		SemanticVectorSHA256: bundle.Digest(),
+	}); err != nil {
+		return err
+	}
+	if err := buffered.Flush(); err != nil {
+		return err
+	}
+
+	decoder := json.NewDecoder(input)
+	attempts := make(map[int]int)
+	for {
+		var request applicationCellWorkerRequest
+		if err := decoder.Decode(&request); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return fmt.Errorf("decode cell request: %w", err)
+		}
+		cell, ok := applicationCellByOrdinal(request.Ordinal)
+		if !ok {
+			response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: fmt.Sprintf("cell ordinal %d outside [0,%d)", request.Ordinal, applicationCellCount())}
+			if err := encoder.Encode(response); err != nil {
+				return err
+			}
+			if err := buffered.Flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		attempt := attempts[request.Ordinal]
+		attempts[request.Ordinal] = attempt + 1
+
+		var state *applicationCellWorkerEnvironment
+		var env *applicationEnvironment
+		var queryVectors map[string][]float32
+		if unsupportedCapability(cell) == nil {
+			opened, openErr := openEnvironment(cell.Embedding, request.Ordinal, attempt)
+			if openErr != nil {
+				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: openErr.Error()}
+				if err := encoder.Encode(response); err != nil {
+					return err
+				}
+				if err := buffered.Flush(); err != nil {
+					return err
+				}
+				continue
+			}
+			state = opened
+			env, queryVectors = state.env, state.queryVectors
+		}
+		row, err := runApplicationCell(cfg, &fixture, env, queryVectors, cell)
+		if state != nil {
+			if closeErr := state.env.closeWithError(); err == nil && closeErr != nil {
+				err = fmt.Errorf("close fresh cell environment: %w", closeErr)
+			}
+			if removeErr := os.RemoveAll(state.dir); err == nil && removeErr != nil {
+				err = fmt.Errorf("remove fresh cell environment: %w", removeErr)
+			}
+		}
+		response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Row: &row}
+		if err != nil {
+			response.Row = nil
+			response.Error = err.Error()
+		}
+		if err := encoder.Encode(response); err != nil {
+			return err
+		}
+		if err := buffered.Flush(); err != nil {
+			return err
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -584,15 +585,31 @@ type applicationEnvironment struct {
 }
 
 func (e *applicationEnvironment) close() {
+	_ = e.closeWithError()
+}
+
+func (e *applicationEnvironment) closeWithError() error {
+	if e == nil {
+		return nil
+	}
 	if e.server != nil {
 		e.server.Close()
+		e.server = nil
 	}
+	var err error
 	if e.service != nil {
-		_ = e.service.Close()
+		err = errors.Join(err, e.service.Close())
+		e.service = nil
+	}
+	if e.col != nil {
+		err = errors.Join(err, e.col.CloseVectorIndexPreparedSearchCache())
+		e.col = nil
 	}
 	if e.db != nil {
-		_ = e.db.Close()
+		err = errors.Join(err, e.db.Close())
+		e.db = nil
 	}
+	return err
 }
 
 func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixture, bundle *semanticVectorBundle, embeddingCell string, provider string, dims int, dir string) (*applicationEnvironment, lifecycleEvidence, error) {
@@ -1835,19 +1852,19 @@ func summarizeIngestion(rows []ingestionRepetition) ingestionSummary {
 	return ingestionSummary{Repetitions: len(rows), MedianDocsPerSec: medianDocs, P95DocsPerSec: p95Docs, MedianBytesPerOp: medianBytes, P95BytesPerOp: p95Bytes, HistoricalReproduced: medianDocs <= 75 || medianBytes >= 66*(1<<30)}
 }
 
-func freezeApplicationGate(summary ingestionSummary) frozenGate {
-	gate := frozenGate{CrossTenantResults: 0, CrossWorkspaceResults: 0, FullDocumentScanFallbacks: 0, MinTimedQueriesPerCell: 1000, MinRepetitionsPerCell: 3, MaxUnaffectedQPSRegression: 10}
-	if summary.HistoricalReproduced {
-		gate.CandidateMinDocsPerSec = summary.MedianDocsPerSec * 2
-		gate.CandidateMaxBytesPerOp = summary.MedianBytesPerOp * 0.5
-		gate.Rationale = "historical 37.59 docs/s or 132 GiB/op regime reproduced; apply #4284 default >=2x throughput and >=50% lower B/op"
-	} else {
-		gate.CandidateMinDocsPerSec = summary.MedianDocsPerSec * 1.15
-		gate.CandidateMaxBytesPerOp = summary.MedianBytesPerOp * 0.90
-		gate.Rationale = "historical regime did not reproduce on the retained application fixture; freeze an attainable 15% throughput gain and 10% allocation reduction"
+func freezeApplicationGate(ingestionSummary) frozenGate {
+	return frozenGate{
+		CrossTenantResults:         0,
+		CrossWorkspaceResults:      0,
+		FullDocumentScanFallbacks:  0,
+		MinTimedQueriesPerCell:     1000,
+		MinRepetitionsPerCell:      3,
+		MaxUnaffectedQPSRegression: 10,
+		CandidateMinDocsPerSec:     325.45,
+		CandidateMaxBytesPerOp:     1947235,
+		NoisePolicy:                "fresh DB; five repetitions; median is decision statistic; p95 disclosed; >10% unaffected QPS or p99 regression blocks; quality/work/projection digests must match",
+		Rationale:                  "retained pre-candidate #4284 gate frozen by the final repaired M1 baseline; final and repeated artifacts evaluate the same thresholds",
 	}
-	gate.NoisePolicy = "fresh DB; five repetitions; median is decision statistic; p95 disclosed; >10% unaffected QPS or p99 regression blocks; quality/work/projection digests must match"
-	return gate
 }
 
 func validateApplicationReport(report *applicationReport, cfg applicationConfig) error {
