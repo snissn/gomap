@@ -24,6 +24,7 @@ const (
 	expectedCellCount               = 384
 	expectedWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
 	maxCellAttempts                 = 2
+	workerShardSize                 = 8
 )
 
 var legOrder = [4]string{"A1", "B1", "B2", "A2"}
@@ -80,6 +81,7 @@ type namedResponse struct {
 }
 
 type workerEvidence struct {
+	Epoch             int       `json:"epoch"`
 	Leg               string    `json:"leg"`
 	Variant           string    `json:"variant"`
 	Command           []string  `json:"command"`
@@ -270,25 +272,51 @@ func runCoordinator(cfg config) error {
 		binaryHashes[path] = hash
 	}
 
-	workers := make([]*worker, 0, len(cfg.Legs))
-	byName := make(map[string]*worker, len(cfg.Legs))
-	for _, leg := range cfg.Legs {
-		worker, err := startWorker(leg, cfg.Root, cfg.WorkerArgs, binaryHashes[leg.Binary])
-		if worker != nil {
-			workers = append(workers, worker)
-		}
-		if err != nil {
-			stopWorkers(workers)
-			if worker != nil && worker.stderr.Len() != 0 {
-				return fmt.Errorf("start %s: %w: %s", leg.Name, err, strings.TrimSpace(worker.stderr.String()))
+	var workers []*worker
+	var byName map[string]*worker
+	evidence := make([]workerEvidence, 0, len(cfg.Legs)*(expectedCellCount/workerShardSize))
+	startEpoch := func(epoch int) error {
+		workers = make([]*worker, 0, len(cfg.Legs))
+		byName = make(map[string]*worker, len(cfg.Legs))
+		for _, leg := range cfg.Legs {
+			worker, err := startWorker(leg, cfg.Root, cfg.WorkerArgs, binaryHashes[leg.Binary], epoch)
+			if worker != nil {
+				workers = append(workers, worker)
 			}
-			return fmt.Errorf("start %s: %w", leg.Name, err)
+			if err != nil {
+				stopWorkers(workers)
+				if worker != nil && worker.stderr.Len() != 0 {
+					return fmt.Errorf("start %s epoch %d: %w: %s", leg.Name, epoch, err, strings.TrimSpace(worker.stderr.String()))
+				}
+				return fmt.Errorf("start %s epoch %d: %w", leg.Name, epoch, err)
+			}
+			byName[leg.Name] = worker
 		}
-		byName[leg.Name] = worker
+		return nil
+	}
+	finishEpoch := func() error {
+		if err := finishWorkers(workers); err != nil {
+			return err
+		}
+		for _, worker := range workers {
+			evidence = append(evidence, worker.evidence)
+		}
+		return nil
+	}
+	if err := startEpoch(0); err != nil {
+		return err
 	}
 
 	cells := make([]cellEvidence, 0, expectedCellCount)
 	for ordinal := range expectedCellCount {
+		if ordinal > 0 && ordinal%workerShardSize == 0 {
+			if err := finishEpoch(); err != nil {
+				return err
+			}
+			if err := startEpoch(ordinal / workerShardSize); err != nil {
+				return err
+			}
+		}
 		order := orderForOrdinal(ordinal)
 		named := make([]namedResponse, 0, len(order))
 		rows := make([]legRow, 0, len(order))
@@ -324,14 +352,10 @@ func runCoordinator(cfg config) error {
 		}
 		cells = append(cells, cellEvidence{Ordinal: ordinal, Order: append([]string(nil), order[:]...), Legs: rows})
 	}
-	if err := finishWorkers(workers); err != nil {
+	if err := finishEpoch(); err != nil {
 		return err
 	}
 	finishedAt := time.Now().UTC()
-	evidence := make([]workerEvidence, len(workers))
-	for i, worker := range workers {
-		evidence[i] = worker.evidence
-	}
 	return writeArtifact(cfg.Output, artifact{
 		SchemaVersion: 1,
 		StartedAt:     startedAt,
@@ -343,10 +367,10 @@ func runCoordinator(cfg config) error {
 	})
 }
 
-func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash string) (*worker, error) {
+func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash string, epoch int) (*worker, error) {
 	args := []string{
 		"-cell-worker",
-		"-dir", filepath.Join(root, strings.ToLower(cfg.Name)),
+		"-dir", filepath.Join(root, fmt.Sprintf("epoch-%03d", epoch), strings.ToLower(cfg.Name)),
 		"-product-base-sha", cfg.ProductBaseSHA,
 		"-harness-revision", cfg.HarnessRevision,
 	}
@@ -367,6 +391,7 @@ func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash str
 	worker.encoder = json.NewEncoder(stdin)
 	worker.decoder = json.NewDecoder(bufio.NewReader(stdout))
 	worker.evidence = workerEvidence{
+		Epoch:           epoch,
 		Leg:             cfg.Name,
 		Variant:         cfg.Variant,
 		Command:         append([]string(nil), cmd.Args...),
