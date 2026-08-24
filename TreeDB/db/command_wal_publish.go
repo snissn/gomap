@@ -482,7 +482,7 @@ func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, op
 	var lastLSN uint64
 	var scan commandWALSegmentScanResult
 	for {
-		frame, err := r.ReadCommandFrame()
+		lsn, err := r.ReadValidatedCommandFrameLSN()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return scan, nil
@@ -504,27 +504,27 @@ func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, op
 			return scan, err
 		}
 		scan.scannedBytes = scannedBytes
-		if lastLSN != 0 && frame.LSN <= lastLSN {
+		if lastLSN != 0 && lsn <= lastLSN {
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
 		if opts.seenLSNs != nil &&
-			(opts.seenLSNAppliedLSN == 0 || frame.LSN > opts.seenLSNAppliedLSN) &&
-			(opts.seenLSNMax == 0 || frame.LSN <= opts.seenLSNMax) {
-			if _, ok := opts.seenLSNs[frame.LSN]; ok {
+			(opts.seenLSNAppliedLSN == 0 || lsn > opts.seenLSNAppliedLSN) &&
+			(opts.seenLSNMax == 0 || lsn <= opts.seenLSNMax) {
+			if _, ok := opts.seenLSNs[lsn]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
 			}
-			opts.seenLSNs[frame.LSN] = struct{}{}
+			opts.seenLSNs[lsn] = struct{}{}
 		}
-		lastLSN = frame.LSN
+		lastLSN = lsn
 		scan.typed = true
 		scan.frames++
-		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
-			scan.minLSN = frame.LSN
+		if scan.minLSN == 0 || lsn < scan.minLSN {
+			scan.minLSN = lsn
 		}
-		if frame.LSN > scan.maxLSN {
-			scan.maxLSN = frame.LSN
+		if lsn > scan.maxLSN {
+			scan.maxLSN = lsn
 		}
 	}
 }
