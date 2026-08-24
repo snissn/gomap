@@ -44,6 +44,23 @@ func TestHybridParentCollapsePreservesFusionOrderAndContributions4291(t *testing
 	}
 }
 
+func TestHybridParentCollapseTreatsInvalidUTF8ParentsAsIndependent4291(t *testing.T) {
+	results := []HybridSearchResult{
+		{ID: []byte{0xff, '#', '0'}},
+		{ID: []byte{0xff, '#', '1'}},
+		{ID: []byte("valid#0")},
+		{ID: []byte("valid#1")},
+	}
+	var stats HybridSearchStats
+	got := hybridCollapseResultsByParent(results, 4, 1, &stats)
+	if len(got) != 3 || !bytes.Equal(got[0].ID, []byte{0xff, '#', '0'}) || !bytes.Equal(got[1].ID, []byte{0xff, '#', '1'}) || !bytes.Equal(got[2].ID, []byte("valid#0")) {
+		t.Fatalf("invalid UTF-8 parents were collapsed: results=%q", hybridResultIDs2505(got))
+	}
+	if stats.CollapseRejections != 1 || stats.CollapseExhaustions != 1 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
 func TestHybridParentCollapseReportsBoundedExhaustion4291(t *testing.T) {
 	candidates := []HybridSearchCandidate{
 		{ID: []byte("parent#0"), Source: HybridCandidateSourceText, IndexName: "lexical", SourceRank: 1, Score: 3, ScoreKind: HybridScoreKindBM25},

@@ -588,7 +588,7 @@ func hybridCollapseResultsByParent(results []HybridSearchResult, topK, maxChunks
 		}
 		id := string(result.ID)
 		parentID, ordinal, child := chunking.ParseChildID(id)
-		if child && chunking.ChildDocumentID(parentID, ordinal) == id {
+		if child && chunking.ChildDocumentID(parentID, ordinal) == id && chunking.ValidateParentID(parentID) == nil {
 			if parentCounts[parentID] >= maxChunksPerParent {
 				if stats != nil {
 					stats.CollapseRejections++
