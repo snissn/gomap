@@ -2,7 +2,7 @@
   "schema": "treedb_rag_multifield_and_evidence/v1",
   "issue": 4292,
   "base_revision": "363a550c368baa23b6ef7c4078f734bd236375a1",
-  "candidate_revision": "f13a7686bb6efb020772f49f4fcd8fe206ecab76",
+  "candidate_revision": "3224fc55306e3b2d4f661549956f6ef9e453084e",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
   "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
@@ -23,31 +23,28 @@
     "max_parent_results": 2,
     "cross_tenant_results": 0,
     "cross_workspace_results": 0,
-    "errors": 0
+    "errors": 0,
+    "all_conjunction_leaves_share_one_snapshot_and_buffered_view": true
   },
-  "ingestion_repeats": [
-    {
-      "median_source_docs_per_sec": 404.68,
-      "median_bytes_per_source": 1851102,
-      "artifact_sha256": "327922f431b18792fb0ece8b8bc1ba476567479251dc478bf6891ff615dfbfe8"
-    },
-    {
-      "median_source_docs_per_sec": 395.99,
-      "median_bytes_per_source": 1851904,
-      "artifact_sha256": "f48d1e504f42390240ab40c6dad0ad6e26ed28b4a372cdce664b4b7af51fdc88"
-    }
-  ],
+  "ingestion": {
+    "median_source_docs_per_sec": 424.52,
+    "p95_source_docs_per_sec": 444.34,
+    "median_bytes_per_source": 1851911,
+    "p95_bytes_per_source": 2237877
+  },
   "quality": {
     "maximum_unaffected_control_delta": 0.0,
     "tenant_workspace_range_scope_audited_untimed": true,
     "bounded_short_rankings_use_nonrelevant_empty_ranks": true
   },
   "performance_disposition": {
-    "repeat_stable_qps_regressions_over_10_percent": 0,
-    "repeat_stable_relative_p99_rows_over_10_percent": 12,
-    "largest_repeat_stable_absolute_p99_delta_ms": 1.6242,
-    "corresponding_qps_changes_percent": [-3.42, -1.16],
-    "explanation": "No unaffected row showed a repeat-stable QPS loss above 10%. Relative p99 shifts occurred on low-millisecond or microsecond tails while QPS stayed within 5%; the largest absolute shift was 1.6242 ms on an existing semantic c4 collapse row with -3.42%/-1.16% QPS. This is retained as host/tail noise and will be rechecked on exact merged main before M3 closeout.",
+    "worst_unaffected_qps_change_percent": -8.55,
+    "worst_unaffected_qps_row": "hashing unfiltered direct c4 hybrid score-only",
+    "worst_relative_p99_row": "hashing unfiltered direct c1 hybrid score-only",
+    "worst_relative_p99_disabled_ms": 0.11109544,
+    "worst_relative_p99_candidate_ms": 0.27497956,
+    "corresponding_qps_change_percent": -5.80,
+    "explanation": "Restoring the historical single-filter execution path removed the snapshot-fix regression; no unaffected QPS row loses 10%. The remaining relative p99 signal is 0.164 ms absolute with only 5.8% QPS change and will be rechecked on exact merged main.",
     "accepted_for_pr": true
   },
   "decision": {
