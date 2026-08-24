@@ -166,7 +166,7 @@ func TestNativeParallelReciprocalLinksPersistExactTopology4243(t *testing.T) {
 	dir := t.TempDir()
 	d := openCollectionCommandWALDB(t, dir)
 	mgr := NewCollectionManager(d)
-	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 4, EfConstruction: 32, Strategy: VectorIndexStrategyNativeRuntime}
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 32, Strategy: VectorIndexStrategyNativeRuntime}
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
 		_ = d.Close()
 		t.Fatalf("CreateCollection: %v", err)
