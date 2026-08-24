@@ -292,14 +292,14 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 		deltaEfSearch = view.efSearch
 	}
 	deltaEfSearch = vectorIndexLiveDeltaSearchBudget(deltaEfSearch, view.deltaLiveDocs, view.liveDocs)
-	deltaResults, err := searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.deltaSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	deltaResults, err := searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, err
 	}
 	for deltaTopK < topK && len(deltaResults) == deltaTopK && (len(baseResults) < topK || vectorIndexSearchResultBefore(deltaResults[len(deltaResults)-1], baseResults[len(baseResults)-1])) {
 		deltaTopK = minInt(topK, deltaTopK*2)
 		deltaEfSearch = maxInt(deltaEfSearch, deltaTopK)
-		deltaResults, err = searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.deltaSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+		deltaResults, err = searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 		if err != nil {
 			return nil, err
 		}
