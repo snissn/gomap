@@ -420,13 +420,13 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDesc
 	}
 }
 
-func TestPublishOrderedRootCommandWALContextWarmCoveredDescriptorTransitionAvoidsCandidateScan(t *testing.T) {
+func TestPublishOrderedRootCommandWALWarmCoveredDescriptorTransitionAvoidsCandidateScan(t *testing.T) {
 	tests := []struct {
 		name    string
 		publish func(*testing.T, *DB, uint64, string) uint64
 	}{
 		{
-			name: "iterator-group",
+			name: "context-iterator-group",
 			publish: func(t *testing.T, db *DB, baseRoot uint64, commandKey string) uint64 {
 				t.Helper()
 				rootDelta := mustFrozenSystemMemtable(t, "sys/1024", "value-updated")
@@ -445,6 +445,30 @@ func TestPublishOrderedRootCommandWALContextWarmCoveredDescriptorTransitionAvoid
 				)
 				if err != nil {
 					t.Fatalf("publish iterator base root %d: %v", baseRoot, err)
+				}
+				return rootIDs[0]
+			},
+		},
+		{
+			name: "iterator-wrapper",
+			publish: func(t *testing.T, db *DB, baseRoot uint64, commandKey string) uint64 {
+				t.Helper()
+				rootDelta := mustFrozenSystemMemtable(t, "sys/1024", "value-updated")
+				if baseRoot == 0 {
+					rootDelta = mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+				}
+				_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(
+					[]OrderedRootDeltaPublishInput{{BaseRoot: baseRoot, Iter: rootDelta.NewIterator(nil, nil)}},
+					mustRawKVCommandWALIntent(t, db, commandKey, "1"),
+					func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+						return mustFrozenRawMemtable(t,
+							collectionRootDescriptorPrefix+"covered-iterator-wrapper",
+							encodeMaintenanceRootID(rootIDs[0]),
+						).NewIterator(nil, nil), nil
+					},
+				)
+				if err != nil {
+					t.Fatalf("publish iterator wrapper base root %d: %v", baseRoot, err)
 				}
 				return rootIDs[0]
 			},

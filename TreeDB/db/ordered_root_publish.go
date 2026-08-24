@@ -2482,6 +2482,15 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 }
 
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithOptions(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if commandWALIntent != nil {
+		var commandBuilder OrderedRootGroupCommandWALSystemBuilder
+		if buildSystemDeltaIter != nil {
+			commandBuilder = func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return buildSystemDeltaIter(rootIDs)
+			}
+		}
+		return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, nil, commandBuilder, opts)
+	}
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(nil, ordered, preflight, commandWALIntent, buildSystemDeltaIter, mode, opts)
 }
 
