@@ -34,7 +34,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		mode = "current"
 	}
 	validModes := map[string]bool{
-		"current": true, "serial-reciprocal": true, "no-publish": true,
+		"current": true, "serial-reciprocal": true, "no-publish": true, "live-delta": true,
 	}
 	if !validModes[mode] {
 		b.Fatalf("unknown TREEDB_VECTOR_MIXED_MODE %q", mode)
@@ -93,7 +93,13 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 			batchStarted := time.Now()
 			end := minInt(start+batchRows, len(rows))
 			index.mu.Lock()
-			if err := index.insertVectorBatchLocked(ids[start:end], rows[start:end]); err != nil {
+			var err error
+			if mode == "live-delta" {
+				err = index.insertLiveVectorBatchLocked(ids[start:end], rows[start:end])
+			} else {
+				err = index.insertVectorBatchLocked(ids[start:end], rows[start:end])
+			}
+			if err != nil {
 				index.mu.Unlock()
 				return err
 			}
@@ -131,6 +137,9 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	b.ReportMetric(float64(index.frozenPrefixBatches), "frozen_batches")
 	b.ReportMetric(float64(index.constructionWorkers), "worker_limit")
 	b.ReportMetric(float64(visibleDocs), "visible_docs")
+	stats := index.Stats()
+	b.ReportMetric(float64(stats.LiveDeltaDocs), "live_delta_docs")
+	b.ReportMetric(float64(stats.LiveDeltaCutovers), "live_delta_cutovers")
 	b.ReportMetric(1, "native_route")
 }
 

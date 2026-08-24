@@ -838,8 +838,13 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 type VectorIndexSearchBuffer struct {
 	results             []VectorIndexSearchResult
 	idBytes             []byte
+	baseResults         []VectorIndexSearchResult
+	baseIDBytes         []byte
+	deltaResults        []VectorIndexSearchResult
+	deltaIDBytes        []byte
 	searchScratch       columnVectorGraphNativeSearchScratch
 	nativeSearchScratch vectorIndexSearchScratch
+	deltaSearchScratch  vectorIndexSearchScratch
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -856,6 +861,10 @@ func (b *VectorIndexSearchBuffer) Reset() {
 func (b *VectorIndexSearchBuffer) resetView() {
 	b.results = b.results[:0]
 	b.idBytes = b.idBytes[:0]
+	b.baseResults = b.baseResults[:0]
+	b.baseIDBytes = b.baseIDBytes[:0]
+	b.deltaResults = b.deltaResults[:0]
+	b.deltaIDBytes = b.deltaIDBytes[:0]
 }
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.

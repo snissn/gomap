@@ -358,13 +358,31 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 		_ = d.Close()
 		t.Fatalf("save seed graph: %v", err)
 	}
+	var buffer VectorIndexSearchBuffer
+	if response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "a" {
+		_ = d.Close()
+		t.Fatalf("seal native base response=%+v err=%v", response, err)
+	}
+	baseNodes := index.Stats().Nodes
 	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
 		_ = d.Close()
 		t.Fatalf("insert live delta: %v", err)
 	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 1 || stats.Nodes != baseNodes+1 || stats.LiveDocs != 2 {
+		_ = d.Close()
+		t.Fatalf("live delta stats=%+v", stats)
+	}
+	if response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" || response.Stats.SearchRouteNativeRuntime != 1 {
+		_ = d.Close()
+		t.Fatalf("search live delta response=%+v err=%v", response, err)
+	}
 	if err := col.Flush(); err != nil {
 		_ = d.Close()
 		t.Fatalf("flush live delta: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 0 || stats.LiveDeltaCutovers != 1 || stats.LiveDocs != 2 {
+		_ = d.Close()
+		t.Fatalf("folded live delta stats=%+v", stats)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close live delta db: %v", err)
