@@ -9,13 +9,13 @@
   "artifacts": [
     {
       "path": "treedb_rag_application_baseline.json",
-      "sha256": "f4dd707736769262690cfb6d2563e9fbb5255eea2e79c1a6440f3ad9503f2534",
-      "bytes": 57555150
+      "sha256": "a54a987359d00367b49c30e1294906c45104766c30bd5d5990c5b325fa17bae7",
+      "bytes": 57560493
     },
     {
       "path": "treedb_rag_application_baseline.md",
-      "sha256": "df5772089d1c316b83565d6f4a660017f61116b34489d7fed2f01a5433a9b3d5",
-      "bytes": 61839
+      "sha256": "c6e0b4a37a89210511e229f391ff2dc398ae763a6f0252ab48f5107d92b9b8f7",
+      "bytes": 61828
     }
   ]
 }

@@ -17,27 +17,44 @@
     "product_base_revision": "d8ad352965493f6a31a1d50ac70f5d783103c454",
     "harness_revision": "30239761b1e7b90cf66fadf894921757f347c9b1",
     "binary_sha256": "994e7b98e477a3b219dd4226648d7a3af316f364005837653b3a081253b724be",
-    "artifact_sha256": "b02905bec36e0877cdcf8a8eac95e9a2c39442940d502e8d88d75fd24fe036bd",
-    "raw_artifact": "baseline/treedb_rag_application_baseline.json",
-    "purpose": "Exact pre-#4292 integrated metadata+collapse control used for unaffected QPS/p99/allocation deltas."
+    "purpose": "Exact pre-#4292 integrated metadata+collapse control for paired unaffected QPS/p99/allocation deltas.",
+    "normalization": "Only the obsolete candidate-derived frozen_gate thresholds/rationale were replaced by the retained pre-candidate #4284 gate in committed control reports; measurement rows and provenance are byte-preserved from the source raw JSON.",
+    "controls": [
+      {
+        "leg": "A1",
+        "generated_at_utc": "2026-08-24T14:36:27.017774Z",
+        "source_raw_sha256": "999b03a58264d579b1bd00c9175092f84343af149e35dbb47e7d2846cdb5d483",
+        "committed_artifact_sha256": "5bc0581fef08787ee0b6cb55cd47c42fca0060a5c79829370447d1e8583137d4",
+        "raw_artifact": "baseline/a1/treedb_rag_application_baseline.json"
+      },
+      {
+        "leg": "A2",
+        "generated_at_utc": "2026-08-24T14:42:32.570568Z",
+        "source_raw_sha256": "40de9b7a94562a927d14c1cf90e33fdb00bf68dfdea3a87a30e4bcc120b3d4af",
+        "committed_artifact_sha256": "44924f9d46771d6dccc2afcfa8f243d70690a106e3eb4ea15830a459cdf46209",
+        "raw_artifact": "baseline/a2/treedb_rag_application_baseline.json"
+      }
+    ]
   },
   "repeats": [
     {
-      "name": "A",
-      "artifact_sha256": "3119a0812f3b0856e868c43c40d9e4e5b4cbe9630dff0e22178cd96540a3e36a",
-      "median_source_docs_per_sec": 403.85,
-      "p95_source_docs_per_sec": 450.02,
-      "median_bytes_per_source": 1848096,
-      "p95_bytes_per_source": 2240400,
+      "name": "B1",
+      "generated_at_utc": "2026-08-24T14:37:42.515593Z",
+      "artifact_sha256": "1049079b3a32edf9dd172e8b831467665cf801a6ca2b7f6621b904d33989f3e2",
+      "median_source_docs_per_sec": 387.98,
+      "p95_source_docs_per_sec": 404.81,
+      "median_bytes_per_source": 1850772,
+      "p95_bytes_per_source": 2249910,
       "raw_artifact": "treedb_rag_application_baseline.json"
     },
     {
-      "name": "B",
-      "artifact_sha256": "f4dd707736769262690cfb6d2563e9fbb5255eea2e79c1a6440f3ad9503f2534",
-      "median_source_docs_per_sec": 415.59,
-      "p95_source_docs_per_sec": 450.99,
-      "median_bytes_per_source": 1853028,
-      "p95_bytes_per_source": 2252670,
+      "name": "B2",
+      "generated_at_utc": "2026-08-24T14:40:07.295795Z",
+      "artifact_sha256": "a54a987359d00367b49c30e1294906c45104766c30bd5d5990c5b325fa17bae7",
+      "median_source_docs_per_sec": 413.64,
+      "p95_source_docs_per_sec": 437.06,
+      "median_bytes_per_source": 1851908,
+      "p95_bytes_per_source": 2246561,
       "raw_artifact": "repeat-b/treedb_rag_application_baseline.json"
     }
   ],
@@ -77,20 +94,908 @@
     "accepted": true
   },
   "performance_disposition": {
-    "repeat_stable_unaffected_qps_regressions_over_10_percent": 1,
-    "accepted_qps_row": "semantic unfiltered direct c4 vector score-only with cap=2",
-    "base_qps": 125564.91,
-    "repeat_qps": [104511.94, 108464.44],
-    "repeat_p99_ms": [0.11193057, 0.11993112],
-    "base_bytes_per_op": 49107.82,
-    "repeat_bytes_per_op": [49235.82, 49235.82],
-    "base_allocs_per_op": 201.745,
-    "repeat_allocs_per_op": [202.745, 202.745],
-    "qps_tradeoff_explanation": "The expanded bounded-filter plan/stats observability adds one 128-byte allocation on this opt-in ultra-fast collapse row. It retains 104k-108k QPS and <=0.120 ms p99, with the previously accepted parent-recall benefit. The measured 13.6%-16.8% QPS cost is explicit and accepted rather than hidden.",
-    "repeat_stable_relative_p99_rows_over_10_percent": 18,
-    "largest_repeat_stable_absolute_p99_delta_ms": 1.7867,
-    "largest_p99_corresponding_qps_changes_percent": [-15.46, -3.27],
-    "p99_explanation": "Relative p99 shifts occur on low-millisecond or microsecond tails. The largest absolute shift is 1.7867 ms; one repeat keeps QPS within 3.27%, while the other shares the disclosed host-tail/QPS noise. No correctness, work-counter, quality, or boundedness gate changes.",
+    "repetition_order": "A1 control -> B1 candidate -> B2 candidate -> A2 control; pairs are A1/B1 and A2/B2.",
+    "control_candidate_generated_at_utc": [
+      "2026-08-24T14:36:27.017774Z",
+      "2026-08-24T14:37:42.515593Z",
+      "2026-08-24T14:40:07.295795Z",
+      "2026-08-24T14:42:32.570568Z"
+    ],
+    "matched_existing_supported_rows": 136,
+    "comparison_identity": "Every matched row has identical work_digest, quality_digest, projection, fixture, config, and semantic-vector digest across all four legs.",
+    "repeat_stable_unaffected_qps_regressions_over_10_percent": 0,
+    "accepted_affected_qps_exceptions": [
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "classification": "accepted_affected_bounded_plan_observability_cost",
+        "controls": {
+          "A1": {
+            "qps": 77157.85,
+            "p99_ms": 0.15336,
+            "bytes_per_op": 70070.12,
+            "allocs_per_op": 301.469
+          },
+          "A2": {
+            "qps": 76997.17,
+            "p99_ms": 0.169127,
+            "bytes_per_op": 70097.07,
+            "allocs_per_op": 301.475
+          }
+        },
+        "candidates": {
+          "B1": {
+            "qps": 68054.03,
+            "p99_ms": 0.180483,
+            "bytes_per_op": 70218.67,
+            "allocs_per_op": 302.476
+          },
+          "B2": {
+            "qps": 67038.8,
+            "p99_ms": 0.17353,
+            "bytes_per_op": 70211.8,
+            "allocs_per_op": 302.471
+          }
+        },
+        "pair_qps_change_percent": [
+          -11.8,
+          -12.93
+        ],
+        "rationale": "The candidate adds one bounded plan/stats allocation (about 115-149 B/op) on this existing row. Exact work and quality digests match; throughput remains 67k-68k QPS and p99 <=0.181 ms. This measured implementation cost is explicitly accepted."
+      }
+    ],
+    "p99_gate_semantics": "Every row with a positive p99 delta in both ABBA pairs is individually classified below; no unstated relative threshold is used.",
+    "repeat_stable_positive_p99_rows": 35,
+    "p99_exceptions": [
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -7.3,
+          "p99_change_percent": 9.32,
+          "p99_change_ms": 0.079366
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -5.57,
+          "p99_change_percent": 15.79,
+          "p99_change_ms": 0.128712
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.91,
+          "p99_change_percent": 0.1,
+          "p99_change_ms": 0.002615
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.77,
+          "p99_change_percent": 0.37,
+          "p99_change_ms": 0.00908
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.99,
+          "p99_change_percent": 9.36,
+          "p99_change_ms": 0.431192
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.17,
+          "p99_change_percent": 23.47,
+          "p99_change_ms": 1.135703
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.88,
+          "p99_change_percent": 9.29,
+          "p99_change_ms": 0.034811
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.62,
+          "p99_change_percent": 3.07,
+          "p99_change_ms": 0.010456
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.52,
+          "p99_change_percent": 13.59,
+          "p99_change_ms": 0.337192
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.81,
+          "p99_change_percent": 0.93,
+          "p99_change_ms": 0.02306
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.06,
+          "p99_change_percent": 1.64,
+          "p99_change_ms": 0.041189
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.23,
+          "p99_change_percent": 1.73,
+          "p99_change_ms": 0.042603
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -10.24,
+          "p99_change_percent": 65.31,
+          "p99_change_ms": 2.966086
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.32,
+          "p99_change_percent": 7.16,
+          "p99_change_ms": 0.295947
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.0,
+          "p99_change_percent": 1.23,
+          "p99_change_ms": 0.014876
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.66,
+          "p99_change_percent": 3.23,
+          "p99_change_ms": 0.039212
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -2.03,
+          "p99_change_percent": 0.5,
+          "p99_change_ms": 0.032143
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 2.2,
+          "p99_change_percent": 48.35,
+          "p99_change_ms": 2.561867
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.66,
+          "p99_change_percent": 39.26,
+          "p99_change_ms": 0.038785
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 2.35,
+          "p99_change_percent": 9.08,
+          "p99_change_ms": 0.007546
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -4.85,
+          "p99_change_percent": 36.16,
+          "p99_change_ms": 0.042882
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -5.26,
+          "p99_change_percent": 127.77,
+          "p99_change_ms": 0.155767
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -3.22,
+          "p99_change_percent": 32.81,
+          "p99_change_ms": 0.067272
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.13,
+          "p99_change_percent": 117.93,
+          "p99_change_ms": 0.153501
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -2.17,
+          "p99_change_percent": 1.11,
+          "p99_change_ms": 0.004188
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.42,
+          "p99_change_percent": 5.85,
+          "p99_change_ms": 0.02136
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.32,
+          "p99_change_percent": 2.41,
+          "p99_change_ms": 0.063688
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.31,
+          "p99_change_percent": 1.28,
+          "p99_change_ms": 0.035229
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.15,
+          "p99_change_percent": 5.17,
+          "p99_change_ms": 0.187865
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.87,
+          "p99_change_percent": 1.59,
+          "p99_change_ms": 0.062535
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.39,
+          "p99_change_percent": 0.73,
+          "p99_change_ms": 0.005477
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.3,
+          "p99_change_percent": 27.77,
+          "p99_change_ms": 0.196302
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -4.28,
+          "p99_change_percent": 5.97,
+          "p99_change_ms": 0.038119
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.74,
+          "p99_change_percent": 20.7,
+          "p99_change_ms": 0.140285
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.46,
+          "p99_change_percent": 0.52,
+          "p99_change_ms": 0.018848
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.76,
+          "p99_change_percent": 14.86,
+          "p99_change_ms": 0.521231
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.62,
+          "p99_change_percent": 6.61,
+          "p99_change_ms": 0.149834
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.37,
+          "p99_change_percent": 3.7,
+          "p99_change_ms": 0.084768
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -3.55,
+          "p99_change_percent": 20.31,
+          "p99_change_ms": 0.676914
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.47,
+          "p99_change_percent": 15.35,
+          "p99_change_ms": 0.509386
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.68,
+          "p99_change_percent": 1.56,
+          "p99_change_ms": 0.011556
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -2.11,
+          "p99_change_percent": 26.21,
+          "p99_change_ms": 0.172538
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.51,
+          "p99_change_percent": 4.98,
+          "p99_change_ms": 0.114099
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.18,
+          "p99_change_percent": 3.03,
+          "p99_change_ms": 0.068794
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -5.18,
+          "p99_change_percent": 7.13,
+          "p99_change_ms": 0.050354
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.29,
+          "p99_change_percent": 6.5,
+          "p99_change_ms": 0.043133
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -7.0,
+          "p99_change_percent": 13.92,
+          "p99_change_ms": 0.027286
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -17.24,
+          "p99_change_percent": 35.34,
+          "p99_change_ms": 0.071542
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.12,
+          "p99_change_percent": 12.31,
+          "p99_change_ms": 0.007651
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 1.29,
+          "p99_change_percent": 52.93,
+          "p99_change_ms": 0.037946
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -11.8,
+          "p99_change_percent": 17.69,
+          "p99_change_ms": 0.027124
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -12.93,
+          "p99_change_percent": 2.6,
+          "p99_change_ms": 0.004403
+        },
+        "classification": "accepted_bounded_plan_observability_cost",
+        "rationale": "Candidate adds one bounded plan/stats allocation; exact work and quality digests match, throughput remains >=67,038 QPS, and p99 remains <=0.181 ms."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 1.82,
+          "p99_change_percent": 12.13,
+          "p99_change_ms": 0.008035
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.35,
+          "p99_change_percent": 46.79,
+          "p99_change_ms": 0.028428
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.82,
+          "p99_change_percent": 9.86,
+          "p99_change_ms": 0.028267
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.82,
+          "p99_change_percent": 16.66,
+          "p99_change_ms": 0.040346
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.29,
+          "p99_change_percent": 44.98,
+          "p99_change_ms": 0.10651
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -10.46,
+          "p99_change_percent": 18.67,
+          "p99_change_ms": 0.04049
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -4.81,
+          "p99_change_percent": 9.75,
+          "p99_change_ms": 0.211525
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -5.4,
+          "p99_change_percent": 5.22,
+          "p99_change_ms": 0.093199
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -9.2,
+          "p99_change_percent": 21.37,
+          "p99_change_ms": 0.124242
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.12,
+          "p99_change_percent": 6.54,
+          "p99_change_ms": 0.036815
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.39,
+          "p99_change_percent": 3.14,
+          "p99_change_ms": 0.070718
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.55,
+          "p99_change_percent": 2.18,
+          "p99_change_ms": 0.048923
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -1.04,
+          "p99_change_percent": 6.84,
+          "p99_change_ms": 0.226648
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.67,
+          "p99_change_percent": 2.43,
+          "p99_change_ms": 0.08098
+        },
+        "classification": "permitted_non_material_host_tail_variance",
+        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_ann",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 1.65,
+          "p99_change_percent": 2.49,
+          "p99_change_ms": 0.090956
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.68,
+          "p99_change_percent": 4.98,
+          "p99_change_ms": 0.184334
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      },
+      {
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.64,
+          "p99_change_percent": 0.33,
+          "p99_change_ms": 0.007324
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.03,
+          "p99_change_percent": 2.67,
+          "p99_change_ms": 0.06127
+        },
+        "classification": "permitted_non_material_timer_tail_variance",
+        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+      }
+    ],
     "no_unaccepted_performance_regression": true,
     "accepted": true
   },
