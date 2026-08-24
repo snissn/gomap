@@ -543,6 +543,36 @@ func TestEncodeCollectionInsertBatchByIDPayloadSortedAndUnsortedMatch(t *testing
 	}
 }
 
+func TestBorrowedCommandFrameValidationRejectsDuplicateCollectionIDs(t *testing.T) {
+	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("a"), Document: []byte("1")},
+		{ID: []byte("b"), Document: []byte("2")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	frame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindCollectionInsertBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1,
+		Payload:       payload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	payloadStart := commandFrameHeaderSize
+	off := 10 + len("users")
+	firstID := payloadStart + off + 8
+	off += 8 + len("a") + len("1")
+	secondID := payloadStart + off + 8
+	frame[secondID] = frame[firstID]
+
+	if _, err := decodeCommandFrame(frame, true); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("borrowed decode error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
 	if err != nil {

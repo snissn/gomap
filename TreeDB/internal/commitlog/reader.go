@@ -14,6 +14,8 @@ type Reader struct {
 	ownsFile       bool
 	maxSegmentSize int64
 	dec            *zstd.Decoder
+	scanRaw        []byte
+	scanDecoded    []byte
 }
 
 func NewReader(path string) (*Reader, error) {
@@ -67,6 +69,14 @@ func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 }
 
 func (r *Reader) readSegmentPayloadWithCompression(commandMode, allowCompressed bool) ([]byte, error) {
+	return r.readSegmentPayloadWithCompressionBuffers(commandMode, allowCompressed, nil, nil)
+}
+
+func (r *Reader) readSegmentPayloadForCommandScan() ([]byte, error) {
+	return r.readSegmentPayloadWithCompressionBuffers(true, true, &r.scanRaw, &r.scanDecoded)
+}
+
+func (r *Reader) readSegmentPayloadWithCompressionBuffers(commandMode, allowCompressed bool, rawBuf, decodedBuf *[]byte) ([]byte, error) {
 	var header [segmentHeaderSize]byte
 	if n, err := io.ReadFull(r.f, header[:]); err != nil {
 		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
@@ -85,8 +95,11 @@ func (r *Reader) readSegmentPayloadWithCompression(commandMode, allowCompressed 
 	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
 		return nil, ErrCorrupt
 	}
+	if uint64(length) > uint64(^uint(0)>>1) {
+		return nil, ErrCorrupt
+	}
 
-	payload := make([]byte, length)
+	payload := resizeReaderBuffer(rawBuf, int(length))
 	if _, err := io.ReadFull(r.f, payload); err != nil {
 		if commandMode && (err == io.EOF || err == io.ErrUnexpectedEOF) {
 			return nil, ErrCommandWALTerminalTail
@@ -116,15 +129,30 @@ func (r *Reader) readSegmentPayloadWithCompression(commandMode, allowCompressed 
 			}
 			r.dec = dec
 		}
-		dst := make([]byte, 0, int(rawLen))
+		dst := resizeReaderBuffer(decodedBuf, int(rawLen))[:0]
 		decoded, err := r.dec.DecodeAll(payload[4:], dst)
 		if err != nil || uint32(len(decoded)) != rawLen {
 			return nil, ErrCorrupt
+		}
+		if decodedBuf != nil {
+			*decodedBuf = decoded
 		}
 		payload = decoded
 	}
 
 	return payload, nil
+}
+
+func resizeReaderBuffer(buf *[]byte, size int) []byte {
+	if buf == nil {
+		return make([]byte, size)
+	}
+	if cap(*buf) < size {
+		*buf = make([]byte, size)
+	} else {
+		*buf = (*buf)[:size]
+	}
+	return *buf
 }
 
 func decodeBatch(payload []byte) ([]Record, error) {
@@ -273,6 +301,8 @@ func (r *Reader) Close() error {
 		r.dec.Close()
 		r.dec = nil
 	}
+	r.scanRaw = nil
+	r.scanDecoded = nil
 	if !r.ownsFile {
 		return nil
 	}

@@ -275,6 +275,60 @@ func BenchmarkCommandWALCoveredSegmentCleanupProof(b *testing.B) {
 	b.ReportMetric(float64(namespaceSyncs)/float64(b.N), "namespace-syncs/op")
 }
 
+func BenchmarkCommandWALCollectionCleanupScan(b *testing.B) {
+	dir := b.TempDir()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		b.Fatalf("MkdirAll: %v", err)
+	}
+	document := make([]byte, 3072)
+	for i := range document {
+		document[i] = 'v'
+	}
+	docs := make([]commitlog.CollectionDocument, 100)
+	for i := range docs {
+		docs[i] = commitlog.CollectionDocument{ID: []byte(fmt.Sprintf("doc-%06d", i)), Document: document}
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("vectors", docs)
+	if err != nil {
+		b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	w, err := commitlog.NewWriterWithOptions(path, commitlog.Options{Compress: true})
+	if err != nil {
+		b.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	const frames = 32
+	for i := 1; i <= frames; i++ {
+		if err := w.AppendCommand(commitlog.CommandEnvelope{
+			LSN:           uint64(i),
+			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+			Scope:         commitlog.CommandScopeCollection,
+			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+			Payload:       payload,
+		}); err != nil {
+			_ = w.Close()
+			b.Fatalf("AppendCommand: %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		b.Fatalf("Close: %v", err)
+	}
+
+	b.SetBytes(int64(len(payload) * frames))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		maxLSN, typed, err := commandWALSegmentMaxLSN(path, 0, false)
+		if err != nil {
+			b.Fatalf("commandWALSegmentMaxLSN: %v", err)
+		}
+		if !typed || maxLSN != frames {
+			b.Fatalf("scan=(typed=%t,maxLSN=%d), want (true,%d)", typed, maxLSN, frames)
+		}
+	}
+}
+
 func commandWALBenchRawKVPayload(b testing.TB, ops int, valueSize int) []byte {
 	b.Helper()
 	rawOps := make([]commitlog.RawKVOperation, ops)

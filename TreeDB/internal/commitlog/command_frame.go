@@ -2026,6 +2026,10 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 }
 
 func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
+	return decodeCommandFrame(frame, false)
+}
+
+func decodeCommandFrame(frame []byte, borrowPayload bool) (CommandEnvelope, error) {
 	var env CommandEnvelope
 	if len(frame) >= batchHeaderSize && len(frame) < commandFrameHeaderSize && isBatchPayloadVersion(frame[0]) {
 		return env, ErrCommandWALLegacyPayload
@@ -2041,7 +2045,7 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	}
 	version := binary.LittleEndian.Uint16(frame[4:6])
 	if version == CommandFrameVersionV2 {
-		return DecodeCommandFrameV2(frame)
+		return decodeCommandFrameV2(frame, borrowPayload)
 	}
 	minReader := binary.LittleEndian.Uint16(frame[6:8])
 	if version != CommandFrameVersion || minReader > CommandFrameVersion {
@@ -2074,7 +2078,10 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, ErrCorrupt
 	}
 	off := commandFrameHeaderSize
-	env.Payload = append([]byte(nil), frame[off:off+int(payloadLen)]...)
+	env.Payload = frame[off : off+int(payloadLen)]
+	if !borrowPayload {
+		env.Payload = append([]byte(nil), env.Payload...)
+	}
 	off += int(payloadLen)
 	extRefs, err := decodeExternalRefs(frame[off : off+int(extRefsLen)])
 	if err != nil {
@@ -2177,20 +2184,15 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	case CommandKindRawKVBatch:
 		return validateRawKVBatchPayloadForFormat(env.PayloadFormat, env.Payload)
 	case CommandKindCollectionInsertBatchByID:
-		_, err := DecodeCollectionInsertBatchByIDPayload(env.Payload)
-		return err
+		return validateCollectionInsertBatchByIDPayload(env.Payload)
 	case CommandKindCollectionDeleteBatchByID:
-		_, err := DecodeCollectionDeleteBatchByIDPayload(env.Payload)
-		return err
+		return validateCollectionDeleteBatchByIDPayload(env.Payload)
 	case CommandKindCollectionUpdateBatchByID:
-		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
-		return err
+		return validateCollectionInsertBatchByIDPayload(env.Payload)
 	case CommandKindCollectionRebuildVectorIndex:
-		_, err := DecodeCollectionRebuildVectorIndexPayload(env.Payload)
-		return err
+		return validateCollectionRebuildVectorIndexPayload(env.Payload)
 	case CommandKindCatalogCreateCollection:
-		_, err := DecodeCatalogCreateCollectionPayload(env.Payload)
-		return err
+		return validateCatalogCreateCollectionPayload(env.Payload)
 	default:
 		return nil
 	}
@@ -3017,6 +3019,41 @@ func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBat
 	return CollectionInsertBatchByIDPayload{Collection: collection, Documents: docs}, nil
 }
 
+func validateCollectionInsertBatchByIDPayload(payload []byte) error {
+	_, count, off, err := parseCollectionBatchHeader(payload)
+	if err != nil {
+		return err
+	}
+	if uint64(count)*8 > uint64(len(payload)-off) {
+		return ErrCorrupt
+	}
+	if _, err := commandPayloadCountToInt(count); err != nil {
+		return err
+	}
+	var previousID []byte
+	for i := uint32(0); i < count; i++ {
+		if off+8 > len(payload) {
+			return ErrCorrupt
+		}
+		idLen := binary.LittleEndian.Uint32(payload[off : off+4])
+		docLen := binary.LittleEndian.Uint32(payload[off+4 : off+8])
+		off += 8
+		if uint64(idLen)+uint64(docLen) > uint64(len(payload)-off) {
+			return ErrCorrupt
+		}
+		id := payload[off : off+int(idLen)]
+		if len(id) == 0 || previousID != nil && bytes.Compare(previousID, id) >= 0 {
+			return ErrCorrupt
+		}
+		previousID = id
+		off += int(idLen) + int(docLen)
+	}
+	if off != len(payload) {
+		return ErrCorrupt
+	}
+	return nil
+}
+
 func EncodeCollectionUpdateBatchByIDPayload(collection string, docs []CollectionDocument) ([]byte, error) {
 	return EncodeCollectionInsertBatchByIDPayload(collection, docs)
 }
@@ -3099,6 +3136,40 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
 }
 
+func validateCollectionDeleteBatchByIDPayload(payload []byte) error {
+	_, count, off, err := parseCollectionBatchHeader(payload)
+	if err != nil {
+		return err
+	}
+	if uint64(count)*4 > uint64(len(payload)-off) {
+		return ErrCorrupt
+	}
+	if _, err := commandPayloadCountToInt(count); err != nil {
+		return err
+	}
+	var previousID []byte
+	for i := uint32(0); i < count; i++ {
+		if off+4 > len(payload) {
+			return ErrCorrupt
+		}
+		idLen := binary.LittleEndian.Uint32(payload[off : off+4])
+		off += 4
+		if uint64(idLen) > uint64(len(payload)-off) {
+			return ErrCorrupt
+		}
+		id := payload[off : off+int(idLen)]
+		if len(id) == 0 || previousID != nil && bytes.Compare(previousID, id) >= 0 {
+			return ErrCorrupt
+		}
+		previousID = id
+		off += int(idLen)
+	}
+	if off != len(payload) {
+		return ErrCorrupt
+	}
+	return nil
+}
+
 func EncodeCollectionRebuildVectorIndexPayload(collection, indexName string) ([]byte, error) {
 	if collection == "" {
 		return nil, fmt.Errorf("%w: invalid collection vector index rebuild payload: collection name is empty", ErrCorrupt)
@@ -3152,6 +3223,22 @@ func DecodeCollectionRebuildVectorIndexPayload(payload []byte) (CollectionRebuil
 	}, nil
 }
 
+func validateCollectionRebuildVectorIndexPayload(payload []byte) error {
+	if len(payload) < collectionRebuildVectorIndexPayloadHeaderSize {
+		return ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[:collectionRebuildVectorIndexVersionEnd]) != collectionRebuildVectorIndexPayloadVersion {
+		return ErrCommandWALUnsupportedVersion
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[collectionRebuildVectorIndexCollectionLenStart:collectionRebuildVectorIndexCollectionLenEnd])
+	indexLen := binary.LittleEndian.Uint32(payload[collectionRebuildVectorIndexIndexLenStart:collectionRebuildVectorIndexIndexLenEnd])
+	off := collectionRebuildVectorIndexCollectionNameStart
+	if uint64(nameLen)+uint64(indexLen) != uint64(len(payload)-off) || nameLen == 0 || indexLen == 0 {
+		return ErrCorrupt
+	}
+	return nil
+}
+
 func EncodeCatalogCreateCollectionPayload(collection string, metadata []byte) ([]byte, error) {
 	if collection == "" || metadata == nil {
 		return nil, fmt.Errorf("%w: invalid catalog create collection payload", ErrCorrupt)
@@ -3202,6 +3289,21 @@ func DecodeCatalogCreateCollectionPayload(payload []byte) (CatalogCreateCollecti
 	}, nil
 }
 
+func validateCatalogCreateCollectionPayload(payload []byte) error {
+	if len(payload) < 10 {
+		return ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+		return ErrCommandWALUnsupportedVersion
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[2:6])
+	metaLen := binary.LittleEndian.Uint32(payload[6:10])
+	if uint64(nameLen)+uint64(metaLen) != uint64(len(payload)-10) || nameLen == 0 {
+		return ErrCorrupt
+	}
+	return nil
+}
+
 func commandPayloadCountToInt(count uint32) (int, error) {
 	maxInt := int(^uint(0) >> 1)
 	if uint64(count) > uint64(maxInt) {
@@ -3226,24 +3328,32 @@ func encodeCollectionBatchHeader(payload []byte, collection string, count int) i
 }
 
 func decodeCollectionBatchHeader(payload []byte) (collection string, count uint32, off int, err error) {
+	nameBytes, count, off, err := parseCollectionBatchHeader(payload)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return string(nameBytes), count, off, nil
+}
+
+func parseCollectionBatchHeader(payload []byte) (collection []byte, count uint32, off int, err error) {
 	if len(payload) < 10 {
-		return "", 0, 0, ErrCorrupt
+		return nil, 0, 0, ErrCorrupt
 	}
 	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
-		return "", 0, 0, ErrCommandWALUnsupportedVersion
+		return nil, 0, 0, ErrCommandWALUnsupportedVersion
 	}
 	nameLen := binary.LittleEndian.Uint32(payload[2:6])
 	count = binary.LittleEndian.Uint32(payload[6:10])
 	off = 10
 	if uint64(nameLen) > uint64(len(payload)-off) {
-		return "", 0, 0, ErrCorrupt
+		return nil, 0, 0, ErrCorrupt
 	}
 	nameBytes := payload[off : off+int(nameLen)]
 	off += int(nameLen)
 	if len(nameBytes) == 0 {
-		return "", 0, 0, ErrCorrupt
+		return nil, 0, 0, ErrCorrupt
 	}
-	return string(nameBytes), count, off, nil
+	return nameBytes, count, off, nil
 }
 
 func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocument, error) {
@@ -3534,6 +3644,21 @@ func (r *Reader) ReadCommandFrame() (CommandEnvelope, error) {
 		return CommandEnvelope{}, err
 	}
 	return DecodeCommandFrame(payload)
+}
+
+// ReadValidatedCommandFrameLSN fully validates the next command frame and
+// returns only its LSN. The reader reuses payload storage between calls, so
+// this is reserved for scans that do not retain decoded frame data.
+func (r *Reader) ReadValidatedCommandFrameLSN() (uint64, error) {
+	payload, err := r.readSegmentPayloadForCommandScan()
+	if err != nil {
+		return 0, err
+	}
+	env, err := decodeCommandFrame(payload, true)
+	if err != nil {
+		return 0, err
+	}
+	return env.LSN, nil
 }
 
 func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {
