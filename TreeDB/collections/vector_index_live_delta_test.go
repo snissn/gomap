@@ -111,6 +111,66 @@ func TestVectorIndexLiveDeltaVisibilityShadowingAndCutover(t *testing.T) {
 	}
 }
 
+func TestVectorIndexLiveDeltaSearchViewSharesAndDetachesBase(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	index.sourceDocumentRootsValid = true
+	index.mu.Lock()
+	if err := index.insertVectorBatchLocked([][]byte{[]byte("a"), []byte("b")}, [][]float32{{1, 0}, {0, 1}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.publishSearchViewLocked(false)
+	first := index.searchView.Load()
+	baseNode := &first.nodes[0]
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("c")}, [][]float32{{-1, 0}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.publishSearchViewLocked(false)
+	second := index.searchView.Load()
+	if baseNode != &second.nodes[0] {
+		index.mu.Unlock()
+		t.Fatal("delta-only publication copied the unchanged base")
+	}
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("d")}, [][]float32{{0, -1}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.publishSearchViewLocked(false)
+	if baseNode != &index.searchView.Load().nodes[0] {
+		index.mu.Unlock()
+		t.Fatal("successive delta-only publication copied the unchanged base")
+	}
+	index.mu.Unlock()
+
+	oldReader := index.acquireSearchView()
+	index.mu.Lock()
+	index.tombstoneDocumentIDLocked([]byte("a"))
+	index.publishSearchViewLocked(false)
+	current := index.searchView.Load()
+	index.mu.Unlock()
+	if oldReader.nodes[0].deleted {
+		index.releaseSearchView(oldReader)
+		t.Fatal("base mutation changed an old immutable reader")
+	}
+	if !current.nodes[0].deleted {
+		index.releaseSearchView(oldReader)
+		t.Fatal("base mutation was not published")
+	}
+	if &oldReader.nodes[0] == &current.nodes[0] {
+		index.releaseSearchView(oldReader)
+		t.Fatal("base mutation did not detach shared storage")
+	}
+	index.releaseSearchView(oldReader)
+}
+
 func TestVectorIndexLiveDeltaBoundsAllocatedNodesWithoutPartialPublication(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
