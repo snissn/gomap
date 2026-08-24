@@ -140,7 +140,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 }
 
 func copyVectorIndexSearchNodes(dst, previous, current []vectorIndexNode, dirty map[int]struct{}, forceFull bool) []vectorIndexNode {
-	if len(current) < cap(dst)-len(current) {
+	if cap(dst) > 2*len(current) {
 		dst = make([]vectorIndexNode, len(current))
 	} else if cap(dst) < len(current) {
 		capacity := maxInt(len(current), cap(dst)*2)
@@ -367,14 +367,11 @@ func mergeVectorIndexViewResults(base, delta []VectorIndexSearchResult, topK int
 	resultCount := minInt(topK, len(base)+len(delta))
 	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, resultCount)
 	idByteCount := 0
-	baseIndex, deltaIndex := 0, 0
-	for resultIndex := 0; resultIndex < resultCount; {
+	baseIndex, deltaIndex, resultIndex := 0, 0, 0
+	for resultIndex < resultCount && (baseIndex < len(base) || deltaIndex < len(delta)) {
 		candidate, nextBase, nextDelta := nextVectorIndexViewResult(base, delta, baseIndex, deltaIndex)
 		baseIndex, deltaIndex = nextBase, nextDelta
 		if vectorIndexViewResultAlreadySelected(buffer.results[:resultIndex], candidate.ID) {
-			if baseIndex == len(base) && deltaIndex == len(delta) {
-				resultCount = resultIndex
-			}
 			continue
 		}
 		var err error
@@ -385,7 +382,7 @@ func mergeVectorIndexViewResults(base, delta []VectorIndexSearchResult, topK int
 		buffer.results[resultIndex] = candidate
 		resultIndex++
 	}
-	buffer.results = buffer.results[:resultCount]
+	buffer.results = buffer.results[:resultIndex]
 	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
 	idOffset := 0
 	for resultIndex := range buffer.results {

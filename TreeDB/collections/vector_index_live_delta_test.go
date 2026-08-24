@@ -131,6 +131,39 @@ func TestVectorIndexLiveDeltaBoundsAllocatedNodesWithoutPartialPublication(t *te
 	index.mu.Unlock()
 }
 
+func TestVectorIndexLiveDeltaFoldValidationIsAtomic(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	index.sourceDocumentRootsValid = true
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	if err := index.insertVectorBatchLocked([][]byte{[]byte("a")}, [][]float32{{1, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	index.publishSearchViewLocked(false)
+	if err := index.insertLiveVectorBatchLocked(
+		[][]byte{[]byte("b"), []byte("c")},
+		[][]float32{{0, 1}, {-1, 0}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	delta := index.liveDelta
+	baseNodes := len(index.nodes)
+	delta.nodes[delta.currentNode["c"]].vector = []float32{-1}
+	if err := index.foldLiveDeltaLocked(); err == nil {
+		t.Fatal("fold with corrupt final vector succeeded")
+	}
+	if len(index.nodes) != baseNodes || index.liveDelta != delta || len(delta.currentNode) != 2 {
+		t.Fatalf("failed fold mutated base/delta: base=%d delta_same=%v live=%d", len(index.nodes), index.liveDelta == delta, len(delta.currentNode))
+	}
+}
+
 func TestVectorIndexLiveDeltaSearchBudget(t *testing.T) {
 	for _, test := range []struct {
 		requested, deltaDocs, totalDocs, want int
@@ -143,6 +176,19 @@ func TestVectorIndexLiveDeltaSearchBudget(t *testing.T) {
 		if got := vectorIndexLiveDeltaSearchBudget(test.requested, test.deltaDocs, test.totalDocs); got != test.want {
 			t.Fatalf("budget(%d, %d, %d)=%d want %d", test.requested, test.deltaDocs, test.totalDocs, got, test.want)
 		}
+	}
+}
+
+func TestMergeVectorIndexViewResultsDeduplicatesExhaustedPlanes(t *testing.T) {
+	base := []VectorIndexSearchResult{{ID: []byte("a"), Score: 0.9}, {ID: []byte("b"), Score: 0.7}}
+	delta := []VectorIndexSearchResult{{ID: []byte("a"), Score: 0.8}}
+	var buffer VectorIndexSearchBuffer
+	got, err := mergeVectorIndexViewResults(base, delta, 4, &buffer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || string(got[0].ID) != "a" || string(got[1].ID) != "b" {
+		t.Fatalf("merged results=%+v want unique a,b", got)
 	}
 }
 
