@@ -22,7 +22,7 @@ import (
 
 const (
 	expectedCellCount               = 384
-	expectedWorkerEnvironmentPolicy = "fresh_per_cell"
+	expectedWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
 )
 
 var legOrder = [4]string{"A1", "B1", "B2", "A2"}
