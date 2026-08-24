@@ -18,7 +18,7 @@
     "harness_revision": "30239761b1e7b90cf66fadf894921757f347c9b1",
     "binary_sha256": "994e7b98e477a3b219dd4226648d7a3af316f364005837653b3a081253b724be",
     "purpose": "Exact pre-#4292 integrated metadata+collapse control for paired unaffected QPS/p99/allocation deltas.",
-    "normalization": "Only the obsolete candidate-derived frozen_gate thresholds/rationale were replaced by the retained pre-candidate #4284 gate in committed control reports; measurement rows and provenance are byte-preserved from the source raw JSON.",
+    "normalization": "Only the obsolete candidate-derived frozen_gate thresholds/rationale were replaced by the retained pre-candidate #4284 gate in committed control reports; measurement-row and provenance values are unchanged from the source raw JSON.",
     "controls": [
       {
         "leg": "A1",
