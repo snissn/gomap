@@ -4,15 +4,15 @@ Authority: `M1_RETAINED_BASELINE`; schema: `treedb_rag_application_baseline/v3`.
 
 ## Exact bindings
 
-- product base: `e9911721c2e03ae10ef12d84249de139f8334426`
-- harness revision: `53c2b5f3ed5d64ad2f90699d6dbed9b62eaa499a`
-- binary SHA-256: `3eb6f8c93b39ea955fa3808e58f6843971772f2bc0aac9aa063bd10840434155`
+- product base: `d8ad352965493f6a31a1d50ac70f5d783103c454`
+- harness revision: `30239761b1e7b90cf66fadf894921757f347c9b1`
+- binary SHA-256: `994e7b98e477a3b219dd4226648d7a3af316f364005837653b3a081253b724be`
 - fixture SHA-256: `df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2`
 - config SHA-256: `1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e`
 - semantic vectors SHA-256: `aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4`
 - hashing regression SHA-256: `2cb6a7f2b28b5335a717f4e4f601ffff65f1f21220504a0d88733e514146240f`
 - Go/host: `go1.26.0` `darwin/arm64` `Michaels-Laptop.local`
-- command: `/tmp/treedb_rag_benchmark_53c2b5f3e -out-dir /tmp/gomap-4291-artifacts-53c -dir /tmp/gomap-4291-db-53c -product-base-sha e9911721c2e03ae10ef12d84249de139f8334426 -harness-revision 53c2b5f3ed5d64ad2f90699d6dbed9b62eaa499a -host-note Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1; #4291 final candidate`
+- command: `/tmp/treedb_rag_benchmark_30239761b -out-dir /tmp/gomap-4291-artifacts-302 -dir /tmp/gomap-4291-db-302 -product-base-sha d8ad352965493f6a31a1d50ac70f5d783103c454 -harness-revision 30239761b1e7b90cf66fadf894921757f347c9b1 -host-note Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1; #4291 integrated metadata candidate`
 
 ## Independent semantic evidence
 
@@ -30,15 +30,15 @@ Five fresh-DB rows include embedding, index publication, and checkpoint in end-t
 
 | rep | sources | chunks | end-to-end s | source docs/s | chunk docs/s | B/source | allocs/source | storage bytes | reopen |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 0 | 18 | 54 | 0.071129 | 253.06 | 759.18 | 2339303 | 4563 | 3743358 | true |
-| 1 | 18 | 54 | 0.042383 | 424.69 | 1274.08 | 1833301 | 4428 | 3743269 | true |
-| 2 | 18 | 54 | 0.041215 | 436.73 | 1310.20 | 1826732 | 4426 | 3743359 | true |
-| 3 | 18 | 54 | 0.038441 | 468.26 | 1404.77 | 1831670 | 4422 | 3743269 | true |
-| 4 | 18 | 54 | 0.045455 | 395.99 | 1187.98 | 1823699 | 4421 | 3743269 | true |
+| 0 | 18 | 54 | 0.070252 | 256.22 | 768.66 | 2365898 | 4810 | 3748802 | true |
+| 1 | 18 | 54 | 0.048002 | 374.98 | 1124.95 | 1843383 | 4682 | 3748827 | true |
+| 2 | 18 | 54 | 0.039101 | 460.35 | 1381.04 | 1841428 | 4673 | 3748827 | true |
+| 3 | 18 | 54 | 0.043313 | 415.58 | 1246.75 | 1844557 | 4679 | 3748790 | true |
+| 4 | 18 | 54 | 0.040467 | 444.81 | 1334.42 | 1857211 | 4676 | 3748827 | true |
 
-Median/p95 docs/s: **424.69 / 461.95**. Median/p95 B/source: **1831670 / 2238102**. Historical 37.59 docs/s / 132 GiB regime reproduced: **false**.
+Median/p95 docs/s: **415.58 / 457.24**. Median/p95 B/source: **1844557 / 2264160**. Historical 37.59 docs/s / 132 GiB regime reproduced: **false**.
 
-Frozen #4284 gate: source docs/s >= **488.40**, B/source <= **1648503**. historical regime did not reproduce on the retained application fixture; freeze an attainable 15% throughput gain and 10% allocation reduction
+Frozen #4284 gate: source docs/s >= **477.92**, B/source <= **1660102**. historical regime did not reproduce on the retained application fixture; freeze an attainable 15% throughput gain and 10% allocation reduction
 
 ## Supported retained rows
 
@@ -48,88 +48,152 @@ Quality is measured by separate untimed queries. Direct score-only rows use comp
 
 | embedding | surface | clients | route | vector route | projection | filter | collapse | QPS | p50 ms | p95 ms | p99 ms | chunk R@10 | parent R@10 | nDCG@10 | B/op | allocs/op |
 |---|---|---:|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 5747.6 | 0.167 | 0.189 | 0.333 | 0.5556 | 0.8333 | 1.0000 | 221978 | 1705.6 |
-| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 5534.3 | 0.173 | 0.196 | 0.324 | 0.5556 | 1.0000 | 1.0000 | 230896 | 1775.9 |
-| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 18344.2 | 0.052 | 0.058 | 0.123 | 0.5556 | 0.8333 | 1.0000 | 132882 | 403.8 |
-| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 17550.9 | 0.054 | 0.061 | 0.129 | 0.5556 | 1.0000 | 1.0000 | 141908 | 474.5 |
-| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | disabled | 6341.5 | 0.154 | 0.168 | 0.202 | 0.5556 | 0.6667 | 1.0000 | 158979 | 1603.0 |
-| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 5926.0 | 0.164 | 0.180 | 0.214 | 0.5556 | 0.8333 | 1.0000 | 184726 | 1706.9 |
-| hashing_regression | direct_collection | 1 | text_only | none | score_only | unfiltered | disabled | 24542.9 | 0.038 | 0.047 | 0.062 | 0.5556 | 0.6667 | 1.0000 | 69930 | 301.5 |
-| hashing_regression | direct_collection | 1 | text_only | none | score_only | unfiltered | enabled_cap_2 | 19512.4 | 0.049 | 0.055 | 0.062 | 0.5556 | 0.8333 | 1.0000 | 95955 | 405.4 |
-| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 7431.5 | 0.131 | 0.143 | 0.171 | 0.5556 | 0.8889 | 1.0000 | 111739 | 1400.5 |
-| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 7137.6 | 0.137 | 0.148 | 0.170 | 0.5556 | 0.9444 | 1.0000 | 137088 | 1504.1 |
-| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 69679.9 | 0.013 | 0.016 | 0.020 | 0.5556 | 0.8889 | 1.0000 | 22518 | 98.1 |
-| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 45476.9 | 0.019 | 0.026 | 0.058 | 0.5556 | 0.9444 | 1.0000 | 47817 | 201.4 |
-| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 16792.0 | 0.197 | 0.475 | 0.728 | 0.5556 | 0.8333 | 1.0000 | 222234 | 1705.8 |
-| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 16360.6 | 0.204 | 0.441 | 0.748 | 0.5556 | 1.0000 | 1.0000 | 231021 | 1776.0 |
-| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 44841.2 | 0.068 | 0.179 | 0.317 | 0.5556 | 0.8333 | 1.0000 | 133026 | 403.9 |
-| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 42843.4 | 0.074 | 0.176 | 0.321 | 0.5556 | 1.0000 | 1.0000 | 142089 | 474.5 |
-| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | disabled | 19783.9 | 0.165 | 0.402 | 0.592 | 0.5556 | 0.6667 | 1.0000 | 159396 | 1603.5 |
-| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 19259.6 | 0.173 | 0.385 | 0.582 | 0.5556 | 0.8333 | 1.0000 | 184914 | 1707.1 |
-| hashing_regression | direct_collection | 4 | text_only | none | score_only | unfiltered | disabled | 74274.1 | 0.038 | 0.108 | 0.181 | 0.5556 | 0.6667 | 1.0000 | 70080 | 301.5 |
-| hashing_regression | direct_collection | 4 | text_only | none | score_only | unfiltered | enabled_cap_2 | 56054.6 | 0.048 | 0.138 | 0.278 | 0.5556 | 0.8333 | 1.0000 | 96142 | 405.5 |
-| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 23740.5 | 0.140 | 0.308 | 0.421 | 0.5556 | 0.8889 | 1.0000 | 111746 | 1400.6 |
-| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 22450.0 | 0.147 | 0.344 | 0.488 | 0.5556 | 0.9444 | 1.0000 | 137096 | 1504.2 |
-| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 210895.5 | 0.012 | 0.023 | 0.038 | 0.5556 | 0.8889 | 1.0000 | 22518 | 98.1 |
-| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 127827.9 | 0.019 | 0.058 | 0.089 | 0.5556 | 0.9444 | 1.0000 | 47817 | 201.4 |
-| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 1636.8 | 0.598 | 0.656 | 1.082 | 0.5556 | 0.8333 | 1.0000 | 506901 | 4046.1 |
-| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 1592.5 | 0.609 | 0.671 | 1.129 | 0.5556 | 1.0000 | 1.0000 | 514888 | 4118.6 |
-| hashing_regression | http_service | 1 | text_only | none | fetch_topk | unfiltered | disabled | 2854.3 | 0.344 | 0.378 | 0.620 | 0.5556 | 0.6667 | 1.0000 | 256752 | 2790.9 |
-| hashing_regression | http_service | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 2745.5 | 0.361 | 0.387 | 0.525 | 0.5556 | 0.8333 | 1.0000 | 282806 | 2897.7 |
-| hashing_regression | http_service | 1 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 1031.2 | 0.949 | 1.050 | 1.352 | 0.5556 | 0.8889 | 1.0000 | 598736 | 3885.1 |
-| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 5246.0 | 0.641 | 1.383 | 1.954 | 0.5556 | 0.8333 | 1.0000 | 506015 | 4048.2 |
-| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 4897.9 | 0.692 | 1.403 | 2.492 | 0.5556 | 1.0000 | 1.0000 | 515242 | 4121.1 |
-| hashing_regression | http_service | 4 | text_only | none | fetch_topk | unfiltered | disabled | 10140.2 | 0.343 | 0.657 | 0.869 | 0.5556 | 0.6667 | 1.0000 | 257053 | 2793.7 |
-| hashing_regression | http_service | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 9698.9 | 0.354 | 0.727 | 1.041 | 0.5556 | 0.8333 | 1.0000 | 283359 | 2901.8 |
-| hashing_regression | http_service | 4 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 3310.6 | 1.087 | 1.772 | 2.249 | 0.5556 | 0.8889 | 1.0000 | 598485 | 3886.2 |
-| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 581.5 | 1.632 | 2.055 | 2.509 | 0.5556 | 0.7222 | 1.0000 | 824621 | 8669.3 |
-| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 591.1 | 1.643 | 1.919 | 2.430 | 0.5556 | 0.8333 | 1.0000 | 828548 | 8747.7 |
-| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 17807.6 | 0.053 | 0.064 | 0.096 | 0.5556 | 0.7222 | 1.0000 | 134282 | 408.1 |
-| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 16818.4 | 0.056 | 0.067 | 0.120 | 0.5556 | 0.8333 | 1.0000 | 143803 | 487.8 |
-| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | disabled | 603.2 | 1.614 | 1.922 | 2.179 | 0.5556 | 0.6667 | 1.0000 | 760233 | 8562.5 |
-| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 597.2 | 1.631 | 1.960 | 2.165 | 0.5556 | 0.8333 | 1.0000 | 780848 | 8665.5 |
-| semantic_minilm | direct_collection | 1 | text_only | none | score_only | unfiltered | disabled | 25272.1 | 0.038 | 0.044 | 0.048 | 0.5556 | 0.6667 | 1.0000 | 69912 | 301.4 |
-| semantic_minilm | direct_collection | 1 | text_only | none | score_only | unfiltered | enabled_cap_2 | 19253.6 | 0.050 | 0.058 | 0.079 | 0.5556 | 0.8333 | 1.0000 | 95961 | 405.4 |
-| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 608.5 | 1.601 | 1.934 | 2.183 | 0.5556 | 0.6667 | 1.0000 | 715729 | 8359.4 |
-| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 604.8 | 1.607 | 1.955 | 2.236 | 0.5556 | 0.8333 | 1.0000 | 741016 | 8463.0 |
-| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 60143.5 | 0.015 | 0.017 | 0.021 | 0.5556 | 0.6667 | 1.0000 | 23798 | 98.1 |
-| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 41582.1 | 0.022 | 0.028 | 0.036 | 0.5556 | 0.8333 | 1.0000 | 49107 | 201.7 |
-| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 1981.7 | 1.712 | 3.153 | 5.082 | 0.5556 | 0.7222 | 1.0000 | 825106 | 8669.8 |
-| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 2100.2 | 1.710 | 2.712 | 4.009 | 0.5556 | 0.8333 | 1.0000 | 828795 | 8747.9 |
-| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 43416.4 | 0.073 | 0.180 | 0.328 | 0.5556 | 0.7222 | 1.0000 | 134441 | 408.2 |
-| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 39716.5 | 0.081 | 0.180 | 0.347 | 0.5556 | 0.8333 | 1.0000 | 143965 | 487.9 |
-| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | disabled | 2210.4 | 1.656 | 2.528 | 3.052 | 0.5556 | 0.6667 | 1.0000 | 761628 | 8563.3 |
-| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 2181.1 | 1.672 | 2.608 | 3.222 | 0.5556 | 0.8333 | 1.0000 | 781335 | 8666.1 |
-| semantic_minilm | direct_collection | 4 | text_only | none | score_only | unfiltered | disabled | 81774.0 | 0.038 | 0.069 | 0.141 | 0.5556 | 0.6667 | 1.0000 | 70083 | 301.5 |
-| semantic_minilm | direct_collection | 4 | text_only | none | score_only | unfiltered | enabled_cap_2 | 59705.5 | 0.048 | 0.128 | 0.213 | 0.5556 | 0.8333 | 1.0000 | 96119 | 405.5 |
-| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 2230.9 | 1.630 | 2.531 | 3.442 | 0.5556 | 0.6667 | 1.0000 | 715752 | 8359.8 |
-| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 2242.3 | 1.633 | 2.463 | 3.064 | 0.5556 | 0.8333 | 1.0000 | 741060 | 8463.6 |
-| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 183699.0 | 0.015 | 0.030 | 0.051 | 0.5556 | 0.6667 | 1.0000 | 23798 | 98.1 |
-| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 119555.2 | 0.021 | 0.062 | 0.098 | 0.5556 | 0.8333 | 1.0000 | 49108 | 201.7 |
-| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 420.2 | 2.265 | 2.829 | 3.451 | 0.5556 | 0.7222 | 1.0000 | 1135459 | 11022.3 |
-| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 432.5 | 2.238 | 2.668 | 3.752 | 0.5556 | 0.8333 | 1.0000 | 1137931 | 11102.5 |
-| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | unfiltered | disabled | 532.1 | 1.831 | 2.173 | 2.404 | 0.5556 | 0.6667 | 1.0000 | 859752 | 9751.1 |
-| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 528.9 | 1.844 | 2.187 | 2.415 | 0.5556 | 0.8333 | 1.0000 | 880379 | 9856.9 |
-| semantic_minilm | http_service | 1 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 373.7 | 2.595 | 3.126 | 3.373 | 0.5556 | 0.6667 | 1.0000 | 1236509 | 10855.6 |
-| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 1556.0 | 2.348 | 3.716 | 4.370 | 0.5556 | 0.7222 | 1.0000 | 1133863 | 11024.2 |
-| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 1539.6 | 2.342 | 3.809 | 5.194 | 0.5556 | 0.8333 | 1.0000 | 1137066 | 11104.2 |
-| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | unfiltered | disabled | 1967.4 | 1.880 | 2.717 | 3.021 | 0.5556 | 0.6667 | 1.0000 | 861084 | 9751.9 |
-| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 1916.6 | 1.908 | 2.832 | 3.330 | 0.5556 | 0.8333 | 1.0000 | 880554 | 9858.6 |
-| semantic_minilm | http_service | 4 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 1345.4 | 2.750 | 3.934 | 4.701 | 0.5556 | 0.6667 | 1.0000 | 1236752 | 10857.0 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 4639.6 | 0.210 | 0.233 | 0.341 | 1.0000 | 1.0000 | 1.0000 | 253304 | 2274.1 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 4557.8 | 0.213 | 0.231 | 0.362 | 0.6667 | 1.0000 | 0.7767 | 259027 | 2323.4 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 4624.2 | 0.209 | 0.228 | 0.384 | 0.5556 | 0.8333 | 1.0000 | 277678 | 2166.3 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 4478.5 | 0.215 | 0.239 | 0.283 | 0.5556 | 1.0000 | 1.0000 | 286543 | 2236.5 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | disabled | 18070.9 | 0.053 | 0.063 | 0.113 | 1.0000 | 1.0000 | 1.0000 | 107778 | 510.5 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 17135.5 | 0.056 | 0.064 | 0.085 | 0.6667 | 1.0000 | 0.7767 | 113565 | 561.4 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 17961.5 | 0.053 | 0.061 | 0.111 | 0.5556 | 0.8333 | 1.0000 | 132850 | 403.8 |
+| hashing_regression | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 16419.6 | 0.056 | 0.069 | 0.153 | 0.5556 | 1.0000 | 1.0000 | 141884 | 474.4 |
+| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | tenant_alpha | disabled | 4834.5 | 0.201 | 0.218 | 0.286 | 1.0000 | 1.0000 | 1.0000 | 221666 | 2216.6 |
+| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 4765.9 | 0.204 | 0.226 | 0.282 | 0.6667 | 1.0000 | 0.7767 | 221791 | 2251.9 |
+| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | disabled | 5058.5 | 0.193 | 0.209 | 0.279 | 0.5556 | 0.6667 | 1.0000 | 215706 | 2064.0 |
+| hashing_regression | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 4832.3 | 0.201 | 0.219 | 0.336 | 0.5556 | 0.8333 | 1.0000 | 241353 | 2167.9 |
+| hashing_regression | direct_collection | 1 | text_only | none | score_only | tenant_alpha | disabled | 20128.1 | 0.048 | 0.056 | 0.080 | 1.0000 | 1.0000 | 1.0000 | 75539 | 453.4 |
+| hashing_regression | direct_collection | 1 | text_only | none | score_only | tenant_alpha | enabled_cap_2 | 19893.3 | 0.048 | 0.054 | 0.064 | 0.6667 | 1.0000 | 0.7767 | 78917 | 492.4 |
+| hashing_regression | direct_collection | 1 | text_only | none | score_only | unfiltered | disabled | 24432.5 | 0.039 | 0.047 | 0.059 | 0.5556 | 0.6667 | 1.0000 | 69930 | 301.5 |
+| hashing_regression | direct_collection | 1 | text_only | none | score_only | unfiltered | enabled_cap_2 | 19639.5 | 0.049 | 0.054 | 0.094 | 0.5556 | 0.8333 | 1.0000 | 95962 | 405.4 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 5618.8 | 0.173 | 0.186 | 0.208 | 1.0000 | 1.0000 | 1.0000 | 183359 | 1972.2 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 5361.3 | 0.179 | 0.196 | 0.257 | 0.6667 | 1.0000 | 0.7767 | 187766 | 2021.8 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 5754.0 | 0.169 | 0.185 | 0.269 | 0.5556 | 0.8889 | 1.0000 | 168592 | 1861.9 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 5559.3 | 0.175 | 0.188 | 0.261 | 0.5556 | 0.9444 | 1.0000 | 193921 | 1965.5 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | disabled | 52818.3 | 0.017 | 0.020 | 0.032 | 1.0000 | 1.0000 | 1.0000 | 37531 | 208.1 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 45319.1 | 0.020 | 0.025 | 0.032 | 0.6667 | 1.0000 | 0.7767 | 42240 | 258.4 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 69066.2 | 0.013 | 0.016 | 0.021 | 0.5556 | 0.8889 | 1.0000 | 22518 | 98.1 |
+| hashing_regression | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 47266.0 | 0.020 | 0.023 | 0.034 | 0.5556 | 0.9444 | 1.0000 | 47817 | 201.4 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 13774.3 | 0.244 | 0.502 | 0.665 | 1.0000 | 1.0000 | 1.0000 | 253421 | 2274.2 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 13819.2 | 0.245 | 0.523 | 0.813 | 0.6667 | 1.0000 | 0.7767 | 259150 | 2323.6 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 13366.6 | 0.247 | 0.553 | 0.988 | 0.5556 | 0.8333 | 1.0000 | 277821 | 2166.3 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 13139.2 | 0.250 | 0.510 | 1.127 | 0.5556 | 1.0000 | 1.0000 | 286699 | 2236.6 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | disabled | 48299.0 | 0.067 | 0.151 | 0.255 | 1.0000 | 1.0000 | 1.0000 | 107908 | 510.5 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 43363.0 | 0.072 | 0.148 | 0.322 | 0.6667 | 1.0000 | 0.7767 | 113701 | 561.5 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 44385.2 | 0.073 | 0.158 | 0.285 | 0.5556 | 0.8333 | 1.0000 | 132997 | 403.8 |
+| hashing_regression | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 42056.6 | 0.076 | 0.175 | 0.346 | 0.5556 | 1.0000 | 1.0000 | 142042 | 474.5 |
+| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | tenant_alpha | disabled | 15919.9 | 0.212 | 0.483 | 0.705 | 1.0000 | 1.0000 | 1.0000 | 221919 | 2216.9 |
+| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 15800.0 | 0.215 | 0.469 | 0.693 | 0.6667 | 1.0000 | 0.7767 | 222044 | 2252.2 |
+| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | disabled | 16569.9 | 0.205 | 0.459 | 0.678 | 0.5556 | 0.6667 | 1.0000 | 216265 | 2064.6 |
+| hashing_regression | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 15978.2 | 0.213 | 0.454 | 0.638 | 0.5556 | 0.8333 | 1.0000 | 241666 | 2168.3 |
+| hashing_regression | direct_collection | 4 | text_only | none | score_only | tenant_alpha | disabled | 65080.7 | 0.046 | 0.087 | 0.215 | 1.0000 | 1.0000 | 1.0000 | 75711 | 453.5 |
+| hashing_regression | direct_collection | 4 | text_only | none | score_only | tenant_alpha | enabled_cap_2 | 60846.2 | 0.049 | 0.126 | 0.194 | 0.6667 | 1.0000 | 0.7767 | 79083 | 492.5 |
+| hashing_regression | direct_collection | 4 | text_only | none | score_only | unfiltered | disabled | 79284.5 | 0.038 | 0.078 | 0.207 | 0.5556 | 0.6667 | 1.0000 | 70093 | 301.5 |
+| hashing_regression | direct_collection | 4 | text_only | none | score_only | unfiltered | enabled_cap_2 | 50789.2 | 0.050 | 0.142 | 0.310 | 0.5556 | 0.8333 | 1.0000 | 96163 | 405.5 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 16235.3 | 0.192 | 0.443 | 0.635 | 1.0000 | 1.0000 | 1.0000 | 183434 | 1972.4 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 18090.1 | 0.188 | 0.407 | 0.622 | 0.6667 | 1.0000 | 0.7767 | 187810 | 2021.9 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 19068.4 | 0.179 | 0.378 | 0.554 | 0.5556 | 0.8889 | 1.0000 | 168605 | 1862.0 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 18358.0 | 0.187 | 0.399 | 0.546 | 0.5556 | 0.9444 | 1.0000 | 193933 | 1965.7 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | disabled | 100418.2 | 0.022 | 0.082 | 0.119 | 1.0000 | 1.0000 | 1.0000 | 37579 | 208.1 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 123928.5 | 0.022 | 0.053 | 0.106 | 0.6667 | 1.0000 | 0.7767 | 42315 | 258.4 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 187681.7 | 0.013 | 0.038 | 0.060 | 0.5556 | 0.8889 | 1.0000 | 22518 | 98.1 |
+| hashing_regression | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 136341.0 | 0.019 | 0.046 | 0.088 | 0.5556 | 0.9444 | 1.0000 | 47817 | 201.4 |
+| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 1406.8 | 0.688 | 0.752 | 1.249 | 1.0000 | 1.0000 | 1.0000 | 558755 | 5370.7 |
+| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 1397.2 | 0.689 | 0.756 | 1.183 | 0.6667 | 1.0000 | 0.7767 | 562985 | 5425.8 |
+| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 1395.3 | 0.690 | 0.779 | 1.403 | 0.5556 | 0.8333 | 1.0000 | 582861 | 5256.5 |
+| hashing_regression | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 1414.9 | 0.689 | 0.733 | 1.122 | 0.5556 | 1.0000 | 1.0000 | 590214 | 5328.9 |
+| hashing_regression | http_service | 1 | text_only | none | fetch_topk | tenant_alpha | disabled | 2213.4 | 0.447 | 0.471 | 0.597 | 1.0000 | 1.0000 | 1.0000 | 342884 | 4164.3 |
+| hashing_regression | http_service | 1 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 2218.7 | 0.446 | 0.473 | 0.655 | 0.6667 | 1.0000 | 0.7767 | 343356 | 4202.9 |
+| hashing_regression | http_service | 1 | text_only | none | fetch_topk | unfiltered | disabled | 2291.1 | 0.432 | 0.461 | 0.718 | 0.5556 | 0.6667 | 1.0000 | 336006 | 4002.9 |
+| hashing_regression | http_service | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 2232.2 | 0.443 | 0.469 | 0.740 | 0.5556 | 0.8333 | 1.0000 | 361836 | 4109.6 |
+| hashing_regression | http_service | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 1571.6 | 0.624 | 0.676 | 1.034 | 1.0000 | 1.0000 | 1.0000 | 469682 | 4666.3 |
+| hashing_regression | http_service | 1 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 945.5 | 1.038 | 1.139 | 1.468 | 0.5556 | 0.8889 | 1.0000 | 681205 | 5148.6 |
+| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 4582.7 | 0.737 | 1.670 | 2.496 | 1.0000 | 1.0000 | 1.0000 | 557875 | 5373.4 |
+| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 4545.9 | 0.755 | 1.436 | 2.210 | 0.6667 | 1.0000 | 0.7767 | 563152 | 5428.3 |
+| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 4624.7 | 0.738 | 1.379 | 3.069 | 0.5556 | 0.8333 | 1.0000 | 582658 | 5259.2 |
+| hashing_regression | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 4417.4 | 0.766 | 1.542 | 2.202 | 0.5556 | 1.0000 | 1.0000 | 590902 | 5332.1 |
+| hashing_regression | http_service | 4 | text_only | none | fetch_topk | tenant_alpha | disabled | 7906.2 | 0.441 | 0.868 | 1.154 | 1.0000 | 1.0000 | 1.0000 | 343497 | 4167.9 |
+| hashing_regression | http_service | 4 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 7895.2 | 0.440 | 0.841 | 1.112 | 0.6667 | 1.0000 | 0.7767 | 344377 | 4206.9 |
+| hashing_regression | http_service | 4 | text_only | none | fetch_topk | unfiltered | disabled | 7670.8 | 0.438 | 0.905 | 1.211 | 0.5556 | 0.6667 | 1.0000 | 337118 | 4006.4 |
+| hashing_regression | http_service | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 7884.7 | 0.435 | 0.895 | 1.113 | 0.5556 | 0.8333 | 1.0000 | 363464 | 4113.8 |
+| hashing_regression | http_service | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 5375.3 | 0.632 | 1.249 | 1.866 | 1.0000 | 1.0000 | 1.0000 | 469037 | 4668.6 |
+| hashing_regression | http_service | 4 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 3114.9 | 1.146 | 1.932 | 2.336 | 0.5556 | 0.8889 | 1.0000 | 681849 | 5150.2 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 577.5 | 1.686 | 1.989 | 2.431 | 1.0000 | 1.0000 | 1.0000 | 832905 | 9222.0 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 572.0 | 1.693 | 2.013 | 2.373 | 0.6667 | 1.0000 | 0.7767 | 829695 | 9270.6 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 575.0 | 1.684 | 2.055 | 2.472 | 0.5556 | 0.7222 | 1.0000 | 854587 | 9119.1 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 575.2 | 1.685 | 2.002 | 2.696 | 0.5556 | 0.8333 | 1.0000 | 858657 | 9197.7 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | disabled | 18493.0 | 0.050 | 0.061 | 0.110 | 1.0000 | 1.0000 | 1.0000 | 109038 | 510.4 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 16975.3 | 0.056 | 0.066 | 0.077 | 0.6667 | 1.0000 | 0.7767 | 114830 | 560.8 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 17574.9 | 0.054 | 0.064 | 0.077 | 0.5556 | 0.7222 | 1.0000 | 134252 | 408.1 |
+| semantic_minilm | direct_collection | 1 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 16707.0 | 0.057 | 0.067 | 0.083 | 0.5556 | 0.8333 | 1.0000 | 143729 | 487.8 |
+| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | tenant_alpha | disabled | 584.5 | 1.669 | 2.007 | 2.251 | 1.0000 | 1.0000 | 1.0000 | 797727 | 9164.8 |
+| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 586.2 | 1.667 | 1.930 | 2.248 | 0.6667 | 1.0000 | 0.7767 | 792093 | 9202.1 |
+| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | disabled | 583.0 | 1.664 | 2.051 | 2.355 | 0.5556 | 0.6667 | 1.0000 | 790324 | 9012.6 |
+| semantic_minilm | direct_collection | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 588.4 | 1.662 | 1.951 | 2.186 | 0.5556 | 0.8333 | 1.0000 | 809143 | 9115.2 |
+| semantic_minilm | direct_collection | 1 | text_only | none | score_only | tenant_alpha | disabled | 19934.3 | 0.048 | 0.055 | 0.072 | 1.0000 | 1.0000 | 1.0000 | 75539 | 453.4 |
+| semantic_minilm | direct_collection | 1 | text_only | none | score_only | tenant_alpha | enabled_cap_2 | 19195.8 | 0.050 | 0.056 | 0.082 | 0.6667 | 1.0000 | 0.7767 | 78924 | 492.4 |
+| semantic_minilm | direct_collection | 1 | text_only | none | score_only | unfiltered | disabled | 24842.4 | 0.039 | 0.046 | 0.061 | 0.5556 | 0.6667 | 1.0000 | 69926 | 301.4 |
+| semantic_minilm | direct_collection | 1 | text_only | none | score_only | unfiltered | enabled_cap_2 | 19624.2 | 0.049 | 0.054 | 0.075 | 0.5556 | 0.8333 | 1.0000 | 95968 | 405.4 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 597.8 | 1.638 | 1.912 | 2.232 | 1.0000 | 1.0000 | 1.0000 | 760991 | 8919.5 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 576.2 | 1.649 | 1.991 | 3.294 | 0.6667 | 1.0000 | 0.7767 | 762042 | 8969.3 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 590.8 | 1.645 | 1.978 | 2.326 | 0.5556 | 0.6667 | 1.0000 | 744031 | 8809.1 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 591.4 | 1.649 | 1.952 | 2.263 | 0.5556 | 0.8333 | 1.0000 | 769326 | 8912.7 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | disabled | 47070.5 | 0.020 | 0.025 | 0.032 | 1.0000 | 1.0000 | 1.0000 | 38810 | 208.1 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 41846.2 | 0.022 | 0.028 | 0.040 | 0.6667 | 1.0000 | 0.7767 | 43551 | 258.7 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 58813.0 | 0.016 | 0.019 | 0.025 | 0.5556 | 0.6667 | 1.0000 | 23798 | 98.1 |
+| semantic_minilm | direct_collection | 1 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 41860.4 | 0.022 | 0.028 | 0.036 | 0.5556 | 0.8333 | 1.0000 | 49107 | 201.7 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 2027.2 | 1.760 | 2.839 | 4.537 | 1.0000 | 1.0000 | 1.0000 | 833076 | 9222.0 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 1982.6 | 1.785 | 2.850 | 3.976 | 0.6667 | 1.0000 | 0.7767 | 829776 | 9270.7 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 2026.3 | 1.778 | 2.772 | 3.697 | 0.5556 | 0.7222 | 1.0000 | 854823 | 9119.3 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 1990.1 | 1.784 | 2.854 | 4.331 | 0.5556 | 0.8333 | 1.0000 | 858829 | 9197.9 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | disabled | 44553.0 | 0.071 | 0.157 | 0.282 | 1.0000 | 1.0000 | 1.0000 | 109195 | 510.5 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 37804.4 | 0.085 | 0.180 | 0.305 | 0.6667 | 1.0000 | 0.7767 | 114953 | 560.8 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | disabled | 42098.8 | 0.077 | 0.171 | 0.377 | 0.5556 | 0.7222 | 1.0000 | 134383 | 408.1 |
+| semantic_minilm | direct_collection | 4 | hybrid | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 39863.1 | 0.078 | 0.164 | 0.461 | 0.5556 | 0.8333 | 1.0000 | 143920 | 487.8 |
+| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | tenant_alpha | disabled | 2099.5 | 1.720 | 2.697 | 3.765 | 1.0000 | 1.0000 | 1.0000 | 798204 | 9165.6 |
+| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 2085.0 | 1.720 | 2.771 | 3.389 | 0.6667 | 1.0000 | 0.7767 | 792685 | 9202.9 |
+| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | disabled | 2140.5 | 1.700 | 2.644 | 3.182 | 0.5556 | 0.6667 | 1.0000 | 791753 | 9013.4 |
+| semantic_minilm | direct_collection | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 2081.8 | 1.723 | 2.800 | 3.330 | 0.5556 | 0.8333 | 1.0000 | 809711 | 9115.9 |
+| semantic_minilm | direct_collection | 4 | text_only | none | score_only | tenant_alpha | disabled | 59319.1 | 0.048 | 0.131 | 0.225 | 1.0000 | 1.0000 | 1.0000 | 75710 | 453.5 |
+| semantic_minilm | direct_collection | 4 | text_only | none | score_only | tenant_alpha | enabled_cap_2 | 51019.3 | 0.052 | 0.159 | 0.293 | 0.6667 | 1.0000 | 0.7767 | 79083 | 492.5 |
+| semantic_minilm | direct_collection | 4 | text_only | none | score_only | unfiltered | disabled | 81647.3 | 0.038 | 0.069 | 0.153 | 0.5556 | 0.6667 | 1.0000 | 70076 | 301.5 |
+| semantic_minilm | direct_collection | 4 | text_only | none | score_only | unfiltered | enabled_cap_2 | 63131.7 | 0.048 | 0.119 | 0.208 | 0.5556 | 0.8333 | 1.0000 | 96120 | 405.5 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 2139.8 | 1.683 | 2.696 | 3.699 | 1.0000 | 1.0000 | 1.0000 | 761241 | 8919.9 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 2141.4 | 1.686 | 2.784 | 3.767 | 0.6667 | 1.0000 | 0.7767 | 762241 | 8969.6 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 2163.5 | 1.677 | 2.600 | 3.441 | 0.5556 | 0.6667 | 1.0000 | 744075 | 8809.6 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 2143.7 | 1.692 | 2.661 | 3.381 | 0.5556 | 0.8333 | 1.0000 | 769367 | 8913.2 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | disabled | 140788.8 | 0.019 | 0.045 | 0.054 | 1.0000 | 1.0000 | 1.0000 | 38824 | 208.1 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | tenant_alpha | enabled_cap_2 | 114237.8 | 0.021 | 0.060 | 0.127 | 0.6667 | 1.0000 | 0.7767 | 43585 | 258.8 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | disabled | 174412.0 | 0.015 | 0.031 | 0.058 | 0.5556 | 0.6667 | 1.0000 | 23798 | 98.1 |
+| semantic_minilm | direct_collection | 4 | vector_only | declared_column_graph_exact | score_only | unfiltered | enabled_cap_2 | 113422.8 | 0.022 | 0.064 | 0.092 | 0.5556 | 0.8333 | 1.0000 | 49108 | 201.7 |
+| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 412.9 | 2.341 | 2.745 | 3.150 | 1.0000 | 1.0000 | 1.0000 | 1162577 | 12329.6 |
+| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 405.2 | 2.382 | 2.820 | 3.165 | 0.6667 | 1.0000 | 0.7767 | 1159080 | 12384.1 |
+| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 409.6 | 2.351 | 2.831 | 3.968 | 0.5556 | 0.7222 | 1.0000 | 1184324 | 12221.5 |
+| semantic_minilm | http_service | 1 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 412.2 | 2.343 | 2.744 | 3.420 | 0.5556 | 0.8333 | 1.0000 | 1188531 | 12302.3 |
+| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | tenant_alpha | disabled | 451.0 | 1.958 | 2.468 | 6.557 | 1.0000 | 1.0000 | 1.0000 | 920889 | 11113.5 |
+| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 497.9 | 1.946 | 2.403 | 2.611 | 0.6667 | 1.0000 | 0.7767 | 915429 | 11153.8 |
+| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | unfiltered | disabled | 502.1 | 1.932 | 2.355 | 2.542 | 0.5556 | 0.6667 | 1.0000 | 913014 | 10952.2 |
+| semantic_minilm | http_service | 1 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 499.8 | 1.940 | 2.397 | 2.628 | 0.5556 | 0.8333 | 1.0000 | 931784 | 11057.6 |
+| semantic_minilm | http_service | 1 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 432.3 | 2.229 | 2.753 | 3.242 | 1.0000 | 1.0000 | 1.0000 | 1072261 | 11624.9 |
+| semantic_minilm | http_service | 1 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 358.5 | 2.693 | 3.286 | 3.596 | 0.5556 | 0.6667 | 1.0000 | 1290538 | 12107.4 |
+| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 1480.6 | 2.415 | 3.869 | 5.785 | 1.0000 | 1.0000 | 1.0000 | 1161903 | 12331.6 |
+| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | tenant_alpha | enabled_cap_2 | 1480.0 | 2.415 | 3.909 | 6.331 | 0.6667 | 1.0000 | 0.7767 | 1158858 | 12386.2 |
+| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | disabled | 1470.2 | 2.468 | 3.930 | 5.586 | 0.5556 | 0.7222 | 1.0000 | 1183366 | 12223.4 |
+| semantic_minilm | http_service | 4 | hybrid | declared_column_graph_exact | fetch_topk | unfiltered | enabled_cap_2 | 1479.3 | 2.441 | 3.990 | 5.934 | 0.5556 | 0.8333 | 1.0000 | 1187795 | 12304.7 |
+| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | tenant_alpha | disabled | 1876.6 | 1.960 | 2.866 | 3.424 | 1.0000 | 1.0000 | 1.0000 | 921450 | 11115.3 |
+| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | tenant_alpha | enabled_cap_2 | 1828.5 | 2.016 | 2.960 | 3.547 | 0.6667 | 1.0000 | 0.7767 | 916348 | 11155.6 |
+| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | unfiltered | disabled | 1855.3 | 1.982 | 2.934 | 3.567 | 0.5556 | 0.6667 | 1.0000 | 913278 | 10953.2 |
+| semantic_minilm | http_service | 4 | text_only | none | fetch_topk | unfiltered | enabled_cap_2 | 1818.0 | 2.029 | 2.993 | 3.638 | 0.5556 | 0.8333 | 1.0000 | 932542 | 11060.1 |
+| semantic_minilm | http_service | 4 | vector_only | declared_column_graph_exact | fetch_topk | tenant_alpha | disabled | 1563.8 | 2.306 | 3.839 | 4.855 | 1.0000 | 1.0000 | 1.0000 | 1071704 | 11626.4 |
+| semantic_minilm | http_service | 4 | vector_only | declared_column_graph_ann | fetch_topk | unfiltered | disabled | 1308.4 | 2.817 | 4.042 | 4.553 | 0.5556 | 0.6667 | 1.0000 | 1291484 | 12108.9 |
 
 ## Unsupported capability evidence
 
-- `http_score_only_route_unavailable`: 20 rows; `*main.capabilityError`; zero results; fail closed.
-- `http_vector_parent_collapse_unavailable`: 4 rows; `*main.capabilityError`; zero results; fail closed.
-- `http_vector_parent_collapse_unavailable+http_score_only_route_unavailable`: 4 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated`: 68 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+http_score_only_route_unavailable`: 20 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+http_vector_parent_collapse_unavailable`: 4 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+http_vector_parent_collapse_unavailable+http_score_only_route_unavailable`: 4 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+multi_field_filter_unavailable`: 136 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+multi_field_filter_unavailable+http_score_only_route_unavailable`: 40 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+multi_field_filter_unavailable+http_vector_parent_collapse_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
-- `source_metadata_not_propagated+multi_field_filter_unavailable+http_vector_parent_collapse_unavailable+http_score_only_route_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
+- `http_score_only_route_unavailable`: 40 rows; `*main.capabilityError`; zero results; fail closed.
+- `http_vector_parent_collapse_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
+- `http_vector_parent_collapse_unavailable+http_score_only_route_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
+- `multi_field_filter_unavailable`: 136 rows; `*main.capabilityError`; zero results; fail closed.
+- `multi_field_filter_unavailable+http_score_only_route_unavailable`: 40 rows; `*main.capabilityError`; zero results; fail closed.
+- `multi_field_filter_unavailable+http_vector_parent_collapse_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
+- `multi_field_filter_unavailable+http_vector_parent_collapse_unavailable+http_score_only_route_unavailable`: 8 rows; `*main.capabilityError`; zero results; fail closed.
 
 ## Exact controls
 
