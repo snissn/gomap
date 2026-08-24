@@ -844,7 +844,6 @@ type VectorIndexSearchBuffer struct {
 	deltaIDBytes        []byte
 	searchScratch       columnVectorGraphNativeSearchScratch
 	nativeSearchScratch vectorIndexSearchScratch
-	deltaSearchScratch  vectorIndexSearchScratch
 }
 
 // Reset clears the buffer's current response view while retaining reusable

@@ -5516,6 +5516,7 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newVectorIndex: %v", err)
 	}
+	index.setNativePersistent(true)
 	index.mu.Lock()
 	for i, vector := range [][]float32{{1, 0}, {0.9, 0.1}, {0, 1}, {-1, 0}} {
 		if err := index.insertVectorLocked([]byte{byte('a' + i)}, vector); err != nil {
@@ -5523,12 +5524,21 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 			t.Fatalf("insertVectorLocked: %v", err)
 		}
 	}
+	index.sourceDocumentRootsValid = true
+	index.publishSearchViewLocked(false)
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("e"), []byte("f")}, [][]float32{{0.99, 0.01}, {0, -1}}); err != nil {
+		index.mu.Unlock()
+		t.Fatalf("insertLiveVectorBatchLocked: %v", err)
+	}
+	index.publishSearchViewLocked(false)
 	index.mu.Unlock()
 
 	query := []float32{1, 0}
 	var buffer VectorIndexSearchBuffer
-	if _, _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
+	if results, _, err := index.searchGraphOnlyWithBuffer(query, 2, 4, &buffer); err != nil {
 		t.Fatalf("warm searchGraphOnlyWithBuffer: %v", err)
+	} else if len(results) != 2 || string(results[0].ID) != "a" || string(results[1].ID) != "e" {
+		t.Fatalf("warm base+delta results=%+v want a,e", results)
 	}
 	if collectionsRaceEnabled {
 		t.Skip("AllocsPerRun is not stable under -race")
@@ -5542,8 +5552,8 @@ func TestSearchGraphOnlyWithBufferSteadyStateAllocations(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		if len(results) != 2 {
-			panic("unexpected native buffered result count")
+		if len(results) != 2 || string(results[0].ID) != "a" || string(results[1].ID) != "e" {
+			panic("unexpected native base+delta buffered results")
 		}
 		sink += len(results) + len(results[0].ID)
 	})
