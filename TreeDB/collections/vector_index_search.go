@@ -836,14 +836,16 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
-	results             []VectorIndexSearchResult
-	idBytes             []byte
-	baseResults         []VectorIndexSearchResult
-	baseIDBytes         []byte
-	deltaResults        []VectorIndexSearchResult
-	deltaIDBytes        []byte
-	searchScratch       columnVectorGraphNativeSearchScratch
-	nativeSearchScratch vectorIndexSearchScratch
+	results                 []VectorIndexSearchResult
+	idBytes                 []byte
+	baseResults             []VectorIndexSearchResult
+	baseIDBytes             []byte
+	deltaResults            []VectorIndexSearchResult
+	deltaIDBytes            []byte
+	searchScratch           columnVectorGraphNativeSearchScratch
+	nativeSearchScratch     vectorIndexSearchScratch
+	nativeSearchWorkEnabled bool
+	nativeSearchWork        vectorIndexNativeSearchWork
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -854,6 +856,7 @@ func (b *VectorIndexSearchBuffer) Reset() {
 		return
 	}
 	clear(b.results)
+	b.nativeSearchWork = vectorIndexNativeSearchWork{}
 	b.resetView()
 }
 

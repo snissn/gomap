@@ -3121,30 +3121,44 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesWithLiveDocsLocked(query []floa
 	if topK < 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
 	}
-	if len(query) == 0 {
-		return nil, errors.New("collections: vector query cannot be empty")
-	}
-	if err := validateFloat32Vector(query); err != nil {
-		return nil, fmt.Errorf("collections: vector query: %w", err)
-	}
-	queryNorm := float64(-1)
-	if idx.metric == VectorMetricCosine {
-		queryNorm = vectorNormSquared(query)
-		if queryNorm == 0 {
-			return nil, errors.New("collections: cosine vector query cannot have zero magnitude")
-		}
+	queryNorm, preparedQuery, preparedCosine, err := prepareVectorIndexGraphOnlyQuery(query, idx.metric, idx.dimensions)
+	if err != nil {
+		return nil, err
 	}
 	var prepared *preparedFloat32CosineQuery
-	if idx.metric == VectorMetricCosine {
-		preparedQuery, err := prepareFloat32CosineQuery(query, queryNorm)
-		if err != nil {
-			return nil, err
-		}
+	if preparedCosine {
 		prepared = &preparedQuery
 	}
-	if idx.dimensions != 0 && len(query) != idx.dimensions {
-		return nil, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), idx.dimensions)
+	return idx.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, prepared, topK, efSearch, liveDocs, scratch)
+}
+
+func prepareVectorIndexGraphOnlyQuery(query []float32, metric VectorMetric, dimensions int) (float64, preparedFloat32CosineQuery, bool, error) {
+	if len(query) == 0 {
+		return 0, preparedFloat32CosineQuery{}, false, errors.New("collections: vector query cannot be empty")
 	}
+	if err := validateFloat32Vector(query); err != nil {
+		return 0, preparedFloat32CosineQuery{}, false, fmt.Errorf("collections: vector query: %w", err)
+	}
+	queryNorm := float64(-1)
+	var prepared preparedFloat32CosineQuery
+	if metric == VectorMetricCosine {
+		queryNorm = vectorNormSquared(query)
+		if queryNorm == 0 {
+			return 0, preparedFloat32CosineQuery{}, false, errors.New("collections: cosine vector query cannot have zero magnitude")
+		}
+		var err error
+		prepared, err = prepareFloat32CosineQuery(query, queryNorm)
+		if err != nil {
+			return 0, preparedFloat32CosineQuery{}, false, err
+		}
+	}
+	if dimensions != 0 && len(query) != dimensions {
+		return 0, preparedFloat32CosineQuery{}, false, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), dimensions)
+	}
+	return queryNorm, prepared, metric == VectorMetricCosine, nil
+}
+
+func (idx *VectorIndex) searchGraphOnlyCandidatesWithPreparedQueryLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch, liveDocs int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, error) {
 	if topK == 0 {
 		return nil, nil
 	}
@@ -3161,7 +3175,12 @@ func (idx *VectorIndex) searchGraphOnlyCandidatesWithLiveDocsLocked(query []floa
 	if limit > liveDocs {
 		limit = liveDocs
 	}
-	candidates := idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNorm, prepared, limit, liveDocs, scratch)
+	var candidates []vectorIndexCandidate
+	if scratch != nil && scratch.resumeEnabled && liveDocs == len(idx.nodes) {
+		candidates = idx.searchCandidatesResumableLocked(query, queryNorm, prepared, limit, scratch)
+	} else {
+		candidates = idx.searchCurrentCandidatesWithLiveDocsLocked(query, queryNorm, prepared, limit, liveDocs, scratch)
+	}
 	if target := minInt(topK, liveDocs); len(candidates) < target {
 		return nil, fmt.Errorf("%w: native graph search returned %d of %d live candidates within bounded traversal; rebuild the vector index", ErrVectorIndexSearchUnavailable, len(candidates), target)
 	}
@@ -3548,6 +3567,87 @@ func (idx *VectorIndex) searchCurrentCandidatesWithLiveDocsLocked(query []float3
 	scratch.explored += upperExplored
 	scratch.explorationLimit = explorationLimit
 	return result
+}
+
+func (idx *VectorIndex) searchCandidatesResumableLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	if scratch.resumeRequested && scratch.resumeVisitedMark != 0 {
+		scratch.resumed = true
+		scratch.explored = 0
+		// Rebuild the bounded result heap from every score already paid for.
+		// Deferred nodes were rejected only by the smaller prior limit and have
+		// not been expanded, so adding them to the frontier exactly continues
+		// the same immutable layer-0 search at the larger limit.
+		scratch.best = scratch.best[:0]
+		for _, candidate := range scratch.resumeCandidates {
+			scratch.best.pushBounded(candidate, limit)
+		}
+		for _, candidate := range scratch.resumeDeferred {
+			scratch.queue.push(candidate)
+		}
+		scratch.resumeDeferred = scratch.resumeDeferred[:0]
+		return idx.continueResumableCandidatesLocked(query, queryNormSquared, prepared, limit, scratch)
+	}
+	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
+		return nil
+	}
+	entryPoint := idx.entry
+	for layer := idx.maxLevel; layer > 0; layer-- {
+		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
+	}
+	entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, entryPoint)
+	if math.IsInf(float64(entryDistance), 1) {
+		return nil
+	}
+	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
+	visited[entryPoint] = mark
+	scratch.resumeVisitedMark = mark
+	scratch.explored = 1
+	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
+	scratch.queue = scratch.queue[:0]
+	scratch.queue.push(entry)
+	scratch.best = scratch.best[:0]
+	scratch.best.pushBounded(entry, limit)
+	scratch.resumeCandidates = append(scratch.resumeCandidates[:0], entry)
+	scratch.resumeDeferred = scratch.resumeDeferred[:0]
+	return idx.continueResumableCandidatesLocked(query, queryNormSquared, prepared, limit, scratch)
+}
+
+func (idx *VectorIndex) continueResumableCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+	visited := scratch.visitedEpochs
+	mark := scratch.resumeVisitedMark
+	for len(scratch.queue) > 0 {
+		current := scratch.queue[0]
+		if len(scratch.best) >= limit && vectorIndexCandidateWorse(current, scratch.best[0]) {
+			break
+		}
+		current = scratch.queue.pop()
+		if current.nodeID < 0 || current.nodeID >= len(idx.nodes) {
+			continue
+		}
+		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, 0) {
+			neighborID := neighbor.nodeID
+			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
+				continue
+			}
+			visited[neighborID] = mark
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
+			scratch.explored++
+			if math.IsInf(float64(distance), 1) {
+				continue
+			}
+			candidate := vectorIndexCandidate{nodeID: neighborID, distance: distance}
+			scratch.resumeCandidates = append(scratch.resumeCandidates, candidate)
+			if len(scratch.best) < limit || vectorIndexCandidateLess(candidate, scratch.best[0]) {
+				scratch.queue.push(candidate)
+				scratch.best.pushBounded(candidate, limit)
+			} else {
+				scratch.resumeDeferred = append(scratch.resumeDeferred, candidate)
+			}
+		}
+	}
+	scratch.out = append(scratch.out[:0], scratch.best...)
+	sortVectorIndexCandidates(scratch.out)
+	return scratch.out
 }
 
 func (idx *VectorIndex) greedyNearestAtLayerBoundedLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint, layer, scoreLimit int, scored *int) int {
@@ -4535,14 +4635,43 @@ type vectorIndexCandidate struct {
 }
 
 type vectorIndexSearchScratch struct {
-	visitedEpochs    []uint32
-	visitedEpoch     uint32
-	explorationLimit int
-	explored         int
-	queue            vectorIndexMinCandidateHeap
-	best             vectorIndexMaxCandidateHeap
-	liveBest         vectorIndexMaxCandidateHeap
-	out              []vectorIndexCandidate
+	visitedEpochs     []uint32
+	visitedEpoch      uint32
+	explorationLimit  int
+	explored          int
+	queue             vectorIndexMinCandidateHeap
+	best              vectorIndexMaxCandidateHeap
+	liveBest          vectorIndexMaxCandidateHeap
+	out               []vectorIndexCandidate
+	resumeCandidates  []vectorIndexCandidate
+	resumeDeferred    []vectorIndexCandidate
+	resumeVisitedMark uint32
+	resumeEnabled     bool
+	resumeRequested   bool
+	resumed           bool
+}
+
+func (scratch *vectorIndexSearchScratch) startResumableSearch() {
+	scratch.resumeCandidates = scratch.resumeCandidates[:0]
+	scratch.resumeDeferred = scratch.resumeDeferred[:0]
+	scratch.resumeVisitedMark = 0
+	scratch.resumeEnabled = true
+	scratch.resumeRequested = false
+	scratch.resumed = false
+}
+
+func (scratch *vectorIndexSearchScratch) resumeSearch() {
+	scratch.resumeRequested = true
+	scratch.resumed = false
+}
+
+func (scratch *vectorIndexSearchScratch) stopResumableSearch() {
+	scratch.resumeCandidates = scratch.resumeCandidates[:0]
+	scratch.resumeDeferred = scratch.resumeDeferred[:0]
+	scratch.resumeEnabled = false
+	scratch.resumeRequested = false
+	scratch.resumed = false
+	scratch.resumeVisitedMark = 0
 }
 
 func (scratch *vectorIndexSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {

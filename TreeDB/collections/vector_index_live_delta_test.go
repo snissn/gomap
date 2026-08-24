@@ -275,6 +275,7 @@ func TestMergeVectorIndexViewResultsDeduplicatesExhaustedPlanes(t *testing.T) {
 }
 
 func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
+	query := []float32{1, 0}
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 16, EfConstruction: 128, EfSearch: 128,
@@ -284,11 +285,13 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	}
 	index.setNativePersistent(true)
 	index.sourceDocumentRootsValid = true
-	baseIDs, baseVectors := make([][]byte, 200), make([][]float32, 200)
-	deltaIDs, deltaVectors := make([][]byte, 200), make([][]float32, 200)
+	baseIDs, baseVectors := make([][]byte, 900), make([][]float32, 900)
+	deltaIDs, deltaVectors := make([][]byte, 100), make([][]float32, 100)
 	for row := range baseIDs {
 		baseIDs[row] = []byte("base-" + string(rune(row)))
 		baseVectors[row] = []float32{0.01 + float32(row)/100_000, 1}
+	}
+	for row := range deltaIDs {
 		deltaIDs[row] = []byte("delta-" + string(rune(row)))
 		deltaVectors[row] = []float32{1, 0.01 + float32(row)/100_000}
 	}
@@ -300,7 +303,7 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	index.publishSearchViewLocked(false)
 	index.mu.Unlock()
 	var buffer VectorIndexSearchBuffer
-	if _, _, err := index.searchGraphOnlyWithBuffer([]float32{1, 0}, 100, 200, &buffer); err != nil {
+	if _, _, err := index.searchGraphOnlyWithBuffer(query, 100, 200, &buffer); err != nil {
 		t.Fatal(err)
 	}
 	index.mu.Lock()
@@ -310,7 +313,8 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	}
 	index.publishSearchViewLocked(false)
 	index.mu.Unlock()
-	results, _, err := index.searchGraphOnlyWithBuffer([]float32{1, 0}, 100, 200, &buffer)
+	buffer.nativeSearchWorkEnabled = true
+	results, _, err := index.searchGraphOnlyWithBuffer(query, 100, 200, &buffer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,6 +324,49 @@ func TestVectorIndexLiveDeltaExpandsForClusteredResults(t *testing.T) {
 	for _, result := range results {
 		if len(result.ID) < len("delta-") || string(result.ID[:len("delta-")]) != "delta-" {
 			t.Fatalf("clustered delta result=%q want delta prefix", result.ID)
+		}
+	}
+	work := buffer.nativeSearchWork
+	if work.deltaPasses != 4 || work.deltaRetries != 3 || work.deltaResumes != 3 || work.deltaInitialTopK != 16 || work.deltaTerminalTopK != 100 {
+		t.Fatalf("delta work=%+v want resumed 16-to-32-to-64-to-100 traversal", work)
+	}
+	if work.queryPreparations != 1 || work.baseVisited == 0 || work.deltaVisited == 0 || work.deltaVisited > len(deltaVectors) || !work.retryChangedMergedTopK {
+		t.Fatalf("delta work=%+v want one query preparation, bounded unique delta visits, and a changed merged top-K", work)
+	}
+	view := index.acquireSearchView()
+	if view == nil {
+		t.Fatal("search view is unavailable")
+	}
+	defer index.releaseSearchView(view)
+	queryNorm, preparedQuery, _, err := prepareVectorIndexGraphOnlyQuery(query, view.metric, view.dimensions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeIndex := VectorIndex{
+		metric: view.metric, encoding: view.encoding, dimensions: view.dimensions,
+		m: view.m, efSearch: view.efSearch, nodes: view.deltaNodes,
+		entry: view.deltaEntry, maxLevel: view.deltaMaxLevel,
+	}
+	var resumedScratch vectorIndexSearchScratch
+	resumedScratch.startResumableSearch()
+	defer resumedScratch.stopResumableSearch()
+	for step, budget := range []int{16, 32, 64, 100} {
+		if step > 0 {
+			resumedScratch.resumeSearch()
+		}
+		resumed, err := runtimeIndex.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, &preparedQuery, budget, budget, view.deltaLiveDocs, &resumedScratch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var freshScratch vectorIndexSearchScratch
+		fresh, err := runtimeIndex.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, &preparedQuery, budget, budget, view.deltaLiveDocs, &freshScratch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for candidate := range fresh {
+			if resumed[candidate] != fresh[candidate] {
+				t.Fatalf("budget %d candidate[%d]=%+v want fresh %+v", budget, candidate, resumed[candidate], fresh[candidate])
+			}
 		}
 	}
 }
