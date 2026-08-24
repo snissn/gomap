@@ -2497,7 +2497,7 @@ func (idx *VectorIndex) recordSourceDocumentStateAndPublishIfChanged(generation 
 	idx.mu.Lock()
 	view := idx.searchView.Load()
 	publish := !idx.sourceDocumentRootsValid || idx.sourceDocumentGeneration != generation ||
-		view == nil || view.mutationSeq != idx.mutationSeq
+		view == nil || view.sourceDocumentGeneration != generation || view.mutationSeq != idx.mutationSeq
 	idx.recordSourceDocumentStateLocked(generation, state)
 	if publish {
 		idx.publishSearchViewLocked(false)
@@ -2566,7 +2566,8 @@ func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentState(state backe
 	idx.mu.RLock()
 	view := idx.searchView.Load()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentStateValid && idx.sourceDocumentState == state &&
-		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+		view != nil && view.sourceDocumentRootsValid && view.sourceDocumentGeneration == idx.sourceDocumentGeneration &&
+		view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers
 }
@@ -2578,7 +2579,8 @@ func (idx *VectorIndex) publishedSearchViewCoversSourceDocumentGeneration(genera
 	idx.mu.RLock()
 	view := idx.searchView.Load()
 	covers := idx.sourceDocumentRootsValid && idx.sourceDocumentGeneration == generation &&
-		view != nil && view.sourceDocumentRootsValid && view.mutationSeq == idx.mutationSeq
+		view != nil && view.sourceDocumentRootsValid && view.sourceDocumentGeneration == generation &&
+		view.mutationSeq == idx.mutationSeq
 	idx.mu.RUnlock()
 	return covers
 }
@@ -2882,7 +2884,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		idx.mu.RUnlock()
 		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
 		defer releaseCollectionSearchVectorIndexResponseBuffer(buffer)
-		candidates, _, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, buffer)
+		candidates, searchState, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, buffer)
 		if searchErr != nil {
 			return nil, trace, searchErr
 		}
@@ -2892,7 +2894,15 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		trace.CandidatesExamined = len(candidateIDs)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
-		results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+		if !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
+			trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+		} else {
+			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+			if err == nil && !idx.nativeSearchStateCoversCurrentDocuments(searchState) {
+				results = nil
+				trace.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
+			}
+		}
 	} else {
 		if idx.nativePersistent && !idx.sourceDocumentRootsValid {
 			idx.mu.RUnlock()
@@ -2928,19 +2938,24 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	if err != nil {
 		return nil, trace, err
 	}
+	if trace.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot && opts.DisableExactFallback {
+		return nil, trace, fmt.Errorf("%w: vector index %q document generation changed during rerank", ErrVectorIndexSearchUnavailable, idx.name)
+	}
 	idx.liveDeltaEnabled.Store(true)
 	sortVectorSearchResults(results)
 	if len(results) > opts.TopK {
 		results = results[:opts.TopK]
 	}
 	trace.ReturnedCount = len(results)
-	if len(results) < opts.TopK && !opts.DisableExactFallback {
+	if (trace.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot || len(results) < opts.TopK) && !opts.DisableExactFallback {
 		if opts.IndexRangeFilter != nil {
 			trace.Strategy = "ann_postfilter_exact_fallback"
 		} else {
 			trace.Strategy = "ann_graph_exact_fallback"
 		}
-		trace.ExactFallbackReason = "underfilled_results"
+		if trace.ExactFallbackReason == "" {
+			trace.ExactFallbackReason = "underfilled_results"
+		}
 		exact, err := idx.collection.SearchVectorsExact(query, VectorSearchOptions{
 			Field:            idx.field,
 			Metric:           idx.metric,
@@ -3087,9 +3102,11 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 	}
 	deletedDocs := len(idx.nodes) - len(idx.currentNode)
 	return buffer.results, vectorIndexNativeSearchState{
-		liveDocs:      len(idx.currentNode),
-		rebuildNeeded: deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
-		fullRebuilds:  idx.liveANNFullRebuilds,
+		liveDocs:                 len(idx.currentNode),
+		rebuildNeeded:            deletedDocs > 0 && float64(deletedDocs)/float64(len(idx.nodes)) >= idx.rebuildDeletedRatio,
+		fullRebuilds:             idx.liveANNFullRebuilds,
+		mutationSeq:              idx.mutationSeq,
+		sourceDocumentGeneration: idx.sourceDocumentGeneration,
 	}, nil
 }
 

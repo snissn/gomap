@@ -45,6 +45,7 @@ type vectorIndexSearchView struct {
 	persisted                atomic.Pointer[vectorIndexSearchPersistedMetadata]
 	fullRebuilds             uint64
 	mutationSeq              uint64
+	sourceDocumentGeneration uint64
 }
 
 type vectorIndexSearchPersistedMetadata struct {
@@ -53,9 +54,11 @@ type vectorIndexSearchPersistedMetadata struct {
 }
 
 type vectorIndexNativeSearchState struct {
-	liveDocs      int
-	rebuildNeeded bool
-	fullRebuilds  uint64
+	liveDocs                 int
+	rebuildNeeded            bool
+	fullRebuilds             uint64
+	mutationSeq              uint64
+	sourceDocumentGeneration uint64
 }
 
 func (idx *VectorIndex) publishSearchView() {
@@ -128,6 +131,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
 	next.fullRebuilds = idx.liveANNFullRebuilds
 	next.mutationSeq = idx.mutationSeq
+	next.sourceDocumentGeneration = idx.sourceDocumentGeneration
 	next.mu.Unlock()
 	idx.searchView.Store(next)
 	if previous != nil {
@@ -259,10 +263,23 @@ func (view *vectorIndexSearchView) nativeSearchState() vectorIndexNativeSearchSt
 	nodes := len(view.nodes) + len(view.deltaNodes)
 	deletedDocs := nodes - view.liveDocs
 	return vectorIndexNativeSearchState{
-		liveDocs:      view.liveDocs,
-		rebuildNeeded: deletedDocs > 0 && nodes > 0 && float64(deletedDocs)/float64(nodes) >= view.rebuildDeletedRatio,
-		fullRebuilds:  view.fullRebuilds,
+		liveDocs:                 view.liveDocs,
+		rebuildNeeded:            deletedDocs > 0 && nodes > 0 && float64(deletedDocs)/float64(nodes) >= view.rebuildDeletedRatio,
+		fullRebuilds:             view.fullRebuilds,
+		mutationSeq:              view.mutationSeq,
+		sourceDocumentGeneration: view.sourceDocumentGeneration,
 	}
+}
+
+func (idx *VectorIndex) nativeSearchStateCoversCurrentDocuments(state vectorIndexNativeSearchState) bool {
+	if idx == nil || idx.collection == nil || idx.collection.nativeVectorIndexMutationActive() {
+		return false
+	}
+	idx.mu.RLock()
+	covers := idx.sourceDocumentRootsValid && idx.mutationSeq == state.mutationSeq &&
+		idx.sourceDocumentGeneration == state.sourceDocumentGeneration
+	idx.mu.RUnlock()
+	return covers
 }
 
 func (c *Collection) nativeVectorIndexMutationActive() bool {
