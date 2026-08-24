@@ -1269,12 +1269,6 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				queryStart := time.Now()
 				result, err := call(query)
 				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes}
-				if result.Counters == nil {
-					result.Counters = map[string]float64{}
-				}
-				crossTenant, crossWorkspace := applicationScopeViolations(fixture, cell.Filter, result.IDs)
-				result.Counters["cross_tenant_results"] += float64(crossTenant)
-				result.Counters["cross_workspace_results"] += float64(crossWorkspace)
 				if err != nil {
 					sample.Error = err.Error()
 				}
@@ -1474,6 +1468,10 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		result, err := call(query)
 		if err != nil {
 			return total, err
+		}
+		crossTenant, crossWorkspace := applicationScopeViolations(fixture, filter, result.IDs)
+		if crossTenant != 0 || crossWorkspace != 0 {
+			return total, fmt.Errorf("quality query %s filter=%s leaked tenant/workspace results=%d/%d", query.ID, filter, crossTenant, crossWorkspace)
 		}
 		if len(result.IDs) < topK {
 			return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d", query.ID, len(result.IDs), topK)
