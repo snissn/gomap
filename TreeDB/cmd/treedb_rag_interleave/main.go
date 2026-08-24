@@ -20,7 +20,10 @@ import (
 	"time"
 )
 
-const expectedCellCount = 384
+const (
+	expectedCellCount               = 384
+	expectedWorkerEnvironmentPolicy = "fresh_per_cell"
+)
 
 var legOrder = [4]string{"A1", "B1", "B2", "A2"}
 
@@ -37,10 +40,11 @@ type legConfig struct {
 }
 
 type workerReady struct {
-	Ready           bool   `json:"ready"`
-	CellCount       int    `json:"cell_count"`
-	ProductBaseSHA  string `json:"product_base_sha"`
-	HarnessRevision string `json:"harness_revision"`
+	Ready             bool   `json:"ready"`
+	CellCount         int    `json:"cell_count"`
+	ProductBaseSHA    string `json:"product_base_sha"`
+	HarnessRevision   string `json:"harness_revision"`
+	EnvironmentPolicy string `json:"environment_policy"`
 }
 
 type workerRequest struct {
@@ -75,15 +79,16 @@ type namedResponse struct {
 }
 
 type workerEvidence struct {
-	Leg             string    `json:"leg"`
-	Variant         string    `json:"variant"`
-	Command         []string  `json:"command"`
-	BinarySHA256    string    `json:"binary_sha256"`
-	ProductBaseSHA  string    `json:"product_base_sha"`
-	HarnessRevision string    `json:"harness_revision"`
-	StartedAt       time.Time `json:"started_at"`
-	ReadyAt         time.Time `json:"ready_at"`
-	FinishedAt      time.Time `json:"finished_at"`
+	Leg               string    `json:"leg"`
+	Variant           string    `json:"variant"`
+	Command           []string  `json:"command"`
+	BinarySHA256      string    `json:"binary_sha256"`
+	ProductBaseSHA    string    `json:"product_base_sha"`
+	HarnessRevision   string    `json:"harness_revision"`
+	EnvironmentPolicy string    `json:"environment_policy"`
+	StartedAt         time.Time `json:"started_at"`
+	ReadyAt           time.Time `json:"ready_at"`
+	FinishedAt        time.Time `json:"finished_at"`
 }
 
 type legRow struct {
@@ -292,14 +297,14 @@ func runCoordinator(cfg config) error {
 			result := namedResponse{Leg: name, Response: response}
 			if err := validateResponse(ordinal, result); err != nil {
 				stopWorkers(workers)
-				return err
+				return fmt.Errorf("cell %d: %w", ordinal, err)
 			}
 			named = append(named, result)
 			rows = append(rows, legRow{Leg: name, StartedAt: requestStarted, FinishedAt: requestFinished, Row: response.Row})
 		}
 		if err := validateResponses(ordinal, named); err != nil {
 			stopWorkers(workers)
-			return err
+			return fmt.Errorf("cell %d: %w", ordinal, err)
 		}
 		cells = append(cells, cellEvidence{Ordinal: ordinal, Order: append([]string(nil), order[:]...), Legs: rows})
 	}
@@ -374,6 +379,10 @@ func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash str
 	if ready.HarnessRevision != cfg.HarnessRevision {
 		return worker, fmt.Errorf("harness_revision %q, want %q", ready.HarnessRevision, cfg.HarnessRevision)
 	}
+	if ready.EnvironmentPolicy != expectedWorkerEnvironmentPolicy {
+		return worker, fmt.Errorf("environment_policy %q, want %q", ready.EnvironmentPolicy, expectedWorkerEnvironmentPolicy)
+	}
+	worker.evidence.EnvironmentPolicy = ready.EnvironmentPolicy
 	return worker, nil
 }
 
