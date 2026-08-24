@@ -21,6 +21,7 @@ func main() {
 		hostNote   = flag.String("host-note", "", "free-form host note recorded in provenance")
 		smoke      = flag.Bool("smoke", false, "run a bounded diagnostic that cannot claim final p99/QPS evidence")
 		dumpInputs = flag.String("dump-semantic-inputs", "", "write the exact semantic generation input manifest and exit")
+		cellWorker = flag.Bool("cell-worker", false, "serve long-lived JSON-line cell requests for per-cell interleaving")
 	)
 	flag.Parse()
 	if *dumpInputs != "" {
@@ -43,6 +44,13 @@ func main() {
 		cfg.Repetitions = 1
 		cfg.SamplesPerRep = 9
 		cfg.IngestionReps = 1
+	}
+	if *cellWorker {
+		if err := runApplicationCellWorker(cfg, os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: cell worker: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	report, err := runApplicationBaseline(cfg)
 	if err != nil {
