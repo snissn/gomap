@@ -104,21 +104,34 @@ That internal guardrail remains finite and fail-closed: if postings or unique
 candidate work exceeds the implementation's safe budget, the query returns an
 unavailable/unsupported diagnostic rather than a partial ranking or primary scan.
 
-Scalar filters likewise build finite indexed allow-sets. The default scalar
-lookup budget is large enough for the 10k guarded rare-tenant shapes, while truly
-broad filters that exceed the bound still fail closed with
-`scalar_filter_unbounded`. v2 text search consumes scalar allow-sets during
-posting-block scans so scalar-filtered candidate generation can score only
-allowed documents while preserving the single-snapshot, zero-document-fetch
-contract. Vector candidate generation consumes selective bounded allow-sets on a
-no-document exact score route only when both the allow-set cardinality is no
-larger than the configured vector candidate budget and the vector index row count
-is within the implementation's exact allow-set scan budget. Broader allow-sets or
-larger vector indexes stay on the existing global vector candidate route plus
-bounded ID filtering rather than fetching documents. In that fallback route,
-scalar-allowed vector hits outside the global vector candidate budget may be
-omitted; callers that need stricter scalar-filtered vector recall must choose a
-larger vector candidate budget or wait for an ID-to-vector-ordinal lookup route.
+Scalar filters build finite indexed allow-sets. `HybridScalarFilter` preserves
+the original one-leaf `{IndexName, Value|Range}` shape and adds one flat ordered
+`And` of 2..16 equality or one/two-sided range leaves. Nested conjunctions and
+`OR`, `NOT`, `!=`, or membership are unsupported. The document service may
+accept nested `AND` in its filter AST, but flattens it, merges same-field bounds,
+and emits one collection leaf per declared scalar index in first-appearance
+order.
+
+Every leaf uses the existing bounded scalar lookup limit. The executor resolves
+all leaves, including those following an empty set, so a missing/corrupt/stale
+index or truncation can never be hidden by an earlier empty predicate. Aggregate
+retained input is bounded by `lookup_limit * lookup_count`; complete sets are
+stable-sorted by cardinality and intersected smallest-first. Any incomplete
+lookup or snapshot/root change fails closed with no candidates. A complete empty
+intersection succeeds before text/vector work.
+
+v2 text search consumes the final allow-set during posting-block scans so
+scalar-filtered candidate generation can score only allowed documents while
+preserving the single-snapshot, zero-document-fetch contract. Vector candidate
+generation consumes selective bounded allow-sets on a no-document exact score
+route only when both the allow-set cardinality is no larger than the configured
+vector candidate budget and the vector index row count is within the
+implementation's exact allow-set scan budget. Broader allow-sets or larger
+vector indexes stay on the existing global vector candidate route plus bounded
+ID filtering rather than fetching documents. In that route, scalar-allowed
+vector hits outside the global vector candidate budget may be omitted; callers
+that need stricter scalar-filtered vector recall must choose a larger vector
+candidate budget or wait for an ID-to-vector-ordinal lookup route.
 
 ## Candidate and result shape
 
@@ -221,10 +234,15 @@ appears in both sources has one final result with two source contributions.
 - `union_fusion`: run text and vector candidate generation independently under
   budgets, fuse the union, then apply scalar filtering/final fetch bounds.
 
-The planner records the actual chosen strategy in `HybridSearchPlan` and uses
-`HybridSearchStats` counters such as `scalar_prefilter_ids`,
-`scalar_postfilter_checks`, `scalar_filter_matched`, and
-`scalar_filter_rejected`. When a selective allow-set is pushed into the vector
+The planner records the actual chosen strategy plus
+`scalar_filter_lookup_count`, `scalar_filter_lookup_limit`, and
+`scalar_filter_aggregate_limit` in `HybridSearchPlan`. `HybridSearchStats`
+reports `scalar_filter_lookups`, `scalar_filter_input_ids`,
+`scalar_filter_intersection_steps`, and `scalar_filter_final_ids` in addition to
+the compatible `scalar_prefilter_ids`, `scalar_postfilter_checks`,
+`scalar_filter_matched`, and `scalar_filter_rejected` counters. A one-leaf
+request reports one lookup, zero intersection steps, and unchanged existing
+counter semantics. When a selective allow-set is pushed into the vector
 candidate adapter, `scalar_filter_rejected` also includes vector rows pruned
 before vector scoring; matched/check counters for returned candidates are still
 recorded once by the executor's bounded ID filter. No primary-document predicate
@@ -261,7 +279,9 @@ counter families:
   `text_postings_scanned`, `text_candidates_scored`;
 - vector: `vector_candidates_requested`, `vector_candidates_returned`,
   `vector_candidates_examined`, `vector_edges_visited`;
-- scalar: `scalar_prefilter_ids`, `scalar_postfilter_checks`,
+- scalar: `scalar_filter_lookups`, `scalar_filter_input_ids`,
+  `scalar_filter_intersection_steps`, `scalar_filter_final_ids`,
+  `scalar_prefilter_ids`, `scalar_postfilter_checks`,
   `scalar_filter_matched`, `scalar_filter_rejected`;
 - fusion/finalization: `candidates_fused`, `candidates_after_fusion`,
   `fusion_text_only`, `fusion_vector_only`, `fusion_both`,
@@ -343,17 +363,23 @@ fetching documents, or consulting text/vector indexes.
 
 Issue `#2505` owns the executor that binds scalar filtering, source candidate APIs,
 fusion, and bounded final document fetch under the snapshot/epoch contract. The
-initial executor uses the #2503 text/vector candidate adapters, #2504 RRF fusion,
+executor uses the #2503 text/vector candidate adapters, #2504 RRF fusion,
 secondary-index-only scalar filtering, and final document materialization only
 after fusion/filter/top-k selection. Scalar equality uses
 `FindByIndexValueLimit`; scalar ranges use `FindByIndexRange` with an explicit
-executor limit derived from the final top-k and source candidate budgets. If the
-scalar lookup truncates before the executor can build a complete allow-set, the
-query fails closed with `scalar_filter_unbounded`. In this initial executor,
+executor limit derived from the final top-k and source candidate budgets. Issue
+`#4292` extends this path to a flat bounded conjunction: all leaves resolve
+completely under unchanged root/commit identity, finite sets intersect
+smallest-first, and the final allow-set enters the existing text/vector/fusion
+paths. If any scalar lookup truncates, the query fails closed with
+`scalar_filter_unbounded`; missing/corrupt indexes retain the typed unavailable
+error and snapshot changes report `snapshot_mismatch`.
+
 `prefilter`, `text_first`, `vector_first`, and `union_fusion` are bounded
 planning/reporting labels unless a source API can accept an ID restriction; the
 executor still builds the scalar allow-set before source generation and applies
-it before fusion for non-`postfilter` strategies. `bound_snapshot` remains
-reserved for a future explicit read-view/searcher API; the current executor
-supports `current_snapshot` and fails closed on root/commit changes observed
-between bounded phases.
+it before fusion for non-`postfilter` strategies. Empty allow-sets short-circuit
+all strategies, including `postfilter`. `bound_snapshot` remains reserved for a
+future explicit read-view/searcher API; the current executor supports
+`current_snapshot` and fails closed on root/commit changes observed between
+bounded phases.

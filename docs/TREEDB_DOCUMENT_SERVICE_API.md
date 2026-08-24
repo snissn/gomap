@@ -511,8 +511,11 @@ typed `unsupported` rather than ignored, because the filtered route currently
 cannot propagate that guardrail. Other guardrail or scalar allow-set truncation
 fails closed with `index_unavailable`; no incomplete ranking is returned.
 `filter` is supported only for fields declared in `scalar_fields` at index
-creation. Undeclared fields return `invalid_request`, and unrepresentable
-operator/boolean shapes return `unsupported`.
+creation. Keyword/hybrid accepts equality and one/two-sided range leaves, either
+alone or joined by nested `AND`; same-field bounds are merged and different
+fields are intersected through their declared indexes. Undeclared fields return
+`invalid_request`. `OR`, `NOT`, `!=`, membership, and other unrepresentable
+shapes return `unsupported`.
 
 Response (abridged; the actual payload also includes the top-level `index`
 object shown in the index metadata section):
@@ -570,7 +573,15 @@ Request:
   "text_candidate_limit": 100,
   "vector_candidate_limit": 100,
   "ef_search": 64,
-  "filter": {"field": "meta.repo", "operator": "==", "value": "snissn/gomap"},
+  "max_chunks_per_parent": 2,
+  "filter": {
+    "operator": "AND",
+    "conditions": [
+      {"field": "meta.tenant_id", "operator": "==", "value": "acme"},
+      {"field": "meta.workspace_id", "operator": "==", "value": "support"},
+      {"field": "meta.created_at", "operator": ">=", "value": 1767225600}
+    ]
+  },
   "fusion": {
     "method": "rrf",
     "rrf_k": 60,
@@ -586,10 +597,29 @@ At least one of `query` or `query_embedding` is required. Supplying only `query`
 runs TreeDB text-only hybrid execution; supplying only `query_embedding` runs the
 collection vector source; supplying both uses deterministic reciprocal-rank
 fusion. `candidate_limit` is a shared default for omitted source-specific limits.
-`filter` is supported for fields declared in `scalar_fields`; undeclared fields
-return `invalid_request`, while an unrepresentable boolean/operator/field shape
-returns `unsupported`. A declared scalar allow-set that exceeds its lookup bound
-returns `index_unavailable` with `scalar_filter_unbounded` and no partial results.
+`max_chunks_per_parent` is disabled when omitted or zero and must otherwise be
+positive. When enabled, the executor walks the already-bounded fused order,
+keeps at most that many canonical `<parentID>#<ordinal>` built-in chunk IDs per
+parent, and only then fetches the final documents. It does not fetch before
+collapse, increase source candidate budgets, or scan for replacement results.
+An ID is a chunk only when it parses and round-trips exactly through the
+built-in child-ID constructor. IDs that are malformed, have extra separators,
+or use non-canonical ordinals such as `parent#01` are independent documents.
+Their literal IDs are never used as parent keys, so they cannot alias a valid
+chunk parent.
+
+`filter` uses the same bounded keyword/hybrid grammar: equality and one/two-sided
+range leaves over declared `scalar_fields`, joined only by `AND`. The service
+groups same-field bounds in first-appearance order, resolves every field through
+its scalar index, and intersects the complete finite ID sets before text/vector
+work. Every lookup uses the same per-lookup bound; at most 16 field groups are
+accepted and aggregate retained input is bounded by `lookup_limit * lookup_count`.
+An empty intersection succeeds without source work. An undeclared field returns
+`invalid_request`; `OR`, `NOT`, `!=`, membership, nested non-AND shapes, and
+malformed leaves return `unsupported`. A missing/corrupt index, snapshot change,
+or any truncated lookup fails closed with no partial candidates, ranking, final
+fetch, or primary-document scan. Truncation returns `index_unavailable` with
+`scalar_filter_unbounded`.
 
 Response (abridged; the actual payload also includes the top-level `index`
 object shown in the index metadata section):
@@ -621,23 +651,43 @@ object shown in the index metadata section):
   ],
   "plan": {
     "scalar_filter_strategy": "union_fusion",
+    "scalar_filter_lookup_count": 3,
+    "scalar_filter_lookup_limit": 4096,
+    "scalar_filter_aggregate_limit": 12288,
     "fusion_method": "rrf",
     "fusion_tie_policy": "fused_score_best_rank_source_order_id",
     "text_candidate_limit": 100,
     "vector_candidate_limit": 100,
+    "max_chunks_per_parent": 2,
     "final_top_k": 10
   },
   "stats": {
+    "scalar_filter_lookups": 3,
+    "scalar_filter_input_ids": 640,
+    "scalar_filter_intersection_steps": 2,
+    "scalar_filter_final_ids": 12,
     "text_candidates_requested": 100,
     "text_candidates_returned": 10,
     "vector_candidates_requested": 100,
     "vector_candidates_returned": 10,
     "candidates_fused": 20,
     "fusion_both": 1,
+    "collapse_rejections": 4,
+    "collapse_exhaustions": 0,
     "documents_fetched": 10
   }
 }
 ```
+
+Collapse preserves fused order, fused scores, text/vector source attribution,
+filter scope, and snapshot identity. `collapse_rejections` counts higher-ranked
+candidates skipped because their valid parent reached the cap.
+`collapse_exhaustions` is `1` when the bounded fused candidates are exhausted
+before `top_k` eligible results can be produced, otherwise `0`; exhaustion may
+therefore return fewer documents than `top_k`. `truncated` continues to count
+fused candidates omitted by the final bound, including cap rejections. With
+collapse disabled, both collapse counters are zero and IDs, scores, and source
+contributions retain their prior behavior.
 
 Missing/stale/unavailable text or vector indexes, text postings/candidate budget
 exhaustion, corrupt index state, and bounded document-fetch failures return a

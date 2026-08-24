@@ -453,12 +453,18 @@ var ragCounterKeys = []struct {
 	{"vector_candidates_examined", func(s collections.HybridSearchStats) uint64 { return s.VectorCandidatesExamined }},
 	{"scalar_prefilter_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarPrefilterIDs }},
 	{"scalar_filter_matched", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterMatched }},
+	{"scalar_filter_lookups", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterLookups }},
+	{"scalar_filter_input_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterInputIDs }},
+	{"scalar_filter_intersection_steps", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterIntersectionSteps }},
+	{"scalar_filter_final_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterFinalIDs }},
 	{"candidates_fused", func(s collections.HybridSearchStats) uint64 { return s.CandidatesFused }},
 	{"candidates_after_fusion", func(s collections.HybridSearchStats) uint64 { return s.CandidatesAfterFusion }},
 	{"fusion_text_only", func(s collections.HybridSearchStats) uint64 { return s.FusionTextOnly }},
 	{"fusion_vector_only", func(s collections.HybridSearchStats) uint64 { return s.FusionVectorOnly }},
 	{"fusion_both", func(s collections.HybridSearchStats) uint64 { return s.FusionBoth }},
 	{"truncated", func(s collections.HybridSearchStats) uint64 { return s.Truncated }},
+	{"collapse_rejections", func(s collections.HybridSearchStats) uint64 { return s.CollapseRejections }},
+	{"collapse_exhaustions", func(s collections.HybridSearchStats) uint64 { return s.CollapseExhaustions }},
 }
 
 func accumulateCounters(dst map[string]float64, s collections.HybridSearchStats) {

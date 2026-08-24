@@ -13,24 +13,30 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 	if len(rows) != want {
 		t.Fatalf("matrix rows=%d want %d", len(rows), want)
 	}
-	seenSupported, seenMetadata, seenFilter, seenCollapse, seenHTTPScore := false, false, false, false, false
+	seenSupported, seenTenantFilter, seenMultiFilter, seenCollapseSupported, seenHTTPVectorGap, seenHTTPScore := false, false, false, false, false, false
 	for _, row := range rows {
 		capability := unsupportedCapability(row)
 		if capability == nil {
 			seenSupported = true
+			seenTenantFilter = seenTenantFilter || row.Filter == filterTenantAlpha
+			seenMultiFilter = seenMultiFilter || row.Filter == filterModerateRange
+			seenCollapseSupported = seenCollapseSupported || row.Collapse == "enabled_cap_2"
 			continue
 		}
 		if strings.Contains(capability.Code, "source_metadata_not_propagated") {
-			seenMetadata = true
+			t.Fatalf("metadata capability remains unsupported after propagation: %+v", row)
 		}
-		if row.Filter == filterTenantAlphaWorkspaceRed || row.Filter == filterModerateRange {
-			seenFilter = seenFilter || strings.Contains(capability.Code, "multi_field_filter_unavailable")
+		if strings.Contains(capability.Code, "multi_field_filter_unavailable") {
+			t.Fatalf("multi-field filter remains unsupported: %+v", row)
 		}
-		seenCollapse = seenCollapse || strings.Contains(capability.Code, "parent_collapse_unavailable")
+		if strings.Contains(capability.Code, "parent_collapse_unavailable") && !strings.Contains(capability.Code, "http_vector_parent_collapse_unavailable") {
+			t.Fatalf("general parent collapse remains unsupported: %+v", row)
+		}
+		seenHTTPVectorGap = seenHTTPVectorGap || strings.Contains(capability.Code, "http_vector_parent_collapse_unavailable")
 		seenHTTPScore = seenHTTPScore || strings.Contains(capability.Code, "http_score_only_route_unavailable")
 	}
-	if !seenSupported || !seenMetadata || !seenFilter || !seenCollapse || !seenHTTPScore {
-		t.Fatalf("matrix capability coverage supported=%t metadata=%t filter=%t collapse=%t http_score=%t", seenSupported, seenMetadata, seenFilter, seenCollapse, seenHTTPScore)
+	if !seenSupported || !seenTenantFilter || !seenMultiFilter || !seenCollapseSupported || !seenHTTPVectorGap || !seenHTTPScore {
+		t.Fatalf("matrix capability coverage supported=%t tenant_filter=%t multi_filter=%t collapse_supported=%t http_vector_gap=%t http_score=%t", seenSupported, seenTenantFilter, seenMultiFilter, seenCollapseSupported, seenHTTPVectorGap, seenHTTPScore)
 	}
 }
 
@@ -106,6 +112,43 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 	}
 	if _, _, _, err := writeApplicationArtifacts(&bad, filepath.Join(t.TempDir(), "bad-artifacts")); err == nil {
 		t.Fatal("artifact writer accepted cold_reopen_parity=false")
+	}
+}
+
+func TestApplicationTenantFilterRequestsAndLeakageAccounting(t *testing.T) {
+	cell := applicationCellIdentity{Filter: filterTenantAlpha}
+	direct := applicationDirectScalarFilter(cell)
+	if direct == nil || direct.IndexName != "meta_tenant_id" || direct.Value != "alpha" {
+		t.Fatalf("direct tenant filter=%+v", direct)
+	}
+	service := applicationServiceFilter(cell)
+	if service == nil || service.Field != "meta.tenant_id" || service.Operator != "==" || service.Value != "alpha" {
+		t.Fatalf("service tenant filter=%+v", service)
+	}
+	fixture := &applicationFixture{Sources: []applicationSource{
+		{ID: "alpha", Tenant: "alpha", Workspace: "red"},
+		{ID: "beta", Tenant: "beta", Workspace: "blue"},
+	}}
+	tenant, workspace, year := applicationScopeViolations(fixture, filterTenantAlpha, []string{"alpha#0", "beta#0", "unknown#0"})
+	if tenant != 2 || workspace != 1 || year != 1 {
+		t.Fatalf("tenant/workspace/range violations=%d/%d/%d want 2/1/1", tenant, workspace, year)
+	}
+	multi := applicationDirectScalarFilter(applicationCellIdentity{Filter: filterModerateRange})
+	if multi == nil || len(multi.And) != 3 || multi.And[2].Range == nil {
+		t.Fatalf("direct multi-field filter=%+v", multi)
+	}
+	serviceMulti := applicationServiceFilter(applicationCellIdentity{Filter: filterModerateRange})
+	if serviceMulti == nil || serviceMulti.Operator != "AND" || len(serviceMulti.Conditions) != 3 {
+		t.Fatalf("service multi-field filter=%+v", serviceMulti)
+	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterUnfiltered}); got != "declared_column_graph_ann" {
+		t.Fatalf("unfiltered HTTP vector route=%q", got)
+	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterTenantAlpha}); got != "declared_column_graph_exact" {
+		t.Fatalf("filtered HTTP vector route=%q", got)
+	}
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "direct_collection", Filter: filterUnfiltered}); got != "declared_column_graph_exact" {
+		t.Fatalf("direct vector route=%q", got)
 	}
 }
 

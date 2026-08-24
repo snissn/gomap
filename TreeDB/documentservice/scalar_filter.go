@@ -171,79 +171,85 @@ func (s scalarSchema) lookup(field string) (normalizedScalarField, bool) {
 	return resolved, ok
 }
 
-// translateScalarFilter compiles the service filter AST into the single bounded
-// collection scalar predicate the hybrid executor can serve from a secondary
-// index. Anything outside that vocabulary fails closed with typed errors
-// instead of degrading into scans or partial results.
+// translateScalarFilter compiles the service filter AST into either one bounded
+// collection scalar predicate or one flat, ordered conjunction. Same-field
+// leaves are merged first so equality plus one/two-sided ranges retain the
+// existing single-lookup path.
 //
 // Supported shapes:
 //   - leaf equality/range on one declared scalar field;
-//   - AND whose conditions all resolve to that same single field (merged into
-//     one equality or range predicate).
+//   - nested AND nodes containing only those leaves.
 //
-// OR, NOT, !=, in/not in, multi-field AND, and undeclared fields return typed
-// errors and never fall back to document scans.
+// Field groups retain first-appearance order. OR, NOT, !=, in/not in, and
+// undeclared fields return typed errors and never fall back to document scans.
 func translateScalarFilter(filter *Filter, schema scalarSchema) (*collections.HybridScalarFilter, error) {
 	if filter == nil {
 		return nil, nil
 	}
-	op, err := normalizeFilterOperator(filter.Operator)
-	if err != nil {
+	var predicates []compiledScalarPredicate
+	if err := appendScalarPredicates(&predicates, filter, schema); err != nil {
 		return nil, err
 	}
-	switch op {
-	case filterOpAND:
-		var merged *collections.HybridScalarFilter
-		var mergedField string
-		for i := range filter.Conditions {
-			child, childField, err := translateScalarLeafOrConjunction(&filter.Conditions[i], schema)
-			if err != nil {
-				return nil, err
-			}
-			if merged == nil {
-				merged, mergedField = child, childField
-				continue
-			}
-			combined, err := mergeScalarPredicates(merged, mergedField, child, childField)
-			if err != nil {
-				return nil, err
-			}
-			merged = combined
-		}
-		return merged, nil
-	default:
-		predicate, _, err := translateScalarLeafOrConjunction(filter, schema)
-		return predicate, err
+	if len(predicates) == 0 {
+		return nil, serviceError(CodeUnsupported, "empty scalar conjunction is unsupported")
 	}
+
+	grouped := make([]compiledScalarPredicate, 0, len(predicates))
+	groupByField := make(map[string]int, len(predicates))
+	for _, predicate := range predicates {
+		position, ok := groupByField[predicate.field]
+		if !ok {
+			groupByField[predicate.field] = len(grouped)
+			grouped = append(grouped, predicate)
+			continue
+		}
+		merged, err := mergeScalarPredicates(&grouped[position].filter, grouped[position].field, &predicate.filter, predicate.field)
+		if err != nil {
+			return nil, err
+		}
+		grouped[position].filter = *merged
+	}
+	if len(grouped) == 1 {
+		return &grouped[0].filter, nil
+	}
+	and := make([]collections.HybridScalarFilter, len(grouped))
+	for i := range grouped {
+		and[i] = grouped[i].filter
+	}
+	return &collections.HybridScalarFilter{And: and}, nil
 }
 
-// translateScalarLeafOrConjunction returns the compiled predicate plus the
-// canonical meta field it targets so AND nodes can verify single-field scope.
-func translateScalarLeafOrConjunction(filter *Filter, schema scalarSchema) (*collections.HybridScalarFilter, string, error) {
+type compiledScalarPredicate struct {
+	filter collections.HybridScalarFilter
+	field  string
+}
+
+func appendScalarPredicates(out *[]compiledScalarPredicate, filter *Filter, schema scalarSchema) error {
 	op, err := normalizeFilterOperator(filter.Operator)
 	if err != nil {
-		return nil, "", err
+		return err
 	}
-	switch op {
-	case filterOpAND:
-		var merged *collections.HybridScalarFilter
-		var mergedField string
-		for i := range filter.Conditions {
-			child, childField, err := translateScalarLeafOrConjunction(&filter.Conditions[i], schema)
-			if err != nil {
-				return nil, "", err
-			}
-			if merged == nil {
-				merged, mergedField = child, childField
-				continue
-			}
-			combined, err := mergeScalarPredicates(merged, mergedField, child, childField)
-			if err != nil {
-				return nil, "", err
-			}
-			merged = combined
+	if op == filterOpAND {
+		if len(filter.Conditions) == 0 {
+			return serviceError(CodeUnsupported, "empty scalar conjunction is unsupported")
 		}
-		return merged, mergedField, nil
+		for i := range filter.Conditions {
+			if err := appendScalarPredicates(out, &filter.Conditions[i], schema); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	predicate, field, err := translateScalarLeaf(filter, schema, op)
+	if err != nil {
+		return err
+	}
+	*out = append(*out, compiledScalarPredicate{filter: *predicate, field: field})
+	return nil
+}
+
+func translateScalarLeaf(filter *Filter, schema scalarSchema, op string) (*collections.HybridScalarFilter, string, error) {
+	switch op {
 	case filterOpEQ, filterOpGT, filterOpGTE, filterOpLT, filterOpLTE:
 		resolved, ok := schema.lookup(strings.TrimSpace(filter.Field))
 		if !ok {
@@ -272,13 +278,13 @@ func translateScalarLeafOrConjunction(filter *Filter, schema scalarSchema) (*col
 		}
 		return &collections.HybridScalarFilter{IndexName: resolved.indexName, Range: rangeOpts}, resolved.field, nil
 	default:
-		return nil, "", serviceError(CodeUnsupported, fmt.Sprintf("filter operator %q cannot be served as one bounded scalar allow-set; the service will not scan documents as a fallback", filter.Operator))
+		return nil, "", serviceError(CodeUnsupported, fmt.Sprintf("filter operator %q cannot be served by a bounded scalar conjunction; the service will not scan documents as a fallback", filter.Operator))
 	}
 }
 
 func mergeScalarPredicates(left *collections.HybridScalarFilter, leftField string, right *collections.HybridScalarFilter, rightField string) (*collections.HybridScalarFilter, error) {
 	if leftField != rightField || left.IndexName != right.IndexName {
-		return nil, serviceError(CodeUnsupported, "AND filters spanning multiple meta fields cannot be served as one bounded scalar allow-set; the service will not scan documents as a fallback")
+		return nil, serviceError(CodeUnsupported, "scalar predicates from different fields cannot be merged into one field group")
 	}
 	switch {
 	case left.Value != nil && right.Value != nil:

@@ -879,6 +879,9 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
 	}
+	if req.MaxChunksPerParent < 0 {
+		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "max_chunks_per_parent must be non-negative")
+	}
 	schema := newScalarSchema(info.ScalarFields)
 	if req.Filter != nil {
 		if err := req.Filter.Validate(); err != nil {
@@ -898,6 +901,7 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 
 	opts := collections.HybridSearchOptions{
 		TopK:                 req.TopK,
+		MaxChunksPerParent:   req.MaxChunksPerParent,
 		Fusion:               req.Fusion,
 		ScalarFilter:         scalarFilter,
 		IncludeDocuments:     true,

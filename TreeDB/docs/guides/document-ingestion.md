@@ -35,6 +35,18 @@ are checked before that source is changed, so chunk, provider, or output errors
 fail closed. A successful result contains one `Ingested` outcome per source,
 including deterministic child IDs (`<sourceID>#<ordinal>`).
 
+`SourceDocument.Meta` is encoded as the parent's top-level `meta` object, and
+the one shared chunk plan copies that exact object value into every generated
+child. It is a caller-safe snapshot: mutating the input map after
+`IngestSources` returns does not alter stored children. There is no metadata
+mapping or allowlist. Keys named `chunk_parent`, `chunk_ordinal`, or
+`chunk_kind` remain nested under `meta`; generated top-level linkage is always
+authoritative. Sources without metadata keep the prior child shape and omit
+`meta`. A non-encodable `Meta`, or a non-object `meta` supplied through
+`Fields`, fails whole-batch planning before mutation. Re-ingesting the source
+replaces inherited child metadata and its text/scalar/vector index state
+atomically, so old scalar values cannot survive on live children.
+
 ## Failure and retry behavior
 
 `*collections.IngestError` identifies the source ID, input index, and stage

@@ -146,9 +146,9 @@ type qualityMetrics struct {
 }
 
 type applicationIndexQuerySnapshot struct {
-	TextChildIDs    []string
-	VectorChildIDs  []string
-	ScalarParentIDs []string
+	TextChildIDs      []string
+	VectorChildIDs    []string
+	ScalarDocumentIDs []string
 }
 
 type applicationRow struct {
@@ -528,7 +528,9 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 				for _, collapse := range []string{"disabled", "enabled_cap_2"} {
 					for _, surface := range applicationSurfaces {
 						for _, clients := range applicationClients {
-							rows = append(rows, applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, VectorRoute: "declared_column_graph_ann", Clients: clients})
+							cell := applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, Clients: clients}
+							cell.VectorRoute = applicationVectorRoute(cell)
+							rows = append(rows, cell)
 						}
 					}
 				}
@@ -538,20 +540,30 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 	return rows
 }
 
+func applicationMaxChunksPerParent(cell applicationCellIdentity) int {
+	if cell.Collapse == "enabled_cap_2" {
+		return 2
+	}
+	return 0
+}
+func applicationVectorRoute(cell applicationCellIdentity) string {
+	if cell.Route == "text_only" {
+		return "none"
+	}
+	if cell.Surface == "http_service" && cell.Route == "vector_only" && cell.Filter == filterUnfiltered {
+		return "declared_column_graph_ann"
+	}
+	return "declared_column_graph_exact"
+}
+
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
 	issues := []int{}
 	codes := []string{}
-	if cell.Filter != filterUnfiltered {
-		issues = append(issues, 4290)
-		codes = append(codes, "source_metadata_not_propagated")
-		if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
-			issues = append(issues, 4292)
-			codes = append(codes, "multi_field_filter_unavailable")
-		}
+	if cell.Collapse != "disabled" && applicationMaxChunksPerParent(cell) == 0 {
+		codes = append(codes, "parent_collapse_shape_unavailable")
 	}
-	if cell.Collapse != "disabled" {
-		issues = append(issues, 4291)
-		codes = append(codes, "parent_collapse_unavailable")
+	if applicationMaxChunksPerParent(cell) > 0 && cell.Surface == "http_service" && cell.Route == "vector_only" {
+		codes = append(codes, "http_vector_parent_collapse_unavailable")
 	}
 	if cell.Surface == "http_service" && cell.Projection == "score_only" {
 		codes = append(codes, "http_score_only_route_unavailable")
@@ -672,7 +684,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 	lifecycle.ColdReopenParity = beforeDigest == afterDigest
 	lifecycle.TextIndexParity = equalStrings(beforeIndexes.TextChildIDs, afterIndexes.TextChildIDs)
 	lifecycle.VectorIndexParity = equalStrings(beforeIndexes.VectorChildIDs, afterIndexes.VectorChildIDs)
-	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarParentIDs, afterIndexes.ScalarParentIDs)
+	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarDocumentIDs, afterIndexes.ScalarDocumentIDs)
 	lifecycle.FinalSources = len(applicationSourceDocuments(fixture, true))
 	lifecycle.FinalChunks = len(childIDs)
 	if err := validateApplicationIndexQueryParity(beforeIndexes, afterIndexes, expectedIndexes); err != nil {
@@ -993,10 +1005,10 @@ func queryApplicationIndexes(col *collections.Collection, fixture *applicationFi
 			return snapshot, fmt.Errorf("scalar index query updated_year=%d: %w", year, err)
 		}
 		for _, id := range ids {
-			snapshot.ScalarParentIDs = append(snapshot.ScalarParentIDs, string(id))
+			snapshot.ScalarDocumentIDs = append(snapshot.ScalarDocumentIDs, string(id))
 		}
 	}
-	sort.Strings(snapshot.ScalarParentIDs)
+	sort.Strings(snapshot.ScalarDocumentIDs)
 	return snapshot, nil
 }
 
@@ -1006,13 +1018,14 @@ func expectedApplicationIndexQuerySnapshot(fixture *applicationFixture, childIDs
 	}
 	for i, id := range childIDs {
 		expected.TextChildIDs[i], expected.VectorChildIDs[i] = string(id), string(id)
+		expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, string(id))
 	}
 	for _, source := range fixture.Sources {
 		if !source.Deleted {
-			expected.ScalarParentIDs = append(expected.ScalarParentIDs, source.ID)
+			expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, source.ID)
 		}
 	}
-	sort.Strings(expected.ScalarParentIDs)
+	sort.Strings(expected.ScalarDocumentIDs)
 	return expected
 }
 
@@ -1020,7 +1033,7 @@ func validateApplicationIndexQueryParity(before, after, expected applicationInde
 	for name, values := range map[string][3][]string{
 		"text":   {before.TextChildIDs, after.TextChildIDs, expected.TextChildIDs},
 		"vector": {before.VectorChildIDs, after.VectorChildIDs, expected.VectorChildIDs},
-		"scalar": {before.ScalarParentIDs, after.ScalarParentIDs, expected.ScalarParentIDs},
+		"scalar": {before.ScalarDocumentIDs, after.ScalarDocumentIDs, expected.ScalarDocumentIDs},
 	} {
 		if !equalStrings(values[0], values[2]) {
 			return fmt.Errorf("%s index before reopen does not match fixture live set: got=%q want=%q", name, values[0], values[2])
@@ -1182,13 +1195,89 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 	for key, value := range row.Counters {
 		row.Counters[key] = value / float64(len(row.Samples))
 	}
-	guard := artifactGuard{Filter: cell.Filter, CrossTenantResults: int(row.Counters["cross_tenant_results"]), CrossWorkspaceResults: int(row.Counters["cross_workspace_results"]), DocumentsFetched: int(math.Ceil(row.Counters["documents_fetched"])), TopK: cfg.TopK, FullDocumentScanFallbacks: int(row.Counters["full_document_scan_fallbacks"]), CollapseEnabled: false}
+	row.Quality.CollapseRejections = int(math.Ceil(row.Counters["collapse_rejections"]))
+	row.Quality.CollapseExhaustions = int(math.Ceil(row.Counters["collapse_exhaustions"]))
+	collapseCap := applicationMaxChunksPerParent(cell)
+	guard := artifactGuard{Filter: cell.Filter, CrossTenantResults: int(row.Counters["cross_tenant_results"]), CrossWorkspaceResults: int(row.Counters["cross_workspace_results"]), DocumentsFetched: int(math.Ceil(row.Counters["documents_fetched"])), TopK: cfg.TopK, FullDocumentScanFallbacks: int(row.Counters["full_document_scan_fallbacks"]), CollapseEnabled: collapseCap > 0, ParentCap: collapseCap, PerParentCounts: map[string]int{"observed_max": row.Quality.MaxPerParentResults}}
 	if err := guard.validate(); err != nil {
 		return row, err
 	}
 	return row, nil
 }
 
+func applicationDirectScalarFilter(cell applicationCellIdentity) *collections.HybridScalarFilter {
+	tenant := collections.HybridScalarFilter{IndexName: "meta_tenant_id", Value: "alpha"}
+	if cell.Filter == filterTenantAlpha {
+		return &tenant
+	}
+	workspace := collections.HybridScalarFilter{IndexName: "meta_workspace_id", Value: "red"}
+	if cell.Filter == filterTenantAlphaWorkspaceRed {
+		return &collections.HybridScalarFilter{And: []collections.HybridScalarFilter{tenant, workspace}}
+	}
+	if cell.Filter == filterModerateRange {
+		year := collections.HybridScalarFilter{
+			IndexName: "meta_updated_year",
+			Range: &collections.IndexRangeOptions{
+				Lower: collections.IndexRangeBound{Value: int64(2024), Inclusive: true},
+				Upper: collections.IndexRangeBound{Unbounded: true},
+			},
+		}
+		return &collections.HybridScalarFilter{And: []collections.HybridScalarFilter{tenant, workspace, year}}
+	}
+	return nil
+}
+
+func applicationServiceFilter(cell applicationCellIdentity) *documentservice.Filter {
+	tenant := documentservice.Filter{Field: "meta.tenant_id", Operator: "==", Value: "alpha"}
+	if cell.Filter == filterTenantAlpha {
+		return &tenant
+	}
+	workspace := documentservice.Filter{Field: "meta.workspace_id", Operator: "==", Value: "red"}
+	if cell.Filter == filterTenantAlphaWorkspaceRed {
+		return &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{tenant, workspace}}
+	}
+	if cell.Filter == filterModerateRange {
+		year := documentservice.Filter{Field: "meta.updated_year", Operator: ">=", Value: 2024}
+		return &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{tenant, workspace, year}}
+	}
+	return nil
+}
+
+func applicationScopeViolations(fixture *applicationFixture, filter string, ids []string) (int, int, int) {
+	if filter == filterUnfiltered {
+		return 0, 0, 0
+	}
+	crossTenant, crossWorkspace, crossRange := 0, 0, 0
+	for _, id := range ids {
+		parentID := id
+		if parent, _, ok := chunking.ParseChildID(id); ok {
+			parentID = parent
+		}
+		var source *applicationSource
+		for i := range fixture.Sources {
+			if fixture.Sources[i].ID == parentID {
+				source = &fixture.Sources[i]
+				break
+			}
+		}
+		if source == nil {
+			crossTenant++
+			crossWorkspace++
+			crossRange++
+			continue
+		}
+		if source.Tenant != "alpha" {
+			crossTenant++
+		}
+		if (filter == filterTenantAlphaWorkspaceRed || filter == filterModerateRange) && source.Workspace != "red" {
+			crossWorkspace++
+		}
+		if filter == filterModerateRange && source.UpdatedYear < 2024 {
+			crossRange++
+		}
+	}
+	return crossTenant, crossWorkspace, crossRange
+}
 func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
 	if rep%2 == 1 {
@@ -1258,6 +1347,8 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 
 func runDirectQuery(cfg applicationConfig, col *collections.Collection, query applicationQuery, vector []float32, cell applicationCellIdentity, attributionQuery bool) (queryResult, error) {
 	opts := collections.HybridSearchOptions{TopK: cfg.TopK}
+	opts.MaxChunksPerParent = applicationMaxChunksPerParent(cell)
+	opts.ScalarFilter = applicationDirectScalarFilter(cell)
 	if cell.Route == "text_only" || cell.Route == "hybrid" {
 		opts.Text = &collections.HybridTextQuery{IndexName: "content", Query: query.Text, CandidateLimit: cfg.CandidateLimit}
 	}
@@ -1297,17 +1388,25 @@ func runDirectQuery(cfg applicationConfig, col *collections.Collection, query ap
 func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query applicationQuery, vector []float32, cell applicationCellIdentity) (queryResult, error) {
 	var path string
 	var request any
-	switch cell.Route {
-	case "text_only":
-		path = "/v1/indexes/" + applicationCollection + "/search/keyword"
-		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit}
-	case "vector_only":
+	filteredVectorEndpoint := cell.Route == "vector_only" && cell.Filter != filterUnfiltered
+	hybridEndpoint := cell.Route == "text_only" || cell.Route == "hybrid" || filteredVectorEndpoint
+	if hybridEndpoint {
+		hybrid := documentservice.HybridSearchRequest{
+			TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch,
+			MaxChunksPerParent: applicationMaxChunksPerParent(cell), Filter: applicationServiceFilter(cell),
+		}
+		if cell.Route == "text_only" || cell.Route == "hybrid" {
+			hybrid.Query = query.Text
+		}
+		if cell.Route == "vector_only" || cell.Route == "hybrid" {
+			hybrid.QueryEmbedding = vector
+		}
+		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
+		request = hybrid
+	} else if cell.Route == "vector_only" {
 		path = "/v1/indexes/" + applicationCollection + "/search/vector"
 		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteAnn}
-	case "hybrid":
-		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
-		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch}
-	default:
+	} else {
 		return queryResult{}, fmt.Errorf("unknown route %q", cell.Route)
 	}
 	raw, err := json.Marshal(request)
@@ -1332,32 +1431,7 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 	if resp.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("http status %d: %s", resp.StatusCode, payload)
 	}
-	switch cell.Route {
-	case "text_only":
-		var parsed documentservice.KeywordSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{true, false}
-		}
-		result.Counters["documents_fetched"] = float64(parsed.Stats.DocumentsFetched)
-		result.Counters["documents_missing"] = float64(parsed.Stats.DocumentsMissing)
-		result.Counters["full_document_scan_fallbacks"] = float64(parsed.Stats.FullDocumentScanFallbacks)
-		result.Counters["text_postings_scanned"] = float64(parsed.Stats.PostingsScanned)
-		result.Counters["text_candidates_scored"] = float64(parsed.Stats.CandidatesScored)
-	case "vector_only":
-		var parsed documentservice.DenseVectorSearchResponse
-		if err := json.Unmarshal(payload, &parsed); err != nil {
-			return result, err
-		}
-		for _, doc := range parsed.Documents {
-			result.IDs = append(result.IDs, doc.ID)
-			result.Sources[doc.ID] = [2]bool{false, true}
-		}
-		result.Counters["documents_fetched"] = float64(len(parsed.Documents))
-	case "hybrid":
+	if hybridEndpoint {
 		var parsed documentservice.HybridSearchResponse
 		if err := json.Unmarshal(payload, &parsed); err != nil {
 			return result, err
@@ -1371,7 +1445,17 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 			result.Sources[doc.ID] = attribution
 		}
 		accumulateCounters(result.Counters, parsed.Stats)
+		return result, nil
 	}
+	var parsed documentservice.DenseVectorSearchResponse
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return result, err
+	}
+	for _, doc := range parsed.Documents {
+		result.IDs = append(result.IDs, doc.ID)
+		result.Sources[doc.ID] = [2]bool{false, true}
+	}
+	result.Counters["documents_fetched"] = float64(len(parsed.Documents))
 	return result, nil
 }
 
@@ -1410,23 +1494,35 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		if err != nil {
 			return total, err
 		}
-		if len(result.IDs) < topK {
-			return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d", query.ID, len(result.IDs), topK)
+		crossTenant, crossWorkspace, crossRange := applicationScopeViolations(fixture, filter, result.IDs)
+		if crossTenant != 0 || crossWorkspace != 0 || crossRange != 0 {
+			return total, fmt.Errorf("quality query %s filter=%s leaked tenant/workspace/range results=%d/%d/%d", query.ID, filter, crossTenant, crossWorkspace, crossRange)
+		}
+		rankedIDs := result.IDs
+		if len(rankedIDs) < topK {
+			scalarBounded := result.Counters["scalar_filter_lookups"] > 0 && result.Counters["scalar_filter_final_ids"] <= float64(topK)
+			if result.Counters["collapse_exhaustions"] == 0 && !scalarBounded {
+				return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d without bounded filter/collapse exhaustion", query.ID, len(rankedIDs), topK)
+			}
+			rankedIDs = append([]string(nil), rankedIDs...)
+			for len(rankedIDs) < topK {
+				rankedIDs = append(rankedIDs, fmt.Sprintf("\x00bounded-empty-rank-%d", len(rankedIDs)))
+			}
 		}
 		judgment := judgments[query.ID+"\x00"+filter]
 		chunkRelevant := stringSet(judgment.RelevantChunks)
 		parentRelevant := stringSet(judgment.RelevantParents)
-		p5, err := precisionAtK(result.IDs, chunkRelevant, 5)
+		p5, err := precisionAtK(rankedIDs, chunkRelevant, 5)
 		if err != nil {
 			return total, err
 		}
-		p10, err := precisionAtK(result.IDs, chunkRelevant, 10)
+		p10, err := precisionAtK(rankedIDs, chunkRelevant, 10)
 		if err != nil {
 			return total, err
 		}
-		r5, _ := recallAtK(result.IDs, chunkRelevant, 5)
-		r10, _ := recallAtK(result.IDs, chunkRelevant, 10)
-		mrr, _ := mrrAtK(result.IDs, chunkRelevant, 10)
+		r5, _ := recallAtK(rankedIDs, chunkRelevant, 5)
+		r10, _ := recallAtK(rankedIDs, chunkRelevant, 10)
+		mrr, _ := mrrAtK(rankedIDs, chunkRelevant, 10)
 		parents := make([]string, 0, len(result.IDs))
 		perParent := map[string]int{}
 		for _, id := range result.IDs {
@@ -1454,8 +1550,8 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		parentR10 := parentRecallAtK(parents, parentRelevant, 10)
 		total.PrecisionAt5 += p5
 		total.PrecisionAt10 += p10
-		total.NDCGAt5 += ndcgAtK(result.IDs, chunkRelevant, 5)
-		total.NDCGAt10 += ndcgAtK(result.IDs, chunkRelevant, 10)
+		total.NDCGAt5 += ndcgAtK(rankedIDs, chunkRelevant, 5)
+		total.NDCGAt10 += ndcgAtK(rankedIDs, chunkRelevant, 10)
 		total.MRRAt10 += mrr
 		if mrr > 0 {
 			total.HitRateAt10++
@@ -1525,7 +1621,7 @@ func ndcgAtK(ranked []string, relevant map[string]bool, k int) float64 {
 func parentRecallAtK(parents []string, relevant map[string]bool, k int) float64 {
 	seen := map[string]bool{}
 	hits := 0
-	for _, parent := range parents[:k] {
+	for _, parent := range parents[:min(k, len(parents))] {
 		if relevant[parent] && !seen[parent] {
 			seen[parent] = true
 			hits++

@@ -799,10 +799,18 @@ class TreeDBClientTests(unittest.TestCase):
                 "fusion_tie_policy": "fused_score_best_rank_source_order_id",
                 "text_candidate_limit": 25,
                 "vector_candidate_limit": 30,
+                "max_chunks_per_parent": 1,
                 "final_top_k": 5,
             },
             "snapshot": {"consistency": "current_snapshot", "commit_seq": 9},
-            "stats": {"text_candidates_returned": 3, "vector_candidates_returned": 4, "fusion_both": 1, "documents_fetched": 5},
+            "stats": {
+                "text_candidates_returned": 3,
+                "vector_candidates_returned": 4,
+                "fusion_both": 1,
+                "collapse_rejections": 2,
+                "collapse_exhaustions": 1,
+                "documents_fetched": 3,
+            },
         }
         with FixtureServer({("POST", route): (200, response, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
@@ -816,6 +824,7 @@ class TreeDBClientTests(unittest.TestCase):
                 text_candidate_limit=25,
                 vector_candidate_limit=30,
                 ef_search=64,
+                max_chunks_per_parent=1,
                 fusion=HybridFusionOptions(
                     method="rrf",
                     rrf_k=60,
@@ -830,8 +839,11 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(result.vector_index, "embedding")
             self.assertEqual(result.plan.fusion_method, "rrf")
             self.assertEqual(result.plan.final_top_k, 5)
+            self.assertEqual(result.plan.max_chunks_per_parent, 1)
             self.assertEqual(result.snapshot.consistency, "current_snapshot")
             self.assertEqual(result.stats.fusion_both, 1)
+            self.assertEqual(result.stats.collapse_rejections, 2)
+            self.assertEqual(result.stats.collapse_exhaustions, 1)
             self.assertEqual(result.documents[0].meta["_treedb_search"]["type"], "hybrid")
             body = json_body(server.records[0])
             self.assertEqual(body["query_embedding"], [0.1, 0.2])
@@ -839,6 +851,7 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(body["fusion"]["tie_policy"], "fused_score_best_rank_source_order_id")
             self.assertEqual(body["text_candidate_limit"], 25)
             self.assertEqual(body["vector_candidate_limit"], 30)
+            self.assertEqual(body["max_chunks_per_parent"], 1)
             self.assertEqual(body["return_embedding"], False)
 
     def test_hybrid_search_requires_query_or_embedding_before_http(self) -> None:

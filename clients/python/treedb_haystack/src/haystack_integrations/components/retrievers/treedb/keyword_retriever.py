@@ -99,7 +99,7 @@ class TreeDBKeywordRetriever:
         """Retrieve documents matching `query` with TreeDB ranked keyword search.
 
         :param query: Text query to send to TreeDB keyword search.
-        :param filters: Runtime TreeDB/Haystack filter AST. Keyword filters are served when they resolve to one bounded scalar allow-set over declared index scalar fields; otherwise the service fails closed with a typed error.
+        :param filters: Runtime TreeDB/Haystack filter AST. Keyword prefilters accept bounded equality/range leaves joined only by AND over declared scalar fields; unsupported shapes fail closed with a typed error.
         :param top_k: Runtime maximum number of documents to return.
         :returns: `{"documents": [...]}` with Haystack `Document` results.
         """

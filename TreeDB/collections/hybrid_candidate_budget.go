@@ -45,7 +45,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	if defaultMode {
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
-	if filterAllowSet != nil && len(filterAllowSet) == 0 && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
+	if filterAllowSet != nil && len(filterAllowSet) == 0 {
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone
@@ -63,6 +63,12 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	}
 	if mode == hybridCandidateBudgetPolicyFixed {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonFixedPolicy, HybridCandidateBudgetStopReasonNone)
+	}
+	// Exact top-k budget proofs do not prove enough distinct chunk parents for
+	// collapse backfill. Honor the declared source budgets rather than reducing
+	// them or expanding them implicitly.
+	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
+		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonExactBoundInsufficient, HybridCandidateBudgetStopReasonExactBoundInsufficient)
 	}
 
 	params, fallbackReason, ok := hybridCandidateBudgetRRFParamsForPlan(plan)
