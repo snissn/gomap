@@ -5141,6 +5141,73 @@ func TestOrderedRootDeltaBatchFromIterator_StableIteratorUsesViews(t *testing.T)
 	}
 }
 
+func TestOrderedRootDeltaBatchFromIterator_PreservesDeleteRevision(t *testing.T) {
+	source := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	defer func() { _ = source.Close() }()
+	const wantRevision = page.EntryRevision(42)
+	if err := source.DeleteWithRevision([]byte("root/deleted"), wantRevision); err != nil {
+		t.Fatalf("delete with revision: %v", err)
+	}
+
+	delta, err := orderedRootDeltaBatchFromIterator(newOrderedRootDeltaBatchIterator(source, true))
+	if err != nil {
+		t.Fatalf("orderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	entries := delta.SortedEntries()
+	if len(entries) != 1 || entries[0].Type != batch.OpDelete || entries[0].Revision != wantRevision {
+		t.Fatalf("entries=%+v, want one delete at revision %d", entries, wantRevision)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContext_AppliesSystemDeletes(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	newSystemRoot, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/system-set", "1"),
+		func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "system/deleted", "value").NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("publish system set: %v", err)
+	}
+	if newSystemRoot == 0 {
+		t.Fatal("system set published zero root")
+	}
+
+	deleted, err := memtable.NewWithCapacityMode(1, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new system delete table: %v", err)
+	}
+	deleted.Delete([]byte("system/deleted"))
+	deleted.Freeze()
+	newSystemRoot, _, err = db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/system-delete", "1"),
+		func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error) {
+			return deleted.NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("publish system delete: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	if _, err := snap.GetEntryAtRoot(newSystemRoot, []byte("system/deleted")); err == nil {
+		t.Fatal("system/deleted still exists after system-root delete")
+	}
+}
+
 func TestOrderedRootDeltaBatchIteratorLenSkipsDeletedWhenHidden(t *testing.T) {
 	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
 	defer func() { _ = delta.Close() }()

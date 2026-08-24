@@ -841,13 +841,14 @@ func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Bat
 	}
 	for iter.Valid() {
 		if iter.IsDeleted() {
+			_, _, _, revision := iterator.UnsafeEntryWithRevision(iter)
 			var err error
 			if borrowEntryViews && trustedSortedUnique {
-				err = delta.AppendDeleteViewTrustedSortedUnique(iter.UnsafeKey())
+				err = delta.AppendDeleteViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), revision)
 			} else if borrowEntryViews {
-				err = delta.DeleteView(iter.UnsafeKey())
+				err = delta.DeleteViewWithRevision(iter.UnsafeKey(), revision)
 			} else {
-				err = delta.Delete(iter.UnsafeKey())
+				err = delta.DeleteWithRevision(iter.UnsafeKey(), revision)
 			}
 			if err != nil {
 				_ = delta.Close()
@@ -3727,7 +3728,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
 		baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
 	}
-	iter = newOrderedRootDeltaBatchIterator(systemDelta, false)
+	iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	phaseStart = time.Now()
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
 	ptrCollectors = append(ptrCollectors, ptrCollector)
