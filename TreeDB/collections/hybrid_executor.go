@@ -473,18 +473,34 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	if aggregateLimit <= 0 {
 		aggregateLimit = hybridScalarAggregateLimit(limit, hybridScalarFilterLookupCount(*plan.scalarFilter))
 	}
+	filters := plan.scalarFilter.And
+	if len(filters) == 0 {
+		filters = []HybridScalarFilter{*plan.scalarFilter}
+	}
+	stats := HybridSearchStats{}
+	if len(filters) == 1 {
+		stats.ScalarFilterLookups = 1
+		set, inputIDs, truncated, err := c.hybridScalarLeafAllowSet(filters[0], limit)
+		stats.ScalarFilterInputIDs = inputIDs
+		if truncated {
+			stats.Truncated = 1
+		}
+		if err != nil {
+			return nil, stats, err
+		}
+		stats.ScalarFilterFinalIDs = uint64(len(set))
+		if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
+			stats.ScalarPrefilterIDs = uint64(len(set))
+		}
+		return set, stats, nil
+	}
 	view, err := c.openHybridScalarLookupView()
 	if err != nil {
 		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar lookup snapshot unavailable: %v", ErrHybridSearchStaleIndex, err)
 	}
 	defer view.close()
 
-	filters := plan.scalarFilter.And
-	if len(filters) == 0 {
-		filters = []HybridScalarFilter{*plan.scalarFilter}
-	}
 	sets := make([]hybridScalarAllowSet, 0, len(filters))
-	stats := HybridSearchStats{}
 	for i := range filters {
 		stats.ScalarFilterLookups++
 		set, inputIDs, truncated, err := view.leafAllowSet(filters[i], limit)
@@ -593,6 +609,63 @@ func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limi
 		set[string(id)] = struct{}{}
 	}
 	return set, inputIDs, false, nil
+}
+
+func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+	exists, err := c.hybridScalarIndexExists(filter.IndexName)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if !exists {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
+	}
+	var ids [][]byte
+	var truncated bool
+	if filter.Range != nil {
+		rangeOpts := *filter.Range
+		rangeOpts.Limit = limit
+		ids, truncated, err = c.FindByIndexRange(filter.IndexName, rangeOpts)
+	} else {
+		ids, truncated, err = c.FindByIndexValueLimit(filter.IndexName, filter.Value, limit)
+	}
+	inputIDs := uint64(len(ids))
+	if err != nil {
+		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if truncated {
+		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
+	}
+	set := make(hybridScalarAllowSet, len(ids))
+	for _, id := range ids {
+		set[string(id)] = struct{}{}
+	}
+	return set, inputIDs, false, nil
+}
+
+func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
+	if err := ValidateIndexName(indexName); err != nil {
+		return false, err
+	}
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	_, ok := findIndex(catalog.meta.Indexes, indexName)
+	return ok, nil
 }
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
