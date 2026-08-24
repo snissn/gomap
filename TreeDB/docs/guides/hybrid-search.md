@@ -49,6 +49,8 @@ meta := &collections.CollectionMeta{
     },
     Indexes: []collections.IndexDefinition{
         {Name: "tenant", Field: "tenant", ValueType: collections.IndexValueString},
+        {Name: "workspace", Field: "workspace", ValueType: collections.IndexValueString},
+        {Name: "created_at", Field: "created_at", ValueType: collections.IndexValueInt64},
     },
     TextIndexes: []collections.TextIndexDefinition{
         {
@@ -94,8 +96,17 @@ resp, err := col.SearchHybrid(collections.HybridSearchOptions{
         QueryMode: collections.VectorIndexQueryModeExact,
     },
     ScalarFilter: &collections.HybridScalarFilter{
-        IndexName: "tenant",
-        Value: "acme",
+        And: []collections.HybridScalarFilter{
+            {IndexName: "tenant", Value: "acme"},
+            {IndexName: "workspace", Value: "support"},
+            {
+                IndexName: "created_at",
+                Range: &collections.IndexRangeOptions{
+                    Lower: collections.IndexRangeBound{Value: int64(1767225600), Inclusive: true},
+                    Upper: collections.IndexRangeBound{Unbounded: true},
+                },
+            },
+        },
     },
     Fusion: collections.HybridFusionOptions{
         Method: collections.HybridFusionMethodRRF,
@@ -112,9 +123,18 @@ resp, err := col.SearchHybrid(collections.HybridSearchOptions{
 })
 ```
 
-Inspect `resp.Plan` and `resp.Stats` for the actual scalar strategy, candidate
-budgets, postings/vector counters, fusion counts, final document fetch count,
-fail-closed reason, fallback count, and truncation signal.
+The collection grammar is deliberately small: preserve the original single
+equality/range filter, or use one flat `And` containing 2..16 equality or
+one/two-sided range leaves. The executor resolves every leaf through its declared
+scalar index, stable-sorts complete ID sets by cardinality, and intersects
+smallest-first. `OR`, `NOT`, `!=`, membership, nested `And`, primary-document
+scans, and partial results are not supported. Empty intersections skip source
+work; a missing/corrupt index, truncation, or snapshot change fails closed.
+
+Inspect `resp.Plan` for scalar lookup count/per-lookup/aggregate bounds. Inspect
+`resp.Stats` for scalar lookups, input IDs, intersection steps, final IDs, source
+candidate work, fusion counts, final document fetch count, fail-closed reason,
+fallback count, and truncation signal.
 
 ## Caveats and evidence links
 

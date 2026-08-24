@@ -144,13 +144,16 @@ type HybridVectorQuery struct {
 	QuantizedRerankCandidates int                  `json:"quantized_rerank_candidates,omitempty"`
 }
 
-// HybridScalarFilter describes a bounded scalar-index filter. Equality uses
-// Value; ranges use Range. Strategies that need an indexed allow-set must fail
-// closed when the filter cannot be served by a scalar index.
+// HybridScalarFilter describes either one bounded scalar-index leaf or an
+// ordered, flat conjunction in And. Equality leaves use Value; range leaves use
+// Range. Conjunction children must be leaves; arbitrary Boolean trees are not
+// accepted. Strategies that need an indexed allow-set fail closed when any leaf
+// cannot be served completely by its declared scalar index.
 type HybridScalarFilter struct {
-	IndexName string             `json:"index_name"`
-	Value     any                `json:"value,omitempty"`
-	Range     *IndexRangeOptions `json:"range,omitempty"`
+	IndexName string               `json:"index_name,omitempty"`
+	Value     any                  `json:"value,omitempty"`
+	Range     *IndexRangeOptions   `json:"range,omitempty"`
+	And       []HybridScalarFilter `json:"and,omitempty"`
 }
 
 // HybridFusionOptions configures deterministic rank fusion. For RRF, RRFK=0
@@ -257,14 +260,17 @@ type HybridSearchResult struct {
 // HybridSearchPlan reports the planner choices that affected source ordering,
 // scalar filtering, fusion, and final fetch bounds.
 type HybridSearchPlan struct {
-	ScalarFilterStrategy HybridScalarFilterStrategy `json:"scalar_filter_strategy,omitempty"`
-	FusionMethod         HybridFusionMethod         `json:"fusion_method,omitempty"`
-	FusionTiePolicy      HybridFusionTiePolicy      `json:"fusion_tie_policy,omitempty"`
-	ResultMode           HybridResultMode           `json:"result_mode,omitempty"`
-	TextCandidateLimit   int                        `json:"text_candidate_limit,omitempty"`
-	VectorCandidateLimit int                        `json:"vector_candidate_limit,omitempty"`
-	MaxChunksPerParent   int                        `json:"max_chunks_per_parent,omitempty"`
-	FinalTopK            int                        `json:"final_top_k,omitempty"`
+	ScalarFilterStrategy       HybridScalarFilterStrategy `json:"scalar_filter_strategy,omitempty"`
+	ScalarFilterLookupCount    int                        `json:"scalar_filter_lookup_count,omitempty"`
+	ScalarFilterLookupLimit    int                        `json:"scalar_filter_lookup_limit,omitempty"`
+	ScalarFilterAggregateLimit int                        `json:"scalar_filter_aggregate_limit,omitempty"`
+	FusionMethod               HybridFusionMethod         `json:"fusion_method,omitempty"`
+	FusionTiePolicy            HybridFusionTiePolicy      `json:"fusion_tie_policy,omitempty"`
+	ResultMode                 HybridResultMode           `json:"result_mode,omitempty"`
+	TextCandidateLimit         int                        `json:"text_candidate_limit,omitempty"`
+	VectorCandidateLimit       int                        `json:"vector_candidate_limit,omitempty"`
+	MaxChunksPerParent         int                        `json:"max_chunks_per_parent,omitempty"`
+	FinalTopK                  int                        `json:"final_top_k,omitempty"`
 }
 
 // HybridSearchSnapshot reports the snapshot/epoch identity used by the query.
@@ -307,6 +313,10 @@ type HybridSearchStats struct {
 	VectorCandidatesExamined       uint64                          `json:"vector_candidates_examined,omitempty"`
 	VectorEdgesVisited             uint64                          `json:"vector_edges_visited,omitempty"`
 	ScalarPrefilterIDs             uint64                          `json:"scalar_prefilter_ids,omitempty"`
+	ScalarFilterLookups            uint64                          `json:"scalar_filter_lookups,omitempty"`
+	ScalarFilterInputIDs           uint64                          `json:"scalar_filter_input_ids,omitempty"`
+	ScalarFilterIntersectionSteps  uint64                          `json:"scalar_filter_intersection_steps,omitempty"`
+	ScalarFilterFinalIDs           uint64                          `json:"scalar_filter_final_ids,omitempty"`
 	ScalarPostfilterChecks         uint64                          `json:"scalar_postfilter_checks,omitempty"`
 	ScalarFilterMatched            uint64                          `json:"scalar_filter_matched,omitempty"`
 	ScalarFilterRejected           uint64                          `json:"scalar_filter_rejected,omitempty"`
@@ -333,8 +343,8 @@ type HybridSearchStats struct {
 	FailClosedReason               HybridFailClosedReason          `json:"fail_closed_reason,omitempty"`
 }
 
-// HybridSearchResponse is returned by SearchHybrid once the executor lands. The
-// current contract stub fails closed and returns no results.
+// HybridSearchResponse carries the selected snapshot and plan, bounded work
+// counters, optional debug candidates, and final ranked results.
 type HybridSearchResponse struct {
 	Snapshot   HybridSearchSnapshot    `json:"snapshot,omitempty"`
 	Plan       HybridSearchPlan        `json:"plan,omitempty"`

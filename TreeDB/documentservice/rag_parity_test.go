@@ -201,6 +201,44 @@ func TestHTTPFilteredKeywordRangeFilterBoundedAllowSet(t *testing.T) {
 	}
 }
 
+func TestHTTPMultiFieldANDKeywordHybridParity4292(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	ragParityCreateIndex(t, handler, "docs")
+	ragParityUpsertTenantDocs(t, handler, "docs", ragParityTenantDocs())
+	filter := `"filter":{"operator":"and","conditions":[{"field":"meta.tenant","operator":"==","value":"t1"},{"field":"meta.priority","operator":">=","value":2}]}`
+
+	status, keyword := ragParityPost(t, handler, "/v1/indexes/docs/search/keyword", `{"query":"refund","top_k":10,`+filter+`}`)
+	if status != http.StatusOK {
+		code, message := ragParityError(t, keyword)
+		t.Fatalf("keyword status=%d code=%s message=%q", status, code, message)
+	}
+	keywordDocs := ragParityArrayValue(t, keyword["documents"], "keyword documents")
+	if len(keywordDocs) != 1 || ragParityObjectValue(t, keywordDocs[0], "keyword document")["id"] != "t1-b" {
+		t.Fatalf("keyword documents=%s want t1-b", mustJSON(keywordDocs))
+	}
+	keywordStats := ragParityObjectValue(t, keyword["stats"], "keyword stats")
+	if keywordStats["scalar_filter_lookups"] != float64(2) || keywordStats["scalar_filter_intersection_steps"] != float64(1) || keywordStats["scalar_filter_final_ids"] != float64(1) {
+		t.Fatalf("keyword stats=%s", mustJSON(keywordStats))
+	}
+
+	status, hybrid := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid", `{"query":"refund","query_embedding":[0.95,0.05,0,0],"top_k":10,"ef_search":16,`+filter+`}`)
+	if status != http.StatusOK {
+		code, message := ragParityError(t, hybrid)
+		t.Fatalf("hybrid status=%d code=%s message=%q", status, code, message)
+	}
+	hybridDocs := ragParityArrayValue(t, hybrid["documents"], "hybrid documents")
+	if len(hybridDocs) != 1 || ragParityObjectValue(t, hybridDocs[0], "hybrid document")["id"] != "t1-b" {
+		t.Fatalf("hybrid documents=%s want t1-b", mustJSON(hybridDocs))
+	}
+	plan := ragParityObjectValue(t, hybrid["plan"], "hybrid plan")
+	stats := ragParityObjectValue(t, hybrid["stats"], "hybrid stats")
+	if plan["scalar_filter_lookup_count"] != float64(2) || stats["scalar_filter_lookups"] != float64(2) || stats["scalar_filter_final_ids"] != float64(1) || stats["full_document_scan_fallbacks"] != nil {
+		t.Fatalf("hybrid plan=%s stats=%s", mustJSON(plan), mustJSON(stats))
+	}
+}
+
 func TestHTTPFilteredSearchUnsupportedShapesFailClosedTyped(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -221,12 +259,6 @@ func TestHTTPFilteredSearchUnsupportedShapesFailClosedTyped(t *testing.T) {
 			want: CodeInvalidRequest,
 		},
 		{
-			name: "multi-field AND cannot be one bounded allow-set",
-			path: "/v1/indexes/docs/search/hybrid",
-			body: `{"query":"refund","top_k":5,"filter":{"operator":"and","conditions":[{"field":"meta.tenant","operator":"==","value":"t1"},{"field":"meta.priority","operator":">=","value":1}]}}`,
-			want: CodeUnsupported,
-		},
-		{
 			name: "OR filter unsupported",
 			path: "/v1/indexes/docs/search/keyword",
 			body: `{"query":"refund","top_k":5,"filter":{"operator":"or","conditions":[{"field":"meta.tenant","operator":"==","value":"t1"},{"field":"meta.tenant","operator":"==","value":"t2"}]}}`,
@@ -242,6 +274,12 @@ func TestHTTPFilteredSearchUnsupportedShapesFailClosedTyped(t *testing.T) {
 			name: "inequality filter unsupported",
 			path: "/v1/indexes/docs/search/keyword",
 			body: `{"query":"refund","top_k":5,"filter":{"field":"meta.tenant","operator":"!=","value":"t1"}}`,
+			want: CodeUnsupported,
+		},
+		{
+			name: "membership filter unsupported",
+			path: "/v1/indexes/docs/search/keyword",
+			body: `{"query":"refund","top_k":5,"filter":{"field":"meta.tenant","operator":"in","value":["t1"]}}`,
 			want: CodeUnsupported,
 		},
 		{

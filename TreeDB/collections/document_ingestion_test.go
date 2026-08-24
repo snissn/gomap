@@ -341,6 +341,45 @@ func TestIngestSourcesHappyPathAndIndexParity(t *testing.T) {
 	assertIndexParity(t, col, parents)
 }
 
+func TestIngestedMetadataMultiFieldANDComposesWithParentCollapse4292(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 256)
+	sources := []SourceDocument{
+		ingestTestSource("tenant-alpha", 0),
+		ingestTestSource("tenant-beta", 1),
+	}
+	sources[0].Meta["tenant"] = "alpha"
+	sources[1].Meta["tenant"] = "beta"
+	mustIngest(t, col, sources, ingestTestCfg(256))
+
+	response, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:               3,
+		MaxChunksPerParent: 1,
+		Text:               &HybridTextQuery{IndexName: "lexical", Query: "tok0", CandidateLimit: 64},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "by_tenant", Value: "alpha"},
+			{IndexName: "by_kind", Value: chunking.KindChunk},
+		}},
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchHybrid: %v", err)
+	}
+	if len(response.Results) != 1 || !strings.HasPrefix(string(response.Results[0].ID), "tenant-alpha#") {
+		t.Fatalf("results=%+v want one collapsed tenant-alpha child", response.Results)
+	}
+	if response.Stats.ScalarFilterLookups != 2 || response.Stats.ScalarFilterIntersectionSteps != 1 || response.Stats.CollapseRejections == 0 || response.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("stats=%+v", response.Stats)
+	}
+	var child map[string]any
+	if err := json.Unmarshal(response.Results[0].Document, &child); err != nil {
+		t.Fatalf("unmarshal child: %v", err)
+	}
+	meta, ok := child["meta"].(map[string]any)
+	if !ok || meta["tenant"] != "alpha" {
+		t.Fatalf("inherited child metadata=%#v", child["meta"])
+	}
+}
+
 // failingEmbedder fails every batch until disarmed; safe for concurrent workers.
 type failingEmbedder struct {
 	dims int

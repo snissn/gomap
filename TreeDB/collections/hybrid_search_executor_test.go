@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -44,8 +45,8 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}
-	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyPrefilter || got.Plan.FusionMethod != HybridFusionMethodRRF {
-		t.Fatalf("plan=%+v want bounded prefilter RRF plan", got.Plan)
+	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyPrefilter || got.Plan.ScalarFilterLookupCount != 1 || got.Plan.ScalarFilterLookupLimit != hybridScalarDefaultLookupLimit || got.Plan.ScalarFilterAggregateLimit != hybridScalarDefaultLookupLimit || got.Plan.FusionMethod != HybridFusionMethodRRF {
+		t.Fatalf("plan=%+v want compatible one-lookup bounded prefilter RRF plan", got.Plan)
 	}
 	if got.Snapshot.Consistency != HybridConsistencyCurrentSnapshot || got.Snapshot.CommitSeq == 0 || got.Snapshot.SystemRootPageID == 0 {
 		t.Fatalf("snapshot=%+v want current snapshot identity", got.Snapshot)
@@ -276,8 +277,8 @@ func TestSearchHybridScalarFilterRangeAndFailClosed2505(t *testing.T) {
 	if gotIDs := hybridResultIDs2505(ranged.Results); !slicesEqualStrings(gotIDs, []string{"doc-10", "doc-20"}) {
 		t.Fatalf("range result ids=%v want doc-10/doc-20 response=%+v", gotIDs, ranged)
 	}
-	if ranged.Stats.ScalarPrefilterIDs != 2 || ranged.Stats.ScalarFilterMatched != 2 || ranged.Stats.ScalarFilterRejected != 2 || ranged.Stats.FailClosed != 0 {
-		t.Fatalf("range stats=%+v want bounded scalar include/exclude", ranged.Stats)
+	if ranged.Stats.ScalarPrefilterIDs != 2 || ranged.Stats.ScalarFilterLookups != 1 || ranged.Stats.ScalarFilterInputIDs != 2 || ranged.Stats.ScalarFilterIntersectionSteps != 0 || ranged.Stats.ScalarFilterFinalIDs != 2 || ranged.Stats.ScalarFilterMatched != 2 || ranged.Stats.ScalarFilterRejected != 2 || ranged.Stats.FailClosed != 0 {
+		t.Fatalf("range stats=%+v want compatible one-lookup bounded scalar include/exclude", ranged.Stats)
 	}
 
 	postfiltered, err := col.SearchHybrid(HybridSearchOptions{
@@ -425,6 +426,203 @@ func TestSearchHybridMissingSourcesAndSnapshotModeFailClosed2505(t *testing.T) {
 	}
 }
 
+func TestSearchHybridMultiFieldANDRoutesCountersAndFailures4292(t *testing.T) {
+	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+		{id: "doc-10", title: "refund", body: "refund alpha", city: "sea", score: 10, vector: []float32{1, 0, 0}},
+		{id: "doc-20", title: "refund", body: "refund beta", city: "sea", score: 20, vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-30", title: "refund", body: "refund gamma", city: "sfo", score: 30, vector: []float32{0.8, 0.2, 0}},
+		{id: "doc-40", title: "shipping", body: "shipping", city: "sea", score: 40, vector: []float32{0, 1, 0}},
+	})
+	defer func() { _ = d.Close() }()
+
+	eqEq := &HybridScalarFilter{And: []HybridScalarFilter{
+		{IndexName: "city", Value: "sea"},
+		{IndexName: "kind", Value: "hybrid"},
+	}}
+	got, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 10, Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 10}, ScalarFilter: eqEq,
+	})
+	if err != nil {
+		t.Fatalf("eq+eq SearchHybrid: %v", err)
+	}
+	if got.Plan.ScalarFilterLookupCount != 2 || got.Stats.ScalarFilterLookups != 2 || got.Stats.ScalarFilterIntersectionSteps != 1 || got.Stats.ScalarFilterFinalIDs != 3 || got.Stats.ScalarPrefilterIDs != 3 {
+		t.Fatalf("eq+eq plan=%+v stats=%+v", got.Plan, got.Stats)
+	}
+	eqRange, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 4,
+		Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "city", Value: "sea"},
+			{IndexName: "score", Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: int64(20), Inclusive: true},
+			}},
+		}},
+	})
+	if err != nil || !slicesEqualStrings(hybridResultIDs2505(eqRange.Results), []string{"doc-10", "doc-20"}) || eqRange.Stats.ScalarFilterInputIDs != 5 || eqRange.Stats.ScalarFilterFinalIDs != 2 {
+		t.Fatalf("eq+range response=%+v err=%v", eqRange, err)
+	}
+
+	threeField := func(reverse bool) *HybridScalarFilter {
+		leaves := []HybridScalarFilter{
+			{IndexName: "city", Value: "sea"},
+			{IndexName: "kind", Value: "hybrid"},
+			{IndexName: "score", Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: int64(20), Inclusive: true},
+			}},
+		}
+		if reverse {
+			leaves[0], leaves[2] = leaves[2], leaves[0]
+		}
+		return &HybridScalarFilter{And: leaves}
+	}
+	routes := []struct {
+		name   string
+		text   *HybridTextQuery
+		vector *HybridVectorQuery
+	}{
+		{name: "text", text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4}},
+		{name: "vector", vector: &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact}},
+		{name: "hybrid", text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4}, vector: &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact}},
+	}
+	var ordered []string
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			response, err := col.SearchHybrid(HybridSearchOptions{TopK: 4, Text: route.text, Vector: route.vector, ScalarFilter: threeField(false)})
+			if err != nil {
+				t.Fatalf("SearchHybrid: %v", err)
+			}
+			ids := hybridResultIDs2505(response.Results)
+			if !slicesEqualStrings(ids, []string{"doc-10", "doc-20"}) {
+				t.Fatalf("ids=%v response=%+v", ids, response)
+			}
+			if response.Plan.ScalarFilterLookupCount != 3 || response.Plan.ScalarFilterLookupLimit != hybridScalarDefaultLookupLimit || response.Plan.ScalarFilterAggregateLimit != 3*hybridScalarDefaultLookupLimit {
+				t.Fatalf("plan=%+v", response.Plan)
+			}
+			if response.Stats.ScalarFilterLookups != 3 || response.Stats.ScalarFilterInputIDs != 9 || response.Stats.ScalarFilterIntersectionSteps != 2 || response.Stats.ScalarFilterFinalIDs != 2 || response.Stats.FullDocumentScanFallbacks != 0 {
+				t.Fatalf("stats=%+v", response.Stats)
+			}
+			if route.name == "hybrid" {
+				ordered = ids
+			}
+		})
+	}
+	reversed, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:         4,
+		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
+		Vector:       &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact},
+		ScalarFilter: threeField(true),
+	})
+	if err != nil || !slicesEqualStrings(hybridResultIDs2505(reversed.Results), ordered) {
+		t.Fatalf("reversed conjunction results=%v err=%v want %v", hybridResultIDs2505(reversed.Results), err, ordered)
+	}
+
+	empty, err := col.SearchHybrid(HybridSearchOptions{
+		TopK:                 2,
+		Text:                 &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
+		Vector:               &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact},
+		ScalarFilterStrategy: HybridScalarFilterStrategyPostfilter,
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "city", Value: "sfo"},
+			{IndexName: "score", Range: &IndexRangeOptions{Lower: IndexRangeBound{Unbounded: true}, Upper: IndexRangeBound{Value: int64(20), Inclusive: true}}},
+		}},
+	})
+	if err != nil || len(empty.Results) != 0 || empty.Stats.TextPostingsScanned != 0 || empty.Stats.VectorCandidatesExamined != 0 || empty.Stats.ScalarFilterLookups != 2 || empty.Stats.ScalarFilterFinalIDs != 0 {
+		t.Fatalf("empty intersection response=%+v err=%v", empty, err)
+	}
+
+	missing, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 2,
+		Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "city", Value: "does-not-exist"},
+			{IndexName: "missing", Value: "x"},
+		}},
+	})
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || missing.Stats.FailClosed != 1 || missing.Stats.ScalarFilterLookups != 2 || len(missing.Results) != 0 || missing.Stats.TextPostingsScanned != 0 {
+		t.Fatalf("missing-after-empty response=%+v err=%v", missing, err)
+	}
+
+	forcedPlan := hybridSearchExecutionPlan{
+		topK: 1, scalarLookupLimit: 1, scalarAggregateLimit: 2,
+		scalarFilterStrategy: HybridScalarFilterStrategyPrefilter,
+		scalarFilter:         &HybridScalarFilter{And: []HybridScalarFilter{{IndexName: "city", Value: "sea"}, {IndexName: "kind", Value: "hybrid"}}},
+	}
+	if _, stats, err := col.hybridScalarAllowSet(forcedPlan); !errors.Is(err, ErrHybridSearchIndexUnavailable) || stats.Truncated != 1 || stats.ScalarFilterLookups != 1 {
+		t.Fatalf("truncated conjunction stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestSearchHybridMultiFieldANDUnsupportedAndConcurrentSnapshot4292(t *testing.T) {
+	if _, err := planHybridSearch(HybridSearchOptions{
+		TopK: 1,
+		Text: &HybridTextQuery{IndexName: "lexical", Query: "refund"},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "city", Value: "sea"},
+			{And: []HybridScalarFilter{{IndexName: "score", Value: int64(1)}, {IndexName: "kind", Value: "hybrid"}}},
+		}},
+	}); !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("nested conjunction err=%v want unsupported", err)
+	}
+
+	_, d, col := openHybridScalarSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+		{id: "stable", title: "refund", body: "refund", city: "sea", score: 10},
+		{id: "toggle", title: "refund", body: "refund", city: "sea", score: 99},
+	})
+	defer func() { _ = d.Close() }()
+	filter := &HybridScalarFilter{And: []HybridScalarFilter{
+		{IndexName: "city", Value: "sea"},
+		{IndexName: "score", Range: &IndexRangeOptions{Lower: IndexRangeBound{Unbounded: true}, Upper: IndexRangeBound{Value: int64(10), Inclusive: true}}},
+	}}
+	oldDoc := mustHybridFixtureDocument2505(t, hybridSearchExecutorFixtureRow2505{id: "toggle", title: "refund", body: "refund", city: "sea", score: 99}, 2)
+	newDoc := mustHybridFixtureDocument2505(t, hybridSearchExecutorFixtureRow2505{id: "toggle", title: "refund", body: "refund", city: "sfo", score: 10}, 2)
+	errs := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range 64 {
+			next := oldDoc
+			if i%2 == 0 {
+				next = newDoc
+			}
+			if _, changed, err := col.Update([]byte("toggle"), func([]byte) ([]byte, bool, error) { return next, true, nil }); err != nil || !changed {
+				errs <- fmt.Errorf("concurrent update %d changed=%v: %v", i, changed, err)
+				return
+			}
+			if err := col.Flush(); err != nil {
+				errs <- fmt.Errorf("concurrent flush %d: %w", i, err)
+				return
+			}
+		}
+	}()
+	defer wg.Wait()
+	successes := 0
+	for i := range 64 {
+		response, err := col.SearchHybrid(HybridSearchOptions{TopK: 4, Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4}, ScalarFilter: filter})
+		if err != nil {
+			if response.Stats.FailClosed != 1 || len(response.Results) != 0 {
+				t.Fatalf("iteration %d partial fail-closed response=%+v err=%v", i, response, err)
+			}
+			continue
+		}
+		if ids := hybridResultIDs2505(response.Results); !slicesEqualStrings(ids, []string{"stable"}) {
+			t.Fatalf("iteration %d mixed-snapshot ids=%v response=%+v", i, ids, response)
+		}
+		successes++
+	}
+	wg.Wait()
+	if successes == 0 {
+		t.Fatal("all concurrent searches failed closed; want at least one coherent success")
+	}
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func TestSearchHybridInsertUpdateDeleteReopenConsistency2505(t *testing.T) {
 	dir, d, col := openHybridScalarSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "mutable", title: "refund", body: "refund", city: "sea", score: 10, vector: []float32{1, 0, 0}},
@@ -446,6 +644,9 @@ func TestSearchHybridInsertUpdateDeleteReopenConsistency2505(t *testing.T) {
 		t.Fatalf("before ids=%v want deleted/mutable", gotIDs)
 	}
 
+	if gotIDs := searchHybridTextMultiScalarIDs4292(t, col); !slicesEqualStrings(gotIDs, []string{"deleted", "mutable"}) {
+		t.Fatalf("before multi-field ids=%v want deleted/mutable", gotIDs)
+	}
 	updatedDoc := mustHybridFixtureDocument2505(t, hybridSearchExecutorFixtureRow2505{id: "mutable", title: "shipping", body: "shipping", city: "sfo", score: 11, vector: []float32{1, 0, 0}}, 10)
 	if _, changed, err := col.Update([]byte("mutable"), func(current []byte) ([]byte, bool, error) {
 		if len(current) == 0 {
@@ -469,6 +670,9 @@ func TestSearchHybridInsertUpdateDeleteReopenConsistency2505(t *testing.T) {
 	if gotIDs := searchHybridTextScalarIDs2505(t, col); !slicesEqualStrings(gotIDs, wantAfter) {
 		t.Fatalf("after mutation ids=%v want %v", gotIDs, wantAfter)
 	}
+	if gotIDs := searchHybridTextMultiScalarIDs4292(t, col); !slicesEqualStrings(gotIDs, wantAfter) {
+		t.Fatalf("after mutation multi-field ids=%v want %v", gotIDs, wantAfter)
+	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -488,6 +692,9 @@ func TestSearchHybridInsertUpdateDeleteReopenConsistency2505(t *testing.T) {
 	}
 	if gotIDs := searchHybridTextScalarIDs2505(t, reopenedCol); !slicesEqualStrings(gotIDs, wantAfter) {
 		t.Fatalf("after reopen ids=%v want %v", gotIDs, wantAfter)
+	}
+	if gotIDs := searchHybridTextMultiScalarIDs4292(t, reopenedCol); !slicesEqualStrings(gotIDs, wantAfter) {
+		t.Fatalf("after reopen multi-field ids=%v want %v", gotIDs, wantAfter)
 	}
 }
 
@@ -576,6 +783,7 @@ func openHybridSearchExecutorFixture2505(tb testing.TB, rows []hybridSearchExecu
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
 			{Name: "score", Field: "score", ValueType: IndexValueInt64},
+			{Name: "kind", Field: "kind", ValueType: IndexValueString},
 		},
 		VectorIndexes: []VectorIndexDefinition{def},
 		TextIndexes:   []TextIndexDefinition{{Name: "lexical", Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}},
@@ -607,6 +815,10 @@ func openHybridScalarSearchExecutorFixture2505(tb testing.TB, rows []hybridSearc
 	if _, err := col.CreateIndex(IndexDefinition{Name: "score", Field: "score", ValueType: IndexValueInt64}); err != nil {
 		_ = d.Close()
 		tb.Fatalf("CreateIndex score: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "kind", Field: "kind", ValueType: IndexValueString}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateIndex kind: %v", err)
 	}
 	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}, StorePositions: true}); err != nil {
 		_ = d.Close()
@@ -685,6 +897,25 @@ func searchHybridTextScalarIDs2505(tb testing.TB, col *Collection) []string {
 	got, err := col.SearchHybrid(HybridSearchOptions{TopK: 10, Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 10}, ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"}})
 	if err != nil {
 		tb.Fatalf("SearchHybrid text+scalar: %v", err)
+	}
+	return hybridResultIDs2505(got.Results)
+}
+
+func searchHybridTextMultiScalarIDs4292(tb testing.TB, col *Collection) []string {
+	tb.Helper()
+	got, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 10,
+		Text: &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 10},
+		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
+			{IndexName: "city", Value: "sea"},
+			{IndexName: "score", Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Unbounded: true},
+				Upper: IndexRangeBound{Value: int64(20), Inclusive: true},
+			}},
+		}},
+	})
+	if err != nil {
+		tb.Fatalf("SearchHybrid text+multi-scalar: %v", err)
 	}
 	return hybridResultIDs2505(got.Results)
 }

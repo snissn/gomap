@@ -9,10 +9,10 @@ import (
 )
 
 // searchKeywordWithScalarFilter serves filtered keyword search through the
-// collection hybrid executor's bounded scalar prefilter vocabulary. The filter
-// is compiled into a single indexed allow-set before candidate generation; the
-// executor consumes it inside posting-block scans and fails closed with
-// scalar_filter_unbounded on truncation instead of returning partial rankings.
+// collection hybrid executor's bounded scalar prefilter vocabulary. Equality
+// and range leaves joined by AND compile into one finite indexed intersection
+// before candidate generation. The executor consumes the final allow-set inside
+// posting-block scans and fails closed on any incomplete lookup.
 func (s *Service) searchKeywordWithScalarFilter(ctx context.Context, col *collections.Collection, info IndexInfo, req KeywordSearchRequest, operator collections.TextSearchOperator) (KeywordSearchResponse, error) {
 	schema := newScalarSchema(info.ScalarFields)
 	scalarFilter, err := translateScalarFilter(req.Filter, schema)
@@ -86,17 +86,21 @@ func keywordResponseFromHybrid(hybrid collections.HybridSearchResponse, info Ind
 		TextIndex: defaultTextIndexName,
 		Documents: docs,
 		Stats: KeywordSearchStats{
-			CandidatesRequested:       stats.TextCandidatesRequested,
-			CandidatesReturned:        stats.TextCandidatesReturned,
-			PostingsScanned:           stats.TextPostingsScanned,
-			CandidatesScored:          stats.TextCandidatesScored,
-			DocumentsFetched:          stats.DocumentsFetched,
-			DocumentsMissing:          stats.DocumentsMissing,
-			FullDocumentScanFallbacks: stats.FullDocumentScanFallbacks,
-			Truncated:                 stats.Truncated > 0,
-			FailClosed:                stats.FailClosed,
-			FailClosedReason:          string(stats.FailClosedReason),
-			ScalarPrefilterIDs:        stats.ScalarPrefilterIDs,
+			CandidatesRequested:           stats.TextCandidatesRequested,
+			CandidatesReturned:            stats.TextCandidatesReturned,
+			PostingsScanned:               stats.TextPostingsScanned,
+			CandidatesScored:              stats.TextCandidatesScored,
+			DocumentsFetched:              stats.DocumentsFetched,
+			DocumentsMissing:              stats.DocumentsMissing,
+			FullDocumentScanFallbacks:     stats.FullDocumentScanFallbacks,
+			Truncated:                     stats.Truncated > 0,
+			FailClosed:                    stats.FailClosed,
+			FailClosedReason:              string(stats.FailClosedReason),
+			ScalarPrefilterIDs:            stats.ScalarPrefilterIDs,
+			ScalarFilterLookups:           stats.ScalarFilterLookups,
+			ScalarFilterInputIDs:          stats.ScalarFilterInputIDs,
+			ScalarFilterIntersectionSteps: stats.ScalarFilterIntersectionSteps,
+			ScalarFilterFinalIDs:          stats.ScalarFilterFinalIDs,
 		},
 	}, nil
 }
@@ -192,8 +196,8 @@ func mappedHybridSearchError(operation string, err error, stats collections.Hybr
 	if err == nil {
 		return nil
 	}
-	if stats.FailClosedReason == collections.HybridFailClosedReasonScalarFilterUnbounded || containsScalarFilterUnbounded(err) {
-		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed: "+string(collections.HybridFailClosedReasonScalarFilterUnbounded)+" (bounded scalar allow-set lookup exceeded its limit; no partial results are returned)", err)
+	if stats.Truncated > 0 && (stats.FailClosedReason == collections.HybridFailClosedReasonScalarFilterUnbounded || containsScalarFilterUnbounded(err)) {
+		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed: "+string(collections.HybridFailClosedReasonScalarFilterUnbounded)+" (a bounded scalar allow-set lookup exceeded its limit; no partial results are returned)", err)
 	}
 	return mapHybridSearchError(err)
 }

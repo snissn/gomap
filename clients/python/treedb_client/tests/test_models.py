@@ -256,7 +256,15 @@ class KeywordHybridModelTests(unittest.TestCase):
                 "index": index,
                 "text_index": "content",
                 "documents": [{"id": "doc-1", "content": "refund", "score": 1.5}],
-                "stats": {"query_terms": 1, "documents_fetched": 1, "future_stat": 12},
+                "stats": {
+                    "query_terms": 1,
+                    "documents_fetched": 1,
+                    "scalar_filter_lookups": 2,
+                    "scalar_filter_input_ids": 7,
+                    "scalar_filter_intersection_steps": 1,
+                    "scalar_filter_final_ids": 1,
+                    "future_stat": 12,
+                },
                 "future_top_level": {"ok": True},
             }
         )
@@ -264,6 +272,10 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(response.text_index, "content")
         self.assertEqual(response.documents[0].score, 1.5)
         self.assertEqual(response.stats.query_terms, 1)
+        self.assertEqual(response.stats.scalar_filter_lookups, 2)
+        self.assertEqual(response.stats.scalar_filter_input_ids, 7)
+        self.assertEqual(response.stats.scalar_filter_intersection_steps, 1)
+        self.assertEqual(response.stats.scalar_filter_final_ids, 1)
         self.assertEqual(response.stats.extra["future_stat"], 12)
         self.assertEqual(response.extra["future_top_level"], {"ok": True})
 
@@ -284,6 +296,13 @@ class KeywordHybridModelTests(unittest.TestCase):
                 tie_policy="fused_score_best_rank_source_order_id",
                 source_order=["text", "vector"],
             ),
+            filter={
+                "operator": "AND",
+                "conditions": [
+                    {"field": "meta.tenant", "operator": "==", "value": "alpha"},
+                    {"field": "meta.workspace", "operator": "==", "value": "red"},
+                ],
+            },
             return_embedding=False,
         )
 
@@ -294,6 +313,8 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(payload["fusion"]["source_order"], ["text", "vector"])
         self.assertEqual(payload["text_candidate_limit"], 25)
         self.assertEqual(payload["max_chunks_per_parent"], 2)
+        self.assertEqual(payload["filter"]["operator"], "AND")
+        self.assertEqual(len(payload["filter"]["conditions"]), 2)
         self.assertEqual(payload["return_embedding"], False)
         self.assertNotIn("max_chunks_per_parent", HybridSearchRequest(top_k=1, query="refund").to_dict())
 
@@ -305,6 +326,9 @@ class KeywordHybridModelTests(unittest.TestCase):
                 "vector_index": "embedding",
                 "documents": [{"id": "doc-1", "meta": {"_treedb_search": {"type": "hybrid"}}, "score": 0.03}],
                 "plan": {
+                    "scalar_filter_lookup_count": 2,
+                    "scalar_filter_lookup_limit": 4096,
+                    "scalar_filter_aggregate_limit": 8192,
                     "fusion_method": "rrf",
                     "max_chunks_per_parent": 2,
                     "final_top_k": 5,
@@ -313,6 +337,10 @@ class KeywordHybridModelTests(unittest.TestCase):
                 "snapshot": {"consistency": "current_snapshot", "commit_seq": 9},
                 "stats": {
                     "fusion_both": 1,
+                    "scalar_filter_lookups": 2,
+                    "scalar_filter_input_ids": 7,
+                    "scalar_filter_intersection_steps": 1,
+                    "scalar_filter_final_ids": 1,
                     "collapse_rejections": 3,
                     "collapse_exhaustions": 1,
                     "documents_fetched": 2,
@@ -325,9 +353,16 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertIsInstance(response.plan, HybridSearchPlan)
         self.assertEqual(response.plan.fusion_method, "rrf")
         self.assertEqual(response.plan.max_chunks_per_parent, 2)
+        self.assertEqual(response.plan.scalar_filter_lookup_count, 2)
+        self.assertEqual(response.plan.scalar_filter_lookup_limit, 4096)
+        self.assertEqual(response.plan.scalar_filter_aggregate_limit, 8192)
         self.assertEqual(response.plan.extra["future_plan"], "kept")
         self.assertEqual(response.snapshot.commit_seq, 9)
         self.assertEqual(response.stats.collapse_rejections, 3)
+        self.assertEqual(response.stats.scalar_filter_lookups, 2)
+        self.assertEqual(response.stats.scalar_filter_input_ids, 7)
+        self.assertEqual(response.stats.scalar_filter_intersection_steps, 1)
+        self.assertEqual(response.stats.scalar_filter_final_ids, 1)
         self.assertEqual(response.stats.collapse_exhaustions, 1)
         self.assertEqual(response.stats.documents_fetched, 2)
         self.assertEqual(response.documents[0].meta["_treedb_search"]["type"], "hybrid")
