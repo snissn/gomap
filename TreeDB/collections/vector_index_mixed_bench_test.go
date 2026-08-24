@@ -4,9 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
-	"runtime"
-	"runtime/pprof"
 	"sort"
 	"strconv"
 	"sync"
@@ -34,8 +31,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		mode = "current"
 	}
 	validModes := map[string]bool{
-		"current": true, "serial-plan": true, "serial-reciprocal": true,
-		"all-serial": true, "no-publish": true,
+		"current": true, "serial-reciprocal": true, "no-publish": true,
 	}
 	if !validModes[mode] {
 		b.Fatalf("unknown TREEDB_VECTOR_MIXED_MODE %q", mode)
@@ -74,7 +70,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		}
 		index.constructionWorkers = workers
 	}
-	if mode == "serial-reciprocal" || mode == "all-serial" {
+	if mode == "serial-reciprocal" {
 		index.parallelReciprocalLinks = false
 	}
 	b.StartTimer()
@@ -86,14 +82,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 			batchStarted := time.Now()
 			end := minInt(start+batchRows, len(rows))
 			index.mu.Lock()
-			if mode == "serial-plan" || mode == "all-serial" {
-				for row := start; row < end; row++ {
-					if err := index.insertVectorLocked(ids[row], rows[row]); err != nil {
-						index.mu.Unlock()
-						return err
-					}
-				}
-			} else if err := index.insertVectorBatchLocked(ids[start:end], rows[start:end]); err != nil {
+			if err := index.insertVectorBatchLocked(ids[start:end], rows[start:end]); err != nil {
 				index.mu.Unlock()
 				return err
 			}
@@ -108,9 +97,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		b.ReportMetric(float64(insertRows)/time.Since(started).Seconds(), "insert_rows/s")
 		return nil
 	}
-	finishProfile := startVectorIndexMixedProfile4300(b)
 	mixed := runVectorIndexMixedSearchWindow4300(b, index, rows[:256], searchers, 0, insert)
-	finishProfile()
 	view := index.acquireSearchView()
 	if view == nil || !view.sourceDocumentRootsValid {
 		b.Fatal("native search view is unavailable")
@@ -133,58 +120,6 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	b.ReportMetric(float64(index.constructionWorkers), "worker_limit")
 	b.ReportMetric(float64(visibleDocs), "visible_docs")
 	b.ReportMetric(1, "native_route")
-}
-
-func startVectorIndexMixedProfile4300(b *testing.B) func() {
-	b.Helper()
-	dir := os.Getenv("TREEDB_VECTOR_MIXED_PROFILE_DIR")
-	if dir == "" {
-		return func() {}
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		b.Fatal(err)
-	}
-	write := func(name string) {
-		file, err := os.Create(filepath.Join(dir, name+".pprof"))
-		if err != nil {
-			b.Fatal(err)
-		}
-		if err := pprof.Lookup(name).WriteTo(file, 0); err != nil {
-			_ = file.Close()
-			b.Fatal(err)
-		}
-		if err := file.Close(); err != nil {
-			b.Fatal(err)
-		}
-	}
-	previousRate := runtime.MemProfileRate
-	runtime.MemProfileRate = 1
-	runtime.GC()
-	write("allocs")
-	if err := os.Rename(filepath.Join(dir, "allocs.pprof"), filepath.Join(dir, "allocs_before.pprof")); err != nil {
-		b.Fatal(err)
-	}
-	cpu, err := os.Create(filepath.Join(dir, "cpu.pprof"))
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := pprof.StartCPUProfile(cpu); err != nil {
-		_ = cpu.Close()
-		b.Fatal(err)
-	}
-	previousMutex := runtime.SetMutexProfileFraction(1)
-	runtime.SetBlockProfileRate(1)
-	return func() {
-		pprof.StopCPUProfile()
-		_ = cpu.Close()
-		runtime.SetBlockProfileRate(0)
-		runtime.SetMutexProfileFraction(previousMutex)
-		runtime.GC()
-		for _, name := range []string{"allocs", "heap", "mutex", "block"} {
-			write(name)
-		}
-		runtime.MemProfileRate = previousRate
-	}
 }
 
 type vectorIndexMixedSearchWindow4300 struct {

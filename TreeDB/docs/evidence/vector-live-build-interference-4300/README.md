@@ -8,13 +8,12 @@ This local diagnostic isolates HNSW construction and immutable search-view publi
 GOMAXPROCS=32 \
 TREEDB_VECTOR_MIXED_MODE=current \
 TREEDB_VECTOR_MIXED_WORKERS=1 \
-TREEDB_VECTOR_MIXED_PROFILE_DIR=/path/to/profiles \
 go test ./TreeDB/collections -run '^$' \
   -bench '^BenchmarkVectorIndexMixedSearchInsert4300$' \
   -benchtime=1x -count=3
 ```
 
-Omit `TREEDB_VECTOR_MIXED_WORKERS` for the production worker choice. Supported diagnostic modes are `current`, `serial-plan`, `serial-reciprocal`, `all-serial`, and `no-publish`. A profile directory captures mixed-interval CPU plus before/after allocation, heap, mutex, and block profiles.
+Omit `TREEDB_VECTOR_MIXED_WORKERS` for the production worker choice. A worker limit of one serializes the frozen-prefix planner without changing its topology. Supported diagnostic modes are `current`, `serial-reciprocal`, and `no-publish`.
 
 Fixture: deterministic 10,000-row 768D FP32 cosine base, 2,000 live inserts in 100-row batches, HNSW M16/efConstruction128/efSearch64, concurrency 10, topK100. Host: Intel i5-11400F (6 cores/12 threads), Linux, with `GOMAXPROCS=32` to preserve the EC2 scheduler shape.
 
