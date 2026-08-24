@@ -29,11 +29,17 @@ vectors, err := emb.EmbedBatch(ctx, texts) // one vector per text, index-aligned
 - **Ordered and fail-closed.** Output is index-aligned to inputs; an empty
   batch is `embedding.ErrEmptyBatch`; a failure at any position — or of the
   context — fails the whole batch and returns no partial vectors.
+- **Provider concurrency.** An `Embedder` instance need not be thread-safe.
+  `Collection.IngestSources` serializes `EmbedBatch` calls on its one shared
+  instance even when source `Concurrency` is greater than one. Callers driving
+  an instance directly must serialize it or create one provider per worker.
 - **Registry.** Providers register a `Factory` by name
   (`Registry.Register`); unknown providers fail with
-  `embedding.ErrUnknownProvider`. `DefaultRegistry()` ships with the built-in
-  reference provider pre-registered; future real-model providers register
-  there or in caller-owned registries.
+  `embedding.ErrUnknownProvider`. A factory error retains its cause and
+  provider context. A factory returning a nil or typed-nil `Embedder` fails
+  with `embedding.ErrInvalidEmbedder` before any method is invoked.
+  `DefaultRegistry()` ships with the built-in reference provider
+  pre-registered; future real-model providers remain deferred to #4270.
 - **Determinism.** The reference `hashing` embedder is a pure function of
   (text, config): FNV-1a feature hashing over whitespace-delimited tokens
   into a signed integer sketch, L2-normalized with IEEE-754 correctly rounded
@@ -57,10 +63,15 @@ vectors, err := col.EmbedForIngest(ctx, "embedding", texts,
     embedding.Config{Provider: embedding.ProviderHashing, Dimensions: 256})
 ```
 
-- Unknown vector index name → `collections: unknown vector index` (typed).
-- Config dimensions ≠ declared index dimensions →
-  `embedding.ErrDimensionMismatch` before any embedding work.
+- Unknown vector index name → `collections.ErrIndexNotFound`.
+- Config dimensions ≠ declared index dimensions, or created-provider
+  dimensions ≠ config dimensions → `embedding.ErrDimensionMismatch` before
+  any embedding work or write.
 - Unknown provider → `embedding.ErrUnknownProvider`.
+- Wrong output count or invalid vector shape, finiteness, or cosine magnitude
+  → `embedding.ErrInvalidOutput`; a wrong vector width also matches
+  `embedding.ErrDimensionMismatch`.
+- Provider and cancellation causes remain available through `errors.Is`.
 - `EmbedForIngest` performs no mutations of its own; a failed call leaves the
   collection untouched.
 
@@ -76,9 +87,11 @@ surface future work builds on.
 |-------|---------|
 | `embedding.ErrUnknownProvider` | Config names no registered provider |
 | `embedding.ErrProviderAlreadyRegistered` | Duplicate `Registry.Register` name |
+| `embedding.ErrInvalidEmbedder` | Factory returned a nil or typed-nil embedder |
 | `embedding.ErrEmptyBatch` | `EmbedBatch` called with zero texts |
-| `embedding.ErrDimensionMismatch` | Declared dimensions disagree (config vs provider, or embedder vs vector index) |
-| `collections: unknown vector index` | Embed request names no vector index on the collection |
+| `embedding.ErrDimensionMismatch` | Config, provider, target index, or output dimensions disagree |
+| `embedding.ErrInvalidOutput` | Batch count or vector metric/shape/finiteness contract failed |
+| `collections.ErrIndexNotFound` | Embed request names no vector index on the collection |
 
 All are tested with `errors.Is`; wrappers add positional context.
 

@@ -27,20 +27,24 @@ result, err := collection.IngestSources(ctx, sources, cfg)
 ```
 
 The configured vector index must exist and its dimensions must exactly match
-the embedder configuration. Every source is validated and chunk-planned before
-mutation. Parent IDs must be non-empty valid UTF-8 without `#`; reserved chunk
-linkage roots cannot be text/vector destinations. Embedding also completes
-before that source is changed, so chunk or embed errors fail closed. A
-successful result contains one `Ingested` outcome per source, including
-deterministic child IDs (`<sourceID>#<ordinal>`).
+both the embedder configuration and the created provider. Every source is
+validated and chunk-planned before mutation. Parent IDs must be non-empty
+valid UTF-8 without `#`; reserved chunk linkage roots cannot be text/vector
+destinations. Provider output count, width, finiteness, and cosine magnitude
+are checked before that source is changed, so chunk, provider, or output errors
+fail closed. A successful result contains one `Ingested` outcome per source,
+including deterministic child IDs (`<sourceID>#<ordinal>`).
 
 ## Failure and retry behavior
 
 `*collections.IngestError` identifies the source ID, input index, and stage
 (`chunk`, `embed`, or `storage`); parent-ID rejection unwraps a typed
-`*chunking.ParentIDError`. The worker pool is bounded by `Concurrency` (zero
-defaults to four), and cancellation stops unstarted work while preserving
-completed sources.
+`*chunking.ParentIDError`, while provider/index failures preserve typed causes
+for `errors.As`/`errors.Is`. The worker pool is bounded by `Concurrency` (zero
+defaults to four), but calls to its one shared provider instance are serialized
+because providers need not be thread-safe. Cancellation prevents queued
+provider calls and unstarted source mutations while preserving completed
+sources.
 
 The shared per-parent lock covers the complete plan through replacement across
 concurrent calls and collection handles; independent parents do not share that
