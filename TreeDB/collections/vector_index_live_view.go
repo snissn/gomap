@@ -86,7 +86,12 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		previousNodes = previous.nodes
 		previousDeltaNodes = previous.deltaNodes
 	}
-	nodes := copyVectorIndexSearchNodes(next.nodes, previousNodes, idx.nodes, idx.searchViewDirty, forceFull)
+	var nodes []vectorIndexNode
+	if previous != nil && !forceFull && len(idx.searchViewDirty) == 0 && len(previousNodes) == len(idx.nodes) {
+		nodes = previousNodes
+	} else {
+		nodes = copyVectorIndexSearchNodes(nil, previousNodes, idx.nodes, idx.searchViewDirty, forceFull)
+	}
 	var deltaNodes []vectorIndexNode
 	deltaEntry, deltaMaxLevel, deltaLiveDocs := -1, -1, 0
 	if idx.liveDelta != nil {
