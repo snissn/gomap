@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -588,15 +589,27 @@ type applicationEnvironment struct {
 }
 
 func (e *applicationEnvironment) close() {
+	_ = e.closeWithError()
+}
+
+func (e *applicationEnvironment) closeWithError() error {
+	if e == nil {
+		return nil
+	}
 	if e.server != nil {
 		e.server.Close()
+		e.server = nil
 	}
+	var err error
 	if e.service != nil {
-		_ = e.service.Close()
+		err = errors.Join(err, e.service.Close())
+		e.service = nil
 	}
 	if e.db != nil {
-		_ = e.db.Close()
+		err = errors.Join(err, e.db.Close())
+		e.db = nil
 	}
+	return err
 }
 
 func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixture, bundle *semanticVectorBundle, embeddingCell string, provider string, dims int, dir string) (*applicationEnvironment, lifecycleEvidence, error) {
