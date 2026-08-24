@@ -972,7 +972,11 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 	}
 	wall := time.Since(start).Seconds()
 	sort.Slice(samples, func(i, j int) bool { return samples[i].Ordinal < samples[j].Ordinal })
-	perf := repetitionPerformance{Repetition: rep, Order: order, Samples: len(samples), WallSeconds: wall, QPS: float64(len(samples)) / wall}
+	qps := 0.0
+	if wall > 0 {
+		qps = float64(len(samples)) / wall
+	}
+	perf := repetitionPerformance{Repetition: rep, Order: order, Samples: len(samples), WallSeconds: wall, QPS: qps}
 	return samples, perf, counters, firstErr
 }
 
