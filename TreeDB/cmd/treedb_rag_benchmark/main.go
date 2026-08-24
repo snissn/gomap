@@ -17,6 +17,7 @@ func main() {
 		dir        = flag.String("dir", "", "benchmark database root (default: temporary)")
 		keepDir    = flag.Bool("keep-dir", false, "keep a temporary benchmark database root")
 		productSHA = flag.String("product-base-sha", "99929cdeb2ae2ec1e411236c853eb36942075d72", "exact accepted main product SHA")
+		harnessSHA = flag.String("harness-revision", "", "exact benchmark harness commit SHA")
 		hostNote   = flag.String("host-note", "", "free-form host note recorded in provenance")
 		smoke      = flag.Bool("smoke", false, "run a bounded diagnostic that cannot claim final p99/QPS evidence")
 		dumpInputs = flag.String("dump-semantic-inputs", "", "write the exact semantic generation input manifest and exit")
@@ -33,6 +34,7 @@ func main() {
 	cfg.Dir = strings.TrimSpace(*dir)
 	cfg.KeepDir = *keepDir
 	cfg.ProductBaseSHA = strings.TrimSpace(*productSHA)
+	cfg.HarnessRevision = strings.TrimSpace(*harnessSHA)
 	cfg.HostNote = strings.TrimSpace(*hostNote)
 	cfg.Command = append([]string(nil), os.Args...)
 	cfg.FinalEvidence = !*smoke

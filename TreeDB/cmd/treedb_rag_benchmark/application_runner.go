@@ -48,20 +48,21 @@ var (
 )
 
 type applicationConfig struct {
-	TopK           int
-	CandidateLimit int
-	EfSearch       int
-	M              int
-	WarmupQueries  int
-	Repetitions    int
-	SamplesPerRep  int
-	IngestionReps  int
-	Dir            string
-	KeepDir        bool
-	ProductBaseSHA string
-	HostNote       string
-	FinalEvidence  bool
-	Command        []string
+	TopK            int
+	CandidateLimit  int
+	EfSearch        int
+	M               int
+	WarmupQueries   int
+	Repetitions     int
+	SamplesPerRep   int
+	IngestionReps   int
+	Dir             string
+	KeepDir         bool
+	ProductBaseSHA  string
+	HarnessRevision string
+	HostNote        string
+	FinalEvidence   bool
+	Command         []string
 }
 
 func defaultApplicationConfig() applicationConfig {
@@ -327,6 +328,9 @@ func validateApplicationConfig(cfg applicationConfig) error {
 	}
 	if cfg.Repetitions <= 0 || cfg.SamplesPerRep <= 0 || cfg.IngestionReps <= 0 {
 		return fmt.Errorf("config: repetitions, samples, and ingestion reps must be positive")
+	}
+	if cfg.FinalEvidence && (len(cfg.ProductBaseSHA) != 40 || len(cfg.HarnessRevision) != 40) {
+		return fmt.Errorf("config: final baseline requires full 40-character product and harness revisions")
 	}
 	if cfg.FinalEvidence && (cfg.Repetitions < 3 || cfg.SamplesPerRep*cfg.Repetitions < 1000 || cfg.IngestionReps < 5) {
 		return fmt.Errorf("config: final baseline requires >=3 reps, >=1000 samples/cell, and >=5 ingestion reps")
@@ -1534,10 +1538,13 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 	configRaw, _ := json.Marshal(cfg)
 	configSum := sha256.Sum256(configRaw)
 	hashingSum := sha256.Sum256([]byte("embedding.ProviderHashing|dims=64|fixture=" + applicationFixtureDigest(fixture)))
-	revision := "unknown"
+	revision := cfg.HarnessRevision
 	cgo := "unknown"
 	if info, ok := runtimeBuildInfo(); ok {
-		revision, cgo = info["vcs.revision"], info["CGO_ENABLED"]
+		if revision == "" {
+			revision = info["vcs.revision"]
+		}
+		cgo = info["CGO_ENABLED"]
 	}
 	if len(cfg.Command) == 0 {
 		cfg.Command = append([]string(nil), os.Args...)
@@ -1550,7 +1557,7 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 		Hostname: hostname, HostNote: cfg.HostNote, Command: cfg.Command,
 		RepetitionOrder: "query reps forward/reverse/forward; ingestion fresh DB reps 0..4; final candidate must use paired ABBA interleave",
 		Environment: map[string]string{
-			"GOROOT": runtime.GOROOT(), "GOMAXPROCS": fmt.Sprint(runtime.GOMAXPROCS(0)),
+			"GOROOT": os.Getenv("GOROOT"), "runtime_goroot": runtime.GOROOT(), "GOMAXPROCS": fmt.Sprint(runtime.GOMAXPROCS(0)),
 			"database_root":     cfg.Dir,
 			"resource_teardown": "every DB, document service, and HTTP server is closed; an explicit database root is retained for inspection",
 		},
