@@ -30,10 +30,11 @@ const (
 var legOrder = [4]string{"A1", "B1", "B2", "A2"}
 
 type config struct {
-	ABinary, BBinary string
-	Output, Root     string
-	WorkerArgs       []string
-	Legs             [4]legConfig
+	ABinary, BBinary          string
+	Output, Root              string
+	WorkerArgs                []string
+	ReadyTimeout, CellTimeout time.Duration
+	Legs                      [4]legConfig
 }
 
 type legConfig struct {
@@ -42,11 +43,14 @@ type legConfig struct {
 }
 
 type workerReady struct {
-	Ready             bool   `json:"ready"`
-	CellCount         int    `json:"cell_count"`
-	ProductBaseSHA    string `json:"product_base_sha"`
-	HarnessRevision   string `json:"harness_revision"`
-	EnvironmentPolicy string `json:"environment_policy"`
+	Ready                bool   `json:"ready"`
+	CellCount            int    `json:"cell_count"`
+	ProductBaseSHA       string `json:"product_base_sha"`
+	HarnessRevision      string `json:"harness_revision"`
+	EnvironmentPolicy    string `json:"environment_policy"`
+	FixtureSHA256        string `json:"fixture_sha256"`
+	ConfigSHA256         string `json:"config_sha256"`
+	SemanticVectorSHA256 string `json:"semantic_vector_sha256"`
 }
 
 type workerRequest struct {
@@ -70,9 +74,16 @@ type cellIdentity struct {
 	Clients     int    `json:"clients"`
 }
 
+type comparisonIdentity struct {
+	WorkDigest    string `json:"work_digest"`
+	Projection    string `json:"projection"`
+	QualityDigest string `json:"quality_digest"`
+}
+
 type rowIdentity struct {
-	Cell   *cellIdentity `json:"cell"`
-	Status *string       `json:"status"`
+	Cell       *cellIdentity       `json:"cell"`
+	Status     *string             `json:"status"`
+	Comparison *comparisonIdentity `json:"comparison"`
 }
 
 type namedResponse struct {
@@ -81,17 +92,20 @@ type namedResponse struct {
 }
 
 type workerEvidence struct {
-	Epoch             int       `json:"epoch"`
-	Leg               string    `json:"leg"`
-	Variant           string    `json:"variant"`
-	Command           []string  `json:"command"`
-	BinarySHA256      string    `json:"binary_sha256"`
-	ProductBaseSHA    string    `json:"product_base_sha"`
-	HarnessRevision   string    `json:"harness_revision"`
-	EnvironmentPolicy string    `json:"environment_policy"`
-	StartedAt         time.Time `json:"started_at"`
-	ReadyAt           time.Time `json:"ready_at"`
-	FinishedAt        time.Time `json:"finished_at"`
+	Epoch                int       `json:"epoch"`
+	Leg                  string    `json:"leg"`
+	Variant              string    `json:"variant"`
+	Command              []string  `json:"command"`
+	BinarySHA256         string    `json:"binary_sha256"`
+	ProductBaseSHA       string    `json:"product_base_sha"`
+	HarnessRevision      string    `json:"harness_revision"`
+	EnvironmentPolicy    string    `json:"environment_policy"`
+	FixtureSHA256        string    `json:"fixture_sha256"`
+	ConfigSHA256         string    `json:"config_sha256"`
+	SemanticVectorSHA256 string    `json:"semantic_vector_sha256"`
+	StartedAt            time.Time `json:"started_at"`
+	ReadyAt              time.Time `json:"ready_at"`
+	FinishedAt           time.Time `json:"finished_at"`
 }
 
 type legAttempt struct {
@@ -124,13 +138,14 @@ type artifact struct {
 }
 
 type worker struct {
-	cfg      legConfig
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	encoder  *json.Encoder
-	decoder  *json.Decoder
-	stderr   bytes.Buffer
-	evidence workerEvidence
+	cfg         legConfig
+	cmd         *exec.Cmd
+	stdin       io.WriteCloser
+	encoder     *json.Encoder
+	decoder     *json.Decoder
+	cellTimeout time.Duration
+	stderr      bytes.Buffer
+	evidence    workerEvidence
 }
 
 func orderForOrdinal(ordinal int) [4]string {
@@ -166,8 +181,11 @@ func validateResponses(ordinal int, responses []namedResponse) error {
 		if err := json.Unmarshal(response.Response.Row, &got); err != nil {
 			return fmt.Errorf("%s: decode row identity: %w", response.Leg, err)
 		}
-		if got.Cell == nil || got.Status == nil || *got.Status == "" {
-			return fmt.Errorf("%s: row lacks cell or status identity", response.Leg)
+		if got.Cell == nil || got.Status == nil || *got.Status == "" || got.Comparison == nil {
+			return fmt.Errorf("%s: row lacks cell, status, or comparison identity", response.Leg)
+		}
+		if got.Comparison.WorkDigest == "" || got.Comparison.Projection == "" || got.Comparison.QualityDigest == "" {
+			return fmt.Errorf("%s: row comparison identity is incomplete", response.Leg)
 		}
 		if i == 0 {
 			want = got
@@ -175,6 +193,9 @@ func validateResponses(ordinal int, responses []namedResponse) error {
 		}
 		if *got.Cell != *want.Cell {
 			return fmt.Errorf("%s: cell identity does not match %s", response.Leg, responses[0].Leg)
+		}
+		if *got.Comparison != *want.Comparison {
+			return fmt.Errorf("%s: comparison identity does not match %s", response.Leg, responses[0].Leg)
 		}
 		// Capability-delivery candidates legitimately change unsupported control
 		// cells to supported. Preserve each leg's status; only cell identity must
@@ -221,6 +242,8 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.BBinary, "b-binary", "", "benchmark binary for B1 and B2")
 	fs.StringVar(&cfg.Output, "out", "", "gzip JSON artifact path")
 	fs.StringVar(&cfg.Root, "root", "", "root for the four worker databases")
+	fs.DurationVar(&cfg.ReadyTimeout, "ready-timeout", 2*time.Minute, "maximum worker readiness time")
+	fs.DurationVar(&cfg.CellTimeout, "cell-timeout", 5*time.Minute, "maximum time for one cell attempt")
 	for index, name := range legOrder {
 		leg := strings.ToLower(name)
 		cfg.Legs[index].Name = name
@@ -234,6 +257,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.ABinary == "" || cfg.BBinary == "" || cfg.Output == "" || cfg.Root == "" {
 		return config{}, errors.New("-a-binary, -b-binary, -out, and -root are required")
 	}
+	if cfg.ReadyTimeout <= 0 || cfg.CellTimeout <= 0 {
+		return config{}, errors.New("-ready-timeout and -cell-timeout must be positive")
+	}
 	for i := range cfg.Legs {
 		leg := &cfg.Legs[i]
 		if leg.Name[0] == 'A' {
@@ -246,10 +272,12 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	for _, arg := range cfg.WorkerArgs {
-		for _, reserved := range []string{"-cell-worker", "-dir", "-product-base-sha", "-harness-revision"} {
-			if arg == reserved || strings.HasPrefix(arg, reserved+"=") {
-				return config{}, fmt.Errorf("worker argument %q is coordinator-owned", arg)
-			}
+		name := strings.SplitN(strings.TrimLeft(arg, "-"), "=", 2)[0]
+		switch name {
+		case "smoke":
+			return config{}, errors.New("-smoke is diagnostic-only and cannot be forwarded by the final interleave coordinator")
+		case "cell-worker", "dir", "product-base-sha", "harness-revision":
+			return config{}, fmt.Errorf("worker argument %q is coordinator-owned", arg)
 		}
 	}
 	return cfg, nil
@@ -279,7 +307,7 @@ func runCoordinator(cfg config) error {
 		workers = make([]*worker, 0, len(cfg.Legs))
 		byName = make(map[string]*worker, len(cfg.Legs))
 		for _, leg := range cfg.Legs {
-			worker, err := startWorker(leg, cfg.Root, cfg.WorkerArgs, binaryHashes[leg.Binary], epoch)
+			worker, err := startWorker(leg, cfg.Root, cfg.WorkerArgs, binaryHashes[leg.Binary], epoch, cfg.ReadyTimeout, cfg.CellTimeout)
 			if worker != nil {
 				workers = append(workers, worker)
 			}
@@ -291,6 +319,18 @@ func runCoordinator(cfg config) error {
 				return fmt.Errorf("start %s epoch %d: %w", leg.Name, epoch, err)
 			}
 			byName[leg.Name] = worker
+		}
+		want := workers[0].evidence
+		if want.FixtureSHA256 == "" || want.ConfigSHA256 == "" || want.SemanticVectorSHA256 == "" {
+			stopWorkers(workers)
+			return fmt.Errorf("epoch %d: worker workload identity is incomplete", epoch)
+		}
+		for _, worker := range workers[1:] {
+			got := worker.evidence
+			if got.FixtureSHA256 != want.FixtureSHA256 || got.ConfigSHA256 != want.ConfigSHA256 || got.SemanticVectorSHA256 != want.SemanticVectorSHA256 {
+				stopWorkers(workers)
+				return fmt.Errorf("epoch %d: %s workload identity does not match %s", epoch, got.Leg, want.Leg)
+			}
 		}
 		return nil
 	}
@@ -367,7 +407,22 @@ func runCoordinator(cfg config) error {
 	})
 }
 
-func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash string, epoch int) (*worker, error) {
+func decodeWithTimeout(decoder *json.Decoder, value any, limit time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- decoder.Decode(value)
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("timed out after %s", limit)
+	}
+}
+
+func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash string, epoch int, readyTimeout, cellTimeout time.Duration) (*worker, error) {
 	args := []string{
 		"-cell-worker",
 		"-dir", filepath.Join(root, fmt.Sprintf("epoch-%03d", epoch), strings.ToLower(cfg.Name)),
@@ -403,8 +458,9 @@ func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash str
 	if err := cmd.Start(); err != nil {
 		return worker, err
 	}
+	worker.cellTimeout = cellTimeout
 	var ready workerReady
-	if err := worker.decoder.Decode(&ready); err != nil {
+	if err := decodeWithTimeout(worker.decoder, &ready, readyTimeout); err != nil {
 		return worker, fmt.Errorf("decode readiness: %w", err)
 	}
 	worker.evidence.ReadyAt = time.Now().UTC()
@@ -424,6 +480,9 @@ func startWorker(cfg legConfig, root string, commonArgs []string, binaryHash str
 		return worker, fmt.Errorf("environment_policy %q, want %q", ready.EnvironmentPolicy, expectedWorkerEnvironmentPolicy)
 	}
 	worker.evidence.EnvironmentPolicy = ready.EnvironmentPolicy
+	worker.evidence.FixtureSHA256 = ready.FixtureSHA256
+	worker.evidence.ConfigSHA256 = ready.ConfigSHA256
+	worker.evidence.SemanticVectorSHA256 = ready.SemanticVectorSHA256
 	return worker, nil
 }
 
@@ -432,7 +491,7 @@ func (worker *worker) request(ordinal int) (workerResponse, error) {
 		return workerResponse{}, fmt.Errorf("send request: %w", err)
 	}
 	var response workerResponse
-	if err := worker.decoder.Decode(&response); err != nil {
+	if err := decodeWithTimeout(worker.decoder, &response, worker.cellTimeout); err != nil {
 		return workerResponse{}, fmt.Errorf("read response: %w", err)
 	}
 	return response, nil
@@ -503,6 +562,14 @@ func writeArtifact(path string, value artifact) (err error) {
 		return err
 	}
 	if err = os.Rename(temporary, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	if err = directory.Sync(); err != nil {
 		return err
 	}
 	return nil

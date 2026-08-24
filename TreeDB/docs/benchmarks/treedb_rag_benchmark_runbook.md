@@ -133,22 +133,22 @@ export GOCACHE="$HOME/.cache/gomap-go126"
 export GOWORK=off
 
 SOURCE_ROOT="$PWD"
-rm -rf /tmp/gomap-rag-evidence-e3de4a6f1
-git clone --no-checkout "$SOURCE_ROOT" /tmp/gomap-rag-evidence-e3de4a6f1
-git -C /tmp/gomap-rag-evidence-e3de4a6f1 \
-  checkout e3de4a6f1e7de8450081c7357a9ff5575cf847bd
-cd /tmp/gomap-rag-evidence-e3de4a6f1
+rm -rf /tmp/gomap-rag-evidence-43e9568e0
+git clone --no-checkout "$SOURCE_ROOT" /tmp/gomap-rag-evidence-43e9568e0
+git -C /tmp/gomap-rag-evidence-43e9568e0 \
+  checkout 43e9568e0059806b9a7f735a5e383800880d1865
+cd /tmp/gomap-rag-evidence-43e9568e0
 
 go build -buildvcs=true -trimpath \
-  -o /tmp/treedb_rag_benchmark_e3de4a6f1 \
+  -o /tmp/treedb_rag_benchmark_43e9568e0 \
   ./TreeDB/cmd/treedb_rag_benchmark
-go version -m /tmp/treedb_rag_benchmark_e3de4a6f1
+go version -m /tmp/treedb_rag_benchmark_43e9568e0
 
-/tmp/treedb_rag_benchmark_e3de4a6f1 \
+/tmp/treedb_rag_benchmark_43e9568e0 \
   -out-dir "$SOURCE_ROOT/TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23" \
-  -dir /tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126 \
+  -dir /tmp/gomap-4289-rag-baseline-db-43e9568e0-go126 \
   -product-base-sha 99929cdeb2ae2ec1e411236c853eb36942075d72 \
-  -harness-revision e3de4a6f1e7de8450081c7357a9ff5575cf847bd \
+  -harness-revision 43e9568e0059806b9a7f735a5e383800880d1865 \
   -host-note "Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1"
 ```
 
@@ -159,7 +159,7 @@ A bounded diagnostic uses `-smoke`. Its authority is
 
 Host: Apple M3, Darwin arm64, 8 logical CPUs, Go 1.26.0, CGO enabled.
 
-Actual final repaired `IngestSources` fresh-DB source docs/s:
+Actual final repaired fresh-DB end-to-end source docs/s:
 `160.18, 232.21, 283.00, 291.75, 297.29` in execution order. Median/p95 are
 `283.00 / 296.18` docs/s. Median/p95 allocation is
 `2,163,595 / 2,577,008` B/source. Every repetition reopened with identical
