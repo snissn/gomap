@@ -56,6 +56,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	batchBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "command_wal_public_cached.go"))
 	backendBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "command_wal_raw.go"))
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
+	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))
 
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
@@ -90,13 +91,8 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	profileInventoryRequireBody(t, backendDBBodies, "Open", "validateOptions")
 	profileInventoryRequireBody(t, backendDBBodies, "validateOptions", "validateResolvedDurabilityProfile")
 
-	orderedRootSource, err := os.ReadFile(filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))
-	if err != nil {
-		t.Fatalf("read ordered_root_publish.go: %v", err)
-	}
-	if got := bytes.Count(orderedRootSource, []byte("commandWALIntentPublishSync")); got < 3 {
-		t.Fatalf("ordered root publication profile sync routes=%d want at least 3", got)
-	}
+	profileInventoryRequireBody(t, orderedRootBodies, "(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder", "publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized")
+	profileInventoryRequireBody(t, orderedRootBodies, "(*DB).publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized", "commandWALIntentPublishSync")
 }
 
 func profileInventoryTreeDBDir(t *testing.T) string {
