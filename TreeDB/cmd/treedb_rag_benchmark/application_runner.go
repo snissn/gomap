@@ -1322,7 +1322,7 @@ func runDirectQuery(cfg applicationConfig, col *collections.Collection, query ap
 func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query applicationQuery, vector []float32, cell applicationCellIdentity) (queryResult, error) {
 	var path string
 	var request any
-	hybridEndpoint := cell.Route == "hybrid" || applicationMaxChunksPerParent(cell) > 0
+	hybridEndpoint := cell.Route == "text_only" || cell.Route == "hybrid"
 	if hybridEndpoint {
 		hybrid := documentservice.HybridSearchRequest{
 			TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch,
