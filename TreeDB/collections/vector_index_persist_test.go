@@ -528,6 +528,60 @@ func TestCollectionVectorIndexNativeSearchRefreshesStaleCatalogWithoutFlushing(t
 	}
 }
 
+func TestCollectionVectorIndexNativeSearchDoesNotWaitForCatalogDuringMutation(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := writer.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	reader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	if _, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil {
+		t.Fatalf("prime reader: %v", err)
+	}
+
+	unlockCoverage := writer.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	if _, err := writer.insertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil); err != nil {
+		t.Fatalf("commit document before native reconciliation: %v", err)
+	}
+	writer.writeDomain.mu.Lock()
+	searchDone := make(chan error, 1)
+	go func() {
+		var searchBuffer VectorIndexSearchBuffer
+		response, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
+		if err == nil && (len(response.Results) != 1 || string(response.Results[0].ID) != "a") {
+			err = fmt.Errorf("search results=%+v want prior published document a", response.Results)
+		}
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		writer.writeDomain.mu.Unlock()
+		if err != nil {
+			t.Fatalf("search during mutation: %v", err)
+		}
+	case <-time.After(time.Second):
+		writer.writeDomain.mu.Unlock()
+		t.Fatal("search waited for the write-domain catalog during native mutation")
+	}
+}
+
 func TestCollectionVectorIndexNativeSearchTracksBufferedUpdateAndDelete(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {

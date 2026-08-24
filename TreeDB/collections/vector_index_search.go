@@ -1531,6 +1531,16 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 		c.catalogSystemRoot == state.SystemRootPageID &&
 		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
 	c.catalogMu.RUnlock()
+	if !current && catalog != nil && c.nativeVectorIndexMutationActive() && c.writeDomain != nil {
+		if c.writeDomain.mu.TryRLock() {
+			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil {
+				catalog, current = currentCatalog, true
+			}
+			c.writeDomain.mu.RUnlock()
+		} else if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+			return def, catalog.rootID(rootName), true, true
+		}
+	}
 	if !current {
 		catalog = cachedWriteDomainCatalogForState(c.writeDomain, state.SystemRootPageID, state.CommitSeq)
 		if catalog == nil {
