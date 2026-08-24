@@ -535,7 +535,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/guides/README.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/docs/guides/typed-storage-performance.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/docs/guides/vector-search-typed-column.md", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
-	{path: "TreeDB/docs/guides/document-chunking.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/docs/guides/document-chunking.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/docs/guides/document-ingestion.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/docs/spec/COMPRESSION_TECHNOLOGY_SPEC.md", classification: typedStorageLegacyDeferred, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md", classification: typedStorageLegacyDeferred, matchingLines: 108, occurrences: 112},

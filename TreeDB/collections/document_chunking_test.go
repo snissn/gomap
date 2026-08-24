@@ -27,11 +27,18 @@ func openChunkingTestCollection(t *testing.T) (string, *backenddb.DB, *Collectio
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
-		Indexes: []IndexDefinition{{
-			Name:      "by_kind",
-			Field:     chunking.MetaFieldKind,
-			ValueType: IndexValueString,
-		}},
+		Indexes: []IndexDefinition{
+			{
+				Name:      "by_kind",
+				Field:     chunking.MetaFieldKind,
+				ValueType: IndexValueString,
+			},
+			{
+				Name:      "by_tenant",
+				Field:     "meta.tenant",
+				ValueType: IndexValueString,
+			},
+		},
 	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
@@ -88,15 +95,46 @@ func openChunkingColumnTestCollection(t *testing.T) (string, *backenddb.DB, *Col
 
 func parentDoc(t *testing.T, title, body string, embedding []float64) []byte {
 	t.Helper()
+	return parentDocWithMeta(t, title, body, embedding, nil)
+}
+
+func parentDocWithMeta(t *testing.T, title, body string, embedding []float64, meta map[string]any) []byte {
+	t.Helper()
 	doc := map[string]any{"title": title, "body": body}
 	if embedding != nil {
 		doc["embedding"] = embedding
+	}
+	if meta != nil {
+		doc[ingestSourceMetaField] = meta
 	}
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func assertChildMetadata(t *testing.T, col *Collection, childIDs [][]byte, want map[string]any) {
+	t.Helper()
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal wanted metadata: %v", err)
+	}
+	for _, id := range childIDs {
+		raw, err := col.Get(id)
+		if err != nil || len(raw) == 0 {
+			t.Fatalf("Get child %q: len=%d err=%v", id, len(raw), err)
+		}
+		var child struct {
+			Meta json.RawMessage `json:"meta"`
+		}
+		if err := json.Unmarshal(raw, &child); err != nil {
+			t.Fatalf("decode child %q: %v", id, err)
+		}
+		if string(child.Meta) != string(wantJSON) {
+			t.Fatalf("child %q meta=%s want %s", id, child.Meta, wantJSON)
+		}
+	}
 }
 
 func childIDsFor(t *testing.T, col *Collection, parentID string) []string {
@@ -148,7 +186,96 @@ func TestIngestChunkedDocumentCreatesLinkedChildren(t *testing.T) {
 			stored[chunking.MetaFieldKind] != chunking.KindChunk {
 			t.Fatalf("child %q metadata=%+v", id, stored)
 		}
+		if _, ok := stored[ingestSourceMetaField]; ok {
+			t.Fatalf("metadata-free child %q unexpectedly has meta: %+v", id, stored)
+		}
+		wantRaw, err := json.Marshal(map[string]any{
+			"body":                    stored["body"],
+			chunking.MetaFieldParent:  parent,
+			chunking.MetaFieldOrdinal: i,
+			chunking.MetaFieldKind:    chunking.KindChunk,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != string(wantRaw) {
+			t.Fatalf("metadata-free child %q bytes=%s want %s", id, raw, wantRaw)
+		}
 	}
+}
+
+func TestIngestChunkedDocumentCopiesMetadataWithoutLinkageOverride(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	meta := map[string]any{
+		"tenant":                  "alpha",
+		"workspace":               "red",
+		chunking.MetaFieldParent:  "spoof-parent",
+		chunking.MetaFieldOrdinal: 99,
+		chunking.MetaFieldKind:    "spoof-kind",
+	}
+	parent := parentDocWithMeta(t, "Metadata", strings.Repeat("metadata inheritance body ", 12), nil, meta)
+	var parentFields map[string]any
+	if err := json.Unmarshal(parent, &parentFields); err != nil {
+		t.Fatal(err)
+	}
+	parentFields[chunking.MetaFieldParent] = "spoof-top-level-parent"
+	parent, err := json.Marshal(parentFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := col.IngestChunkedDocument([]byte("meta-source"), parent, fixedWindowCfg(48, 8), ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("IngestChunkedDocument: %v", err)
+	}
+	for i := range parent {
+		parent[i] = 'x'
+	}
+	assertChildMetadata(t, col, result.ChildIDs, meta)
+	for i, id := range result.ChildIDs {
+		raw, err := col.Get(id)
+		if err != nil {
+			t.Fatalf("Get child %q: %v", id, err)
+		}
+		var child map[string]any
+		if err := json.Unmarshal(raw, &child); err != nil {
+			t.Fatalf("decode child %q: %v", id, err)
+		}
+		if child[chunking.MetaFieldParent] != "meta-source" ||
+			child[chunking.MetaFieldOrdinal] != float64(i) ||
+			child[chunking.MetaFieldKind] != chunking.KindChunk {
+			t.Fatalf("child %q authoritative linkage=%+v", id, child)
+		}
+	}
+}
+
+func TestIngestChunkedDocumentRejectsMalformedMetadataBeforeMutation(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	const parent = "meta-fail-closed"
+	good := parentDocWithMeta(t, "Good", strings.Repeat("stable old body ", 8), nil, map[string]any{"tenant": "old"})
+	first, err := col.IngestChunkedDocument([]byte(parent), good, fixedWindowCfg(32, 4), ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("initial ingest: %v", err)
+	}
+	if _, err := col.IngestChunkedDocument(
+		[]byte(parent),
+		[]byte(`{"body":"replacement must not land","meta":"not-an-object"}`),
+		fixedWindowCfg(32, 4),
+		ChunkedIngestOptions{},
+	); err == nil {
+		t.Fatal("non-object metadata accepted")
+	}
+	storedParent, err := col.Get([]byte(parent))
+	if err != nil || string(storedParent) != string(good) {
+		t.Fatalf("parent mutated after metadata rejection: got=%s err=%v", storedParent, err)
+	}
+	children, err := col.ChunkChildren([]byte(parent))
+	if err != nil {
+		t.Fatalf("ChunkChildren: %v", err)
+	}
+	if len(children) != len(first.ChildIDs) {
+		t.Fatalf("children=%d want unchanged %d", len(children), len(first.ChildIDs))
+	}
+	assertChildMetadata(t, col, children, map[string]any{"tenant": "old"})
 }
 
 func TestIngestChunkedDocumentFailClosedBeforeMutation(t *testing.T) {
@@ -200,18 +327,23 @@ func TestRechunkReplacesChildrenAcrossIndexes(t *testing.T) {
 	parent := "src-r"
 	oldBody := "refund policy details for vintage lamps and shipping timelines. " +
 		"Warranty coverage spans two years from purchase date with proof of receipt."
-	v1, err := col.IngestChunkedDocument([]byte(parent), parentDoc(t, "Rechunk Me", oldBody, []float64{1, 0, 0}), fixedWindowCfg(60, 12), ChunkedIngestOptions{})
+	v1, err := col.IngestChunkedDocument([]byte(parent), parentDocWithMeta(t, "Rechunk Me", oldBody, []float64{1, 0, 0}, map[string]any{"tenant": "old", "revision": 1}), fixedWindowCfg(60, 12), ChunkedIngestOptions{})
 	if err != nil {
 		t.Fatalf("ingest v1: %v", err)
 	}
 	if len(v1.ChildIDs) < 2 {
 		t.Fatalf("v1 children=%d want multiple", len(v1.ChildIDs))
 	}
+	assertChildMetadata(t, col, v1.ChildIDs, map[string]any{"tenant": "old", "revision": 1})
+	oldTenant, err := col.FindByIndexValue("by_tenant", "old")
+	if err != nil || len(oldTenant) != len(v1.ChildIDs)+1 {
+		t.Fatalf("old tenant index=%d want parent+%d children err=%v", len(oldTenant), len(v1.ChildIDs), err)
+	}
 
 	newBody := "Completely different content about orchard machinery, tractor maintenance, " +
 		"and seasonal harvest scheduling across the valley cooperatives this autumn."
 	cfgV2 := chunking.Config{Strategy: chunking.StrategyRecursive, SizeUnit: chunking.SizeUnitRunes, Size: 80, Overlap: 16, Separators: chunking.DefaultSeparators()}
-	v2, err := col.IngestChunkedDocument([]byte(parent), parentDoc(t, "Rechunk Me", newBody, []float64{0, 1, 0}), cfgV2, ChunkedIngestOptions{})
+	v2, err := col.IngestChunkedDocument([]byte(parent), parentDocWithMeta(t, "Rechunk Me", newBody, []float64{0, 1, 0}, map[string]any{"tenant": "new", "revision": 2}), cfgV2, ChunkedIngestOptions{})
 	if err != nil {
 		t.Fatalf("ingest v2: %v", err)
 	}
@@ -221,6 +353,7 @@ func TestRechunkReplacesChildrenAcrossIndexes(t *testing.T) {
 	if v2.Replaced != len(v1.ChildIDs) {
 		t.Fatalf("v2.Replaced=%d want %d", v2.Replaced, len(v1.ChildIDs))
 	}
+	assertChildMetadata(t, col, v2.ChildIDs, map[string]any{"tenant": "new", "revision": 2})
 
 	live := map[string]bool{}
 	for _, id := range v2.ChildIDs {
@@ -280,6 +413,17 @@ func TestRechunkReplacesChildrenAcrossIndexes(t *testing.T) {
 	if len(byKind) != len(v2.ChildIDs) {
 		t.Fatalf("scalar index resolved %d docs want %d (live children)", len(byKind), len(v2.ChildIDs))
 	}
+	oldTenant, err = col.FindByIndexValue("by_tenant", "old")
+	if err != nil {
+		t.Fatalf("FindByIndexValue old tenant: %v", err)
+	}
+	if len(oldTenant) != 0 {
+		t.Fatalf("stale tenant scalar rows survived replacement: %q", oldTenant)
+	}
+	newTenant, err := col.FindByIndexValue("by_tenant", "new")
+	if err != nil || len(newTenant) != len(v2.ChildIDs)+1 {
+		t.Fatalf("new tenant index=%d want parent+%d children err=%v", len(newTenant), len(v2.ChildIDs), err)
+	}
 
 	// Exact vector search over the embedding field resolves only live documents;
 	// only the parent carries an embedding in this fixture.
@@ -317,6 +461,15 @@ func TestRechunkReplacesChildrenAcrossIndexes(t *testing.T) {
 	}
 	if len(byKindAfter) != len(v2.ChildIDs) {
 		t.Fatalf("reopened scalar index resolved %d docs want %d", len(byKindAfter), len(v2.ChildIDs))
+	}
+	assertChildMetadata(t, reopenedCol, v2.ChildIDs, map[string]any{"tenant": "new", "revision": 2})
+	oldTenantAfter, err := reopenedCol.FindByIndexValue("by_tenant", "old")
+	if err != nil || len(oldTenantAfter) != 0 {
+		t.Fatalf("reopened stale tenant rows=%q err=%v", oldTenantAfter, err)
+	}
+	newTenantAfter, err := reopenedCol.FindByIndexValue("by_tenant", "new")
+	if err != nil || len(newTenantAfter) != len(v2.ChildIDs)+1 {
+		t.Fatalf("reopened new tenant index=%d want parent+%d children err=%v", len(newTenantAfter), len(v2.ChildIDs), err)
 	}
 	searchAfter, err := reopenedCol.SearchText(TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 50})
 	if err != nil {
@@ -678,7 +831,7 @@ func TestChunkChildrenColumnStoreReopenPrefixParity(t *testing.T) {
 	dir, d, col := openChunkingColumnTestCollection(t)
 	result, err := col.IngestChunkedDocument(
 		[]byte("reopen-target"),
-		[]byte(`{"body":"reopen target body repeated reopen target body repeated"}`),
+		[]byte(`{"body":"reopen target body repeated reopen target body repeated","meta":{"tenant":"column-retained","workspace":"red"}}`),
 		fixedWindowCfg(14, 3),
 		ChunkedIngestOptions{},
 	)
@@ -713,6 +866,10 @@ func TestChunkChildrenColumnStoreReopenPrefixParity(t *testing.T) {
 			t.Fatalf("child %d=%q want %q", i, children[i], result.ChildIDs[i])
 		}
 	}
+	// "meta" is intentionally not a declared column: the existing
+	// retained-non-column capability must preserve it without widening the
+	// column schema.
+	assertChildMetadata(t, col2, children, map[string]any{"tenant": "column-retained", "workspace": "red"})
 }
 
 func TestChunkChildrenPrefixScanTruncationAndOrdinalGapFailClosed(t *testing.T) {
