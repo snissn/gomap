@@ -45,11 +45,11 @@ func TestValidateResponses(t *testing.T) {
 			t.Fatalf("error = %v, want cell identity mismatch", err)
 		}
 	})
-	t.Run("mismatched status", func(t *testing.T) {
+	t.Run("capability status transition", func(t *testing.T) {
 		got := responses()
 		got[3].Response.Row = json.RawMessage(strings.Replace(string(row), `"status":"supported"`, `"status":"unsupported"`, 1))
-		if err := validateResponses(7, got); err == nil || !strings.Contains(err.Error(), "status") {
-			t.Fatalf("error = %v, want status mismatch", err)
+		if err := validateResponses(7, got); err != nil {
+			t.Fatalf("status transition rejected: %v", err)
 		}
 	})
 	t.Run("worker error", func(t *testing.T) {

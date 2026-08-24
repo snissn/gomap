@@ -162,9 +162,9 @@ func validateResponses(ordinal int, responses []namedResponse) error {
 		if *got.Cell != *want.Cell {
 			return fmt.Errorf("%s: cell identity does not match %s", response.Leg, responses[0].Leg)
 		}
-		if *got.Status != *want.Status {
-			return fmt.Errorf("%s: status %q does not match %s status %q", response.Leg, *got.Status, responses[0].Leg, *want.Status)
-		}
+		// Capability-delivery candidates legitimately change unsupported control
+		// cells to supported. Preserve each leg's status; only cell identity must
+		// match for per-cell ordering.
 	}
 	return nil
 }
