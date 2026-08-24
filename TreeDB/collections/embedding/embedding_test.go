@@ -44,6 +44,116 @@ func TestRegistryCreateUnknownProviderFailsClosed(t *testing.T) {
 		t.Fatalf("Create(unknown)=%v want ErrUnknownProvider", err)
 	}
 }
+func TestRegistryCreateRejectsNilAndTypedNilEmbedders(t *testing.T) {
+	tests := []struct {
+		name    string
+		factory Factory
+	}{
+		{
+			name: "nil interface",
+			factory: func(Config) (Embedder, error) {
+				return nil, nil
+			},
+		},
+		{
+			name: "typed nil pointer",
+			factory: func(Config) (Embedder, error) {
+				var emb *panicOnUseEmbedder
+				return emb, nil
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := NewRegistry()
+			if err := reg.Register("malformed", tc.factory); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+			emb, err := reg.Create(Config{Provider: "malformed", Dimensions: 4})
+			if !errors.Is(err, ErrInvalidEmbedder) {
+				t.Fatalf("Create=(%v, %v) want ErrInvalidEmbedder", emb, err)
+			}
+			if emb != nil {
+				t.Fatalf("Create returned malformed embedder %#v", emb)
+			}
+		})
+	}
+}
+
+func TestRegistryCreateReleasesProviderLockAfterFactoryPanic(t *testing.T) {
+	reg := NewRegistry()
+	var panicFactory atomic.Bool
+	panicFactory.Store(true)
+	if err := reg.Register("panic-once", func(Config) (Embedder, error) {
+		if panicFactory.Swap(false) {
+			panic("factory exploded")
+		}
+		return stubEmbedder{dims: 4}, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	cfg := Config{Provider: "panic-once", Dimensions: 4}
+	if _, err := reg.Create(cfg); !errors.Is(err, ErrInvalidEmbedder) {
+		t.Fatalf("panic Create err=%v want ErrInvalidEmbedder", err)
+	}
+	emb, err := reg.Create(cfg)
+	if err != nil || emb == nil {
+		t.Fatalf("Create after panic=(%v, %v), provider lock was not released", emb, err)
+	}
+}
+
+func TestRegistryCreatePreservesFactoryCauseAndProviderContext(t *testing.T) {
+	cause := errors.New("provider credentials unavailable")
+	reg := NewRegistry()
+	if err := reg.Register("remote", func(Config) (Embedder, error) {
+		return nil, cause
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	emb, err := reg.Create(Config{Provider: "remote", Dimensions: 4})
+	if !errors.Is(err, cause) {
+		t.Fatalf("Create=(%v, %v) does not preserve factory cause", emb, err)
+	}
+	if !strings.Contains(err.Error(), `"remote"`) {
+		t.Fatalf("Create error %q does not name provider", err)
+	}
+}
+
+func TestRegistryCreateRejectsFactoryDimensionMismatch(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register("wrong-width", func(Config) (Embedder, error) {
+		return stubEmbedder{dims: 3}, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	emb, err := reg.Create(Config{Provider: "wrong-width", Dimensions: 4})
+	if !errors.Is(err, ErrDimensionMismatch) {
+		t.Fatalf("Create=(%v, %v) want ErrDimensionMismatch", emb, err)
+	}
+	if !strings.Contains(err.Error(), `"wrong-width"`) {
+		t.Fatalf("Create error %q does not name provider", err)
+	}
+}
+
+func TestRegistryCreateContextHonorsProviderLockCancellation(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register("blocked", func(Config) (Embedder, error) {
+		return stubEmbedder{dims: 4}, nil
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	unlock, err := reg.LockProvider(context.Background(), "blocked")
+	if err != nil {
+		t.Fatalf("LockProvider: %v", err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = reg.CreateContext(ctx, Config{Provider: "blocked", Dimensions: 4})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CreateContext err=%v want context deadline", err)
+	}
+}
 
 func TestRegistryRegisterRejectsDuplicateAndInvalid(t *testing.T) {
 	reg := NewRegistry()
@@ -181,4 +291,14 @@ func (s stubEmbedder) EmbedBatch(ctx context.Context, texts [][]byte) ([][]float
 		return nil, err
 	}
 	return out, nil
+}
+
+type panicOnUseEmbedder struct{}
+
+func (*panicOnUseEmbedder) Dimensions() int {
+	panic("Dimensions called on typed-nil embedder")
+}
+
+func (*panicOnUseEmbedder) EmbedBatch(context.Context, [][]byte) ([][]float32, error) {
+	panic("EmbedBatch called on typed-nil embedder")
 }

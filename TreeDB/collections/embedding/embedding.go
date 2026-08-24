@@ -32,7 +32,9 @@ import (
 //
 // Implementations must satisfy the package contracts: ordered fail-closed
 // batches, deterministic output for deterministic inputs, and no unbounded
-// concurrency (use RunBatch or equivalent bounded pooling).
+// concurrency (use RunBatch or equivalent bounded pooling). Implementations
+// need not support concurrent method calls on one instance; callers must
+// serialize shared instances or create one instance per worker.
 type Embedder interface {
 	// Dimensions reports the fixed width of every returned vector.
 	Dimensions() int
@@ -50,11 +52,17 @@ var (
 	// ErrProviderAlreadyRegistered is returned by Registry.Register on a
 	// duplicate name.
 	ErrProviderAlreadyRegistered = errors.New("embedding: provider already registered")
+	// ErrInvalidEmbedder is returned when a provider factory returns a nil or
+	// typed-nil Embedder.
+	ErrInvalidEmbedder = errors.New("embedding: invalid embedder")
 	// ErrEmptyBatch is returned by EmbedBatch for zero input texts.
 	ErrEmptyBatch = errors.New("embedding: empty batch")
 	// ErrDimensionMismatch is returned when declared dimensions disagree —
 	// between config and provider, or embedder and target vector index.
 	ErrDimensionMismatch = errors.New("embedding: dimension mismatch")
+	// ErrInvalidOutput is returned when a provider batch result violates the
+	// ordered, fixed-width, finite-vector contract.
+	ErrInvalidOutput = errors.New("embedding: invalid output")
 )
 
 // Config selects and parameterizes an embedder. Validate must pass before any
