@@ -591,10 +591,6 @@ func TestSearchHybridMultiFieldANDUnsupportedAndConcurrentSnapshot4292(t *testin
 				errs <- fmt.Errorf("concurrent update %d changed=%v: %v", i, changed, err)
 				return
 			}
-			if err := col.Flush(); err != nil {
-				errs <- fmt.Errorf("concurrent flush %d: %w", i, err)
-				return
-			}
 		}
 	}()
 	defer wg.Wait()

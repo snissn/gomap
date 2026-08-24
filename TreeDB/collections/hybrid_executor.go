@@ -9,6 +9,8 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const (
@@ -401,6 +403,64 @@ func hybridScalarLookupLimit(plan hybridSearchExecutionPlan) int {
 
 type hybridScalarAllowSet map[string]struct{}
 
+type hybridScalarLookupView struct {
+	domain   *collectionWriteDomain
+	snapshot *backenddb.Snapshot
+	catalog  *collectionCatalog
+}
+
+func (c *Collection) openHybridScalarLookupView() (*hybridScalarLookupView, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if err := c.flushBufferedNoIndex(); err != nil {
+		return nil, err
+	}
+	domain := c.writeDomain
+	if domain != nil {
+		domain.mu.RLock()
+	}
+	unlockOnError := func() {
+		if domain != nil {
+			domain.mu.RUnlock()
+		}
+	}
+	snapshot := c.db.AcquireSnapshot()
+	if snapshot == nil {
+		unlockOnError()
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snapshot)
+	if err != nil {
+		_ = snapshot.Close()
+		unlockOnError()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snapshot.Close()
+		unlockOnError()
+		return nil, errCollectionNotFound
+	}
+	return &hybridScalarLookupView{domain: domain, snapshot: snapshot, catalog: catalog}, nil
+}
+
+func (view *hybridScalarLookupView) close() {
+	if view == nil {
+		return
+	}
+	if view.snapshot != nil {
+		_ = view.snapshot.Close()
+		view.snapshot = nil
+	}
+	if view.domain != nil {
+		view.domain.mu.RUnlock()
+		view.domain = nil
+	}
+}
+
 func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybridScalarAllowSet, HybridSearchStats, error) {
 	if plan.scalarFilter == nil {
 		return nil, HybridSearchStats{}, nil
@@ -413,10 +473,11 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	if aggregateLimit <= 0 {
 		aggregateLimit = hybridScalarAggregateLimit(limit, hybridScalarFilterLookupCount(*plan.scalarFilter))
 	}
-	lookupState := hybridSearchDBStateToken(c.db)
-	if !lookupState.available {
-		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar lookup snapshot unavailable", ErrHybridSearchStaleIndex)
+	view, err := c.openHybridScalarLookupView()
+	if err != nil {
+		return nil, HybridSearchStats{}, fmt.Errorf("%w: hybrid scalar lookup snapshot unavailable: %v", ErrHybridSearchStaleIndex, err)
 	}
+	defer view.close()
 
 	filters := plan.scalarFilter.And
 	if len(filters) == 0 {
@@ -426,7 +487,7 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	stats := HybridSearchStats{}
 	for i := range filters {
 		stats.ScalarFilterLookups++
-		set, inputIDs, truncated, err := c.hybridScalarLeafAllowSet(filters[i], limit)
+		set, inputIDs, truncated, err := view.leafAllowSet(filters[i], limit)
 		stats.ScalarFilterInputIDs += inputIDs
 		if truncated {
 			stats.Truncated++
@@ -437,9 +498,6 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 		if stats.ScalarFilterInputIDs > uint64(aggregateLimit) {
 			stats.Truncated++
 			return nil, stats, fmt.Errorf("%w: hybrid scalar conjunction exceeded aggregate input-ID limit %d", ErrHybridSearchIndexUnavailable, aggregateLimit)
-		}
-		if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), lookupState); err != nil {
-			return nil, stats, err
 		}
 		sets = append(sets, set)
 	}
@@ -463,27 +521,69 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	return allowSet, stats, nil
 }
 
-func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
-	exists, err := c.hybridScalarIndexExists(filter.IndexName)
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+	if err := ValidateIndexName(filter.IndexName); err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
-	if !exists {
+	idx, ok := findIndex(view.catalog.meta.Indexes, filter.IndexName)
+	if !ok {
 		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q is unavailable", ErrHybridSearchIndexUnavailable, filter.IndexName)
 	}
-
-	var ids [][]byte
-	var truncated bool
-	if filter.Range != nil {
-		rangeOpts := *filter.Range
-		rangeOpts.Limit = limit
-		ids, truncated, err = c.FindByIndexRange(filter.IndexName, rangeOpts)
-	} else {
-		ids, truncated, err = c.FindByIndexValueLimit(filter.IndexName, filter.Value, limit)
+	if orderedBSONIndexRequiresCompoundRangeAPI(idx) {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q requires compound range lookup", ErrHybridSearchIndexUnavailable, filter.IndexName)
 	}
+	opts := IndexRangeOptions{
+		Lower: IndexRangeBound{Value: filter.Value, Inclusive: true},
+		Upper: IndexRangeBound{Value: filter.Value, Inclusive: true},
+		Limit: limit,
+	}
+	if filter.Range != nil {
+		opts = *filter.Range
+		opts.Limit = limit
+	}
+	start, end, empty, err := indexRangeScanBounds(idx.ValueType, opts)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if empty {
+		return hybridScalarAllowSet{}, 0, false, nil
+	}
+	exactPrefix, exactPrefixScan, err := exactIndexRangePrefix(idx.ValueType, opts)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	var bufferedTable memtable.Table
+	if exactPrefixScan {
+		bufferedTable, err = bufferedIndexPrefixTableLocked(view.domain, view.catalog.meta.Name, filter.IndexName, false, exactPrefix, 0)
+	} else {
+		bufferedTable, err = bufferedIndexRangeTableLocked(view.domain, view.catalog.meta.Name, filter.IndexName, start, end, 0, nil)
+	}
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if bufferedTable != nil {
+		defer resetCollectionRunTable(bufferedTable)
+	}
+	var bufferedIt iterator.UnsafeIterator
+	if bufferedTable != nil {
+		bufferedIt = bufferedTable.NewIterator(start, end)
+		defer func() { _ = bufferedIt.Close() }()
+	}
+	persistedIt, err := collectionIteratorAtCatalogRoot(view.snapshot, view.catalog, collectionSecondaryRootName(view.catalog.meta.Name, idx.Name), start, end, true)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+	}
+	if persistedIt != nil {
+		defer func() { _ = persistedIt.Close() }()
+	}
+	ids := make([][]byte, 0, min(limit, hybridScalarDefaultLookupLimit))
+	truncated, err := scanMergedCollectionIndexIDs(bufferedIt, persistedIt, idx.ValueType, limit, shouldDedupeIndexDocumentIDs(idx, view.catalog.meta.Options), func(id []byte) (bool, error) {
+		ids = append(ids, bytes.Clone(id))
+		return true, nil
+	})
 	inputIDs := uint64(len(ids))
 	if err != nil {
-		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %w", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
+		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
 	if truncated {
 		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
@@ -493,32 +593,6 @@ func (c *Collection) hybridScalarLeafAllowSet(filter HybridScalarFilter, limit i
 		set[string(id)] = struct{}{}
 	}
 	return set, inputIDs, false, nil
-}
-
-func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
-	if err := ValidateIndexName(indexName); err != nil {
-		return false, err
-	}
-	if c == nil {
-		return false, errCollectionNil
-	}
-	if c.db == nil {
-		return false, errCollectionDBNil
-	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return false, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return false, err
-	}
-	if catalog == nil {
-		return false, errCollectionNotFound
-	}
-	_, ok := findIndex(catalog.meta.Indexes, indexName)
-	return ok, nil
 }
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
