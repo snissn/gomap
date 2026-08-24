@@ -223,11 +223,12 @@ func (c *Collection) lockChunkMutation(ctx context.Context) (func(), error) {
 //
 // Lifecycle: parent ID, text field, and child plan validate before mutation.
 // A per-parent lock shared across collection handles serializes plan through
-// replacement. The parent upsert, stale-child DeleteBatch, and replacement
-// InsertBatch remain separate durable commits: each batch is atomic, but an
-// error between boundaries is commit-ambiguous. The source may be old, new, or
-// between those states; retrying converges because child IDs derive only from
-// parent ID and ordinal. Atomic durable publication is deferred to #4284.
+// replacement. This direct chunk-ingest API keeps separate parent upsert,
+// stale-child DeleteBatch, and replacement InsertBatch durable commits: each
+// batch is atomic, but an error between boundaries is commit-ambiguous. The
+// source may be old, new, or between those states; retrying converges because
+// child IDs derive only from parent ID and ordinal. IngestSources uses the
+// stronger one-source atomic publication path.
 //
 // Children are ordinary documents to the index layer: text, scalar, and vector
 // indexes maintain them through the normal InsertBatch/DeleteBatch paths, so

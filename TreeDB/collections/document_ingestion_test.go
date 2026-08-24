@@ -17,6 +17,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 // openIngestTestCollection opens a collection wired for full RAG ingestion
@@ -60,6 +61,60 @@ func openIngestTestCollection(t testing.TB, dims int) (string, *backenddb.DB, *C
 		StorePositions: true,
 	}); err != nil {
 		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	return dir, d, col
+}
+
+func openCommandWALIngestTestCollection(t testing.TB, dims int) (string, *backenddb.DB, *Collection) {
+	t.Helper()
+	dir := t.TempDir()
+	setup, err := backenddb.Open(backenddb.Options{
+		Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed, DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("open setup db: %v", err)
+	}
+	mgr := NewCollectionManager(setup)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{{
+			Name: "by_kind", Field: chunking.MetaFieldKind, ValueType: IndexValueString,
+		}},
+		VectorIndexes: []VectorIndexDefinition{{
+			Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims,
+		}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{
+		Name: "lexical", Version: TextIndexVersionV1, Fields: []TextIndexField{{Field: "body"}}, StorePositions: true,
+	}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	if err := setup.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint setup: %v", err)
+	}
+	if err := setup.Close(); err != nil {
+		t.Fatalf("Close setup: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open command WAL db: %v", err)
+	}
+	if !d.CommandWALEnabled() {
+		t.Fatal("command WAL fixture reopened without command WAL")
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection command WAL: %v", err)
 	}
 	return dir, d, col
 }
@@ -854,10 +909,9 @@ func TestIngestSourcesFaultBoundaryDurabilityReopen(t *testing.T) {
 	assertIndexParity(t, col2, completeParents)
 }
 
-// TestIngestSourcesRetryConvergesAfterMidBatchFault injects a fault before
-// either mutation boundary during a changed re-ingest. The storage error is
-// surfaced with its source identity; a fault-free retry converges to exactly
-// the new child set with full index parity and no stale rows.
+// TestIngestSourcesRetryConvergesAfterMidBatchFault injects a fault while the
+// replacement candidate is being planned. The old source remains published,
+// and a fault-free retry converges to exactly the new child set.
 func TestIngestSourcesRetryConvergesAfterMidBatchFault(t *testing.T) {
 	_, d, col := openIngestTestCollection(t, 256)
 	cfg := ingestTestCfg(256)
@@ -893,33 +947,42 @@ func TestIngestSourcesRetryConvergesAfterMidBatchFault(t *testing.T) {
 	_ = d
 }
 
-func TestIngestSourcesCommitAmbiguityBoundariesReopenAndRetry(t *testing.T) {
+func TestIngestSourcesAtomicPublicationBoundariesReopenAndRetry(t *testing.T) {
 	tests := []struct {
 		name          string
 		setHook       func(*ingestFaultHooks)
 		wantParentNew bool
-		wantChildren  bool
 	}{
 		{
-			name: "after delete",
+			name: "after delete plan",
 			setHook: func(h *ingestFaultHooks) {
 				h.afterDelete = func(int) error { return errIngestInjected }
 			},
 		},
 		{
-			name: "after insert",
+			name: "after insert plan",
 			setHook: func(h *ingestFaultHooks) {
 				h.afterInsert = func(int) error { return errIngestInjected }
 			},
-			wantChildren: true,
 		},
 		{
-			name: "after parent",
+			name: "after parent plan",
 			setHook: func(h *ingestFaultHooks) {
 				h.afterParent = func(int) error { return errIngestInjected }
 			},
+		},
+		{
+			name: "before publication",
+			setHook: func(h *ingestFaultHooks) {
+				h.beforePublish = func(int) error { return errIngestInjected }
+			},
+		},
+		{
+			name: "after publication",
+			setHook: func(h *ingestFaultHooks) {
+				h.afterPublish = func(int) error { return errIngestInjected }
+			},
 			wantParentNew: true,
-			wantChildren:  true,
 		},
 	}
 	for _, tc := range tests {
@@ -939,19 +1002,19 @@ func TestIngestSourcesCommitAmbiguityBoundariesReopenAndRetry(t *testing.T) {
 				t.Fatalf("boundary error=%v typed=%+v", err, ingestErr)
 			}
 			if err := d.Checkpoint(); err != nil {
-				t.Fatalf("Checkpoint ambiguous state: %v", err)
+				t.Fatalf("Checkpoint boundary state: %v", err)
 			}
 			if err := d.Close(); err != nil {
-				t.Fatalf("Close ambiguous state: %v", err)
+				t.Fatalf("Close boundary state: %v", err)
 			}
 			d2, err := backenddb.Open(backenddb.Options{Dir: dir})
 			if err != nil {
-				t.Fatalf("reopen ambiguous state: %v", err)
+				t.Fatalf("reopen boundary state: %v", err)
 			}
 			defer func() { _ = d2.Close() }()
 			col2, err := NewCollectionManager(d2).OpenCollection("docs")
 			if err != nil {
-				t.Fatalf("OpenCollection after ambiguous state: %v", err)
+				t.Fatalf("OpenCollection after boundary state: %v", err)
 			}
 
 			parentRaw, err := col2.Get([]byte("src-0"))
@@ -967,20 +1030,94 @@ func TestIngestSourcesCommitAmbiguityBoundariesReopenAndRetry(t *testing.T) {
 				t.Fatalf("parent new=%t want %t body=%q", gotNew, tc.wantParentNew, parentBody[:min(80, len(parentBody))])
 			}
 			children, err := col2.ChunkChildren([]byte("src-0"))
-			if err != nil {
-				t.Fatalf("ChunkChildren ambiguous state: %v", err)
+			if err != nil || len(children) == 0 {
+				t.Fatalf("atomic boundary lost children: count=%d err=%v", len(children), err)
 			}
-			if got := len(children) > 0; got != tc.wantChildren {
-				t.Fatalf("children present=%t count=%d want %t", got, len(children), tc.wantChildren)
+			query := "tok0"
+			if tc.wantParentNew {
+				query = "tok7"
 			}
+			resp, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: query, TopK: 100})
+			if err != nil || len(resp.Results) == 0 {
+				t.Fatalf("atomic boundary text query %q results=%d err=%v", query, len(resp.Results), err)
+			}
+			assertIndexParity(t, col2, []string{"src-0"})
 
 			cfg.hooks = nil
 			mustIngest(t, col2, []SourceDocument{newSource}, cfg)
 			assertIndexParity(t, col2, []string{"src-0"})
-			resp, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: "tok7", TopK: 100})
-			if err != nil || len(resp.Results) == 0 {
-				t.Fatalf("retry new text results=%d err=%v", len(resp.Results), err)
+		})
+	}
+}
+
+func TestIngestSourcesCommandWALPublicationCutsRecoverWholeSource(t *testing.T) {
+	tests := []struct {
+		name    string
+		matches func(durabilitycut.Event) bool
+		wantNew bool
+	}{
+		{
+			name: "before command WAL append preserves old",
+			matches: func(event durabilitycut.Event) bool {
+				return event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeDependencyAppend
+			},
+		},
+		{
+			name: "before applied target selection replays new",
+			matches: func(event durabilitycut.Event) bool {
+				return event.Resource == durabilitycut.ResourceMeta && event.Point == durabilitycut.BeforeAppliedLSNAdvance
+			},
+			wantNew: true,
+		},
+		{
+			name: "after applied target selection retains new",
+			matches: func(event durabilitycut.Event) bool {
+				return event.Resource == durabilitycut.ResourceMeta && event.Point == durabilitycut.AfterAppliedLSNAdvance
+			},
+			wantNew: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, d, col := openCommandWALIngestTestCollection(t, 64)
+			cfg := ingestTestCfg(64)
+			mustIngest(t, col, []SourceDocument{ingestTestSource("src-0", 0)}, cfg)
+			fired := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if !fired && tc.matches(event) {
+					fired = true
+					return errIngestInjected
+				}
+				return nil
+			})
+			_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-0", 7)}, cfg)
+			restore()
+			if !fired || !errors.Is(err, errIngestInjected) {
+				t.Fatalf("cut fired=%t err=%v", fired, err)
 			}
+			_ = d.Close()
+
+			reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatalf("reopen after cut: %v", err)
+			}
+			defer func() { _ = reopened.Close() }()
+			reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection after cut: %v", err)
+			}
+			parentRaw, err := reopenedCol.Get([]byte("src-0"))
+			if err != nil {
+				t.Fatalf("Get parent after cut: %v", err)
+			}
+			var parent map[string]any
+			if err := json.Unmarshal(parentRaw, &parent); err != nil {
+				t.Fatalf("decode parent after cut: %v", err)
+			}
+			if gotNew := strings.Contains(parent["body"].(string), "tok7"); gotNew != tc.wantNew {
+				t.Fatalf("recovered new=%t want %t", gotNew, tc.wantNew)
+			}
+			assertIndexParity(t, reopenedCol, []string{"src-0"})
 		})
 	}
 }

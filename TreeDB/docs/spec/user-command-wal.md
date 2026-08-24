@@ -343,6 +343,7 @@ replayable without adding query-wide mutation semantics.
 | Collection update callback | explicit document ID plus Go callback | `CollectionUpdateBatchByID` after callback execution | PR5 implementation: callback itself is not replayed. WAL logs final accepted replacements; missing/no-op updates do not append production frames. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
+| Source-level RAG replacement | `Collection.IngestSources` for one parent | `CollectionReplaceSourceByID` | `WAL-supported`; one frame contains the stale parent/child delete set and complete new parent/child documents, and replay re-enters the atomic source publisher. |
 | Collection/catalog metadata | create collection | `CatalogCreateCollection` | PR6 implementation: `WAL-supported`; payload carries canonical collection metadata, replay is idempotent for matching metadata and fail-closed for incompatible metadata. |
 | Collection/index metadata | create/drop index | future catalog command | `WAL-rejected` in PR6; public index DDL fails before frame append or `AppliedCommandLSN` advancement until index catalog commands land. |
 | Collection vector index rebuild | explicit index name through `Collection.RebuildVectorIndex` | `CollectionRebuildVectorIndex` | `WAL-supported` for `native_runtime` and explicit `column_graph` rebuild/publish maintenance. Payload carries only collection and index names. Replay publishes a complete native graph root for `native_runtime`; for `column_graph`, it rebuilds physical assets or publishes a defined no-op status boundary. |
@@ -368,9 +369,10 @@ rather than skipping frames.
 ### 6.1 Batch Atomicity
 
 V1 batch commands are atomic at the command-frame level. `RawKVBatch`,
-`CollectionInsertBatchByID`, `CollectionDeleteBatchByID`, and
-`CollectionReplaceBatchByID` are each represented as one command frame with one
-LSN, frame-level CRC integrity, and all-or-nothing replay semantics.
+`CollectionInsertBatchByID`, `CollectionDeleteBatchByID`,
+`CollectionUpdateBatchByID`, and `CollectionReplaceSourceByID` are each
+represented as one command frame with one LSN, frame-level CRC integrity, and
+all-or-nothing replay semantics.
 
 If a batch is too large for the configured command-frame limits, the V1 WAL-on
 durable mode must reject it before assigning an LSN. The implementation must not
