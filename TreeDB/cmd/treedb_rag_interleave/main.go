@@ -23,6 +23,7 @@ import (
 const (
 	expectedCellCount               = 384
 	expectedWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
+	maxCellAttempts                 = 2
 )
 
 var legOrder = [4]string{"A1", "B1", "B2", "A2"}
@@ -91,11 +92,17 @@ type workerEvidence struct {
 	FinishedAt        time.Time `json:"finished_at"`
 }
 
+type legAttempt struct {
+	Attempt    int       `json:"attempt"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+	Error      string    `json:"error,omitempty"`
+}
+
 type legRow struct {
-	Leg        string          `json:"leg"`
-	StartedAt  time.Time       `json:"started_at"`
-	FinishedAt time.Time       `json:"finished_at"`
-	Row        json.RawMessage `json:"row"`
+	Leg      string          `json:"leg"`
+	Attempts []legAttempt    `json:"attempts"`
+	Row      json.RawMessage `json:"row"`
 }
 
 type cellEvidence struct {
@@ -287,12 +294,21 @@ func runCoordinator(cfg config) error {
 		rows := make([]legRow, 0, len(order))
 		for _, name := range order {
 			worker := byName[name]
-			requestStarted := time.Now().UTC()
-			response, err := worker.request(ordinal)
-			requestFinished := time.Now().UTC()
-			if err != nil {
-				stopWorkers(workers)
-				return fmt.Errorf("cell %d %s: %w", ordinal, name, err)
+			var response workerResponse
+			attempts := make([]legAttempt, 0, maxCellAttempts)
+			for attempt := 1; attempt <= maxCellAttempts; attempt++ {
+				requestStarted := time.Now().UTC()
+				var err error
+				response, err = worker.request(ordinal)
+				requestFinished := time.Now().UTC()
+				if err != nil {
+					stopWorkers(workers)
+					return fmt.Errorf("cell %d %s attempt %d: %w", ordinal, name, attempt, err)
+				}
+				attempts = append(attempts, legAttempt{Attempt: attempt, StartedAt: requestStarted, FinishedAt: requestFinished, Error: response.Error})
+				if response.Error == "" {
+					break
+				}
 			}
 			result := namedResponse{Leg: name, Response: response}
 			if err := validateResponse(ordinal, result); err != nil {
@@ -300,7 +316,7 @@ func runCoordinator(cfg config) error {
 				return fmt.Errorf("cell %d: %w", ordinal, err)
 			}
 			named = append(named, result)
-			rows = append(rows, legRow{Leg: name, StartedAt: requestStarted, FinishedAt: requestFinished, Row: response.Row})
+			rows = append(rows, legRow{Leg: name, Attempts: attempts, Row: response.Row})
 		}
 		if err := validateResponses(ordinal, named); err != nil {
 			stopWorkers(workers)

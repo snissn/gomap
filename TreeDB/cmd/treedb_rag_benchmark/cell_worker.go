@@ -113,8 +113,8 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		defer os.RemoveAll(root)
 	}
 
-	openEnvironment := func(embeddingCell string, ordinal int) (*applicationCellWorkerEnvironment, error) {
-		environmentDir := filepath.Join(root, embeddingCell, fmt.Sprintf("cell-%03d", ordinal))
+	openEnvironment := func(embeddingCell string, ordinal, attempt int) (*applicationCellWorkerEnvironment, error) {
+		environmentDir := filepath.Join(root, embeddingCell, fmt.Sprintf("cell-%03d-attempt-%02d", ordinal, attempt))
 		if err := os.RemoveAll(environmentDir); err != nil {
 			return nil, err
 		}
@@ -145,6 +145,7 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 	}
 
 	decoder := json.NewDecoder(input)
+	attempts := make(map[int]int)
 	for {
 		var request applicationCellWorkerRequest
 		if err := decoder.Decode(&request); err != nil {
@@ -164,17 +165,19 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			}
 			continue
 		}
+		attempt := attempts[request.Ordinal]
+		attempts[request.Ordinal] = attempt + 1
 
 		var state *applicationCellWorkerEnvironment
 		var env *applicationEnvironment
 		var queryVectors map[string][]float32
 		if unsupportedCapability(cell) == nil {
-			state, err := openEnvironment(cell.Embedding, request.Ordinal)
+			state, err := openEnvironment(cell.Embedding, request.Ordinal, attempt)
 			if err != nil {
 				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: err.Error()}
 				_ = encoder.Encode(response)
 				_ = buffered.Flush()
-				return err
+				continue
 			}
 			env, queryVectors = state.env, state.queryVectors
 		}
@@ -197,9 +200,6 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		}
 		if err := buffered.Flush(); err != nil {
 			return err
-		}
-		if response.Error != "" {
-			return fmt.Errorf("cell %d: %s", request.Ordinal, response.Error)
 		}
 	}
 }

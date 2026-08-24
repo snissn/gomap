@@ -45,8 +45,8 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 		t.Fatal("matrix has no unsupported cell")
 	}
 	input := strings.NewReader(
-		`{"ordinal":` + jsonInt(unsupportedOrdinal) + `}` + "\n" +
-			`{"ordinal":` + jsonInt(applicationCellCount()) + `}` + "\n",
+		`{"ordinal":` + jsonInt(applicationCellCount()) + `}` + "\n" +
+			`{"ordinal":` + jsonInt(unsupportedOrdinal) + `}` + "\n",
 	)
 	var output bytes.Buffer
 	cfg := defaultApplicationConfig()
@@ -63,19 +63,19 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 	if err := decoder.Decode(&ready); err != nil || !ready.Ready || ready.CellCount != applicationCellCount() {
 		t.Fatalf("ready=%+v err=%v", ready, err)
 	}
-	var unsupported applicationCellWorkerResponse
-	if err := decoder.Decode(&unsupported); err != nil {
-		t.Fatalf("decode unsupported: %v", err)
-	}
-	if unsupported.Error != "" || unsupported.Row == nil || unsupported.Row.Status != "unsupported" {
-		t.Fatalf("unsupported response=%+v", unsupported)
-	}
 	var outOfRange applicationCellWorkerResponse
 	if err := decoder.Decode(&outOfRange); err != nil {
 		t.Fatalf("decode range response: %v", err)
 	}
 	if outOfRange.Error == "" || outOfRange.Row != nil {
 		t.Fatalf("range response=%+v", outOfRange)
+	}
+	var unsupported applicationCellWorkerResponse
+	if err := decoder.Decode(&unsupported); err != nil {
+		t.Fatalf("decode unsupported after range error: %v", err)
+	}
+	if unsupported.Error != "" || unsupported.Row == nil || unsupported.Row.Status != "unsupported" {
+		t.Fatalf("unsupported response=%+v", unsupported)
 	}
 }
 
