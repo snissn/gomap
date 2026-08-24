@@ -3,11 +3,11 @@
 This runbook reproduces the repaired M1 application baseline. The historical
 C1 code is retained only as an unfiltered hashing regression cell; it is not a
 product or ingestion claim. The authoritative artifact schema is
-`treedb_rag_application_baseline/v2`.
+`treedb_rag_application_baseline/v3`.
 
 Product base: `99929cdeb2ae2ec1e411236c853eb36942075d72` (accepted #4293 and
 #4294). Harness revision used by the committed baseline:
-`e0eb90f15a4a3de2cafed54509235dbeea96bd83`.
+`e3de4a6f1e7de8450081c7357a9ff5575cf847bd`.
 
 ## What the repaired harness proves
 
@@ -28,6 +28,17 @@ Product base: `99929cdeb2ae2ec1e411236c853eb36942075d72` (accepted #4293 and
 - Artifact guards reject cross-tenant/workspace results, unbounded document
   fetch, full-document-scan fallback, and parent-cap violations. Comparison
   identities bind work, projection, and quality digests.
+- Final evidence reads `debug.ReadBuildInfo` and rejects an absent, dirty, or
+  mismatched `vcs.revision`; the CLI harness SHA is an assertion, not an
+  override. `config_sha256` covers only TopK/candidate/index parameters,
+  warmup/repetition/sample counts, and ingestion repetitions, so paths, command,
+  revisions, and host provenance cannot split matched workload identities.
+- Warmup query ordinal rotates through the complete committed query set,
+  independently of timed samples.
+- Direct score-only quality attribution comes from separate untimed compact
+  queries with identical work, route, and filter. Timed score-only rows retain
+  zero document fetches and never publish projection-stripped attribution as
+  zero.
 
 ## Application fixture
 
@@ -41,7 +52,11 @@ function. Each query has duplicate-heavy relevant chunks from the same parent.
 
 The lifecycle performs unchanged re-ingest, an updated source replacement,
 source+children deletion, checkpoint, close, cold reopen, and byte-identical
-child snapshot validation. Parent metadata remains in the source-ingestion
+child snapshot validation. Before and after reopen it also executes the
+fixture-known `guidance` text query, exact native vector-index queries for every
+live child vector, and `updated_year` scalar-index lookups. Both sides must
+equal the exact live fixture set; stale, missing, corrupt, or false parity fails
+the M1 run and artifact writer. Parent metadata remains in the source-ingestion
 collection. Because #4290 has not propagated it to children, all tenant rows
 fail closed as typed capability evidence.
 
@@ -117,14 +132,23 @@ export CGO_ENABLED=1
 export GOCACHE="$HOME/.cache/gomap-go126"
 export GOWORK=off
 
-go build -trimpath -o /tmp/treedb_rag_benchmark_e0eb90f15 \
-  ./TreeDB/cmd/treedb_rag_benchmark
+SOURCE_ROOT="$PWD"
+rm -rf /tmp/gomap-rag-evidence-e3de4a6f1
+git clone --no-checkout "$SOURCE_ROOT" /tmp/gomap-rag-evidence-e3de4a6f1
+git -C /tmp/gomap-rag-evidence-e3de4a6f1 \
+  checkout e3de4a6f1e7de8450081c7357a9ff5575cf847bd
+cd /tmp/gomap-rag-evidence-e3de4a6f1
 
-/tmp/treedb_rag_benchmark_e0eb90f15 \
-  -out-dir TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23 \
-  -dir /tmp/gomap-4289-rag-baseline-db-e0eb90f15-go126 \
+go build -buildvcs=true -trimpath \
+  -o /tmp/treedb_rag_benchmark_e3de4a6f1 \
+  ./TreeDB/cmd/treedb_rag_benchmark
+go version -m /tmp/treedb_rag_benchmark_e3de4a6f1
+
+/tmp/treedb_rag_benchmark_e3de4a6f1 \
+  -out-dir "$SOURCE_ROOT/TreeDB/docs/benchmarks/treedb_rag_application_baseline_2026-08-23" \
+  -dir /tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126 \
   -product-base-sha 99929cdeb2ae2ec1e411236c853eb36942075d72 \
-  -harness-revision e0eb90f15a4a3de2cafed54509235dbeea96bd83 \
+  -harness-revision e3de4a6f1e7de8450081c7357a9ff5575cf847bd \
   -host-note "Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1"
 ```
 
@@ -136,16 +160,18 @@ A bounded diagnostic uses `-smoke`. Its authority is
 Host: Apple M3, Darwin arm64, 8 logical CPUs, Go 1.26.0, CGO enabled.
 
 Actual `IngestSources` fresh-DB source docs/s:
-`149.13, 243.89, 308.75, 318.69, 343.83` in execution order. Median/p95 are
-`308.75 / 338.80` docs/s. Median/p95 allocation is
-`2,162,690 / 2,571,587` B/source. Every repetition reopened with identical
-parent/child state.
+`138.34, 234.42, 235.80, 238.99, 296.52` in execution order. Median/p95 are
+`235.80 / 285.02` docs/s. Median/p95 allocation is
+`2,164,257 / 2,565,956` B/source. Every repetition reopened with identical
+parent/child and queried text/vector/scalar index state.
 
 The historical 37.59 docs/s / 132 GiB-per-operation regime did not reproduce.
-Before any #4284 candidate is measured, the frozen attainable objective is:
+Because the evidence-integrity repair required exact regeneration, the
+prospective #4284/#4288 handoff replaces the prior noisy M1 gate. Before any
+#4284 candidate is measured, the frozen attainable objective is:
 
-- source docs/s >= `355.06` (15% over the M1 median);
-- B/source <= `1,946,421` (10% below the M1 median);
+- source docs/s >= `271.17` (15% over the M1 median);
+- B/source <= `1,947,831` (10% below the M1 median);
 - all structural, durability, and matched-quality gates remain mandatory.
 
 Noise policy: fresh DB per ingestion repetition; median is the decision
@@ -155,10 +181,10 @@ matched-quality row. Base/final work, projection, quality, fixture, config, and
 vector digests must match exactly.
 
 Representative hashing c1 rows (QPS / p99 ms): text score
-`24,133 / 0.111`, vector score `68,114 / 0.035`, hybrid score
-`16,276 / 0.215`, and HTTP hybrid fetch `1,315 / 2.245`. Representative semantic
-c1 rows: text score `23,233 / 0.121`, vector score `57,409 / 0.031`, hybrid score
-`14,126 / 0.195`, and HTTP hybrid fetch `361 / 5.237`.
+`23,984 / 0.122`, vector score `65,866 / 0.045`, hybrid score
+`15,857 / 0.204`, and HTTP hybrid fetch `1,457 / 1.801`. Representative semantic
+c1 rows: text score `15,806 / 0.379`, vector score `58,650 / 0.042`, hybrid score
+`17,191 / 0.152`, and HTTP hybrid fetch `365 / 4.668`.
 
 ## Durable artifacts
 
@@ -172,7 +198,7 @@ c1 rows: text score `23,233 / 0.121`, vector score `57,409 / 0.031`, hybrid scor
   artifacts plus product/harness/binary/fixture/config/vector bindings.
 
 The retained explicit DB root is
-`/tmp/gomap-4289-rag-baseline-db-e0eb90f15-go126`. All DB handles, document
+`/tmp/gomap-4289-rag-baseline-db-e3de4a6f1-go126`. All DB handles, document
 services, and HTTP servers are closed after collection. The DB root is retained
 only for local forensic inspection; the committed raw artifacts are the durable
 repository evidence.

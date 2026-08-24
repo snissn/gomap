@@ -1,21 +1,21 @@
 {
   "schema": "treedb_rag_application_manifest/v1",
   "product_base_sha": "99929cdeb2ae2ec1e411236c853eb36942075d72",
-  "harness_revision": "e0eb90f15a4a3de2cafed54509235dbeea96bd83",
+  "harness_revision": "e3de4a6f1e7de8450081c7357a9ff5575cf847bd",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
-  "config_sha256": "d5d66991cfbd9a79acea6879b04bb20786179ce05ae3338c9fcb3bafba593057",
+  "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
-  "binary_sha256": "dc95599f0b32649ed298ef6a48fdd4d9e96ca32064bb27254977b97a0e0dbe59",
+  "binary_sha256": "88b4f1485307ff1b4cd00ec2d1769df94e49b61d479772d5c2121ff8b0848d7e",
   "artifacts": [
     {
       "path": "treedb_rag_application_baseline.json",
-      "sha256": "6e981208cdeeb4bb6bcabb314e7d910b594694616ba5c29ae557da7247494270",
-      "bytes": 9172633
+      "sha256": "c6c3d765b7e64e81d0ea5e2aacc6a8b26b95b5162dfc308d30664a32321d6f76",
+      "bytes": 9186905
     },
     {
       "path": "treedb_rag_application_baseline.md",
-      "sha256": "64f2dc641e618e327d66489065843f9158e86440927abb80e550d3e53f1f0587",
-      "bytes": 11401
+      "sha256": "d8334bdcb06b6768694b571554eca0fc4f2841b8a10fe0767e7f215402e4bf32",
+      "bytes": 11684
     }
   ]
 }
