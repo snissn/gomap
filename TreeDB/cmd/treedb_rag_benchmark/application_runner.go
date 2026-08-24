@@ -528,7 +528,7 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 				for _, collapse := range []string{"disabled", "enabled_cap_2"} {
 					for _, surface := range applicationSurfaces {
 						for _, clients := range applicationClients {
-							rows = append(rows, applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, VectorRoute: "declared_column_graph_ann", Clients: clients})
+							rows = append(rows, applicationCellIdentity{Route: route, Projection: projection, Filter: filter, Collapse: collapse, Surface: surface, Embedding: embeddingCell, VectorRoute: "declared_column_graph_exact", Clients: clients})
 						}
 					}
 				}
@@ -1186,6 +1186,51 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 	return row, nil
 }
 
+func applicationDirectScalarFilter(cell applicationCellIdentity) *collections.HybridScalarFilter {
+	if cell.Filter == filterTenantAlpha {
+		return &collections.HybridScalarFilter{IndexName: "meta_tenant_id", Value: "alpha"}
+	}
+	return nil
+}
+
+func applicationServiceFilter(cell applicationCellIdentity) *documentservice.Filter {
+	if cell.Filter == filterTenantAlpha {
+		return &documentservice.Filter{Field: "meta.tenant_id", Operator: "==", Value: "alpha"}
+	}
+	return nil
+}
+
+func applicationScopeViolations(fixture *applicationFixture, filter string, ids []string) (int, int) {
+	if filter == filterUnfiltered {
+		return 0, 0
+	}
+	crossTenant, crossWorkspace := 0, 0
+	for _, id := range ids {
+		parentID := id
+		if parent, _, ok := chunking.ParseChildID(id); ok {
+			parentID = parent
+		}
+		var source *applicationSource
+		for i := range fixture.Sources {
+			if fixture.Sources[i].ID == parentID {
+				source = &fixture.Sources[i]
+				break
+			}
+		}
+		if source == nil {
+			crossTenant++
+			crossWorkspace++
+			continue
+		}
+		if source.Tenant != "alpha" {
+			crossTenant++
+		}
+		if (filter == filterTenantAlphaWorkspaceRed || filter == filterModerateRange) && source.Workspace != "red" {
+			crossWorkspace++
+		}
+	}
+	return crossTenant, crossWorkspace
+}
 func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
 	if rep%2 == 1 {
@@ -1212,6 +1257,12 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 				queryStart := time.Now()
 				result, err := call(query)
 				sample := querySample{Repetition: rep, Ordinal: ordinal, QueryID: query.ID, Millis: time.Since(queryStart).Seconds() * 1000, RequestBytes: result.RequestBytes, ResponseBytes: result.ResponseBytes}
+				if result.Counters == nil {
+					result.Counters = map[string]float64{}
+				}
+				crossTenant, crossWorkspace := applicationScopeViolations(fixture, cell.Filter, result.IDs)
+				result.Counters["cross_tenant_results"] += float64(crossTenant)
+				result.Counters["cross_workspace_results"] += float64(crossWorkspace)
 				if err != nil {
 					sample.Error = err.Error()
 				}
@@ -1255,6 +1306,7 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 
 func runDirectQuery(cfg applicationConfig, col *collections.Collection, query applicationQuery, vector []float32, cell applicationCellIdentity, attributionQuery bool) (queryResult, error) {
 	opts := collections.HybridSearchOptions{TopK: cfg.TopK}
+	opts.ScalarFilter = applicationDirectScalarFilter(cell)
 	if cell.Route == "text_only" || cell.Route == "hybrid" {
 		opts.Text = &collections.HybridTextQuery{IndexName: "content", Query: query.Text, CandidateLimit: cfg.CandidateLimit}
 	}
@@ -1297,13 +1349,13 @@ func runHTTPQuery(cfg applicationConfig, env *applicationEnvironment, query appl
 	switch cell.Route {
 	case "text_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/keyword"
-		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit}
+		request = documentservice.KeywordSearchRequest{Query: query.Text, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, Filter: applicationServiceFilter(cell)}
 	case "vector_only":
 		path = "/v1/indexes/" + applicationCollection + "/search/vector"
-		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteAnn}
+		request = documentservice.DenseVectorSearchRequest{QueryEmbedding: vector, TopK: cfg.TopK, EfSearch: cfg.EfSearch, Route: documentservice.RouteExact, Filter: applicationServiceFilter(cell)}
 	case "hybrid":
 		path = "/v1/indexes/" + applicationCollection + "/search/hybrid"
-		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch}
+		request = documentservice.HybridSearchRequest{Query: query.Text, QueryEmbedding: vector, TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, Filter: applicationServiceFilter(cell)}
 	default:
 		return queryResult{}, fmt.Errorf("unknown route %q", cell.Route)
 	}

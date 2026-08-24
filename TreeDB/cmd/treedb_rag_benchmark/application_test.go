@@ -110,6 +110,26 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 	}
 }
 
+func TestApplicationTenantFilterRequestsAndLeakageAccounting(t *testing.T) {
+	cell := applicationCellIdentity{Filter: filterTenantAlpha}
+	direct := applicationDirectScalarFilter(cell)
+	if direct == nil || direct.IndexName != "meta_tenant_id" || direct.Value != "alpha" {
+		t.Fatalf("direct tenant filter=%+v", direct)
+	}
+	service := applicationServiceFilter(cell)
+	if service == nil || service.Field != "meta.tenant_id" || service.Operator != "==" || service.Value != "alpha" {
+		t.Fatalf("service tenant filter=%+v", service)
+	}
+	fixture := &applicationFixture{Sources: []applicationSource{
+		{ID: "alpha", Tenant: "alpha", Workspace: "red"},
+		{ID: "beta", Tenant: "beta", Workspace: "blue"},
+	}}
+	tenant, workspace := applicationScopeViolations(fixture, filterTenantAlpha, []string{"alpha#0", "beta#0", "unknown#0"})
+	if tenant != 2 || workspace != 1 {
+		t.Fatalf("tenant/workspace violations=%d/%d want 2/1", tenant, workspace)
+	}
+}
+
 func TestFinalApplicationPolicyRejectsDiagnosticCounts(t *testing.T) {
 	cfg := defaultApplicationConfig()
 	cfg.FinalEvidence = true

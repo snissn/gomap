@@ -1700,6 +1700,35 @@ func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
 	}
 }
 
+func TestIngestSourcesRejectsVectorSourceMetadataOverlap(t *testing.T) {
+	for _, field := range []string{"meta", "meta.embedding"} {
+		t.Run(field, func(t *testing.T) {
+			_, _, col := openIngestTestCollection(t, 8)
+			col.meta.VectorIndexes[0].Field = field
+			res, err := col.IngestSources(context.Background(), []SourceDocument{{
+				ID: []byte("metadata-vector-field"),
+				Fields: map[string]any{
+					"body": "must not be indexed",
+				},
+				Meta: map[string]any{"tenant_id": "alpha"},
+			}}, ingestTestCfg(8))
+			if err == nil {
+				t.Fatal("vector field overlapping inherited metadata was accepted")
+			}
+			var ingestErr *IngestError
+			if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk {
+				t.Fatalf("err=%v want chunk-stage IngestError", err)
+			}
+			if len(res.Ingested) != 0 {
+				t.Fatalf("metadata vector overlap returned ingested outcomes: %+v", res.Ingested)
+			}
+			if raw, _ := col.Get([]byte("metadata-vector-field")); len(raw) != 0 {
+				t.Fatal("metadata vector overlap mutated the collection")
+			}
+		})
+	}
+}
+
 func TestIngestSourcesRejectsParentChildNamespaceCollision(t *testing.T) {
 	tests := []struct {
 		name        string

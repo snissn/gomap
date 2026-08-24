@@ -296,6 +296,13 @@ func (c *Collection) IngestSources(ctx context.Context, sources []SourceDocument
 			Err:         fmt.Errorf("collections: invalid vector index field %q: %w", vectorField, err),
 		}
 	}
+	if vectorPath[0] == ingestSourceMetaField {
+		return result, &IngestError{
+			Stage:       IngestStageChunk,
+			SourceIndex: 0,
+			Err:         fmt.Errorf("collections: vector index field %q overlaps inherited source metadata field %q", vectorField, ingestSourceMetaField),
+		}
+	}
 	for _, reserved := range []string{
 		chunking.MetaFieldParent,
 		chunking.MetaFieldOrdinal,
