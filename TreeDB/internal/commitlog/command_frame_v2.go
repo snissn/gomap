@@ -171,6 +171,10 @@ func commandFrameV2EncodedSize(env CommandEnvelope) (int, error) {
 
 // DecodeCommandFrameV2 decodes and fully validates one V2 frame.
 func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
+	return decodeCommandFrameV2(frame, false)
+}
+
+func decodeCommandFrameV2(frame []byte, borrowPayload bool) (CommandEnvelope, error) {
 	var env CommandEnvelope
 	if len(frame) < commandFrameHeaderSize {
 		return env, ErrCorrupt
@@ -211,7 +215,10 @@ func DecodeCommandFrameV2(frame []byte) (CommandEnvelope, error) {
 		return env, ErrCorrupt
 	}
 	off := commandFrameHeaderSize
-	env.Payload = append([]byte(nil), frame[off:off+int(payloadLen)]...)
+	env.Payload = frame[off : off+int(payloadLen)]
+	if !borrowPayload {
+		env.Payload = append([]byte(nil), env.Payload...)
+	}
 	off += int(payloadLen)
 	var err error
 	env.ExternalRefs, err = decodeExternalRefs(frame[off : off+int(extRefsLen)])
