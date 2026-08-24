@@ -2,7 +2,7 @@
   "schema": "treedb_rag_parent_collapse_evidence/v1",
   "issue": 4291,
   "base_revision": "e9911721c2e03ae10ef12d84249de139f8334426",
-  "candidate_revision": "4f96d46078a08e3bf705c87d2ead793ca48ea5b0",
+  "candidate_revision": "a316c6db6428c21f7203998b41ac6c1f11b53e7e",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
   "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
@@ -12,8 +12,8 @@
     "collapse_enabled_cap_2": 36
   },
   "candidate": {
-    "median_source_docs_per_sec": 435.87,
-    "median_bytes_per_source": 1830070,
+    "median_source_docs_per_sec": 434.79,
+    "median_bytes_per_source": 1835963,
     "max_per_parent_results": 2,
     "max_documents_fetched": 10,
     "minimum_mean_collapse_rejections": 3,
@@ -26,12 +26,17 @@
     "deterministic_parent_cap_passed": true
   },
   "performance_disposition": {
-    "worst_relative_row": "hashing direct c4 vector score-only",
-    "disabled_qps": 212606.03,
-    "enabled_qps": 139107.98,
-    "disabled_p99_ms": 0.02970606,
-    "enabled_p99_ms": 0.08081062,
-    "explanation": "Enabled collapse must honor the declared bounded candidate budget (32 versus the disabled adaptive top-10 proof) to backfill distinct parents. The row retains 139k QPS and 0.081 ms p99 while parent recall@10 improves by 0.0556. No hidden expansion or document fetch occurs. This explicit quality-for-bounded-work tradeoff is accepted for the opt-in feature; disabled rows remain compatibility controls.",
+    "worst_qps_relative_row": "hashing direct c4 vector score-only",
+    "disabled_qps": 161646.37,
+    "enabled_qps": 106128.77,
+    "disabled_p99_ms": 0.06900075,
+    "enabled_p99_ms": 0.10663919,
+    "worst_p99_relative_row": "hashing HTTP c1 hybrid fetch",
+    "worst_p99_disabled_ms": 0.81231844,
+    "worst_p99_enabled_ms": 1.39525607,
+    "worst_p99_qps_change_percent": -3.07,
+    "vector_route": "declared_column_graph_exact",
+    "explanation": "Enabled collapse must honor the declared bounded candidate budget (32 versus the disabled adaptive top-10 proof) to backfill distinct parents. The direct vector row retains 106k QPS and 0.107 ms p99 while parent recall@10 improves by 0.0556. The largest relative HTTP p99 change is 0.812 to 1.395 ms with only 3.07% QPS loss and a 0.1667 parent-recall gain. No hidden expansion or pre-collapse document fetch occurs. These explicit opt-in quality-for-bounded-work tradeoffs are accepted; disabled rows use the same exact vector route and remain compatibility controls.",
     "accepted": true
   },
   "decision": {
