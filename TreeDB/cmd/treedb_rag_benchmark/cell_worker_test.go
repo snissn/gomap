@@ -63,6 +63,9 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 	if err := decoder.Decode(&ready); err != nil || !ready.Ready || ready.CellCount != applicationCellCount() {
 		t.Fatalf("ready=%+v err=%v", ready, err)
 	}
+	if ready.EnvironmentPolicy != applicationCellWorkerEnvironmentPolicy || ready.FixtureSHA256 == "" || ready.ConfigSHA256 == "" || ready.SemanticVectorSHA256 == "" {
+		t.Fatalf("ready workload identity=%+v", ready)
+	}
 	var outOfRange applicationCellWorkerResponse
 	if err := decoder.Decode(&outOfRange); err != nil {
 		t.Fatalf("decode range response: %v", err)

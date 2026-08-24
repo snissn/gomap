@@ -9,11 +9,6 @@ import (
 	"path/filepath"
 )
 
-// applicationCellWorkerBuildRevision is set with -ldflags=-X for exact
-// cross-revision workers when the Go toolchain cannot stamp a linked worktree.
-// The coordinator also binds the resulting binary SHA-256.
-var applicationCellWorkerBuildRevision string
-
 const applicationCellWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
 
 type applicationCellWorkerRequest struct {
@@ -21,11 +16,14 @@ type applicationCellWorkerRequest struct {
 }
 
 type applicationCellWorkerReady struct {
-	Ready             bool   `json:"ready"`
-	CellCount         int    `json:"cell_count"`
-	ProductBaseSHA    string `json:"product_base_sha"`
-	HarnessRevision   string `json:"harness_revision"`
-	EnvironmentPolicy string `json:"environment_policy"`
+	Ready                bool   `json:"ready"`
+	CellCount            int    `json:"cell_count"`
+	ProductBaseSHA       string `json:"product_base_sha"`
+	HarnessRevision      string `json:"harness_revision"`
+	EnvironmentPolicy    string `json:"environment_policy"`
+	FixtureSHA256        string `json:"fixture_sha256"`
+	ConfigSHA256         string `json:"config_sha256"`
+	SemanticVectorSHA256 string `json:"semantic_vector_sha256"`
 }
 
 type applicationCellWorkerResponse struct {
@@ -66,17 +64,10 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 	if err := validateApplicationConfig(cfg); err != nil {
 		return err
 	}
-	if cfg.FinalEvidence {
-		if applicationCellWorkerBuildRevision != "" {
-			if !isFullRevision(applicationCellWorkerBuildRevision) || cfg.HarnessRevision != applicationCellWorkerBuildRevision {
-				return fmt.Errorf("provenance: requested harness revision %q does not match linked cell-worker revision %q", cfg.HarnessRevision, applicationCellWorkerBuildRevision)
-			}
-		} else {
-			settings, ok := runtimeBuildInfo()
-			if _, err := resolveApplicationHarnessRevision(cfg, settings, ok); err != nil {
-				return err
-			}
-		}
+	settings, buildInfoOK := runtimeBuildInfo()
+	resolvedRevision, err := resolveApplicationHarnessRevision(cfg, settings, buildInfoOK)
+	if err != nil {
+		return err
 	}
 	fixture := buildApplicationFixture()
 	if err := validateApplicationFixture(&fixture); err != nil {
@@ -137,7 +128,12 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 
 	buffered := bufio.NewWriter(output)
 	encoder := json.NewEncoder(buffered)
-	if err := encoder.Encode(applicationCellWorkerReady{Ready: true, CellCount: applicationCellCount(), ProductBaseSHA: cfg.ProductBaseSHA, HarnessRevision: cfg.HarnessRevision, EnvironmentPolicy: applicationCellWorkerEnvironmentPolicy}); err != nil {
+	if err := encoder.Encode(applicationCellWorkerReady{
+		Ready: true, CellCount: applicationCellCount(), ProductBaseSHA: cfg.ProductBaseSHA,
+		HarnessRevision: resolvedRevision, EnvironmentPolicy: applicationCellWorkerEnvironmentPolicy,
+		FixtureSHA256: applicationFixtureDigest(&fixture), ConfigSHA256: applicationConfigDigest(cfg),
+		SemanticVectorSHA256: bundle.Digest(),
+	}); err != nil {
 		return err
 	}
 	if err := buffered.Flush(); err != nil {
