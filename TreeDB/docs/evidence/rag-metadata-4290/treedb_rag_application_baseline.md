@@ -5,14 +5,14 @@ Authority: `M1_RETAINED_BASELINE`; schema: `treedb_rag_application_baseline/v3`.
 ## Exact bindings
 
 - product base: `e9911721c2e03ae10ef12d84249de139f8334426`
-- harness revision: `f34b10cd057bd85477f3b54b23ca39b53983da8d`
-- binary SHA-256: `8f8995c9077a069541fbf78ea6a55aecea93c196a8662e3ad59f4a69ba2e4523`
+- harness revision: `241e5a2afcadc19d63309b348a1797ffc2c6a8f1`
+- binary SHA-256: `5c7c7eda9f337ef9a00c0e2b2b0a2ae84dc20132a4b5b11abcc4e7d25aa90577`
 - fixture SHA-256: `df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2`
 - config SHA-256: `1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e`
 - semantic vectors SHA-256: `aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4`
 - hashing regression SHA-256: `2cb6a7f2b28b5335a717f4e4f601ffff65f1f21220504a0d88733e514146240f`
 - Go/host: `go1.26.0` `darwin/arm64` `Michaels-Laptop.local`
-- command: `/tmp/treedb_rag_benchmark_f34b10cd0 -out-dir /tmp/gomap-4290-artifacts-f34 -dir /tmp/gomap-4290-db-f34 -product-base-sha e9911721c2e03ae10ef12d84249de139f8334426 -harness-revision f34b10cd057bd85477f3b54b23ca39b53983da8d -host-note Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1; #4290 candidate`
+- command: `/tmp/treedb_rag_benchmark_241e5a2af -out-dir /tmp/gomap-4290-artifacts-241 -dir /tmp/gomap-4290-db-241 -product-base-sha e9911721c2e03ae10ef12d84249de139f8334426 -harness-revision 241e5a2afcadc19d63309b348a1797ffc2c6a8f1 -host-note Apple M3 arm64, macOS 26.2, 8 logical CPUs, quiet local host, Go 1.26.0, CGO_ENABLED=1; #4290 corrected candidate`
 
 ## Independent semantic evidence
 
@@ -30,15 +30,15 @@ Five fresh-DB rows include embedding, index publication, and checkpoint in end-t
 
 | rep | sources | chunks | end-to-end s | source docs/s | chunk docs/s | B/source | allocs/source | storage bytes | reopen |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 0 | 18 | 54 | 0.063943 | 281.50 | 844.51 | 2348039 | 4812 | 3748783 | true |
-| 1 | 18 | 54 | 0.040344 | 446.17 | 1338.50 | 1849740 | 4680 | 3748790 | true |
-| 2 | 18 | 54 | 0.042368 | 424.85 | 1274.55 | 1850447 | 4682 | 3748833 | true |
-| 3 | 18 | 54 | 0.040513 | 444.31 | 1332.92 | 1850904 | 4677 | 3748827 | true |
-| 4 | 18 | 54 | 0.041099 | 437.97 | 1313.91 | 1841477 | 4674 | 3748827 | true |
+| 0 | 18 | 54 | 0.068683 | 262.07 | 786.22 | 2339526 | 4807 | 3748800 | true |
+| 1 | 18 | 54 | 0.044780 | 401.96 | 1205.89 | 1854961 | 4683 | 3748827 | true |
+| 2 | 18 | 54 | 0.042902 | 419.56 | 1258.68 | 1845995 | 4676 | 3748833 | true |
+| 3 | 18 | 54 | 0.036810 | 489.00 | 1467.01 | 1840752 | 4672 | 3748827 | true |
+| 4 | 18 | 54 | 0.042447 | 424.06 | 1272.17 | 1852888 | 4676 | 3748827 | true |
 
-Median/p95 docs/s: **437.97 / 445.79**. Median/p95 B/source: **1850447 / 2248612**. Historical 37.59 docs/s / 132 GiB regime reproduced: **false**.
+Median/p95 docs/s: **419.56 / 476.01**. Median/p95 B/source: **1852888 / 2242613**. Historical 37.59 docs/s / 132 GiB regime reproduced: **false**.
 
-Frozen #4284 gate: source docs/s >= **503.66**, B/source <= **1665402**. historical regime did not reproduce on the retained application fixture; freeze an attainable 15% throughput gain and 10% allocation reduction
+Frozen #4284 gate: source docs/s >= **482.49**, B/source <= **1667599**. historical regime did not reproduce on the retained application fixture; freeze an attainable 15% throughput gain and 10% allocation reduction
 
 ## Supported retained rows
 
@@ -48,78 +48,78 @@ Quality is measured by separate untimed queries. Direct score-only rows use comp
 
 | embedding | surface | clients | route | projection | QPS | p50 ms | p95 ms | p99 ms | chunk R@10 | parent R@10 | nDCG@10 | B/op | allocs/op |
 |---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| hashing_regression | direct_collection | 1 | hybrid | fetch_topk | 4590.7 | 0.208 | 0.231 | 0.352 | 0.7407 | 0.8889 | 0.8093 | 277658 | 2166.3 |
-| hashing_regression | direct_collection | 1 | hybrid | fetch_topk | 4732.8 | 0.205 | 0.222 | 0.373 | 0.5556 | 0.8333 | 1.0000 | 277721 | 2166.4 |
-| hashing_regression | direct_collection | 1 | hybrid | score_only | 18032.7 | 0.051 | 0.070 | 0.139 | 0.7407 | 0.8889 | 0.8093 | 132860 | 403.9 |
-| hashing_regression | direct_collection | 1 | hybrid | score_only | 18062.4 | 0.052 | 0.063 | 0.123 | 0.5556 | 0.8333 | 1.0000 | 132867 | 403.8 |
-| hashing_regression | direct_collection | 1 | text_only | fetch_topk | 5076.6 | 0.192 | 0.210 | 0.284 | 0.8889 | 0.8889 | 0.9256 | 215681 | 2064.2 |
-| hashing_regression | direct_collection | 1 | text_only | fetch_topk | 5079.5 | 0.192 | 0.209 | 0.277 | 0.5556 | 0.6667 | 1.0000 | 215672 | 2064.0 |
-| hashing_regression | direct_collection | 1 | text_only | score_only | 24771.2 | 0.039 | 0.046 | 0.061 | 0.8889 | 0.8889 | 0.9256 | 69889 | 301.4 |
-| hashing_regression | direct_collection | 1 | text_only | score_only | 24342.6 | 0.038 | 0.049 | 0.105 | 0.5556 | 0.6667 | 1.0000 | 69898 | 301.5 |
-| hashing_regression | direct_collection | 1 | vector_only | fetch_topk | 5785.3 | 0.169 | 0.181 | 0.205 | 0.6667 | 0.8889 | 0.6591 | 168558 | 1861.8 |
-| hashing_regression | direct_collection | 1 | vector_only | fetch_topk | 5815.4 | 0.168 | 0.179 | 0.222 | 0.5556 | 0.8889 | 1.0000 | 168560 | 1861.9 |
-| hashing_regression | direct_collection | 1 | vector_only | score_only | 71554.6 | 0.013 | 0.015 | 0.018 | 0.6667 | 0.8889 | 0.6591 | 22486 | 98.1 |
-| hashing_regression | direct_collection | 1 | vector_only | score_only | 68019.9 | 0.013 | 0.017 | 0.023 | 0.5556 | 0.8889 | 1.0000 | 22486 | 98.1 |
-| hashing_regression | direct_collection | 4 | hybrid | fetch_topk | 13494.7 | 0.245 | 0.534 | 0.885 | 0.7407 | 0.8889 | 0.8093 | 277828 | 2166.4 |
-| hashing_regression | direct_collection | 4 | hybrid | fetch_topk | 13966.0 | 0.238 | 0.545 | 0.836 | 0.5556 | 0.8333 | 1.0000 | 277963 | 2166.7 |
-| hashing_regression | direct_collection | 4 | hybrid | score_only | 42176.2 | 0.073 | 0.191 | 0.310 | 0.7407 | 0.8889 | 0.8093 | 133055 | 403.9 |
-| hashing_regression | direct_collection | 4 | hybrid | score_only | 43792.5 | 0.069 | 0.192 | 0.333 | 0.5556 | 0.8333 | 1.0000 | 133048 | 403.9 |
-| hashing_regression | direct_collection | 4 | text_only | fetch_topk | 16187.6 | 0.204 | 0.471 | 0.703 | 0.8889 | 0.8889 | 0.9256 | 215905 | 2064.6 |
-| hashing_regression | direct_collection | 4 | text_only | fetch_topk | 11107.1 | 0.243 | 0.588 | 2.064 | 0.5556 | 0.6667 | 1.0000 | 216205 | 2064.5 |
-| hashing_regression | direct_collection | 4 | text_only | score_only | 77903.4 | 0.038 | 0.099 | 0.186 | 0.8889 | 0.8889 | 0.9256 | 70075 | 301.5 |
-| hashing_regression | direct_collection | 4 | text_only | score_only | 72943.3 | 0.039 | 0.107 | 0.210 | 0.5556 | 0.6667 | 1.0000 | 70067 | 301.5 |
-| hashing_regression | direct_collection | 4 | vector_only | fetch_topk | 19078.7 | 0.179 | 0.372 | 0.541 | 0.6667 | 0.8889 | 0.6591 | 168581 | 1862.1 |
-| hashing_regression | direct_collection | 4 | vector_only | fetch_topk | 18932.1 | 0.178 | 0.392 | 0.573 | 0.5556 | 0.8889 | 1.0000 | 168578 | 1862.1 |
-| hashing_regression | direct_collection | 4 | vector_only | score_only | 185079.0 | 0.012 | 0.036 | 0.057 | 0.6667 | 0.8889 | 0.6591 | 22486 | 98.1 |
-| hashing_regression | direct_collection | 4 | vector_only | score_only | 210855.6 | 0.012 | 0.024 | 0.044 | 0.5556 | 0.8889 | 1.0000 | 22486 | 98.1 |
-| hashing_regression | http_service | 1 | hybrid | fetch_topk | 1411.7 | 0.685 | 0.754 | 1.236 | 0.7407 | 0.8889 | 0.8093 | 582455 | 5256.4 |
-| hashing_regression | http_service | 1 | hybrid | fetch_topk | 1425.0 | 0.684 | 0.753 | 1.247 | 0.5556 | 0.8333 | 1.0000 | 584086 | 5257.1 |
-| hashing_regression | http_service | 1 | text_only | fetch_topk | 2147.8 | 0.454 | 0.516 | 0.855 | 0.8889 | 0.8889 | 0.9256 | 353642 | 4508.4 |
-| hashing_regression | http_service | 1 | text_only | fetch_topk | 2189.1 | 0.450 | 0.489 | 0.691 | 0.5556 | 0.6667 | 1.0000 | 353800 | 4509.5 |
-| hashing_regression | http_service | 1 | vector_only | fetch_topk | 947.8 | 1.038 | 1.128 | 1.450 | 0.6667 | 0.8889 | 0.6591 | 681335 | 5148.6 |
-| hashing_regression | http_service | 1 | vector_only | fetch_topk | 955.1 | 1.032 | 1.116 | 1.398 | 0.5556 | 0.8889 | 1.0000 | 681507 | 5148.7 |
-| hashing_regression | http_service | 4 | hybrid | fetch_topk | 4549.9 | 0.740 | 1.504 | 2.533 | 0.7407 | 0.8889 | 0.8093 | 582092 | 5258.3 |
-| hashing_regression | http_service | 4 | hybrid | fetch_topk | 4812.1 | 0.719 | 1.425 | 2.036 | 0.5556 | 0.8333 | 1.0000 | 582912 | 5259.6 |
-| hashing_regression | http_service | 4 | text_only | fetch_topk | 7734.8 | 0.447 | 0.890 | 1.159 | 0.8889 | 0.8889 | 0.9256 | 354994 | 4512.7 |
-| hashing_regression | http_service | 4 | text_only | fetch_topk | 7882.9 | 0.442 | 0.888 | 1.082 | 0.5556 | 0.6667 | 1.0000 | 355215 | 4512.0 |
-| hashing_regression | http_service | 4 | vector_only | fetch_topk | 2930.3 | 1.195 | 2.170 | 2.876 | 0.6667 | 0.8889 | 0.6591 | 681469 | 5150.3 |
-| hashing_regression | http_service | 4 | vector_only | fetch_topk | 3069.3 | 1.157 | 1.948 | 2.380 | 0.5556 | 0.8889 | 1.0000 | 681448 | 5150.5 |
-| semantic_minilm | direct_collection | 1 | hybrid | fetch_topk | 576.4 | 1.682 | 2.036 | 2.649 | 0.8519 | 1.0000 | 0.8742 | 854536 | 9119.1 |
-| semantic_minilm | direct_collection | 1 | hybrid | fetch_topk | 578.1 | 1.682 | 2.063 | 2.340 | 0.5556 | 0.7222 | 1.0000 | 854731 | 9119.4 |
-| semantic_minilm | direct_collection | 1 | hybrid | score_only | 18037.2 | 0.053 | 0.060 | 0.122 | 0.8519 | 1.0000 | 0.8742 | 134244 | 408.1 |
-| semantic_minilm | direct_collection | 1 | hybrid | score_only | 17665.2 | 0.053 | 0.062 | 0.156 | 0.5556 | 0.7222 | 1.0000 | 134252 | 408.1 |
-| semantic_minilm | direct_collection | 1 | text_only | fetch_topk | 580.0 | 1.675 | 2.032 | 2.271 | 0.8889 | 0.8889 | 0.9256 | 790281 | 9012.5 |
-| semantic_minilm | direct_collection | 1 | text_only | fetch_topk | 589.3 | 1.659 | 1.966 | 2.205 | 0.5556 | 0.6667 | 1.0000 | 790294 | 9012.5 |
-| semantic_minilm | direct_collection | 1 | text_only | score_only | 24141.6 | 0.040 | 0.048 | 0.054 | 0.8889 | 0.8889 | 0.9256 | 69887 | 301.4 |
-| semantic_minilm | direct_collection | 1 | text_only | score_only | 25062.9 | 0.039 | 0.045 | 0.053 | 0.5556 | 0.6667 | 1.0000 | 69874 | 301.4 |
-| semantic_minilm | direct_collection | 1 | vector_only | fetch_topk | 584.5 | 1.647 | 1.970 | 2.267 | 0.7037 | 0.7778 | 0.7652 | 744003 | 8809.1 |
-| semantic_minilm | direct_collection | 1 | vector_only | fetch_topk | 593.0 | 1.648 | 1.962 | 2.188 | 0.5556 | 0.6667 | 1.0000 | 744007 | 8809.1 |
-| semantic_minilm | direct_collection | 1 | vector_only | score_only | 60621.7 | 0.015 | 0.021 | 0.033 | 0.7037 | 0.7778 | 0.7652 | 23766 | 98.1 |
-| semantic_minilm | direct_collection | 1 | vector_only | score_only | 62445.1 | 0.015 | 0.017 | 0.021 | 0.5556 | 0.6667 | 1.0000 | 23766 | 98.1 |
-| semantic_minilm | direct_collection | 4 | hybrid | fetch_topk | 2030.3 | 1.762 | 2.981 | 3.913 | 0.8519 | 1.0000 | 0.8742 | 854748 | 9119.3 |
-| semantic_minilm | direct_collection | 4 | hybrid | fetch_topk | 2052.9 | 1.762 | 2.740 | 3.255 | 0.5556 | 0.7222 | 1.0000 | 855177 | 9120.0 |
-| semantic_minilm | direct_collection | 4 | hybrid | score_only | 39381.7 | 0.078 | 0.175 | 0.393 | 0.8519 | 1.0000 | 0.8742 | 134424 | 408.2 |
-| semantic_minilm | direct_collection | 4 | hybrid | score_only | 43209.9 | 0.074 | 0.171 | 0.335 | 0.5556 | 0.7222 | 1.0000 | 134436 | 408.2 |
-| semantic_minilm | direct_collection | 4 | text_only | fetch_topk | 2119.2 | 1.711 | 2.619 | 3.598 | 0.8889 | 0.8889 | 0.9256 | 790861 | 9013.4 |
-| semantic_minilm | direct_collection | 4 | text_only | fetch_topk | 2138.4 | 1.702 | 2.588 | 3.220 | 0.5556 | 0.6667 | 1.0000 | 791620 | 9013.3 |
-| semantic_minilm | direct_collection | 4 | text_only | score_only | 79862.8 | 0.038 | 0.072 | 0.173 | 0.8889 | 0.8889 | 0.9256 | 70059 | 301.5 |
-| semantic_minilm | direct_collection | 4 | text_only | score_only | 77475.2 | 0.039 | 0.098 | 0.177 | 0.5556 | 0.6667 | 1.0000 | 70053 | 301.5 |
-| semantic_minilm | direct_collection | 4 | vector_only | fetch_topk | 2182.2 | 1.673 | 2.565 | 3.292 | 0.7037 | 0.7778 | 0.7652 | 744047 | 8809.6 |
-| semantic_minilm | direct_collection | 4 | vector_only | fetch_topk | 2193.6 | 1.675 | 2.513 | 3.082 | 0.5556 | 0.6667 | 1.0000 | 744047 | 8809.6 |
-| semantic_minilm | direct_collection | 4 | vector_only | score_only | 160685.2 | 0.015 | 0.047 | 0.059 | 0.7037 | 0.7778 | 0.7652 | 23766 | 98.1 |
-| semantic_minilm | direct_collection | 4 | vector_only | score_only | 142523.0 | 0.015 | 0.048 | 0.061 | 0.5556 | 0.6667 | 1.0000 | 23766 | 98.1 |
-| semantic_minilm | http_service | 1 | hybrid | fetch_topk | 411.4 | 2.364 | 2.735 | 4.006 | 0.8519 | 1.0000 | 0.8742 | 1184375 | 12221.6 |
-| semantic_minilm | http_service | 1 | hybrid | fetch_topk | 419.1 | 2.324 | 2.769 | 3.193 | 0.5556 | 0.7222 | 1.0000 | 1186081 | 12222.4 |
-| semantic_minilm | http_service | 1 | text_only | fetch_topk | 496.9 | 1.954 | 2.371 | 2.525 | 0.8889 | 0.8889 | 0.9256 | 930344 | 11457.5 |
-| semantic_minilm | http_service | 1 | text_only | fetch_topk | 497.9 | 1.951 | 2.356 | 2.576 | 0.5556 | 0.6667 | 1.0000 | 929943 | 11458.4 |
-| semantic_minilm | http_service | 1 | vector_only | fetch_topk | 361.7 | 2.677 | 3.197 | 3.538 | 0.7037 | 0.7778 | 0.7652 | 1290808 | 12107.7 |
-| semantic_minilm | http_service | 1 | vector_only | fetch_topk | 359.4 | 2.694 | 3.237 | 3.523 | 0.5556 | 0.6667 | 1.0000 | 1291404 | 12107.4 |
-| semantic_minilm | http_service | 4 | hybrid | fetch_topk | 1463.1 | 2.466 | 4.112 | 5.772 | 0.8519 | 1.0000 | 0.8742 | 1183420 | 12223.7 |
-| semantic_minilm | http_service | 4 | hybrid | fetch_topk | 1512.0 | 2.398 | 3.887 | 4.670 | 0.5556 | 0.7222 | 1.0000 | 1185346 | 12224.0 |
-| semantic_minilm | http_service | 4 | text_only | fetch_topk | 1815.6 | 2.015 | 3.024 | 3.784 | 0.8889 | 0.8889 | 0.9256 | 930564 | 11459.8 |
-| semantic_minilm | http_service | 4 | text_only | fetch_topk | 1821.4 | 2.036 | 2.945 | 3.454 | 0.5556 | 0.6667 | 1.0000 | 931309 | 11459.9 |
-| semantic_minilm | http_service | 4 | vector_only | fetch_topk | 1289.3 | 2.869 | 4.178 | 5.128 | 0.7037 | 0.7778 | 0.7652 | 1294931 | 12109.8 |
-| semantic_minilm | http_service | 4 | vector_only | fetch_topk | 1291.5 | 2.866 | 4.135 | 4.812 | 0.5556 | 0.6667 | 1.0000 | 1295143 | 12109.2 |
+| hashing_regression | direct_collection | 1 | hybrid | fetch_topk | 4545.5 | 0.209 | 0.234 | 0.383 | 1.0000 | 1.0000 | 1.0000 | 253335 | 2274.2 |
+| hashing_regression | direct_collection | 1 | hybrid | fetch_topk | 4742.1 | 0.205 | 0.218 | 0.338 | 0.5556 | 0.8333 | 1.0000 | 277713 | 2166.4 |
+| hashing_regression | direct_collection | 1 | hybrid | score_only | 18595.8 | 0.051 | 0.058 | 0.120 | 1.0000 | 1.0000 | 1.0000 | 107766 | 510.5 |
+| hashing_regression | direct_collection | 1 | hybrid | score_only | 18284.7 | 0.052 | 0.058 | 0.082 | 0.5556 | 0.8333 | 1.0000 | 132841 | 403.8 |
+| hashing_regression | direct_collection | 1 | text_only | fetch_topk | 4842.6 | 0.201 | 0.216 | 0.242 | 1.0000 | 1.0000 | 1.0000 | 221648 | 2216.6 |
+| hashing_regression | direct_collection | 1 | text_only | fetch_topk | 5055.3 | 0.193 | 0.208 | 0.256 | 0.5556 | 0.6667 | 1.0000 | 215650 | 2064.0 |
+| hashing_regression | direct_collection | 1 | text_only | score_only | 20096.0 | 0.048 | 0.053 | 0.058 | 1.0000 | 1.0000 | 1.0000 | 75514 | 453.4 |
+| hashing_regression | direct_collection | 1 | text_only | score_only | 24625.7 | 0.039 | 0.048 | 0.067 | 0.5556 | 0.6667 | 1.0000 | 69906 | 301.5 |
+| hashing_regression | direct_collection | 1 | vector_only | fetch_topk | 5544.5 | 0.175 | 0.190 | 0.223 | 1.0000 | 1.0000 | 1.0000 | 183327 | 1972.2 |
+| hashing_regression | direct_collection | 1 | vector_only | fetch_topk | 5761.9 | 0.170 | 0.182 | 0.221 | 0.5556 | 0.8889 | 1.0000 | 168560 | 1861.9 |
+| hashing_regression | direct_collection | 1 | vector_only | score_only | 52705.9 | 0.017 | 0.021 | 0.034 | 1.0000 | 1.0000 | 1.0000 | 37513 | 208.1 |
+| hashing_regression | direct_collection | 1 | vector_only | score_only | 70163.5 | 0.013 | 0.016 | 0.019 | 0.5556 | 0.8889 | 1.0000 | 22486 | 98.1 |
+| hashing_regression | direct_collection | 4 | hybrid | fetch_topk | 13000.3 | 0.253 | 0.552 | 0.943 | 1.0000 | 1.0000 | 1.0000 | 253465 | 2274.3 |
+| hashing_regression | direct_collection | 4 | hybrid | fetch_topk | 14363.5 | 0.237 | 0.527 | 0.803 | 0.5556 | 0.8333 | 1.0000 | 277977 | 2166.6 |
+| hashing_regression | direct_collection | 4 | hybrid | score_only | 47112.3 | 0.066 | 0.155 | 0.280 | 1.0000 | 1.0000 | 1.0000 | 107924 | 510.5 |
+| hashing_regression | direct_collection | 4 | hybrid | score_only | 44818.7 | 0.067 | 0.175 | 0.351 | 0.5556 | 0.8333 | 1.0000 | 133015 | 403.9 |
+| hashing_regression | direct_collection | 4 | text_only | fetch_topk | 14828.2 | 0.213 | 0.544 | 0.776 | 1.0000 | 1.0000 | 1.0000 | 221807 | 2216.9 |
+| hashing_regression | direct_collection | 4 | text_only | fetch_topk | 16474.2 | 0.205 | 0.473 | 0.674 | 0.5556 | 0.6667 | 1.0000 | 216239 | 2064.6 |
+| hashing_regression | direct_collection | 4 | text_only | score_only | 58510.2 | 0.047 | 0.140 | 0.232 | 1.0000 | 1.0000 | 1.0000 | 75680 | 453.5 |
+| hashing_regression | direct_collection | 4 | text_only | score_only | 74136.1 | 0.039 | 0.102 | 0.162 | 0.5556 | 0.6667 | 1.0000 | 70063 | 301.5 |
+| hashing_regression | direct_collection | 4 | vector_only | fetch_topk | 17796.3 | 0.186 | 0.424 | 0.691 | 1.0000 | 1.0000 | 1.0000 | 183398 | 1972.3 |
+| hashing_regression | direct_collection | 4 | vector_only | fetch_topk | 18914.5 | 0.180 | 0.401 | 0.539 | 0.5556 | 0.8889 | 1.0000 | 168573 | 1862.0 |
+| hashing_regression | direct_collection | 4 | vector_only | score_only | 117630.1 | 0.019 | 0.066 | 0.124 | 1.0000 | 1.0000 | 1.0000 | 37548 | 208.1 |
+| hashing_regression | direct_collection | 4 | vector_only | score_only | 213280.1 | 0.012 | 0.022 | 0.036 | 0.5556 | 0.8889 | 1.0000 | 22488 | 98.1 |
+| hashing_regression | http_service | 1 | hybrid | fetch_topk | 1434.6 | 0.661 | 0.752 | 1.639 | 1.0000 | 1.0000 | 1.0000 | 557956 | 5370.8 |
+| hashing_regression | http_service | 1 | hybrid | fetch_topk | 1473.3 | 0.662 | 0.735 | 1.277 | 0.5556 | 0.8333 | 1.0000 | 583597 | 5257.0 |
+| hashing_regression | http_service | 1 | text_only | fetch_topk | 2301.5 | 0.425 | 0.464 | 0.659 | 1.0000 | 1.0000 | 1.0000 | 360857 | 4480.6 |
+| hashing_regression | http_service | 1 | text_only | fetch_topk | 2278.2 | 0.430 | 0.467 | 0.737 | 0.5556 | 0.6667 | 1.0000 | 353369 | 4509.3 |
+| hashing_regression | http_service | 1 | vector_only | fetch_topk | 1205.4 | 0.820 | 0.873 | 1.015 | 1.0000 | 1.0000 | 1.0000 | 375083 | 3830.2 |
+| hashing_regression | http_service | 1 | vector_only | fetch_topk | 1216.6 | 0.813 | 0.865 | 1.103 | 0.5556 | 0.8889 | 1.0000 | 383329 | 3824.1 |
+| hashing_regression | http_service | 4 | hybrid | fetch_topk | 4455.1 | 0.774 | 1.461 | 2.196 | 1.0000 | 1.0000 | 1.0000 | 558861 | 5374.1 |
+| hashing_regression | http_service | 4 | hybrid | fetch_topk | 4573.7 | 0.736 | 1.564 | 2.277 | 0.5556 | 0.8333 | 1.0000 | 583377 | 5259.8 |
+| hashing_regression | http_service | 4 | text_only | fetch_topk | 7585.1 | 0.451 | 0.926 | 1.269 | 1.0000 | 1.0000 | 1.0000 | 361233 | 4483.7 |
+| hashing_regression | http_service | 4 | text_only | fetch_topk | 7801.1 | 0.450 | 0.864 | 1.132 | 0.5556 | 0.6667 | 1.0000 | 355031 | 4512.6 |
+| hashing_regression | http_service | 4 | vector_only | fetch_topk | 4174.8 | 0.861 | 1.446 | 1.753 | 1.0000 | 1.0000 | 1.0000 | 375770 | 3832.2 |
+| hashing_regression | http_service | 4 | vector_only | fetch_topk | 4220.0 | 0.856 | 1.325 | 1.773 | 0.5556 | 0.8889 | 1.0000 | 383609 | 3825.9 |
+| semantic_minilm | direct_collection | 1 | hybrid | fetch_topk | 577.9 | 1.685 | 1.981 | 2.565 | 1.0000 | 1.0000 | 1.0000 | 832939 | 9222.1 |
+| semantic_minilm | direct_collection | 1 | hybrid | fetch_topk | 580.5 | 1.679 | 2.023 | 2.341 | 0.5556 | 0.7222 | 1.0000 | 854682 | 9119.3 |
+| semantic_minilm | direct_collection | 1 | hybrid | score_only | 17666.2 | 0.051 | 0.073 | 0.146 | 1.0000 | 1.0000 | 1.0000 | 109035 | 510.4 |
+| semantic_minilm | direct_collection | 1 | hybrid | score_only | 17992.9 | 0.053 | 0.060 | 0.089 | 0.5556 | 0.7222 | 1.0000 | 134258 | 408.1 |
+| semantic_minilm | direct_collection | 1 | text_only | fetch_topk | 585.4 | 1.671 | 1.980 | 2.245 | 1.0000 | 1.0000 | 1.0000 | 797683 | 9164.8 |
+| semantic_minilm | direct_collection | 1 | text_only | fetch_topk | 581.6 | 1.664 | 2.044 | 2.320 | 0.5556 | 0.6667 | 1.0000 | 790272 | 9012.6 |
+| semantic_minilm | direct_collection | 1 | text_only | score_only | 19597.4 | 0.049 | 0.055 | 0.074 | 1.0000 | 1.0000 | 1.0000 | 75514 | 453.4 |
+| semantic_minilm | direct_collection | 1 | text_only | score_only | 24921.7 | 0.038 | 0.045 | 0.051 | 0.5556 | 0.6667 | 1.0000 | 69901 | 301.4 |
+| semantic_minilm | direct_collection | 1 | vector_only | fetch_topk | 589.2 | 1.654 | 1.992 | 2.273 | 1.0000 | 1.0000 | 1.0000 | 760984 | 8919.5 |
+| semantic_minilm | direct_collection | 1 | vector_only | fetch_topk | 593.5 | 1.643 | 1.983 | 2.250 | 0.5556 | 0.6667 | 1.0000 | 744002 | 8809.1 |
+| semantic_minilm | direct_collection | 1 | vector_only | score_only | 48408.3 | 0.018 | 0.025 | 0.042 | 1.0000 | 1.0000 | 1.0000 | 38773 | 208.1 |
+| semantic_minilm | direct_collection | 1 | vector_only | score_only | 59887.9 | 0.015 | 0.018 | 0.023 | 0.5556 | 0.6667 | 1.0000 | 23766 | 98.1 |
+| semantic_minilm | direct_collection | 4 | hybrid | fetch_topk | 2056.9 | 1.758 | 2.761 | 3.769 | 1.0000 | 1.0000 | 1.0000 | 833119 | 9222.3 |
+| semantic_minilm | direct_collection | 4 | hybrid | fetch_topk | 2063.3 | 1.758 | 2.717 | 3.262 | 0.5556 | 0.7222 | 1.0000 | 855148 | 9119.9 |
+| semantic_minilm | direct_collection | 4 | hybrid | score_only | 44241.7 | 0.073 | 0.159 | 0.254 | 1.0000 | 1.0000 | 1.0000 | 109160 | 510.5 |
+| semantic_minilm | direct_collection | 4 | hybrid | score_only | 44067.5 | 0.068 | 0.159 | 0.389 | 0.5556 | 0.7222 | 1.0000 | 134391 | 408.2 |
+| semantic_minilm | direct_collection | 4 | text_only | fetch_topk | 2120.3 | 1.716 | 2.655 | 3.416 | 1.0000 | 1.0000 | 1.0000 | 798124 | 9165.7 |
+| semantic_minilm | direct_collection | 4 | text_only | fetch_topk | 2130.4 | 1.707 | 2.624 | 3.407 | 0.5556 | 0.6667 | 1.0000 | 791617 | 9013.3 |
+| semantic_minilm | direct_collection | 4 | text_only | score_only | 58632.3 | 0.048 | 0.125 | 0.301 | 1.0000 | 1.0000 | 1.0000 | 75667 | 453.5 |
+| semantic_minilm | direct_collection | 4 | text_only | score_only | 70027.5 | 0.040 | 0.113 | 0.143 | 0.5556 | 0.6667 | 1.0000 | 70060 | 301.5 |
+| semantic_minilm | direct_collection | 4 | vector_only | fetch_topk | 2165.8 | 1.690 | 2.526 | 3.156 | 1.0000 | 1.0000 | 1.0000 | 761400 | 8920.1 |
+| semantic_minilm | direct_collection | 4 | vector_only | fetch_topk | 2179.6 | 1.677 | 2.511 | 3.136 | 0.5556 | 0.6667 | 1.0000 | 744048 | 8809.6 |
+| semantic_minilm | direct_collection | 4 | vector_only | score_only | 108603.3 | 0.022 | 0.071 | 0.145 | 1.0000 | 1.0000 | 1.0000 | 38828 | 208.1 |
+| semantic_minilm | direct_collection | 4 | vector_only | score_only | 196179.2 | 0.014 | 0.021 | 0.035 | 0.5556 | 0.6667 | 1.0000 | 23768 | 98.1 |
+| semantic_minilm | http_service | 1 | hybrid | fetch_topk | 416.6 | 2.335 | 2.715 | 3.908 | 1.0000 | 1.0000 | 1.0000 | 1163807 | 12330.3 |
+| semantic_minilm | http_service | 1 | hybrid | fetch_topk | 414.5 | 2.358 | 2.775 | 3.135 | 0.5556 | 0.7222 | 1.0000 | 1186723 | 12222.6 |
+| semantic_minilm | http_service | 1 | text_only | fetch_topk | 502.1 | 1.938 | 2.339 | 2.525 | 1.0000 | 1.0000 | 1.0000 | 938402 | 11429.3 |
+| semantic_minilm | http_service | 1 | text_only | fetch_topk | 495.6 | 1.955 | 2.376 | 2.605 | 0.5556 | 0.6667 | 1.0000 | 930403 | 11458.7 |
+| semantic_minilm | http_service | 1 | vector_only | fetch_topk | 150.6 | 6.561 | 7.206 | 7.577 | 1.0000 | 1.0000 | 1.0000 | 1791566 | 4110.7 |
+| semantic_minilm | http_service | 1 | vector_only | fetch_topk | 149.5 | 6.598 | 7.270 | 7.713 | 0.5556 | 0.6667 | 1.0000 | 1802724 | 4106.2 |
+| semantic_minilm | http_service | 4 | hybrid | fetch_topk | 1466.9 | 2.459 | 4.009 | 5.570 | 1.0000 | 1.0000 | 1.0000 | 1162731 | 12332.1 |
+| semantic_minilm | http_service | 4 | hybrid | fetch_topk | 1465.1 | 2.503 | 4.034 | 4.898 | 0.5556 | 0.7222 | 1.0000 | 1184315 | 12224.2 |
+| semantic_minilm | http_service | 4 | text_only | fetch_topk | 1834.7 | 1.993 | 3.000 | 3.632 | 1.0000 | 1.0000 | 1.0000 | 940155 | 11432.3 |
+| semantic_minilm | http_service | 4 | text_only | fetch_topk | 1797.9 | 2.052 | 3.024 | 3.652 | 0.5556 | 0.6667 | 1.0000 | 932135 | 11459.9 |
+| semantic_minilm | http_service | 4 | vector_only | fetch_topk | 549.3 | 6.973 | 8.520 | 9.630 | 1.0000 | 1.0000 | 1.0000 | 1796001 | 4113.6 |
+| semantic_minilm | http_service | 4 | vector_only | fetch_topk | 556.3 | 6.973 | 8.476 | 9.485 | 0.5556 | 0.6667 | 1.0000 | 1804490 | 4107.4 |
 
 ## Unsupported capability evidence
 

@@ -2,7 +2,7 @@
   "schema": "treedb_rag_metadata_evidence/v1",
   "issue": 4290,
   "base_revision": "e9911721c2e03ae10ef12d84249de139f8334426",
-  "candidate_revision": "f34b10cd057bd85477f3b54b23ca39b53983da8d",
+  "candidate_revision": "241e5a2afcadc19d63309b348a1797ffc2c6a8f1",
   "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
   "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
   "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
@@ -12,15 +12,15 @@
     "persisted_bytes": 3743269
   },
   "candidate": {
-    "median_source_docs_per_sec": 437.97,
-    "p95_source_docs_per_sec": 445.79,
-    "median_bytes_per_source": 1850447,
-    "p95_bytes_per_source": 2248612,
+    "median_source_docs_per_sec": 419.56,
+    "p95_source_docs_per_sec": 476.01,
+    "median_bytes_per_source": 1852888,
+    "p95_bytes_per_source": 2242613,
     "persisted_bytes": 3748827
   },
   "decision": {
-    "throughput_change_percent": 11.70,
-    "allocation_change_percent": 1.20,
+    "throughput_change_percent": 7.00,
+    "allocation_change_percent": 1.34,
     "persisted_bytes_change_percent": 0.15,
     "retained_4284_throughput_gate_passed": true,
     "retained_4284_allocation_gate_passed": true,
