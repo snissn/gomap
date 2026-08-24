@@ -32,8 +32,10 @@ import (
 )
 
 // SourceDocument is one parent document to ingest. Fields holds the document
-// fields (the configured TextField must carry a string); Meta is optional
-// metadata stored under the reserved "meta" field of the parent document.
+// fields (the configured TextField must carry a string); Meta is an optional
+// object stored under "meta" on the parent and copied into every generated
+// child. Generated top-level chunk linkage stays authoritative over any
+// same-named keys inside Meta.
 type SourceDocument struct {
 	ID     []byte
 	Fields map[string]any
@@ -219,9 +221,11 @@ type ingestPlan struct {
 //
 // # Atomicity And Durability Contract
 //
-// Parent IDs and every chunk plan validate before mutation. Embedding finishes
-// before that source mutates, so a chunk/embed failure preserves its prior
-// state. Per-parent locks shared across collection handles cover the complete
+// Parent IDs, source metadata, and every chunk plan validate before mutation.
+// Each child gets a detached copy of its parent's "meta" object; generated
+// top-level chunk linkage remains authoritative. Embedding finishes before that
+// source mutates, so a chunk/embed failure preserves its prior state.
+// Per-parent locks shared across collection handles cover the complete
 // plan-through-replace lifecycle; independent parents do not share that lock.
 //
 // Each source replacement is planned from one pinned collection snapshot. Its

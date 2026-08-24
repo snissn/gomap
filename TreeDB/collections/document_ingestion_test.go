@@ -21,8 +21,9 @@ import (
 )
 
 // openIngestTestCollection opens a collection wired for full RAG ingestion
-// coverage: a scalar index over chunk kind, a lexical index over the chunked
-// body field, and a declared cosine vector index over the "embedding" field.
+// coverage: scalar indexes over chunk kind and inherited tenant metadata, a
+// lexical index over the chunked body field, and a declared cosine vector index
+// over the "embedding" field.
 func openIngestTestCollection(t testing.TB, dims int) (string, *backenddb.DB, *Collection) {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,11 +37,18 @@ func openIngestTestCollection(t testing.TB, dims int) (string, *backenddb.DB, *C
 	// still held by the database.
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
-		Indexes: []IndexDefinition{{
-			Name:      "by_kind",
-			Field:     chunking.MetaFieldKind,
-			ValueType: IndexValueString,
-		}},
+		Indexes: []IndexDefinition{
+			{
+				Name:      "by_kind",
+				Field:     chunking.MetaFieldKind,
+				ValueType: IndexValueString,
+			},
+			{
+				Name:      "by_tenant",
+				Field:     "meta.tenant",
+				ValueType: IndexValueString,
+			},
+		},
 		VectorIndexes: []VectorIndexDefinition{{
 			Name:       "embedding",
 			Field:      "embedding",
@@ -834,6 +842,111 @@ func TestIngestSourcesChangedSourceCleanReplace(t *testing.T) {
 	}
 	if len(respOld.Results) != 0 {
 		t.Fatalf("stale lexical rows survived replace: %d hits for tok0", len(respOld.Results))
+	}
+}
+
+func TestIngestSourcesMetadataReplaceIndexParityAndReopen(t *testing.T) {
+	dir, d, col := openIngestTestCollection(t, 64)
+	cfg := ingestTestCfg(64)
+	const parent = "src-0"
+	oldMeta := map[string]any{
+		"tenant":                  "old",
+		"workspace":               "red",
+		"revision":                1,
+		chunking.MetaFieldParent:  "spoof-parent",
+		chunking.MetaFieldOrdinal: 99,
+		chunking.MetaFieldKind:    "spoof-kind",
+	}
+	oldSource := ingestTestSource(parent, 0)
+	oldSource.Meta = oldMeta
+	first := mustIngest(t, col, []SourceDocument{oldSource}, cfg)
+	oldWant := map[string]any{
+		"tenant":                  "old",
+		"workspace":               "red",
+		"revision":                1,
+		chunking.MetaFieldParent:  "spoof-parent",
+		chunking.MetaFieldOrdinal: 99,
+		chunking.MetaFieldKind:    "spoof-kind",
+	}
+	oldMeta["tenant"] = "caller-mutated"
+	assertChildMetadata(t, col, first.Ingested[0].ChildIDs, oldWant)
+	oldRows, err := col.FindByIndexValue("by_tenant", "old")
+	if err != nil || len(oldRows) != len(first.Ingested[0].ChildIDs)+1 {
+		t.Fatalf("old tenant rows=%d want parent+%d children err=%v", len(oldRows), len(first.Ingested[0].ChildIDs), err)
+	}
+
+	newMeta := map[string]any{"tenant": "new", "workspace": "blue", "revision": 2}
+	newSource := ingestTestSource(parent, 7)
+	newSource.Meta = newMeta
+	second := mustIngest(t, col, []SourceDocument{newSource}, cfg)
+	assertChildMetadata(t, col, second.Ingested[0].ChildIDs, newMeta)
+	oldRows, err = col.FindByIndexValue("by_tenant", "old")
+	if err != nil || len(oldRows) != 0 {
+		t.Fatalf("stale tenant rows=%q err=%v", oldRows, err)
+	}
+	newRows, err := col.FindByIndexValue("by_tenant", "new")
+	if err != nil || len(newRows) != len(second.Ingested[0].ChildIDs)+1 {
+		t.Fatalf("new tenant rows=%d want parent+%d children err=%v", len(newRows), len(second.Ingested[0].ChildIDs), err)
+	}
+	staleText, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "tok0", TopK: 100})
+	if err != nil || len(staleText.Results) != 0 {
+		t.Fatalf("stale text results=%d err=%v", len(staleText.Results), err)
+	}
+	liveText, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "tok7", TopK: 100})
+	if err != nil || len(liveText.Results) == 0 {
+		t.Fatalf("live text results=%d err=%v", len(liveText.Results), err)
+	}
+	assertIndexParity(t, col, []string{parent})
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d2, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+	col2, err := NewCollectionManager(d2).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after reopen: %v", err)
+	}
+	assertChildMetadata(t, col2, second.Ingested[0].ChildIDs, newMeta)
+	oldRows, err = col2.FindByIndexValue("by_tenant", "old")
+	if err != nil || len(oldRows) != 0 {
+		t.Fatalf("reopened stale tenant rows=%q err=%v", oldRows, err)
+	}
+	newRows, err = col2.FindByIndexValue("by_tenant", "new")
+	if err != nil || len(newRows) != len(second.Ingested[0].ChildIDs)+1 {
+		t.Fatalf("reopened new tenant rows=%d want parent+%d children err=%v", len(newRows), len(second.Ingested[0].ChildIDs), err)
+	}
+	assertIndexParity(t, col2, []string{parent})
+}
+
+func TestIngestSourcesNonEncodableMetadataFailsWholeBatchBeforeMutation(t *testing.T) {
+	_, _, col := openIngestTestCollection(t, 64)
+	cfg := ingestTestCfg(64)
+	sources := []SourceDocument{
+		ingestTestSource("src-0", 0),
+		{ID: []byte("src-1"), Fields: map[string]any{"body": "invalid metadata source"}, Meta: map[string]any{"bad": make(chan int)}},
+	}
+	result, err := col.IngestSources(context.Background(), sources, cfg)
+	var ingestErr *IngestError
+	if !errors.As(err, &ingestErr) || ingestErr.Stage != IngestStageChunk || ingestErr.SourceIndex != 1 {
+		t.Fatalf("err=%v want source 1 chunk-stage IngestError", err)
+	}
+	if len(result.Ingested) != 0 {
+		t.Fatalf("non-encodable metadata returned committed sources: %+v", result.Ingested)
+	}
+	for _, source := range sources {
+		if raw, err := col.Get(source.ID); err != nil || len(raw) != 0 {
+			t.Fatalf("source %q mutated: len=%d err=%v", source.ID, len(raw), err)
+		}
+		if children, err := col.ChunkChildren(source.ID); err != nil || len(children) != 0 {
+			t.Fatalf("source %q children=%q err=%v", source.ID, children, err)
+		}
 	}
 }
 
