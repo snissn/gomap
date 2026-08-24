@@ -5,6 +5,28 @@ import (
 	"time"
 )
 
+func TestVectorIndexLiveDeltaStatsIncludesDeltaMaxLevel(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.setNativePersistent(true)
+	index.sourceDocumentRootsValid = true
+	index.mu.Lock()
+	index.publishSearchViewLocked(false)
+	if err := index.insertLiveVectorBatchLocked([][]byte{[]byte("a")}, [][]float32{{1, 0}}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.mu.Unlock()
+	if stats := index.Stats(); stats.Nodes != 1 || stats.MaxLevel < 0 {
+		t.Fatalf("live delta stats=%+v want one node with a nonnegative max level", stats)
+	}
+}
+
 func TestVectorIndexLiveDeltaVisibilityShadowingAndCutover(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,

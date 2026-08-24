@@ -467,6 +467,67 @@ func TestCollectionVectorIndexNativeSearchDoesNotFlushBufferedDocuments(t *testi
 	}
 }
 
+func TestCollectionVectorIndexNativeSearchRefreshesStaleCatalogWithoutFlushing(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{BufferedIndexedWrites: true, DisableBufferedIndexedAsyncFlush: true},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"kind":"x","embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := writer.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	reader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	search := func(want string) {
+		t.Helper()
+		response, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name,
+			Query:     []float32{1, 0},
+			TopK:      1,
+			EfSearch:  8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != want {
+			t.Fatalf("search response=%+v err=%v want %s", response, err, want)
+		}
+	}
+	search("a")
+	if _, err := writer.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"kind":"x","embedding":[0.8,0.2]}`)}); err != nil {
+		t.Fatalf("insert committed document: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush committed document: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("c")}, [][]byte{[]byte(`{"kind":"x","embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	pendingBefore := mgr.StatsSnapshot().PendingDocuments
+	if pendingBefore == 0 {
+		t.Fatal("expected pending document before stale-handle search")
+	}
+	search("c")
+	if pendingAfter := mgr.StatsSnapshot().PendingDocuments; pendingAfter != pendingBefore {
+		t.Fatalf("pending documents after stale-handle search=%d want %d", pendingAfter, pendingBefore)
+	}
+}
+
 func TestCollectionVectorIndexNativeSearchTracksBufferedUpdateAndDelete(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
