@@ -3,6 +3,8 @@ package main
 import (
 	"math"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func almostEqual(a, b float64) bool {
@@ -127,5 +129,19 @@ func TestAccumulateQualityTinyFixture(t *testing.T) {
 	}
 	if !almostEqual(row.MRRAt10, wantMRR) {
 		t.Fatalf("mrr@10=%f want %f", row.MRRAt10, wantMRR)
+	}
+}
+
+func TestAccumulateCountersOmitsZeroAdditiveScalarMetrics(t *testing.T) {
+	counters := map[string]float64{}
+	accumulateCounters(counters, collections.HybridSearchStats{})
+	for _, key := range []string{"scalar_filter_lookups", "scalar_filter_input_ids", "scalar_filter_intersection_steps", "scalar_filter_final_ids"} {
+		if _, ok := counters[key]; ok {
+			t.Fatalf("zero additive counter %q allocated a map entry", key)
+		}
+	}
+	accumulateCounters(counters, collections.HybridSearchStats{ScalarFilterLookups: 2, ScalarFilterInputIDs: 9, ScalarFilterIntersectionSteps: 1, ScalarFilterFinalIDs: 3})
+	if counters["scalar_filter_lookups"] != 2 || counters["scalar_filter_input_ids"] != 9 || counters["scalar_filter_intersection_steps"] != 1 || counters["scalar_filter_final_ids"] != 3 {
+		t.Fatalf("nonzero additive counters=%v", counters)
 	}
 }

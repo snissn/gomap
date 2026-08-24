@@ -453,10 +453,6 @@ var ragCounterKeys = []struct {
 	{"vector_candidates_examined", func(s collections.HybridSearchStats) uint64 { return s.VectorCandidatesExamined }},
 	{"scalar_prefilter_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarPrefilterIDs }},
 	{"scalar_filter_matched", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterMatched }},
-	{"scalar_filter_lookups", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterLookups }},
-	{"scalar_filter_input_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterInputIDs }},
-	{"scalar_filter_intersection_steps", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterIntersectionSteps }},
-	{"scalar_filter_final_ids", func(s collections.HybridSearchStats) uint64 { return s.ScalarFilterFinalIDs }},
 	{"candidates_fused", func(s collections.HybridSearchStats) uint64 { return s.CandidatesFused }},
 	{"candidates_after_fusion", func(s collections.HybridSearchStats) uint64 { return s.CandidatesAfterFusion }},
 	{"fusion_text_only", func(s collections.HybridSearchStats) uint64 { return s.FusionTextOnly }},
@@ -470,6 +466,18 @@ var ragCounterKeys = []struct {
 func accumulateCounters(dst map[string]float64, s collections.HybridSearchStats) {
 	for _, k := range ragCounterKeys {
 		dst[k.Key] += float64(k.Value(s))
+	}
+	if s.ScalarFilterLookups != 0 {
+		dst["scalar_filter_lookups"] += float64(s.ScalarFilterLookups)
+	}
+	if s.ScalarFilterInputIDs != 0 {
+		dst["scalar_filter_input_ids"] += float64(s.ScalarFilterInputIDs)
+	}
+	if s.ScalarFilterIntersectionSteps != 0 {
+		dst["scalar_filter_intersection_steps"] += float64(s.ScalarFilterIntersectionSteps)
+	}
+	if s.ScalarFilterFinalIDs != 0 {
+		dst["scalar_filter_final_ids"] += float64(s.ScalarFilterFinalIDs)
 	}
 }
 
