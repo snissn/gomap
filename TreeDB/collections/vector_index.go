@@ -358,6 +358,10 @@ type VectorIndex struct {
 	searchView          atomic.Pointer[vectorIndexSearchView]
 	searchViewSpare     atomic.Pointer[vectorIndexSearchView]
 	searchViewDirty     map[int]struct{}
+	frozenPrefixBatches uint64
+	// constructionWorkers is a private benchmark seam; zero preserves the
+	// production worker choice.
+	constructionWorkers int
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
 	// untraced offline column graph builder. Traced and partition builds stay
 	// serial.
@@ -1194,6 +1198,12 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 		if _, ok := rebuilt[index.name]; ok {
 			continue
 		}
+		batch := len(documentIDs) > 1
+		var batchIDs, batchDocuments [][]byte
+		if batch {
+			batchIDs = make([][]byte, 0, len(documentIDs))
+			batchDocuments = make([][]byte, 0, len(documentIDs))
+		}
 		for documentIndex, documentID := range documentIDs {
 			if len(documentID) == 0 {
 				continue
@@ -1211,7 +1221,18 @@ func (c *Collection) reconcileVectorIndexes(documentIDs [][]byte) error {
 					return err
 				}
 			}
-			if err := index.insertStoredDocumentUnpublished(materializer, documentID, document); err != nil {
+			if !batch {
+				if err := index.insertStoredDocumentUnpublished(materializer, documentID, document); err != nil {
+					c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
+					return err
+				}
+				continue
+			}
+			batchIDs = append(batchIDs, documentID)
+			batchDocuments = append(batchDocuments, document)
+		}
+		if batch {
+			if err := index.insertStoredDocumentsUnpublished(materializer, batchIDs, batchDocuments); err != nil {
 				c.invalidateRegisteredVectorIndexDocumentCoverageLocked()
 				return err
 			}
@@ -1711,6 +1732,53 @@ func (idx *VectorIndex) insertStoredDocumentUnpublished(materializer *StoredDocu
 	return idx.insertStoredDocumentWithPublication(materializer, documentID, document, false)
 }
 
+func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDocumentJSONMaterializer, documentIDs, documents [][]byte) error {
+	if idx == nil {
+		return errors.New("collections: vector index is nil")
+	}
+	if len(documentIDs) != len(documents) {
+		return errors.New("collections: vector index batch ids/documents length mismatch")
+	}
+	if len(documentIDs) == 1 {
+		return idx.insertStoredDocumentUnpublished(materializer, documentIDs[0], documents[0])
+	}
+	vectors := make([][]float32, len(documents))
+	hasVector := true
+	for i, document := range documents {
+		if len(documentIDs[i]) == 0 {
+			return errors.New("collections: document id cannot be empty")
+		}
+		if document == nil {
+			hasVector = false
+			continue
+		}
+		vector, ok, err := vectorFromStoredDocument(materializer, document, idx.fieldPath)
+		if err != nil {
+			return fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, documentIDs[i], err)
+		}
+		if !ok {
+			hasVector = false
+			continue
+		}
+		vectors[i] = vector
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if hasVector {
+		return idx.insertVectorBatchLocked(documentIDs, vectors)
+	}
+	for i := range documentIDs {
+		if vectors[i] == nil {
+			idx.tombstoneDocumentIDLocked(documentIDs[i])
+			continue
+		}
+		if err := idx.insertVectorLocked(documentIDs[i], vectors[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *StoredDocumentJSONMaterializer, documentID, document []byte, publish bool) error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
@@ -1867,6 +1935,153 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	return nil
 }
 
+const (
+	nativeVectorFrozenPrefixBatchWidth   = 8
+	nativeVectorFrozenPrefixBatchMinimum = 32
+)
+
+type vectorIndexFrozenPrefixInsert struct {
+	documentID []byte
+	vector     []float32
+	level      int
+	neighbors  [][]int
+}
+
+func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
+	if len(documentIDs) != len(vectors) {
+		return errors.New("collections: vector index batch ids/vectors length mismatch")
+	}
+	dimensions := idx.dimensions
+	for row := range documentIDs {
+		if len(documentIDs[row]) == 0 {
+			return errors.New("collections: document id cannot be empty")
+		}
+		if dimensions == 0 {
+			dimensions = len(vectors[row])
+		}
+		if len(vectors[row]) != dimensions {
+			return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentIDs[row], len(vectors[row]), dimensions)
+		}
+		if err := validateFloat32Vector(vectors[row]); err != nil {
+			return err
+		}
+		if idx.metric == VectorMetricCosine && vectorNormSquared(vectors[row]) == 0 {
+			return errors.New("collections: cosine vector cannot have zero magnitude")
+		}
+	}
+	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
+		for row := range documentIDs {
+			if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for start := 0; start < len(documentIDs); {
+		if idx.entry < 0 {
+			if err := idx.insertVectorLocked(documentIDs[start], vectors[start]); err != nil {
+				return err
+			}
+			start++
+			continue
+		}
+		end := minInt(start+nativeVectorFrozenPrefixBatchWidth, len(documentIDs))
+		if !idx.canPlanFrozenPrefixBatchLocked(documentIDs[start:end]) {
+			for row := start; row < end; row++ {
+				if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
+					return err
+				}
+			}
+			start = end
+			continue
+		}
+		entry, maxLevel := idx.entry, idx.maxLevel
+		plans := make([]vectorIndexFrozenPrefixInsert, end-start)
+		errs := make([]error, len(plans))
+		workers := idx.constructionWorkerCount(len(plans))
+		var wg sync.WaitGroup
+		for worker := 1; worker < workers; worker++ {
+			wg.Go(func() {
+				for plan := worker; plan < len(plans); plan += workers {
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+				}
+			})
+		}
+		for plan := 0; plan < len(plans); plan += workers {
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+		}
+		wg.Wait()
+		for row, err := range errs {
+			if err != nil {
+				return fmt.Errorf("collections: vector batch row %d: %w", start+row, err)
+			}
+		}
+		for i := range plans {
+			idx.commitFrozenPrefixInsertLocked(plans[i])
+		}
+		idx.frozenPrefixBatches++
+		start = end
+	}
+	return nil
+}
+
+func (idx *VectorIndex) canPlanFrozenPrefixBatchLocked(documentIDs [][]byte) bool {
+	if !idx.nativePersistent || idx.encoding != VectorIndexEncodingFloat32 || idx.metric != VectorMetricCosine || len(documentIDs) < 2 || idx.m < len(documentIDs) || idx.constructionTrace != nil || idx.layer0ConstructionPolicy != nil || idx.qualityPostfillCandidates != nil {
+		return false
+	}
+	for i, documentID := range documentIDs {
+		if _, exists := idx.currentNode[string(documentID)]; exists {
+			return false
+		}
+		for j := 0; j < i; j++ {
+			if bytes.Equal(documentID, documentIDs[j]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (idx *VectorIndex) planFrozenPrefixInsertLocked(documentID []byte, vector []float32, entry, maxLevel int) (vectorIndexFrozenPrefixInsert, error) {
+	plan := vectorIndexFrozenPrefixInsert{documentID: documentID, vector: vector, level: idx.levelForDocumentID(documentID)}
+	norm := vectorNormSquared(vector)
+	prepared, err := prepareFloat32CosineQuery(vector, norm)
+	if err != nil {
+		return plan, err
+	}
+	for layer := maxLevel; layer > plan.level; layer-- {
+		entry = idx.greedyNearestAtLayerLocked(vector, norm, &prepared, entry, layer)
+	}
+	scratch := idx.getSearchScratch()
+	defer idx.putSearchScratch(scratch)
+	plan.neighbors = make([][]int, minInt(plan.level, maxLevel)+1)
+	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
+		candidates := idx.searchLayerWithScratchLocked(vector, norm, &prepared, entry, idx.efConstruction, layer, scratch)
+		plan.neighbors[layer] = idx.selectLayerNeighborsLocked(vector, norm, &prepared, candidates, layer, idx.maxNeighborsForLayer(layer), -1)
+		if len(plan.neighbors[layer]) > 0 {
+			entry = plan.neighbors[layer][0]
+		}
+	}
+	return plan, nil
+}
+
+func (idx *VectorIndex) commitFrozenPrefixInsertLocked(plan vectorIndexFrozenPrefixInsert) {
+	nodeID := len(idx.nodes)
+	idx.nodes = append(idx.nodes, idx.newVectorIndexNodePrepared(plan.documentID, plan.vector, plan.level, nil, 0))
+	idx.markGraphChangedLocked()
+	idx.markVectorNodeDirtyLocked(nodeID)
+	idx.markVectorDocDirtyLocked(plan.documentID)
+	idx.currentNode[string(plan.documentID)] = nodeID
+	for layer := len(plan.neighbors) - 1; layer >= 0; layer-- {
+		idx.linkSelectedNeighborsLocked(nodeID, plan.neighbors[layer], layer)
+	}
+	if plan.level > idx.maxLevel {
+		idx.entry = nodeID
+		idx.maxLevel = plan.level
+		idx.markVectorMetaDirtyLocked()
+	}
+}
+
 func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int, layer int) {
 	workers := 1
 	if idx.parallelReciprocalLinks &&
@@ -1874,7 +2089,7 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 		idx.layer0ConstructionPolicy == nil &&
 		idx.qualityPostfillCandidates == nil &&
 		vectorIndexNeighborIDsDistinct(neighbors) {
-		workers = vectorIndexReciprocalLinkWorkerCount(len(neighbors))
+		workers = idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(len(neighbors)))
 	}
 	if workers == 1 {
 		for _, neighborID := range neighbors {
@@ -1893,7 +2108,6 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	}
 	var wg sync.WaitGroup
 	for worker := 1; worker < workers; worker++ {
-		worker := worker
 		wg.Go(func() {
 			for neighbor := worker; neighbor < len(neighbors); neighbor += workers {
 				idx.linkLayerLocked(neighbors[neighbor], nodeID, layer, false)
@@ -1907,6 +2121,13 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	for _, neighborID := range neighbors {
 		idx.markVectorNodeDirtyLocked(neighborID)
 	}
+}
+
+func (idx *VectorIndex) constructionWorkerCount(work int) int {
+	if idx.constructionWorkers > 0 {
+		return minInt(idx.constructionWorkers, work)
+	}
+	return work
 }
 
 func vectorIndexReciprocalLinkWorkerCount(neighbors int) int {

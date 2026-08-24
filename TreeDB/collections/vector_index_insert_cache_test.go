@@ -166,7 +166,7 @@ func TestNativeParallelReciprocalLinksPersistExactTopology4243(t *testing.T) {
 	dir := t.TempDir()
 	d := openCollectionCommandWALDB(t, dir)
 	mgr := NewCollectionManager(d)
-	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 4, EfConstruction: 32, Strategy: VectorIndexStrategyNativeRuntime}
+	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 32, Strategy: VectorIndexStrategyNativeRuntime}
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
 		_ = d.Close()
 		t.Fatalf("CreateCollection: %v", err)
@@ -195,6 +195,10 @@ func TestNativeParallelReciprocalLinksPersistExactTopology4243(t *testing.T) {
 	if index == nil || !index.parallelReciprocalLinks {
 		_ = d.Close()
 		t.Fatalf("native parallel index=%v", index)
+	}
+	if index.frozenPrefixBatches == 0 {
+		_ = d.Close()
+		t.Fatal("native InsertBatch did not use frozen-prefix construction")
 	}
 	wantTopology := snapshotVectorIndexTopology4257(index)
 	if status, err := index.SaveNativeSnapshot(); err != nil || !status.Loaded {
