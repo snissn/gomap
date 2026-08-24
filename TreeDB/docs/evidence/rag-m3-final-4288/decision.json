@@ -1173,5 +1173,10 @@
     "repeat_positive_p99_rows": 40,
     "failed_attempts": 0,
     "disposition": "Frozen p99/QPS gate still fails under coordinator-bound, epoch-frozen, product-bound, cleanup-verified per-cell interleaving."
+  },
+  "artifact_role_disposition": {
+    "application_report_authority_label": "The generated full-matrix reports retain schema authority M1_RETAINED_BASELINE because that label names the reusable application-report contract, not their experimental role. In this directory the root and repeat-b reports are M3 candidate correctness/ingestion repeats over product main 3b3235ea1; baseline/a1 and baseline/a2 are pre-#4292 query controls.",
+    "final_query_decision_authority": "per-cell-abba/decision.json and its coordinator-bound raw gzip supersede the earlier whole-matrix query-performance comparison.",
+    "raw_artifacts_unchanged": "Role is dispositioned here rather than mutating hash-bound generated reports or manifests."
   }
 }
