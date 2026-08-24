@@ -568,7 +568,11 @@ func writeArtifact(path string, value artifact) (err error) {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() {
+		if closeErr := directory.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 	if err = directory.Sync(); err != nil {
 		return err
 	}

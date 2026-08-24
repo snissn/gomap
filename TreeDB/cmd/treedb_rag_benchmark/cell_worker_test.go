@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,9 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 	}
 	input := strings.NewReader(
 		`{"ordinal":` + jsonInt(applicationCellCount()) + `}` + "\n" +
-			`{"ordinal":` + jsonInt(unsupportedOrdinal) + `}` + "\n",
+			`{"ordinal":` + jsonInt(unsupportedOrdinal) + `}` + "\n" +
+			`{"ordinal":0}` + "\n" +
+			`{"ordinal":0}` + "\n",
 	)
 	var output bytes.Buffer
 	cfg := defaultApplicationConfig()
@@ -79,6 +82,23 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 	}
 	if unsupported.Error != "" || unsupported.Row == nil || unsupported.Row.Status != "unsupported" {
 		t.Fatalf("unsupported response=%+v", unsupported)
+	}
+	wantCell, _ := applicationCellByOrdinal(0)
+	for attempt := 0; attempt < 2; attempt++ {
+		var supported applicationCellWorkerResponse
+		if err := decoder.Decode(&supported); err != nil {
+			t.Fatalf("decode supported attempt %d: %v", attempt, err)
+		}
+		if supported.Error != "" || supported.Row == nil || supported.Row.Status != "supported" || supported.Row.Cell != wantCell {
+			t.Fatalf("supported attempt %d response=%+v", attempt, supported)
+		}
+	}
+	matches, err := filepath.Glob(filepath.Join(cfg.Dir, "*", "cell-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("fresh cell directories retained: %v", matches)
 	}
 }
 

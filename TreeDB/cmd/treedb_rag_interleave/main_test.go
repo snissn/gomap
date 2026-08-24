@@ -125,8 +125,8 @@ func TestParseConfigRejectsUnsafeWorkerArguments(t *testing.T) {
 
 func TestDecodeWithTimeout(t *testing.T) {
 	reader, writer := io.Pipe()
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	var value any
 	err := decodeWithTimeout(json.NewDecoder(reader), &value, 10*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
