@@ -67,7 +67,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	// Exact top-k budget proofs do not prove enough distinct chunk parents for
 	// collapse backfill. Honor the declared source budgets rather than reducing
 	// them or expanding them implicitly.
-	if plan.maxChunksPerParent > 0 {
+	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
 		return c.hybridSearchCandidatesFixedBudget(plan, candidateAllowSet, HybridCandidateBudgetStopReasonExactBoundInsufficient, HybridCandidateBudgetStopReasonExactBoundInsufficient)
 	}
 

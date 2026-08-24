@@ -114,6 +114,19 @@ func TestSearchHybridParentCollapseFilterFetchAndDisabledParity4291(t *testing.T
 		t.Fatalf("disabled collapse stats=%+v", disabled.Stats)
 	}
 
+	nonbinding := base
+	nonbinding.MaxChunksPerParent = nonbinding.TopK
+	nonbindingResponse, err := col.SearchHybrid(nonbinding)
+	if err != nil {
+		t.Fatalf("SearchHybrid nonbinding cap: %v", err)
+	}
+	if !reflect.DeepEqual(disabled.Results, nonbindingResponse.Results) || !reflect.DeepEqual(disabled.Stats, nonbindingResponse.Stats) {
+		t.Fatalf("nonbinding cap changed work/results: disabled=%+v nonbinding=%+v", disabled, nonbindingResponse)
+	}
+	if nonbindingResponse.Plan.MaxChunksPerParent != nonbinding.TopK {
+		t.Fatalf("nonbinding plan=%+v", nonbindingResponse.Plan)
+	}
+
 	enabled := base
 	enabled.MaxChunksPerParent = 1
 	got, err := col.SearchHybrid(enabled)

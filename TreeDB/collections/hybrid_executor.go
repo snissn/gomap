@@ -118,7 +118,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	}
 	if allowSet != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
 		filterTopK := plan.topK
-		if plan.maxChunksPerParent > 0 {
+		if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) {
 			filterTopK = len(results)
 		}
 		results = hybridFilterResultsByScalarAllowSet(results, allowSet, filterTopK, &response.Stats)
@@ -526,9 +526,13 @@ func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, 
 	return out
 }
 
+func hybridParentCollapseBinding(topK, maxChunksPerParent int) bool {
+	return maxChunksPerParent > 0 && maxChunksPerParent < topK
+}
+
 func hybridFusePlannedCandidates(candidates []HybridSearchCandidate, plan hybridSearchExecutionPlan) ([]HybridSearchResult, HybridSearchStats, error) {
 	topK := plan.topK
-	if plan.maxChunksPerParent > 0 || (plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter) {
+	if hybridParentCollapseBinding(plan.topK, plan.maxChunksPerParent) || (plan.scalarFilter != nil && plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter) {
 		topK = len(candidates)
 	}
 	return FuseHybridSearchCandidates(candidates, plan.fusion, topK)
@@ -577,7 +581,7 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 // parse and round-trip through ChildDocumentID are independent documents and
 // never share a parent-count key.
 func hybridCollapseResultsByParent(results []HybridSearchResult, topK, maxChunksPerParent int, stats *HybridSearchStats) []HybridSearchResult {
-	if maxChunksPerParent <= 0 {
+	if !hybridParentCollapseBinding(topK, maxChunksPerParent) {
 		return results
 	}
 	parentCounts := make(map[string]int, min(len(results), topK))
