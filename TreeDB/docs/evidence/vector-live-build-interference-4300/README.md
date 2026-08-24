@@ -13,11 +13,24 @@ go test ./TreeDB/collections -run '^$' \
   -benchtime=1x -count=3
 ```
 
-Omit `TREEDB_VECTOR_MIXED_WORKERS` for the production worker choice. A worker limit of one serializes the frozen-prefix planner without changing its topology. Supported diagnostic modes are `current`, `serial-reciprocal`, and `no-publish`.
+Omit `TREEDB_VECTOR_MIXED_WORKERS` for the production worker choice. A worker limit of one serializes the frozen-prefix planner without changing its topology. Supported diagnostic modes are `current`, `serial-reciprocal`, `no-publish`, `live-delta`, and `live-delta-cutover`. The last two route inserted rows through the native live-delta graph; `live-delta-cutover` inserts enough rows to cross the production fold bound once.
 
 The default 200 ms pace per 100-row batch models the 500 rows/s H-B stage and caps offered throughput near 500 rows/s. Set `TREEDB_VECTOR_MIXED_BATCH_PACE=0s` for an unpaced control. The local throughput result is directional under this pacing; AWS H-B is authoritative.
 
-Fixture: deterministic 10,000-row 768D FP32 cosine base, 2,000 live inserts in 100-row batches, HNSW M16/efConstruction128/efSearch64, concurrency 10, topK100. Host: Intel i5-11400F (6 cores/12 threads), Linux, with `GOMAXPROCS=32` to preserve the EC2 scheduler shape.
+Fixture: deterministic 10,000-row 768D FP32 cosine base, 2,000 live inserts in 100-row batches, HNSW M16/efConstruction128/efSearch64, concurrency 10, topK100. Override the inserted-row count with `TREEDB_VECTOR_MIXED_INSERT_ROWS`; for example, `10000` grows the live delta to 50% of the final 20,000-row graph and approximates the R21 growth ratio. Host: Intel i5-11400F (6 cores/12 threads), Linux, with `GOMAXPROCS=32` to preserve the EC2 scheduler shape.
+
+Set `TREEDB_VECTOR_MIXED_ACCOUNT_SEARCH_WORK=1` only for diagnostic attribution. It reports the percentage of searches that use the delta, initial and terminal topK/efSearch budgets, retry incidence and depth, resumed-retry percentage, delta visits per query, and whether retrying changes merged topK. This mode performs extra accounting and an initial-result fingerprint; do not use its QPS as production-mode evidence.
+
+Example R21-ratio attribution run:
+
+```sh
+TREEDB_VECTOR_MIXED_MODE=live-delta \
+TREEDB_VECTOR_MIXED_INSERT_ROWS=10000 \
+TREEDB_VECTOR_MIXED_ACCOUNT_SEARCH_WORK=1 \
+go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkVectorIndexMixedSearchInsert4300$' \
+  -benchtime=1x -count=1
+```
 
 ## Three-repeat medians
 
