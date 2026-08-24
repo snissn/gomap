@@ -32,8 +32,7 @@ type durablePagerSinkV1 struct{ pager *pager.Pager }
 var _ freelist.CandidatePageWriterV1 = durablePagerSinkV1{}
 
 var (
-	errDurableRootCandidateStale               = errors.New("durable-root candidate base changed")
-	errDurableRootDependencyProjectionRequired = errors.New("durable-root dependency projection required")
+	errDurableRootCandidateStale = errors.New("durable-root candidate base changed")
 )
 
 const maxDurableRootPreMetaRetriesV1 = 64
@@ -183,13 +182,20 @@ func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublica
 }
 
 func (db *DB) projectedValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
-	// The persisted tracker projects logical ValuePtr counts, but it does not
-	// describe raw outer-leaf LogRecordRef dependencies of collection-local
-	// roots. Those transitions either use the bounded predecessor/current
-	// segment plan below or fall back to the exact candidate scanner.
-	if delta != nil && delta.outerLeafDependencyReuse {
+	// Logical counts alone cannot describe raw outer-leaf dependencies. The
+	// bounded reuse planner composes them explicitly when it has certified
+	// predecessor/current-segment evidence; every fallback must scan the full
+	// candidate closure.
+	if db.indexOuterLeavesInValueLog || delta != nil && delta.outerLeafDependencyReuse {
 		return nil, false, nil
 	}
+	return db.projectedLogicalValueLogReferencesV1(next, delta)
+}
+
+func (db *DB) projectedLogicalValueLogReferencesV1(next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+	// The persisted tracker projects logical ValuePtr counts. Raw outer-leaf
+	// LogRecordRef dependencies are composed separately by the bounded
+	// predecessor/current-segment plan below.
 	tracker := db.valueLogRefTracker
 	if tracker == nil {
 		return nil, false, nil
@@ -516,11 +522,11 @@ func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPag
 // destructive transitions keep requiresCandidateProjection set and therefore
 // fall back to the exact scanner for leaf-generation GC. The ordered multi-root
 // path may retain raw predecessor membership across segment rotation, while
-// negative logical ValuePtr transitions still fall back to exact projection.
+// the exact logical ValuePtr tracker removes stale value-log membership.
 // A replacement generation manifest does not invalidate this proof: the caller
 // replaces that authoritative namespace token independently while this plan
 // recaptures only the raw/value-log handles.
-func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
+func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublication.StableResourceSet, next page.MetaPageBody, delta *valueLogRefDelta) (map[uint32]struct{}, bool, error) {
 	if db == nil || delta == nil || (!db.indexOuterLeavesInValueLog && !delta.outerLeafDependencyReuse) {
 		return nil, false, nil
 	}
@@ -605,12 +611,10 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 			return nil, false, nil
 		}
 	}
+	hasNegative := false
 	if err := delta.forEachChange(func(fileID uint32, change int64) error {
 		if change < 0 {
-			// Membership alone cannot prove whether a subtractive count reached
-			// zero. Use the exact scanner rather than retaining or deleting on a
-			// guess.
-			return errDurableRootDependencyProjectionRequired
+			hasNegative = true
 		}
 		if change > 0 {
 			if _, ownedByAdditional := additionalReferences[fileID]; !ownedByAdditional {
@@ -619,10 +623,29 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 		}
 		return nil
 	}); err != nil {
-		if errors.Is(err, errDurableRootDependencyProjectionRequired) {
+		return nil, false, err
+	}
+	if hasNegative {
+		logicalReferences, projected, err := db.projectedLogicalValueLogReferencesV1(next, delta)
+		if err != nil {
+			return nil, false, err
+		}
+		if !projected {
 			return nil, false, nil
 		}
-		return nil, false, err
+		for fileID := range references {
+			lane, _ := valuelog.DecodeFileID(fileID)
+			if lane != valuelog.ReservedLeafLogLaneID {
+				delete(references, fileID)
+			}
+		}
+		for fileID := range logicalReferences {
+			lane, _ := valuelog.DecodeFileID(fileID)
+			if lane == valuelog.ReservedLeafLogLaneID {
+				continue
+			}
+			references[fileID] = struct{}{}
+		}
 	}
 	for fileID := range additionalReferences {
 		delete(references, fileID)
@@ -685,7 +708,7 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 			}
 		}
 	}
-	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, delta)
+	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
 	if err != nil {
 		return nil, fmt.Errorf("plan outer-leaf candidate dependencies: %w", err)
 	}

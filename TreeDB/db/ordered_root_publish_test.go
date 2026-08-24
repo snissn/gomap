@@ -269,6 +269,91 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextPreservesExactValueLog
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextOuterLeafReplacementAvoidsCandidateScan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	opts := Options{
+		Dir:                        dir,
+		CommandWAL:                 true,
+		Durability:                 DurabilityDurable,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 610_000, 1, func(int) []byte { return []byte("value-0") })[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 620_000, 1, func(int) []byte { return []byte("value-1") })[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	publish := func(baseRoot uint64, ptr page.ValuePtr, commandKey string) uint64 {
+		t.Helper()
+		delta := mustFrozenSystemPointerMemtable(t, "doc/p", ptr)
+		_, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+			[]OrderedRootDeltaPublishInput{{
+				BaseRoot:      baseRoot,
+				Iter:          delta.NewIterator(nil, nil),
+				StoragePolicy: OrderedRootStorageValueLogLeaves,
+			}},
+			mustRawKVCommandWALIntent(t, db, commandKey, "1"),
+			func(_ CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return mustFrozenRawMemtable(t, maintenanceTestCollectionRootKey, encodeMaintenanceRootID(rootIDs[0])).NewIterator(nil, nil), nil
+			},
+		)
+		if err != nil {
+			t.Fatalf("publish base root %d: %v", baseRoot, err)
+		}
+		return rootIDs[0]
+	}
+
+	root := publish(0, oldPtr, "cmd/outer-leaf-base")
+	primeValueLogRefTracker(t, db)
+	if !db.valueLogRefTracker.canTrack(db.currentCommitSeq()) {
+		t.Fatal("logical value-log tracker is not current after base publication")
+	}
+	var scans atomic.Int64
+	db.testScanCandidateExternalReferencesHook = func() { scans.Add(1) }
+	_ = publish(root, newPtr, "cmd/outer-leaf-replace")
+	db.testScanCandidateExternalReferencesHook = nil
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("outer-leaf replacement candidate dependency scans=%d want 0", got)
+	}
+	refs, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq())
+	if !ok {
+		t.Fatal("logical value-log tracker is not current after replacement")
+	}
+	if _, ok := refs[oldPtr.FileID]; ok {
+		t.Fatalf("logical value-log tracker retained replaced segment %d", oldPtr.FileID)
+	}
+	if _, ok := refs[newPtr.FileID]; !ok {
+		t.Fatalf("logical value-log tracker omitted replacement segment %d", newPtr.FileID)
+	}
+
+	if err := leafLog.Sync(); err != nil {
+		t.Fatalf("sync leaf log: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("close leaf log: %v", err)
+	}
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopen)
+	if got := readCollectionRootValue(t, reopen, maintenanceTestCollectionRootKey, []byte("doc/p")); !bytes.Equal(got, []byte("value-1")) {
+		t.Fatalf("reopened collection value=%q want value-1", got)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDescriptorReachability(t *testing.T) {
 	tests := []struct {
 		name    string
