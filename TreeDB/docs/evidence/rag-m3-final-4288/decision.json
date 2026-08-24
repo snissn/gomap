@@ -94,70 +94,65 @@
     "accepted": true
   },
   "performance_disposition": {
-    "repetition_order": "A1 control -> B1 candidate -> B2 candidate -> A2 control; pairs are A1/B1 and A2/B2.",
-    "control_candidate_generated_at_utc": [
-      "2026-08-24T14:36:27.017774Z",
-      "2026-08-24T14:37:42.515593Z",
-      "2026-08-24T14:40:07.295795Z",
-      "2026-08-24T14:42:32.570568Z"
-    ],
+    "method": "Fresh unique database per cell; four long-lived logical legs are process-sharded every 8 cells; even ordinals A1-B1-B2-A2 and odd ordinals A2-B2-B1-A1.",
+    "raw_artifact": "per-cell-abba/treedb_rag_per_cell_abba.json.gz",
+    "raw_artifact_sha256": "49fcf473f9b10b7f74d3bddd149e94526094f98696967cbecf15861fbdf2aebd",
     "matched_existing_supported_rows": 136,
+    "capability_transitions_to_supported": 136,
     "comparison_identity": "Every matched row has identical work_digest, quality_digest, projection, fixture, config, and semantic-vector digest across all four legs.",
-    "repeat_stable_unaffected_qps_regressions_over_10_percent": 0,
-    "accepted_affected_qps_exceptions": [
+    "failed_attempts": 0,
+    "repeat_stable_unaffected_qps_regressions_over_10_percent": 3,
+    "qps_failures": [
       {
+        "ordinal": 38,
         "cell": {
           "route": "text_only",
-          "projection": "score_only",
+          "projection": "fetch_topk",
           "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -46.26,
+          "p99_change_percent": 643.64,
+          "p99_change_ms": 6.381486
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -31.42,
+          "p99_change_percent": 185.73,
+          "p99_change_ms": 2.480927
+        }
+      },
+      {
+        "ordinal": 41,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
           "collapse": "disabled",
           "surface": "direct_collection",
-          "embedding": "semantic_minilm",
+          "embedding": "hashing_regression",
           "vector_route": "none",
           "clients": 4
         },
-        "classification": "accepted_affected_bounded_plan_observability_cost",
-        "controls": {
-          "A1": {
-            "qps": 77157.85,
-            "p99_ms": 0.15336,
-            "bytes_per_op": 70070.12,
-            "allocs_per_op": 301.469
-          },
-          "A2": {
-            "qps": 76997.17,
-            "p99_ms": 0.169127,
-            "bytes_per_op": 70097.07,
-            "allocs_per_op": 301.475
-          }
+        "pair_a1_b1": {
+          "qps_change_percent": -10.37,
+          "p99_change_percent": 12.44,
+          "p99_change_ms": 0.245938
         },
-        "candidates": {
-          "B1": {
-            "qps": 68054.03,
-            "p99_ms": 0.180483,
-            "bytes_per_op": 70218.67,
-            "allocs_per_op": 302.476
-          },
-          "B2": {
-            "qps": 67038.8,
-            "p99_ms": 0.17353,
-            "bytes_per_op": 70211.8,
-            "allocs_per_op": 302.471
-          }
-        },
-        "pair_qps_change_percent": [
-          -11.8,
-          -12.93
-        ],
-        "rationale": "The candidate adds one bounded plan/stats allocation (about 115-149 B/op) on this existing row. Exact work and quality digests match; throughput remains 67k-68k QPS and p99 <=0.181 ms. This measured implementation cost is explicitly accepted."
-      }
-    ],
-    "p99_gate_semantics": "The frozen pre-candidate policy says any p99 regression blocks and defines no prospective numeric/noise exception. A positive delta in both ABBA pairs is therefore a failure; no post-hoc exception is applied.",
-    "repeat_stable_positive_p99_rows": 35,
-    "p99_exceptions": [
+        "pair_a2_b2": {
+          "qps_change_percent": -33.94,
+          "p99_change_percent": 106.26,
+          "p99_change_ms": 0.876407
+        }
+      },
       {
+        "ordinal": 105,
         "cell": {
-          "route": "hybrid",
+          "route": "vector_only",
           "projection": "fetch_topk",
           "filter": "tenant_alpha",
           "collapse": "disabled",
@@ -167,71 +162,255 @@
           "clients": 4
         },
         "pair_a1_b1": {
-          "qps_change_percent": -7.3,
-          "p99_change_percent": 9.32,
-          "p99_change_ms": 0.079366
+          "qps_change_percent": -19.98,
+          "p99_change_percent": 137.1,
+          "p99_change_ms": 1.138361
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -24.37,
+          "p99_change_percent": 64.23,
+          "p99_change_ms": 0.528642
+        }
+      }
+    ],
+    "repeat_positive_p99_rows": 32,
+    "p99_failures": [
+      {
+        "ordinal": 9,
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -3.13,
+          "p99_change_percent": 16.29,
+          "p99_change_ms": 0.033738
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -6.96,
+          "p99_change_percent": 24.47,
+          "p99_change_ms": 0.041027
+        }
+      },
+      {
+        "ordinal": 38,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -46.26,
+          "p99_change_percent": 643.64,
+          "p99_change_ms": 6.381486
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -31.42,
+          "p99_change_percent": 185.73,
+          "p99_change_ms": 2.480927
+        }
+      },
+      {
+        "ordinal": 40,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -8.3,
+          "p99_change_percent": 68.92,
+          "p99_change_ms": 0.549554
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -36.37,
+          "p99_change_percent": 451.83,
+          "p99_change_ms": 2.613843
+        }
+      },
+      {
+        "ordinal": 41,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -10.37,
+          "p99_change_percent": 12.44,
+          "p99_change_ms": 0.245938
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -33.94,
+          "p99_change_percent": 106.26,
+          "p99_change_ms": 0.876407
+        }
+      },
+      {
+        "ordinal": 43,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "none",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -29.96,
+          "p99_change_percent": 52.1,
+          "p99_change_ms": 1.43619
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 30.26,
+          "p99_change_percent": 5.51,
+          "p99_change_ms": 0.51856
+        }
+      },
+      {
+        "ordinal": 105,
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -19.98,
+          "p99_change_percent": 137.1,
+          "p99_change_ms": 1.138361
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -24.37,
+          "p99_change_percent": 64.23,
+          "p99_change_ms": 0.528642
+        }
+      },
+      {
+        "ordinal": 106,
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 2.32,
+          "p99_change_percent": 31.87,
+          "p99_change_ms": 0.444691
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -5.21,
+          "p99_change_percent": 48.16,
+          "p99_change_ms": 0.701242
+        }
+      },
+      {
+        "ordinal": 132,
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -2.44,
+          "p99_change_percent": 28.38,
+          "p99_change_ms": 0.047989
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -7.13,
+          "p99_change_percent": 72.56,
+          "p99_change_ms": 0.087422
+        }
+      },
+      {
+        "ordinal": 133,
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -5.16,
+          "p99_change_percent": 167.39,
+          "p99_change_ms": 0.54078
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -18.96,
+          "p99_change_percent": 110.9,
+          "p99_change_ms": 0.375168
+        }
+      },
+      {
+        "ordinal": 141,
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -16.78,
+          "p99_change_percent": 147.36,
+          "p99_change_ms": 0.483387
         },
         "pair_a2_b2": {
           "qps_change_percent": -5.57,
-          "p99_change_percent": 15.79,
-          "p99_change_ms": 0.128712
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "p99_change_percent": 17.33,
+          "p99_change_ms": 0.044522
+        }
       },
       {
+        "ordinal": 164,
         "cell": {
           "route": "hybrid",
           "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -0.91,
-          "p99_change_percent": 0.1,
-          "p99_change_ms": 0.002615
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.77,
-          "p99_change_percent": 0.37,
-          "p99_change_ms": 0.00908
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -0.99,
-          "p99_change_percent": 9.36,
-          "p99_change_ms": 0.431192
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.17,
-          "p99_change_percent": 23.47,
-          "p99_change_ms": 1.135703
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
+          "filter": "unfiltered",
           "collapse": "enabled_cap_2",
           "surface": "direct_collection",
           "embedding": "hashing_regression",
@@ -239,45 +418,250 @@
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": -1.88,
-          "p99_change_percent": 9.29,
-          "p99_change_ms": 0.034811
+          "qps_change_percent": -1.43,
+          "p99_change_percent": 53.11,
+          "p99_change_ms": 0.492084
         },
         "pair_a2_b2": {
-          "qps_change_percent": -1.62,
-          "p99_change_percent": 3.07,
-          "p99_change_ms": 0.010456
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": -16.39,
+          "p99_change_percent": 89.91,
+          "p99_change_ms": 0.594147
+        }
       },
       {
+        "ordinal": 168,
         "cell": {
           "route": "hybrid",
           "projection": "fetch_topk",
           "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -2.23,
+          "p99_change_percent": 21.09,
+          "p99_change_ms": 0.090455
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -4.67,
+          "p99_change_percent": 44.38,
+          "p99_change_ms": 0.177954
+        }
+      },
+      {
+        "ordinal": 170,
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 2.44,
+          "p99_change_percent": 18.06,
+          "p99_change_ms": 0.201834
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -1.84,
+          "p99_change_percent": 47.87,
+          "p99_change_ms": 0.45207
+        }
+      },
+      {
+        "ordinal": 171,
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "http_service",
+          "embedding": "hashing_regression",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.87,
+          "p99_change_percent": 6.27,
+          "p99_change_ms": 0.148325
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -3.03,
+          "p99_change_percent": 11.12,
+          "p99_change_ms": 0.223831
+        }
+      },
+      {
+        "ordinal": 204,
+        "cell": {
+          "route": "text_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
           "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.71,
+          "p99_change_percent": 4.57,
+          "p99_change_ms": 0.004089
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.58,
+          "p99_change_percent": 15.14,
+          "p99_change_ms": 0.010936
+        }
+      },
+      {
+        "ordinal": 224,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.56,
+          "p99_change_percent": 3.34,
+          "p99_change_ms": 0.075155
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": 0.27,
+          "p99_change_percent": 7.39,
+          "p99_change_ms": 0.165268
+        }
+      },
+      {
+        "ordinal": 228,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.58,
+          "p99_change_percent": 3.54,
+          "p99_change_ms": 0.08241
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.8,
+          "p99_change_percent": 2.12,
+          "p99_change_ms": 0.047211
+        }
+      },
+      {
+        "ordinal": 230,
+        "cell": {
+          "route": "text_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "http_service",
+          "embedding": "semantic_minilm",
+          "vector_route": "none",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -0.42,
+          "p99_change_percent": 23.12,
+          "p99_change_ms": 0.651923
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.16,
+          "p99_change_percent": 6.52,
+          "p99_change_ms": 0.172282
+        }
+      },
+      {
+        "ordinal": 261,
+        "cell": {
+          "route": "vector_only",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -15.24,
+          "p99_change_percent": 50.52,
+          "p99_change_ms": 0.028828
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -2.81,
+          "p99_change_percent": 11.14,
+          "p99_change_ms": 0.007739
+        }
+      },
+      {
+        "ordinal": 264,
+        "cell": {
+          "route": "vector_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
           "surface": "direct_collection",
           "embedding": "semantic_minilm",
           "vector_route": "declared_column_graph_exact",
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": -0.52,
-          "p99_change_percent": 13.59,
-          "p99_change_ms": 0.337192
+          "qps_change_percent": -7.43,
+          "p99_change_percent": 108.18,
+          "p99_change_ms": 0.033444
         },
         "pair_a2_b2": {
-          "qps_change_percent": -0.81,
-          "p99_change_percent": 0.93,
-          "p99_change_ms": 0.02306
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": -1.85,
+          "p99_change_percent": 3.97,
+          "p99_change_ms": 0.00126
+        }
       },
       {
+        "ordinal": 269,
         "cell": {
-          "route": "hybrid",
+          "route": "vector_only",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -4.88,
+          "p99_change_percent": 5.25,
+          "p99_change_ms": 0.005001
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -20.89,
+          "p99_change_percent": 82.87,
+          "p99_change_ms": 0.048382
+        }
+      },
+      {
+        "ordinal": 288,
+        "cell": {
+          "route": "vector_only",
           "projection": "fetch_topk",
           "filter": "unfiltered",
           "collapse": "disabled",
@@ -287,718 +671,250 @@
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": 0.06,
-          "p99_change_percent": 1.64,
-          "p99_change_ms": 0.041189
+          "qps_change_percent": -3.57,
+          "p99_change_percent": 43.83,
+          "p99_change_ms": 0.963299
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.27,
+          "p99_change_percent": 5.54,
+          "p99_change_ms": 0.119924
+        }
+      },
+      {
+        "ordinal": 292,
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.16,
+          "p99_change_percent": 1.07,
+          "p99_change_ms": 0.024638
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -2.89,
+          "p99_change_percent": 64.73,
+          "p99_change_ms": 1.476592
+        }
+      },
+      {
+        "ordinal": 297,
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 1.38,
+          "p99_change_percent": 6.35,
+          "p99_change_ms": 0.2491
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -7.28,
+          "p99_change_percent": 35.77,
+          "p99_change_ms": 1.312669
+        }
+      },
+      {
+        "ordinal": 301,
+        "cell": {
+          "route": "vector_only",
+          "projection": "fetch_topk",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.31,
+          "p99_change_percent": 2.01,
+          "p99_change_ms": 0.073475
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -5.16,
+          "p99_change_percent": 7.17,
+          "p99_change_ms": 0.279656
+        }
+      },
+      {
+        "ordinal": 325,
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "unfiltered",
+          "collapse": "enabled_cap_2",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": -2.33,
+          "p99_change_percent": 20.05,
+          "p99_change_ms": 0.056349
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -6.26,
+          "p99_change_percent": 63.74,
+          "p99_change_ms": 0.16127
+        }
+      },
+      {
+        "ordinal": 328,
+        "cell": {
+          "route": "hybrid",
+          "projection": "score_only",
+          "filter": "tenant_alpha",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 1
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 0.17,
+          "p99_change_percent": 8.82,
+          "p99_change_ms": 0.008981
+        },
+        "pair_a2_b2": {
+          "qps_change_percent": -0.3,
+          "p99_change_percent": 4.05,
+          "p99_change_ms": 0.00479
+        }
+      },
+      {
+        "ordinal": 353,
+        "cell": {
+          "route": "hybrid",
+          "projection": "fetch_topk",
+          "filter": "unfiltered",
+          "collapse": "disabled",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
+          "vector_route": "declared_column_graph_exact",
+          "clients": 4
+        },
+        "pair_a1_b1": {
+          "qps_change_percent": 8.21,
+          "p99_change_percent": 19.84,
+          "p99_change_ms": 2.380752
         },
         "pair_a2_b2": {
           "qps_change_percent": -1.23,
-          "p99_change_percent": 1.73,
-          "p99_change_ms": 0.042603
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "p99_change_percent": 6.97,
+          "p99_change_ms": 0.280657
+        }
       },
       {
+        "ordinal": 356,
         "cell": {
           "route": "hybrid",
           "projection": "fetch_topk",
           "filter": "unfiltered",
-          "collapse": "disabled",
+          "collapse": "enabled_cap_2",
           "surface": "direct_collection",
           "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -10.24,
-          "p99_change_percent": 65.31,
-          "p99_change_ms": 2.966086
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -1.32,
-          "p99_change_percent": 7.16,
-          "p99_change_ms": 0.295947
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "hashing_regression",
           "vector_route": "declared_column_graph_exact",
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": 0.0,
-          "p99_change_percent": 1.23,
-          "p99_change_ms": 0.014876
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -1.66,
-          "p99_change_percent": 3.23,
-          "p99_change_ms": 0.039212
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -2.03,
-          "p99_change_percent": 0.5,
-          "p99_change_ms": 0.032143
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 2.2,
-          "p99_change_percent": 48.35,
-          "p99_change_ms": 2.561867
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "score_only",
-          "filter": "tenant_alpha",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -1.66,
-          "p99_change_percent": 39.26,
-          "p99_change_ms": 0.038785
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 2.35,
-          "p99_change_percent": 9.08,
-          "p99_change_ms": 0.007546
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -4.85,
-          "p99_change_percent": 36.16,
-          "p99_change_ms": 0.042882
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -5.26,
-          "p99_change_percent": 127.77,
-          "p99_change_ms": 0.155767
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -3.22,
-          "p99_change_percent": 32.81,
-          "p99_change_ms": 0.067272
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.13,
-          "p99_change_percent": 117.93,
-          "p99_change_ms": 0.153501
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "hybrid",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -2.17,
-          "p99_change_percent": 1.11,
-          "p99_change_ms": 0.004188
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.42,
-          "p99_change_percent": 5.85,
-          "p99_change_ms": 0.02136
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 0.32,
-          "p99_change_percent": 2.41,
-          "p99_change_ms": 0.063688
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.31,
-          "p99_change_percent": 1.28,
-          "p99_change_ms": 0.035229
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 0.15,
-          "p99_change_percent": 5.17,
-          "p99_change_ms": 0.187865
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.87,
-          "p99_change_percent": 1.59,
-          "p99_change_ms": 0.062535
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -1.39,
-          "p99_change_percent": 0.73,
-          "p99_change_ms": 0.005477
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.3,
-          "p99_change_percent": 27.77,
-          "p99_change_ms": 0.196302
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "enabled_cap_2",
-          "surface": "http_service",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -4.28,
-          "p99_change_percent": 5.97,
-          "p99_change_ms": 0.038119
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.74,
-          "p99_change_percent": 20.7,
-          "p99_change_ms": 0.140285
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "tenant_alpha",
-          "collapse": "enabled_cap_2",
-          "surface": "http_service",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 0.46,
-          "p99_change_percent": 0.52,
-          "p99_change_ms": 0.018848
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -1.76,
-          "p99_change_percent": 14.86,
-          "p99_change_ms": 0.521231
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -0.62,
-          "p99_change_percent": 6.61,
-          "p99_change_ms": 0.149834
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.37,
-          "p99_change_percent": 3.7,
-          "p99_change_ms": 0.084768
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -3.55,
-          "p99_change_percent": 20.31,
-          "p99_change_ms": 0.676914
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.47,
-          "p99_change_percent": 15.35,
-          "p99_change_ms": 0.509386
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 0.68,
-          "p99_change_percent": 1.56,
-          "p99_change_ms": 0.011556
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -2.11,
-          "p99_change_percent": 26.21,
-          "p99_change_ms": 0.172538
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -1.51,
-          "p99_change_percent": 4.98,
-          "p99_change_ms": 0.114099
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -1.18,
-          "p99_change_percent": 3.03,
-          "p99_change_ms": 0.068794
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "http_service",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -5.18,
-          "p99_change_percent": 7.13,
-          "p99_change_ms": 0.050354
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.29,
-          "p99_change_percent": 6.5,
-          "p99_change_ms": 0.043133
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "tenant_alpha",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -7.0,
-          "p99_change_percent": 13.92,
-          "p99_change_ms": 0.027286
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -17.24,
-          "p99_change_percent": 35.34,
-          "p99_change_ms": 0.071542
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "tenant_alpha",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -1.12,
-          "p99_change_percent": 12.31,
-          "p99_change_ms": 0.007651
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 1.29,
-          "p99_change_percent": 52.93,
-          "p99_change_ms": 0.037946
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -11.8,
-          "p99_change_percent": 17.69,
-          "p99_change_ms": 0.027124
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -12.93,
-          "p99_change_percent": 2.6,
-          "p99_change_ms": 0.004403
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 1.82,
-          "p99_change_percent": 12.13,
-          "p99_change_ms": 0.008035
-        },
-        "pair_a2_b2": {
           "qps_change_percent": 0.35,
-          "p99_change_percent": 46.79,
-          "p99_change_ms": 0.028428
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 0.82,
-          "p99_change_percent": 9.86,
-          "p99_change_ms": 0.028267
+          "p99_change_percent": 9.99,
+          "p99_change_ms": 0.303533
         },
         "pair_a2_b2": {
-          "qps_change_percent": -0.82,
-          "p99_change_percent": 16.66,
-          "p99_change_ms": 0.040346
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": -4.02,
+          "p99_change_percent": 39.73,
+          "p99_change_ms": 1.047494
+        }
       },
       {
+        "ordinal": 361,
         "cell": {
-          "route": "text_only",
-          "projection": "score_only",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "none",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -0.29,
-          "p99_change_percent": 44.98,
-          "p99_change_ms": 0.10651
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -10.46,
-          "p99_change_percent": 18.67,
-          "p99_change_ms": 0.04049
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "vector_only",
+          "route": "hybrid",
           "projection": "fetch_topk",
           "filter": "tenant_alpha",
           "collapse": "disabled",
-          "surface": "http_service",
-          "embedding": "hashing_regression",
+          "surface": "direct_collection",
+          "embedding": "semantic_minilm",
           "vector_route": "declared_column_graph_exact",
           "clients": 4
         },
         "pair_a1_b1": {
-          "qps_change_percent": -4.81,
-          "p99_change_percent": 9.75,
-          "p99_change_ms": 0.211525
+          "qps_change_percent": 6.68,
+          "p99_change_percent": 21.03,
+          "p99_change_ms": 1.955734
         },
         "pair_a2_b2": {
-          "qps_change_percent": -5.4,
-          "p99_change_percent": 5.22,
-          "p99_change_ms": 0.093199
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": -7.38,
+          "p99_change_percent": 23.68,
+          "p99_change_ms": 1.030582
+        }
       },
       {
+        "ordinal": 364,
         "cell": {
-          "route": "vector_only",
+          "route": "hybrid",
           "projection": "fetch_topk",
           "filter": "tenant_alpha",
           "collapse": "enabled_cap_2",
           "surface": "direct_collection",
-          "embedding": "hashing_regression",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -9.2,
-          "p99_change_percent": 21.37,
-          "p99_change_ms": 0.124242
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.12,
-          "p99_change_percent": 6.54,
-          "p99_change_ms": 0.036815
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "vector_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "direct_collection",
           "embedding": "semantic_minilm",
           "vector_route": "declared_column_graph_exact",
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": 0.39,
-          "p99_change_percent": 3.14,
-          "p99_change_ms": 0.070718
+          "qps_change_percent": -23.33,
+          "p99_change_percent": 307.32,
+          "p99_change_ms": 12.742615
         },
         "pair_a2_b2": {
-          "qps_change_percent": -0.55,
-          "p99_change_percent": 2.18,
-          "p99_change_ms": 0.048923
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": 1.38,
+          "p99_change_percent": 10.43,
+          "p99_change_ms": 0.334461
+        }
       },
       {
+        "ordinal": 366,
         "cell": {
-          "route": "vector_only",
+          "route": "hybrid",
           "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_exact",
-          "clients": 4
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": -1.04,
-          "p99_change_percent": 6.84,
-          "p99_change_ms": 0.226648
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": -0.67,
-          "p99_change_percent": 2.43,
-          "p99_change_ms": 0.08098
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "vector_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "disabled",
+          "filter": "tenant_alpha",
+          "collapse": "enabled_cap_2",
           "surface": "http_service",
           "embedding": "semantic_minilm",
-          "vector_route": "declared_column_graph_ann",
-          "clients": 1
-        },
-        "pair_a1_b1": {
-          "qps_change_percent": 1.65,
-          "p99_change_percent": 2.49,
-          "p99_change_ms": 0.090956
-        },
-        "pair_a2_b2": {
-          "qps_change_percent": 0.68,
-          "p99_change_percent": 4.98,
-          "p99_change_ms": 0.184334
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
-      },
-      {
-        "cell": {
-          "route": "vector_only",
-          "projection": "fetch_topk",
-          "filter": "unfiltered",
-          "collapse": "enabled_cap_2",
-          "surface": "direct_collection",
-          "embedding": "semantic_minilm",
           "vector_route": "declared_column_graph_exact",
           "clients": 1
         },
         "pair_a1_b1": {
-          "qps_change_percent": 0.64,
-          "p99_change_percent": 0.33,
-          "p99_change_ms": 0.007324
+          "qps_change_percent": 3.06,
+          "p99_change_percent": 23.67,
+          "p99_change_ms": 0.981384
         },
         "pair_a2_b2": {
-          "qps_change_percent": -0.03,
-          "p99_change_percent": 2.67,
-          "p99_change_ms": 0.06127
-        },
-        "classification": "frozen_p99_gate_failure",
-        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
+          "qps_change_percent": -7.76,
+          "p99_change_percent": 60.87,
+          "p99_change_ms": 2.459005
+        }
       }
     ],
+    "p99_gate_semantics": "The frozen pre-candidate policy says any p99 regression blocks and defines no numeric/noise exception. Positive deltas in both per-cell pairs therefore fail.",
     "no_unaccepted_performance_regression": false,
-    "accepted": false,
-    "blocked_repeat_positive_p99_rows": 35
+    "accepted": false
   },
   "m3_decision": {
     "metadata_propagation_4290": "merged",
@@ -1007,7 +923,7 @@
     "both_repeats_pass_retained_4284_gate": true,
     "all_named_m3_gates_pass": false,
     "close_tracker_4288": false,
-    "blocker": "Thirty-five matched existing rows have positive p99 deltas in both exact ABBA pairs. The frozen policy supplies no prospective p99 noise threshold or exception contract; final independent review rejected post-hoc acceptance."
+    "blocker": "Owner-selected fresh per-cell counterbalanced ABBA still has 32 matched rows with positive p99 deltas in both pairs and 3 matched rows with >10% QPS losses in both pairs; the frozen literal rule therefore fails."
   },
   "null_abba_diagnostic": {
     "summary": "null-abba/decision.json",
@@ -1015,5 +931,17 @@
     "identical_binary_repeat_positive_p99_rows": 96,
     "identical_binary_repeat_stable_qps_regressions_over_10_percent": 9,
     "disposition": "Literal performance gate is non-attributive under identical bytes; M3 remains failed rather than inventing a post-hoc exception."
+  },
+  "per_cell_abba": {
+    "summary": "per-cell-abba/decision.json",
+    "summary_sha256": "c23ef078dcefa4a91949de6b1495f713c84bc8c427b9f0ace7174662343265de",
+    "raw_artifact": "per-cell-abba/treedb_rag_per_cell_abba.json.gz",
+    "raw_artifact_sha256": "49fcf473f9b10b7f74d3bddd149e94526094f98696967cbecf15861fbdf2aebd",
+    "matched_supported_cells": 136,
+    "capability_transitions_to_supported": 136,
+    "repeat_stable_qps_regressions_over_10_percent": 3,
+    "repeat_positive_p99_rows": 32,
+    "failed_attempts": 0,
+    "disposition": "Frozen p99/QPS gate still fails under the owner-selected per-cell interleaving harness."
   }
 }
