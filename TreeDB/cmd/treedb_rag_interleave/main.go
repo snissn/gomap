@@ -31,7 +31,7 @@ var legOrder = [4]string{"A1", "B1", "B2", "A2"}
 
 type config struct {
 	ABinary, BBinary          string
-	Output, Root              string
+	Output, Root, SourceRepo  string
 	WorkerArgs                []string
 	ReadyTimeout, CellTimeout time.Duration
 	Legs                      [4]legConfig
@@ -132,6 +132,7 @@ type artifact struct {
 	StartedAt     time.Time        `json:"started_at"`
 	FinishedAt    time.Time        `json:"finished_at"`
 	Root          string           `json:"root"`
+	SourceRepo    string           `json:"source_repo"`
 	CellCount     int              `json:"cell_count"`
 	Workers       []workerEvidence `json:"workers"`
 	Cells         []cellEvidence   `json:"cells"`
@@ -217,6 +218,23 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+func isRevision(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateProductAncestor(repo, productRevision, buildRevision string) error {
+	command := exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", productRevision, buildRevision)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s is not an ancestor of observed build %s: %w: %s", productRevision, buildRevision, err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -242,6 +260,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.BBinary, "b-binary", "", "benchmark binary for B1 and B2")
 	fs.StringVar(&cfg.Output, "out", "", "gzip JSON artifact path")
 	fs.StringVar(&cfg.Root, "root", "", "root for the four worker databases")
+	fs.StringVar(&cfg.SourceRepo, "source-repo", "", "Git repository used to verify product ancestry")
 	fs.DurationVar(&cfg.ReadyTimeout, "ready-timeout", 2*time.Minute, "maximum worker readiness time")
 	fs.DurationVar(&cfg.CellTimeout, "cell-timeout", 5*time.Minute, "maximum time for one cell attempt")
 	for index, name := range legOrder {
@@ -254,8 +273,8 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.WorkerArgs = append([]string(nil), fs.Args()...)
-	if cfg.ABinary == "" || cfg.BBinary == "" || cfg.Output == "" || cfg.Root == "" {
-		return config{}, errors.New("-a-binary, -b-binary, -out, and -root are required")
+	if cfg.ABinary == "" || cfg.BBinary == "" || cfg.Output == "" || cfg.Root == "" || cfg.SourceRepo == "" {
+		return config{}, errors.New("-a-binary, -b-binary, -out, -root, and -source-repo are required")
 	}
 	if cfg.ReadyTimeout <= 0 || cfg.CellTimeout <= 0 {
 		return config{}, errors.New("-ready-timeout and -cell-timeout must be positive")
@@ -269,6 +288,9 @@ func parseConfig(args []string) (config, error) {
 		}
 		if leg.ProductBaseSHA == "" || leg.HarnessRevision == "" {
 			return config{}, fmt.Errorf("-%s-product-base-sha and -%s-harness-revision are required", strings.ToLower(leg.Name), strings.ToLower(leg.Name))
+		}
+		if !isRevision(leg.ProductBaseSHA) || !isRevision(leg.HarnessRevision) {
+			return config{}, fmt.Errorf("%s product and harness revisions must be full 40-character hexadecimal SHAs", leg.Name)
 		}
 	}
 	for _, arg := range cfg.WorkerArgs {
@@ -285,6 +307,11 @@ func parseConfig(args []string) (config, error) {
 
 func runCoordinator(cfg config) error {
 	startedAt := time.Now().UTC()
+	for _, leg := range cfg.Legs {
+		if err := validateProductAncestor(cfg.SourceRepo, leg.ProductBaseSHA, leg.HarnessRevision); err != nil {
+			return fmt.Errorf("%s product identity: %w", leg.Name, err)
+		}
+	}
 	if err := os.MkdirAll(cfg.Root, 0o755); err != nil {
 		return fmt.Errorf("create root: %w", err)
 	}
@@ -401,6 +428,7 @@ func runCoordinator(cfg config) error {
 		StartedAt:     startedAt,
 		FinishedAt:    finishedAt,
 		Root:          cfg.Root,
+		SourceRepo:    cfg.SourceRepo,
 		CellCount:     expectedCellCount,
 		Workers:       evidence,
 		Cells:         cells,

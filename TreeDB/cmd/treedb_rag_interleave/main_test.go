@@ -106,12 +106,14 @@ func TestHashFile(t *testing.T) {
 }
 
 func TestParseConfigRejectsUnsafeWorkerArguments(t *testing.T) {
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
 	base := []string{
-		"-a-binary", "a", "-b-binary", "b", "-out", "out.gz", "-root", "root",
-		"-a1-product-base-sha", "a", "-a1-harness-revision", "a",
-		"-b1-product-base-sha", "b", "-b1-harness-revision", "b",
-		"-b2-product-base-sha", "b", "-b2-harness-revision", "b",
-		"-a2-product-base-sha", "a", "-a2-harness-revision", "a",
+		"-a-binary", "a", "-b-binary", "b", "-out", "out.gz", "-root", "root", "-source-repo", "repo",
+		"-a1-product-base-sha", a, "-a1-harness-revision", a,
+		"-b1-product-base-sha", b, "-b1-harness-revision", b,
+		"-b2-product-base-sha", b, "-b2-harness-revision", b,
+		"-a2-product-base-sha", a, "-a2-harness-revision", a,
 		"--",
 	}
 	for _, arg := range []string{"-smoke", "--smoke", "--dir=/tmp/shared", "--product-base-sha=wrong"} {
