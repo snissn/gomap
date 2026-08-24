@@ -3145,10 +3145,11 @@ func DecodeCollectionReplaceSourceByIDPayload(payload []byte) (CollectionReplace
 	if len(payload) < 4 {
 		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
 	}
-	deleteLen := int(binary.LittleEndian.Uint32(payload[:4]))
-	if deleteLen > len(payload)-4 {
+	deleteLenRaw := binary.LittleEndian.Uint32(payload[:4])
+	if uint64(deleteLenRaw) > uint64(len(payload)-4) {
 		return CollectionReplaceSourceByIDPayload{}, ErrCorrupt
 	}
+	deleteLen := int(deleteLenRaw)
 	deleted, err := DecodeCollectionDeleteBatchByIDPayload(payload[4 : 4+deleteLen])
 	if err != nil {
 		return CollectionReplaceSourceByIDPayload{}, err

@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"bytes"
+	"encoding/binary"
 	"reflect"
 	"testing"
 )
@@ -68,6 +69,14 @@ func TestCollectionReplaceSourceByIDPayloadRejectsMismatchedCollections(t *testi
 	copy(payload[4+len(deleted):], inserted)
 	if _, err := DecodeCollectionReplaceSourceByIDPayload(payload); !errorsIsCorrupt(err) {
 		t.Fatalf("decode mismatch err=%v want ErrCorrupt", err)
+	}
+}
+
+func TestCollectionReplaceSourceByIDPayloadRejectsOversizedDeleteLength(t *testing.T) {
+	payload := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload, ^uint32(0))
+	if _, err := DecodeCollectionReplaceSourceByIDPayload(payload); !errorsIsCorrupt(err) {
+		t.Fatalf("decode oversized delete length err=%v want ErrCorrupt", err)
 	}
 }
 
