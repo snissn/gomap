@@ -2880,8 +2880,9 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	idx.mu.RLock()
 	if idx.liveDelta != nil {
 		idx.mu.RUnlock()
-		var buffer VectorIndexSearchBuffer
-		candidates, _, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, &buffer)
+		buffer := acquireCollectionSearchVectorIndexResponseBuffer()
+		defer releaseCollectionSearchVectorIndexResponseBuffer(buffer)
+		candidates, _, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, buffer)
 		if searchErr != nil {
 			return nil, trace, searchErr
 		}
