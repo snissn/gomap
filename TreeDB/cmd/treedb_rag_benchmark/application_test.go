@@ -13,11 +13,12 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 	if len(rows) != want {
 		t.Fatalf("matrix rows=%d want %d", len(rows), want)
 	}
-	seenSupported, seenMetadata, seenFilter, seenCollapse, seenHTTPScore := false, false, false, false, false
+	seenSupported, seenMetadata, seenFilter, seenCollapseSupported, seenHTTPScore := false, false, false, false, false
 	for _, row := range rows {
 		capability := unsupportedCapability(row)
 		if capability == nil {
 			seenSupported = true
+			seenCollapseSupported = seenCollapseSupported || row.Collapse == "enabled_cap_2"
 			continue
 		}
 		if strings.Contains(capability.Code, "source_metadata_not_propagated") {
@@ -26,11 +27,13 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 		if row.Filter == filterTenantAlphaWorkspaceRed || row.Filter == filterModerateRange {
 			seenFilter = seenFilter || strings.Contains(capability.Code, "multi_field_filter_unavailable")
 		}
-		seenCollapse = seenCollapse || strings.Contains(capability.Code, "parent_collapse_unavailable")
+		if strings.Contains(capability.Code, "parent_collapse_unavailable") {
+			t.Fatalf("parent collapse remains unsupported: %+v", row)
+		}
 		seenHTTPScore = seenHTTPScore || strings.Contains(capability.Code, "http_score_only_route_unavailable")
 	}
-	if !seenSupported || !seenMetadata || !seenFilter || !seenCollapse || !seenHTTPScore {
-		t.Fatalf("matrix capability coverage supported=%t metadata=%t filter=%t collapse=%t http_score=%t", seenSupported, seenMetadata, seenFilter, seenCollapse, seenHTTPScore)
+	if !seenSupported || !seenMetadata || !seenFilter || !seenCollapseSupported || !seenHTTPScore {
+		t.Fatalf("matrix capability coverage supported=%t metadata=%t filter=%t collapse_supported=%t http_score=%t", seenSupported, seenMetadata, seenFilter, seenCollapseSupported, seenHTTPScore)
 	}
 }
 
