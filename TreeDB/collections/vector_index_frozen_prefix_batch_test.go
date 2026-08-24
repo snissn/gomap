@@ -161,6 +161,29 @@ func TestVectorIndexFrozenPrefixBatchKeepsSmallMReachable4297(t *testing.T) {
 	}
 }
 
+func TestVectorIndexFrozenPrefixWorkerBudgetsPreserveTopology4300(t *testing.T) {
+	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
+	want := snapshotVectorIndexTopology4257(buildVectorIndexFrozenPrefixBatch4297(t, rows))
+	for _, workers := range []int{1, 2, 4} {
+		index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 16, EfConstruction: 64})
+		if err != nil {
+			t.Fatal(err)
+		}
+		index.setNativePersistent(true)
+		index.constructionWorkers = workers
+		ids := make([][]byte, len(rows))
+		for row := range ids {
+			ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
+		}
+		if err := index.insertVectorBatchLocked(ids, rows); err != nil {
+			t.Fatal(err)
+		}
+		if got := snapshotVectorIndexTopology4257(index); !reflect.DeepEqual(got, want) {
+			t.Fatalf("worker budget %d changed topology", workers)
+		}
+	}
+}
+
 func BenchmarkVectorIndexFrozenPrefixBatch4297(b *testing.B) {
 	const dimensions = 768
 	rows := vectorIndexReciprocalParityRows4257(10_000, dimensions, false)

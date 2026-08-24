@@ -359,6 +359,9 @@ type VectorIndex struct {
 	searchViewSpare     atomic.Pointer[vectorIndexSearchView]
 	searchViewDirty     map[int]struct{}
 	frozenPrefixBatches uint64
+	// constructionWorkers is a private benchmark seam; zero preserves the
+	// production worker choice.
+	constructionWorkers int
 	// parallelReciprocalLinks is enabled for native runtime indexes and the
 	// untraced offline column graph builder. Traced and partition builds stay
 	// serial.
@@ -1995,13 +1998,18 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 		entry, maxLevel := idx.entry, idx.maxLevel
 		plans := make([]vectorIndexFrozenPrefixInsert, end-start)
 		errs := make([]error, len(plans))
+		workers := idx.constructionWorkerCount(len(plans))
 		var wg sync.WaitGroup
-		for worker := 1; worker < len(plans); worker++ {
+		for worker := 1; worker < workers; worker++ {
 			wg.Go(func() {
-				plans[worker], errs[worker] = idx.planFrozenPrefixInsertLocked(documentIDs[start+worker], vectors[start+worker], entry, maxLevel)
+				for plan := worker; plan < len(plans); plan += workers {
+					plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+				}
 			})
 		}
-		plans[0], errs[0] = idx.planFrozenPrefixInsertLocked(documentIDs[start], vectors[start], entry, maxLevel)
+		for plan := 0; plan < len(plans); plan += workers {
+			plans[plan], errs[plan] = idx.planFrozenPrefixInsertLocked(documentIDs[start+plan], vectors[start+plan], entry, maxLevel)
+		}
 		wg.Wait()
 		for row, err := range errs {
 			if err != nil {
@@ -2081,7 +2089,7 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 		idx.layer0ConstructionPolicy == nil &&
 		idx.qualityPostfillCandidates == nil &&
 		vectorIndexNeighborIDsDistinct(neighbors) {
-		workers = vectorIndexReciprocalLinkWorkerCount(len(neighbors))
+		workers = idx.constructionWorkerCount(vectorIndexReciprocalLinkWorkerCount(len(neighbors)))
 	}
 	if workers == 1 {
 		for _, neighborID := range neighbors {
@@ -2113,6 +2121,13 @@ func (idx *VectorIndex) linkSelectedNeighborsLocked(nodeID int, neighbors []int,
 	for _, neighborID := range neighbors {
 		idx.markVectorNodeDirtyLocked(neighborID)
 	}
+}
+
+func (idx *VectorIndex) constructionWorkerCount(work int) int {
+	if idx.constructionWorkers > 0 {
+		return minInt(idx.constructionWorkers, work)
+	}
+	return work
 }
 
 func vectorIndexReciprocalLinkWorkerCount(neighbors int) int {
