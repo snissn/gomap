@@ -61,6 +61,20 @@ type vectorIndexNativeSearchState struct {
 	sourceDocumentGeneration uint64
 }
 
+type vectorIndexNativeSearchWork struct {
+	queryPreparations      int
+	baseVisited            int
+	deltaPasses            int
+	deltaRetries           int
+	deltaResumes           int
+	deltaVisited           int
+	deltaInitialTopK       int
+	deltaTerminalTopK      int
+	deltaInitialEfSearch   int
+	deltaTerminalEfSearch  int
+	retryChangedMergedTopK bool
+}
+
 func (idx *VectorIndex) publishSearchView() {
 	if idx == nil {
 		return
@@ -296,12 +310,34 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 	if !view.sourceDocumentRootsValid {
 		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
 	}
-	if len(view.deltaNodes) == 0 {
-		return searchVectorIndexViewPlane(query, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+	if topK < 0 {
+		return nil, errors.New("collections: vector search TopK must be positive")
 	}
-	baseResults, err := searchVectorIndexViewPlane(query, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	queryNorm, preparedQuery, preparedCosine, err := prepareVectorIndexGraphOnlyQuery(query, view.metric, view.dimensions)
 	if err != nil {
 		return nil, err
+	}
+	var prepared *preparedFloat32CosineQuery
+	if preparedCosine {
+		prepared = &preparedQuery
+	}
+	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork = vectorIndexNativeSearchWork{}
+		buffer.nativeSearchWork.queryPreparations = 1
+	}
+	if len(view.deltaNodes) == 0 {
+		results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+		if buffer.nativeSearchWorkEnabled {
+			buffer.nativeSearchWork.baseVisited = buffer.nativeSearchScratch.explored
+		}
+		return results, err
+	}
+	baseResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	if err != nil {
+		return nil, err
+	}
+	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork.baseVisited = buffer.nativeSearchScratch.explored
 	}
 	deltaTopK := vectorIndexLiveDeltaSearchBudget(topK, view.deltaLiveDocs, view.liveDocs)
 	deltaEfSearch := efSearch
@@ -309,19 +345,65 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithBuffer(query []float32, to
 		deltaEfSearch = view.efSearch
 	}
 	deltaEfSearch = vectorIndexLiveDeltaSearchBudget(deltaEfSearch, view.deltaLiveDocs, view.liveDocs)
-	deltaResults, err := searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork.deltaInitialTopK = deltaTopK
+		buffer.nativeSearchWork.deltaInitialEfSearch = deltaEfSearch
+	}
+	buffer.nativeSearchScratch.startResumableSearch()
+	defer buffer.nativeSearchScratch.stopResumableSearch()
+	deltaResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, err
 	}
+	var initialMergedFingerprint uint64
+	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork.deltaPasses = 1
+		buffer.nativeSearchWork.deltaVisited = buffer.nativeSearchScratch.explored
+		initialMerged, mergeErr := mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
+		if mergeErr != nil {
+			return nil, mergeErr
+		}
+		initialMergedFingerprint = vectorIndexSearchResultsFingerprint(initialMerged)
+	}
 	for deltaTopK < topK && len(deltaResults) == deltaTopK && (len(baseResults) < topK || vectorIndexSearchResultBefore(deltaResults[len(deltaResults)-1], baseResults[len(baseResults)-1])) {
+		buffer.nativeSearchScratch.resumeSearch()
 		deltaTopK = minInt(topK, deltaTopK*2)
 		deltaEfSearch = maxInt(deltaEfSearch, deltaTopK)
-		deltaResults, err = searchVectorIndexViewPlane(query, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+		deltaResults, err = searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 		if err != nil {
 			return nil, err
 		}
+		if buffer.nativeSearchWorkEnabled {
+			buffer.nativeSearchWork.deltaPasses++
+			buffer.nativeSearchWork.deltaRetries++
+			if buffer.nativeSearchScratch.resumed {
+				buffer.nativeSearchWork.deltaResumes++
+			}
+			buffer.nativeSearchWork.deltaVisited += buffer.nativeSearchScratch.explored
+		}
 	}
-	return mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
+	merged, err := mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
+	if buffer.nativeSearchWorkEnabled {
+		buffer.nativeSearchWork.deltaTerminalTopK = deltaTopK
+		buffer.nativeSearchWork.deltaTerminalEfSearch = deltaEfSearch
+		buffer.nativeSearchWork.retryChangedMergedTopK = buffer.nativeSearchWork.deltaRetries > 0 && initialMergedFingerprint != vectorIndexSearchResultsFingerprint(merged)
+	}
+	return merged, err
+}
+
+func vectorIndexSearchResultsFingerprint(results []VectorIndexSearchResult) uint64 {
+	const (
+		offset = uint64(14695981039346656037)
+		prime  = uint64(1099511628211)
+	)
+	hash := offset
+	for _, result := range results {
+		for _, value := range result.ID {
+			hash = (hash ^ uint64(value)) * prime
+		}
+		hash = (hash ^ math.Float64bits(result.Score)) * prime
+	}
+	return hash
 }
 
 func vectorIndexLiveDeltaSearchBudget(requested, deltaDocs, totalDocs int) int {
@@ -333,7 +415,7 @@ func vectorIndexLiveDeltaSearchBudget(requested, deltaDocs, totalDocs int) int {
 	return minInt(budget, requested)
 }
 
-func searchVectorIndexViewPlane(query []float32, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
+func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
 	runtimeIndex := VectorIndex{
 		metric:     view.metric,
 		encoding:   view.encoding,
@@ -344,7 +426,7 @@ func searchVectorIndexViewPlane(query []float32, topK, efSearch int, nodes []vec
 		entry:      entry,
 		maxLevel:   maxLevel,
 	}
-	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithLiveDocsLocked(query, topK, efSearch, liveDocs, scratch)
+	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, prepared, topK, efSearch, liveDocs, scratch)
 	if err != nil {
 		return nil, err
 	}

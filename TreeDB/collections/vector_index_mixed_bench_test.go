@@ -45,6 +45,13 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	if mode == "live-delta-cutover" {
 		insertRows = defaultVectorIndexLiveDeltaRows + batchRows
 	}
+	if value := os.Getenv("TREEDB_VECTOR_MIXED_INSERT_ROWS"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			b.Fatalf("invalid TREEDB_VECTOR_MIXED_INSERT_ROWS %q", value)
+		}
+		insertRows = parsed
+	}
 	batchPace := 200 * time.Millisecond
 	if value := os.Getenv("TREEDB_VECTOR_MIXED_BATCH_PACE"); value != "" {
 		parsed, err := time.ParseDuration(value)
@@ -53,6 +60,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		}
 		batchPace = parsed
 	}
+	accountSearchWork := os.Getenv("TREEDB_VECTOR_MIXED_ACCOUNT_SEARCH_WORK") == "1"
 
 	b.StopTimer()
 	rng := rand.New(rand.NewSource(4300))
@@ -92,7 +100,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	}
 	b.StartTimer()
 
-	baseline := runVectorIndexMixedSearchWindow4300(b, index, rows[:256], searchers, 3*time.Second, nil)
+	baseline := runVectorIndexMixedSearchWindow4300(b, index, rows[:256], searchers, 3*time.Second, nil, accountSearchWork)
 	insert := func() error {
 		started := time.Now()
 		for start := baseRows; start < len(rows); start += batchRows {
@@ -120,7 +128,7 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 		b.ReportMetric(float64(insertRows)/time.Since(started).Seconds(), "insert_rows/s")
 		return nil
 	}
-	mixed := runVectorIndexMixedSearchWindow4300(b, index, rows[:256], searchers, 0, insert)
+	mixed := runVectorIndexMixedSearchWindow4300(b, index, rows[:256], searchers, 0, insert, accountSearchWork)
 	view := index.acquireSearchView()
 	if view == nil || !view.sourceDocumentRootsValid {
 		b.Fatal("native search view is unavailable")
@@ -150,24 +158,53 @@ func BenchmarkVectorIndexMixedSearchInsert4300(b *testing.B) {
 	b.ReportMetric(float64(stats.LiveDeltaDocs), "live_delta_docs")
 	b.ReportMetric(float64(stats.LiveDeltaCutovers), "live_delta_cutovers")
 	b.ReportMetric(1, "native_route")
+	if accountSearchWork {
+		b.ReportMetric(100*float64(mixed.deltaSearches)/float64(mixed.searches), "delta_search_pct")
+		b.ReportMetric(float64(mixed.deltaVisited)/float64(mixed.searches), "delta_visited/search")
+		b.ReportMetric(100*float64(mixed.retryChanged)/float64(mixed.searches), "retry_changed_topk_pct")
+		if mixed.deltaSearches > 0 {
+			b.ReportMetric(100*float64(mixed.retrySearches)/float64(mixed.deltaSearches), "retry_incidence_pct")
+			b.ReportMetric(float64(mixed.initialTopK)/float64(mixed.deltaSearches), "initial_topk")
+			b.ReportMetric(float64(mixed.terminalTopK)/float64(mixed.deltaSearches), "terminal_topk")
+			b.ReportMetric(float64(mixed.terminalEfSearch)/float64(mixed.deltaSearches), "terminal_ef_search")
+		}
+		if mixed.retrySearches > 0 {
+			b.ReportMetric(float64(mixed.deltaRetries)/float64(mixed.retrySearches), "retry_depth/retry")
+			b.ReportMetric(100*float64(mixed.deltaResumes)/float64(mixed.deltaRetries), "retry_resumed_pct")
+		}
+	}
 }
 
 type vectorIndexMixedSearchWindow4300 struct {
-	qps float64
-	p99 time.Duration
+	qps              float64
+	p99              time.Duration
+	searches         uint64
+	deltaSearches    uint64
+	retrySearches    uint64
+	deltaPasses      uint64
+	deltaRetries     uint64
+	deltaResumes     uint64
+	deltaVisited     uint64
+	retryChanged     uint64
+	initialTopK      uint64
+	terminalTopK     uint64
+	terminalEfSearch uint64
 }
 
-func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queries [][]float32, searchers int, duration time.Duration, work func() error) vectorIndexMixedSearchWindow4300 {
+func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queries [][]float32, searchers int, duration time.Duration, work func() error, accountSearchWork bool) vectorIndexMixedSearchWindow4300 {
 	b.Helper()
 	stop := make(chan struct{})
 	latencies := make([][]time.Duration, searchers)
 	var count atomic.Uint64
+	var deltaSearches, retrySearches, deltaPasses, deltaRetries, deltaResumes, deltaVisited, retryChanged atomic.Uint64
+	var initialTopK, terminalTopK, terminalEfSearch atomic.Uint64
 	var wg sync.WaitGroup
 	errCh := make(chan error, searchers)
 	for worker := 0; worker < searchers; worker++ {
 		worker := worker
 		wg.Go(func() {
 			buffer := new(VectorIndexSearchBuffer)
+			buffer.nativeSearchWorkEnabled = accountSearchWork
 			for query := worker; ; query++ {
 				select {
 				case <-stop:
@@ -178,6 +215,25 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 				if _, _, err := index.searchGraphOnlyWithBuffer(queries[query%len(queries)], 100, 64, buffer); err != nil {
 					errCh <- err
 					return
+				}
+				if accountSearchWork {
+					searchWork := buffer.nativeSearchWork
+					if searchWork.deltaPasses > 0 {
+						deltaSearches.Add(1)
+						deltaPasses.Add(uint64(searchWork.deltaPasses))
+						deltaRetries.Add(uint64(searchWork.deltaRetries))
+						deltaResumes.Add(uint64(searchWork.deltaResumes))
+						deltaVisited.Add(uint64(searchWork.deltaVisited))
+						initialTopK.Add(uint64(searchWork.deltaInitialTopK))
+						terminalTopK.Add(uint64(searchWork.deltaTerminalTopK))
+						terminalEfSearch.Add(uint64(searchWork.deltaTerminalEfSearch))
+						if searchWork.deltaRetries > 0 {
+							retrySearches.Add(1)
+						}
+						if searchWork.retryChangedMergedTopK {
+							retryChanged.Add(1)
+						}
+					}
 				}
 				latencies[worker] = append(latencies[worker], time.Since(started))
 				count.Add(1)
@@ -191,10 +247,10 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 	} else {
 		time.Sleep(duration)
 	}
-	elapsed := time.Since(started)
-	total := count.Load()
 	close(stop)
 	wg.Wait()
+	elapsed := time.Since(started)
+	total := count.Load()
 	close(errCh)
 	if workErr != nil {
 		b.Fatal(workErr)
@@ -211,5 +267,19 @@ func runVectorIndexMixedSearchWindow4300(b *testing.B, index *VectorIndex, queri
 		b.Fatal("no successful searches")
 	}
 	p99 := all[minInt(len(all)-1, (len(all)*99)/100)]
-	return vectorIndexMixedSearchWindow4300{qps: float64(total) / elapsed.Seconds(), p99: p99}
+	return vectorIndexMixedSearchWindow4300{
+		qps:              float64(total) / elapsed.Seconds(),
+		p99:              p99,
+		searches:         total,
+		deltaSearches:    deltaSearches.Load(),
+		retrySearches:    retrySearches.Load(),
+		deltaPasses:      deltaPasses.Load(),
+		deltaRetries:     deltaRetries.Load(),
+		deltaResumes:     deltaResumes.Load(),
+		deltaVisited:     deltaVisited.Load(),
+		retryChanged:     retryChanged.Load(),
+		initialTopK:      initialTopK.Load(),
+		terminalTopK:     terminalTopK.Load(),
+		terminalEfSearch: terminalEfSearch.Load(),
+	}
 }
