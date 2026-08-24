@@ -14,7 +14,7 @@ import (
 // The coordinator also binds the resulting binary SHA-256.
 var applicationCellWorkerBuildRevision string
 
-const applicationCellWorkerEnvironmentPolicy = "fresh_per_cell"
+const applicationCellWorkerEnvironmentPolicy = "fresh_unique_dir_per_cell"
 
 type applicationCellWorkerRequest struct {
 	Ordinal int `json:"ordinal"`
@@ -37,6 +37,7 @@ type applicationCellWorkerResponse struct {
 type applicationCellWorkerEnvironment struct {
 	env          *applicationEnvironment
 	queryVectors map[string][]float32
+	dir          string
 }
 
 func applicationCellCount() int {
@@ -112,8 +113,8 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		defer os.RemoveAll(root)
 	}
 
-	openEnvironment := func(embeddingCell string) (*applicationCellWorkerEnvironment, error) {
-		environmentDir := filepath.Join(root, embeddingCell)
+	openEnvironment := func(embeddingCell string, ordinal int) (*applicationCellWorkerEnvironment, error) {
+		environmentDir := filepath.Join(root, embeddingCell, fmt.Sprintf("cell-%03d", ordinal))
 		if err := os.RemoveAll(environmentDir); err != nil {
 			return nil, err
 		}
@@ -131,7 +132,7 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			env.close()
 			return nil, err
 		}
-		return &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors}, nil
+		return &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors, dir: environmentDir}, nil
 	}
 
 	buffered := bufio.NewWriter(output)
@@ -168,7 +169,7 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		var env *applicationEnvironment
 		var queryVectors map[string][]float32
 		if unsupportedCapability(cell) == nil {
-			state, err := openEnvironment(cell.Embedding)
+			state, err := openEnvironment(cell.Embedding, request.Ordinal)
 			if err != nil {
 				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: err.Error()}
 				_ = encoder.Encode(response)
@@ -181,6 +182,9 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		if state != nil {
 			if closeErr := state.env.closeWithError(); err == nil && closeErr != nil {
 				err = fmt.Errorf("close fresh cell environment: %w", closeErr)
+			}
+			if removeErr := os.RemoveAll(state.dir); err == nil && removeErr != nil {
+				err = fmt.Errorf("remove fresh cell environment: %w", removeErr)
 			}
 		}
 		response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Row: &row}

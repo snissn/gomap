@@ -601,6 +601,10 @@ func (e *applicationEnvironment) closeWithError() error {
 		err = errors.Join(err, e.service.Close())
 		e.service = nil
 	}
+	if e.col != nil {
+		err = errors.Join(err, e.col.CloseVectorIndexPreparedSearchCache())
+		e.col = nil
+	}
 	if e.db != nil {
 		err = errors.Join(err, e.db.Close())
 		e.db = nil
