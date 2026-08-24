@@ -837,6 +837,10 @@ class KeywordSearchStats:
     unavailable: bool = False
     unavailable_reason: str = ""
     scalar_prefilter_ids: int = 0
+    scalar_filter_lookups: int = 0
+    scalar_filter_input_ids: int = 0
+    scalar_filter_intersection_steps: int = 0
+    scalar_filter_final_ids: int = 0
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -860,6 +864,10 @@ class KeywordSearchStats:
             "unavailable",
             "unavailable_reason",
             "scalar_prefilter_ids",
+            "scalar_filter_lookups",
+            "scalar_filter_input_ids",
+            "scalar_filter_intersection_steps",
+            "scalar_filter_final_ids",
         ]
         return cls(
             query_terms=_as_optional_int_default(data.get("query_terms"), "keyword stats.query_terms"),
@@ -881,6 +889,12 @@ class KeywordSearchStats:
             unavailable=_as_optional_bool_default(data.get("unavailable"), "keyword stats.unavailable"),
             unavailable_reason=_as_optional_str_default(data.get("unavailable_reason"), "keyword stats.unavailable_reason"),
             scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "keyword stats.scalar_prefilter_ids"),
+            scalar_filter_lookups=_as_optional_int_default(data.get("scalar_filter_lookups"), "keyword stats.scalar_filter_lookups"),
+            scalar_filter_input_ids=_as_optional_int_default(data.get("scalar_filter_input_ids"), "keyword stats.scalar_filter_input_ids"),
+            scalar_filter_intersection_steps=_as_optional_int_default(
+                data.get("scalar_filter_intersection_steps"), "keyword stats.scalar_filter_intersection_steps"
+            ),
+            scalar_filter_final_ids=_as_optional_int_default(data.get("scalar_filter_final_ids"), "keyword stats.scalar_filter_final_ids"),
             extra=_copy_extra(data, allowed),
         )
 
@@ -1003,6 +1017,9 @@ class HybridSearchRequest:
 @dataclass(frozen=True)
 class HybridSearchPlan:
     scalar_filter_strategy: str = ""
+    scalar_filter_lookup_count: int = 0
+    scalar_filter_lookup_limit: int = 0
+    scalar_filter_aggregate_limit: int = 0
     fusion_method: str = ""
     fusion_tie_policy: str = ""
     text_candidate_limit: int = 0
@@ -1016,6 +1033,9 @@ class HybridSearchPlan:
         data = _as_mapping(data, "hybrid plan")
         allowed = [
             "scalar_filter_strategy",
+            "scalar_filter_lookup_count",
+            "scalar_filter_lookup_limit",
+            "scalar_filter_aggregate_limit",
             "fusion_method",
             "fusion_tie_policy",
             "text_candidate_limit",
@@ -1025,6 +1045,15 @@ class HybridSearchPlan:
         ]
         return cls(
             scalar_filter_strategy=_as_optional_str_default(data.get("scalar_filter_strategy"), "hybrid plan.scalar_filter_strategy"),
+            scalar_filter_lookup_count=_as_optional_int_default(
+                data.get("scalar_filter_lookup_count"), "hybrid plan.scalar_filter_lookup_count"
+            ),
+            scalar_filter_lookup_limit=_as_optional_int_default(
+                data.get("scalar_filter_lookup_limit"), "hybrid plan.scalar_filter_lookup_limit"
+            ),
+            scalar_filter_aggregate_limit=_as_optional_int_default(
+                data.get("scalar_filter_aggregate_limit"), "hybrid plan.scalar_filter_aggregate_limit"
+            ),
             fusion_method=_as_optional_str_default(data.get("fusion_method"), "hybrid plan.fusion_method"),
             fusion_tie_policy=_as_optional_str_default(data.get("fusion_tie_policy"), "hybrid plan.fusion_tie_policy"),
             text_candidate_limit=_as_optional_int_default(data.get("text_candidate_limit"), "hybrid plan.text_candidate_limit"),
@@ -1080,6 +1109,10 @@ class HybridSearchStats:
     vector_candidates_examined: int = 0
     vector_edges_visited: int = 0
     scalar_prefilter_ids: int = 0
+    scalar_filter_lookups: int = 0
+    scalar_filter_input_ids: int = 0
+    scalar_filter_intersection_steps: int = 0
+    scalar_filter_final_ids: int = 0
     scalar_postfilter_checks: int = 0
     scalar_filter_matched: int = 0
     scalar_filter_rejected: int = 0
@@ -1113,6 +1146,10 @@ class HybridSearchStats:
             "vector_candidates_examined",
             "vector_edges_visited",
             "scalar_prefilter_ids",
+            "scalar_filter_lookups",
+            "scalar_filter_input_ids",
+            "scalar_filter_intersection_steps",
+            "scalar_filter_final_ids",
             "scalar_postfilter_checks",
             "scalar_filter_matched",
             "scalar_filter_rejected",
@@ -1148,6 +1185,12 @@ class HybridSearchStats:
             ),
             vector_edges_visited=_as_optional_int_default(data.get("vector_edges_visited"), "hybrid stats.vector_edges_visited"),
             scalar_prefilter_ids=_as_optional_int_default(data.get("scalar_prefilter_ids"), "hybrid stats.scalar_prefilter_ids"),
+            scalar_filter_lookups=_as_optional_int_default(data.get("scalar_filter_lookups"), "hybrid stats.scalar_filter_lookups"),
+            scalar_filter_input_ids=_as_optional_int_default(data.get("scalar_filter_input_ids"), "hybrid stats.scalar_filter_input_ids"),
+            scalar_filter_intersection_steps=_as_optional_int_default(
+                data.get("scalar_filter_intersection_steps"), "hybrid stats.scalar_filter_intersection_steps"
+            ),
+            scalar_filter_final_ids=_as_optional_int_default(data.get("scalar_filter_final_ids"), "hybrid stats.scalar_filter_final_ids"),
             scalar_postfilter_checks=_as_optional_int_default(
                 data.get("scalar_postfilter_checks"), "hybrid stats.scalar_postfilter_checks"
             ),

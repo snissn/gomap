@@ -119,7 +119,7 @@ class TreeDBHybridRetriever:
 
         :param query: Optional text query for TreeDB text/keyword source.
         :param query_embedding: Optional dense query embedding for TreeDB vector source.
-        :param filters: Runtime TreeDB/Haystack filter AST. Hybrid filters are served via prefilter when they resolve to one bounded scalar allow-set over declared index scalar fields; otherwise the service fails closed with a typed error.
+        :param filters: Runtime TreeDB/Haystack filter AST. Hybrid prefilters accept bounded equality/range leaves joined only by AND over declared scalar fields; unsupported shapes fail closed with a typed error.
         :param top_k: Runtime maximum number of documents to return.
         :param candidate_limit: Runtime shared candidate limit override.
         :param text_candidate_limit: Runtime text-source candidate limit override.

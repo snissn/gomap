@@ -137,14 +137,18 @@ Boolean filters use `conditions`. Supported operators are `AND`, `OR`, `NOT`,
 closed through the base `treedb-client`; this package does not broaden them into
 local scans.
 
-Metadata filters are supported by document count/filter/delete, exact dense-vector
-retrieval, and keyword/hybrid retrieval when their fields were declared in
-`TreeDBDocumentStore(..., scalar_fields=[...])` (or when the service index was
-created with `scalar_fields`). The service compiles those filters into bounded
-scalar allow-sets and fails closed on truncation with `index_unavailable` and
-`scalar_filter_unbounded`; undeclared fields return `invalid_request` and
-unrepresentable shapes return `unsupported`. The retrievers never fetch and
-filter documents client-side.
+The full AST is supported by document count/filter/delete and exact dense-vector
+retrieval. Keyword/hybrid retrieval accepts only equality and one/two-sided
+range leaves, alone or joined by nested `AND`, over fields declared in
+`TreeDBDocumentStore(..., scalar_fields=[...])` (or in the service create-index
+request). Same-field bounds merge and different fields use bounded indexed
+intersection before source work. `OR`, `NOT`, `!=`, `in`, and `not in` remain
+typed unsupported shapes on these two routes.
+
+Any missing/corrupt index, truncated lookup, or snapshot change fails closed
+without partial ranking. Truncation reports `index_unavailable` with
+`scalar_filter_unbounded`; undeclared fields return `invalid_request`. The
+retrievers never fetch and filter documents client-side.
 
 ## Duplicate and filter policies
 

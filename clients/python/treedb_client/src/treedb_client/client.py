@@ -429,10 +429,10 @@ class TreeDBClient:
         At least one of `query` or `query_embedding` must be supplied by the
         caller/service. `max_chunks_per_parent` is disabled when omitted or
         zero; positive values cap built-in chunk children after fusion without
-        expanding candidate budgets. Since contract v1alpha2, metadata filters
-        that resolve to one bounded scalar allow-set over declared scalar fields
-        are served via prefilter; other shapes fail closed with typed errors.
-        There is no client-side text/vector fallback.
+        expanding candidate budgets. Metadata equality/range leaves over
+        declared scalar fields may be joined only by AND and are served through
+        bounded indexed intersection; other shapes fail closed with typed
+        errors. There is no client-side text/vector fallback.
         """
 
         if not query and query_embedding is None:

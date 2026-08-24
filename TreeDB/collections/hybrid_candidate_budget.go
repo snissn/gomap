@@ -45,7 +45,7 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	if defaultMode {
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
-	if filterAllowSet != nil && len(filterAllowSet) == 0 && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
+	if filterAllowSet != nil && len(filterAllowSet) == 0 {
 		policy := HybridCandidateBudgetPolicyFixed
 		stop := HybridCandidateBudgetStopReasonFixedPolicy
 		fallback := HybridCandidateBudgetStopReasonNone

@@ -559,10 +559,6 @@ func applicationVectorRoute(cell applicationCellIdentity) string {
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
 	issues := []int{}
 	codes := []string{}
-	if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
-		issues = append(issues, 4292)
-		codes = append(codes, "multi_field_filter_unavailable")
-	}
 	if cell.Collapse != "disabled" && applicationMaxChunksPerParent(cell) == 0 {
 		codes = append(codes, "parent_collapse_shape_unavailable")
 	}
@@ -1210,24 +1206,48 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 }
 
 func applicationDirectScalarFilter(cell applicationCellIdentity) *collections.HybridScalarFilter {
+	tenant := collections.HybridScalarFilter{IndexName: "meta_tenant_id", Value: "alpha"}
 	if cell.Filter == filterTenantAlpha {
-		return &collections.HybridScalarFilter{IndexName: "meta_tenant_id", Value: "alpha"}
+		return &tenant
+	}
+	workspace := collections.HybridScalarFilter{IndexName: "meta_workspace_id", Value: "red"}
+	if cell.Filter == filterTenantAlphaWorkspaceRed {
+		return &collections.HybridScalarFilter{And: []collections.HybridScalarFilter{tenant, workspace}}
+	}
+	if cell.Filter == filterModerateRange {
+		year := collections.HybridScalarFilter{
+			IndexName: "meta_updated_year",
+			Range: &collections.IndexRangeOptions{
+				Lower: collections.IndexRangeBound{Value: int64(2024), Inclusive: true},
+				Upper: collections.IndexRangeBound{Unbounded: true},
+			},
+		}
+		return &collections.HybridScalarFilter{And: []collections.HybridScalarFilter{tenant, workspace, year}}
 	}
 	return nil
 }
 
 func applicationServiceFilter(cell applicationCellIdentity) *documentservice.Filter {
+	tenant := documentservice.Filter{Field: "meta.tenant_id", Operator: "==", Value: "alpha"}
 	if cell.Filter == filterTenantAlpha {
-		return &documentservice.Filter{Field: "meta.tenant_id", Operator: "==", Value: "alpha"}
+		return &tenant
+	}
+	workspace := documentservice.Filter{Field: "meta.workspace_id", Operator: "==", Value: "red"}
+	if cell.Filter == filterTenantAlphaWorkspaceRed {
+		return &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{tenant, workspace}}
+	}
+	if cell.Filter == filterModerateRange {
+		year := documentservice.Filter{Field: "meta.updated_year", Operator: ">=", Value: 2024}
+		return &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{tenant, workspace, year}}
 	}
 	return nil
 }
 
-func applicationScopeViolations(fixture *applicationFixture, filter string, ids []string) (int, int) {
+func applicationScopeViolations(fixture *applicationFixture, filter string, ids []string) (int, int, int) {
 	if filter == filterUnfiltered {
-		return 0, 0
+		return 0, 0, 0
 	}
-	crossTenant, crossWorkspace := 0, 0
+	crossTenant, crossWorkspace, crossRange := 0, 0, 0
 	for _, id := range ids {
 		parentID := id
 		if parent, _, ok := chunking.ParseChildID(id); ok {
@@ -1243,6 +1263,7 @@ func applicationScopeViolations(fixture *applicationFixture, filter string, ids 
 		if source == nil {
 			crossTenant++
 			crossWorkspace++
+			crossRange++
 			continue
 		}
 		if source.Tenant != "alpha" {
@@ -1251,8 +1272,11 @@ func applicationScopeViolations(fixture *applicationFixture, filter string, ids 
 		if (filter == filterTenantAlphaWorkspaceRed || filter == filterModerateRange) && source.Workspace != "red" {
 			crossWorkspace++
 		}
+		if filter == filterModerateRange && source.UpdatedYear < 2024 {
+			crossRange++
+		}
 	}
-	return crossTenant, crossWorkspace
+	return crossTenant, crossWorkspace, crossRange
 }
 func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture, cell applicationCellIdentity, rep int, call func(applicationQuery) (queryResult, error)) ([]querySample, repetitionPerformance, map[string]float64, error) {
 	order := "forward"
@@ -1470,27 +1494,35 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		if err != nil {
 			return total, err
 		}
-		crossTenant, crossWorkspace := applicationScopeViolations(fixture, filter, result.IDs)
-		if crossTenant != 0 || crossWorkspace != 0 {
-			return total, fmt.Errorf("quality query %s filter=%s leaked tenant/workspace results=%d/%d", query.ID, filter, crossTenant, crossWorkspace)
+		crossTenant, crossWorkspace, crossRange := applicationScopeViolations(fixture, filter, result.IDs)
+		if crossTenant != 0 || crossWorkspace != 0 || crossRange != 0 {
+			return total, fmt.Errorf("quality query %s filter=%s leaked tenant/workspace/range results=%d/%d/%d", query.ID, filter, crossTenant, crossWorkspace, crossRange)
 		}
-		if len(result.IDs) < topK {
-			return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d", query.ID, len(result.IDs), topK)
+		rankedIDs := result.IDs
+		if len(rankedIDs) < topK {
+			scalarBounded := result.Counters["scalar_filter_lookups"] > 0 && result.Counters["scalar_filter_final_ids"] <= float64(topK)
+			if result.Counters["collapse_exhaustions"] == 0 && !scalarBounded {
+				return total, fmt.Errorf("quality query %s ranking depth=%d below top_k=%d without bounded filter/collapse exhaustion", query.ID, len(rankedIDs), topK)
+			}
+			rankedIDs = append([]string(nil), rankedIDs...)
+			for len(rankedIDs) < topK {
+				rankedIDs = append(rankedIDs, fmt.Sprintf("\x00bounded-empty-rank-%d", len(rankedIDs)))
+			}
 		}
 		judgment := judgments[query.ID+"\x00"+filter]
 		chunkRelevant := stringSet(judgment.RelevantChunks)
 		parentRelevant := stringSet(judgment.RelevantParents)
-		p5, err := precisionAtK(result.IDs, chunkRelevant, 5)
+		p5, err := precisionAtK(rankedIDs, chunkRelevant, 5)
 		if err != nil {
 			return total, err
 		}
-		p10, err := precisionAtK(result.IDs, chunkRelevant, 10)
+		p10, err := precisionAtK(rankedIDs, chunkRelevant, 10)
 		if err != nil {
 			return total, err
 		}
-		r5, _ := recallAtK(result.IDs, chunkRelevant, 5)
-		r10, _ := recallAtK(result.IDs, chunkRelevant, 10)
-		mrr, _ := mrrAtK(result.IDs, chunkRelevant, 10)
+		r5, _ := recallAtK(rankedIDs, chunkRelevant, 5)
+		r10, _ := recallAtK(rankedIDs, chunkRelevant, 10)
+		mrr, _ := mrrAtK(rankedIDs, chunkRelevant, 10)
 		parents := make([]string, 0, len(result.IDs))
 		perParent := map[string]int{}
 		for _, id := range result.IDs {
@@ -1518,8 +1550,8 @@ func measureApplicationQuality(fixture *applicationFixture, filter string, topK 
 		parentR10 := parentRecallAtK(parents, parentRelevant, 10)
 		total.PrecisionAt5 += p5
 		total.PrecisionAt10 += p10
-		total.NDCGAt5 += ndcgAtK(result.IDs, chunkRelevant, 5)
-		total.NDCGAt10 += ndcgAtK(result.IDs, chunkRelevant, 10)
+		total.NDCGAt5 += ndcgAtK(rankedIDs, chunkRelevant, 5)
+		total.NDCGAt10 += ndcgAtK(rankedIDs, chunkRelevant, 10)
 		total.MRRAt10 += mrr
 		if mrr > 0 {
 			total.HitRateAt10++
@@ -1589,7 +1621,7 @@ func ndcgAtK(ranked []string, relevant map[string]bool, k int) float64 {
 func parentRecallAtK(parents []string, relevant map[string]bool, k int) float64 {
 	seen := map[string]bool{}
 	hits := 0
-	for _, parent := range parents[:k] {
+	for _, parent := range parents[:min(k, len(parents))] {
 		if relevant[parent] && !seen[parent] {
 			seen[parent] = true
 			hits++

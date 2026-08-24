@@ -266,12 +266,20 @@ Unsupported operators and the top-level `embedding` field filter raise
 `meta.embedding.provider` are allowed. The client does not broaden unsupported
 filters into local document scans.
 
-This filter AST is supported by document count/filter/delete, exact dense vector
-search, and filtered keyword/hybrid methods when the fields were declared in
-`scalar_fields` at index creation. The service compiles those filters into
-bounded scalar allow-sets and raises `IndexUnavailableError` with the typed
-`scalar_filter_unbounded` reason instead of returning partial results. The
-client never broadens a filter into a local scan.
+The full filter AST is supported by document count/filter/delete and exact dense
+vector search. Filtered keyword/hybrid methods intentionally accept only
+equality and one/two-sided range leaves, alone or nested under `AND`, and only
+when every field was declared in `scalar_fields` at index creation. Same-field
+bounds merge; different fields resolve through bounded scalar indexes and
+intersect before text/vector work. `OR`, `NOT`, `!=`, `in`, and `not in` remain
+typed `UnsupportedError` results on keyword/hybrid routes even though the client
+can serialize them for other document methods.
+
+Any missing/corrupt index, truncated lookup, or snapshot change fails closed
+without partial ranking or a local/primary document scan. Truncation raises
+`IndexUnavailableError` with `scalar_filter_unbounded`. Hybrid plan/stats models
+expose lookup count, per-lookup and aggregate bounds, input IDs, intersection
+steps, and final IDs. The client never broadens a filter into a local scan.
 
 ## Error mapping
 
