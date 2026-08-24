@@ -165,6 +165,8 @@ Actual final repaired fresh-DB end-to-end source docs/s:
 `2,163,595 / 2,577,008` B/source. Every repetition reopened with identical
 parent/child and queried text/vector/scalar index state. The retained artifact
 binds harness `43e9568e0059806b9a7f735a5e383800880d1865`.
+The commit is retained on remote branch `evidence/4289-retained-harness`, so a
+normal clone can resolve and inspect the exact checkout.
 
 The historical 37.59 docs/s / 132 GiB-per-operation regime did not reproduce.
 The final repaired M1 artifact replaced the earlier evidence-integrity sample
