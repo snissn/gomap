@@ -66,6 +66,56 @@ func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
 }
 
+func TestHTTPHybridParentCollapseRequestResponse4291(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
+	postJSON(t, handler, "/v1/indexes/docs/documents/upsert", UpsertDocumentsRequest{Documents: []Document{
+		{ID: "parent#0", Content: "first", Embedding: []float32{1, 0}},
+		{ID: "parent#1", Content: "second", Embedding: []float32{0.99, 0.01}},
+		{ID: "other#0", Content: "other", Embedding: []float32{0.8, 0.2}},
+		{ID: "plain", Content: "plain", Embedding: []float32{0, 1}},
+	}}, http.StatusOK, nil)
+
+	var capOne HybridSearchResponse
+	postJSON(t, handler, "/v1/indexes/docs/search/hybrid", HybridSearchRequest{
+		QueryEmbedding:       []float32{1, 0},
+		TopK:                 3,
+		VectorCandidateLimit: 4,
+		EfSearch:             4,
+		MaxChunksPerParent:   1,
+	}, http.StatusOK, &capOne)
+	if got := documentIDs(capOne.Documents); !slices.Equal(got, []string{"parent#0", "other#0", "plain"}) {
+		t.Fatalf("cap=1 ids=%v response=%+v", got, capOne)
+	}
+	if capOne.Plan.MaxChunksPerParent != 1 || capOne.Stats.CollapseRejections != 1 || capOne.Stats.CollapseExhaustions != 0 || capOne.Stats.DocumentsFetched != 3 {
+		t.Fatalf("cap=1 plan=%+v stats=%+v", capOne.Plan, capOne.Stats)
+	}
+
+	var capTwo HybridSearchResponse
+	postJSON(t, handler, "/v1/indexes/docs/search/hybrid", HybridSearchRequest{
+		QueryEmbedding:       []float32{1, 0},
+		TopK:                 3,
+		VectorCandidateLimit: 4,
+		EfSearch:             4,
+		MaxChunksPerParent:   2,
+	}, http.StatusOK, &capTwo)
+	if got := documentIDs(capTwo.Documents); !slices.Equal(got, []string{"parent#0", "parent#1", "other#0"}) {
+		t.Fatalf("cap=2 ids=%v response=%+v", got, capTwo)
+	}
+	if capTwo.Plan.MaxChunksPerParent != 2 || capTwo.Stats.CollapseRejections != 0 {
+		t.Fatalf("cap=2 plan=%+v stats=%+v", capTwo.Plan, capTwo.Stats)
+	}
+
+	postJSON(t, handler, "/v1/indexes/docs/search/hybrid", HybridSearchRequest{
+		QueryEmbedding:     []float32{1, 0},
+		TopK:               1,
+		MaxChunksPerParent: -1,
+	}, http.StatusBadRequest, nil)
+}
+
 func TestHTTPDefaultMaxBodyBytesDoesNotMutateHandler(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

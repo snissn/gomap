@@ -398,6 +398,7 @@ type HybridSearchRequest struct {
 	TextCandidateLimit   int                             `json:"text_candidate_limit,omitempty"`
 	VectorCandidateLimit int                             `json:"vector_candidate_limit,omitempty"`
 	CandidateLimit       int                             `json:"candidate_limit,omitempty"`
+	MaxChunksPerParent   int                             `json:"max_chunks_per_parent,omitempty"`
 	EfSearch             int                             `json:"ef_search,omitempty"`
 	Fusion               collections.HybridFusionOptions `json:"fusion,omitempty"`
 	Filter               *Filter                         `json:"filter,omitempty"`

@@ -277,6 +277,7 @@ class KeywordHybridModelTests(unittest.TestCase):
             text_candidate_limit=25,
             vector_candidate_limit=30,
             ef_search=64,
+            max_chunks_per_parent=2,
             fusion=HybridFusionOptions(
                 method="rrf",
                 rrf_k=60,
@@ -292,7 +293,9 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(payload["fusion"]["method"], "rrf")
         self.assertEqual(payload["fusion"]["source_order"], ["text", "vector"])
         self.assertEqual(payload["text_candidate_limit"], 25)
+        self.assertEqual(payload["max_chunks_per_parent"], 2)
         self.assertEqual(payload["return_embedding"], False)
+        self.assertNotIn("max_chunks_per_parent", HybridSearchRequest(top_k=1, query="refund").to_dict())
 
     def test_hybrid_response_parses_plan_snapshot_stats(self) -> None:
         response = HybridSearchResponse.from_dict(
@@ -301,9 +304,19 @@ class KeywordHybridModelTests(unittest.TestCase):
                 "text_index": "content",
                 "vector_index": "embedding",
                 "documents": [{"id": "doc-1", "meta": {"_treedb_search": {"type": "hybrid"}}, "score": 0.03}],
-                "plan": {"fusion_method": "rrf", "final_top_k": 5, "future_plan": "kept"},
+                "plan": {
+                    "fusion_method": "rrf",
+                    "max_chunks_per_parent": 2,
+                    "final_top_k": 5,
+                    "future_plan": "kept",
+                },
                 "snapshot": {"consistency": "current_snapshot", "commit_seq": 9},
-                "stats": {"fusion_both": 1, "documents_fetched": 5},
+                "stats": {
+                    "fusion_both": 1,
+                    "collapse_rejections": 3,
+                    "collapse_exhaustions": 1,
+                    "documents_fetched": 2,
+                },
             }
         )
 
@@ -311,9 +324,12 @@ class KeywordHybridModelTests(unittest.TestCase):
         self.assertEqual(response.vector_index, "embedding")
         self.assertIsInstance(response.plan, HybridSearchPlan)
         self.assertEqual(response.plan.fusion_method, "rrf")
+        self.assertEqual(response.plan.max_chunks_per_parent, 2)
         self.assertEqual(response.plan.extra["future_plan"], "kept")
         self.assertEqual(response.snapshot.commit_seq, 9)
-        self.assertEqual(response.stats.documents_fetched, 5)
+        self.assertEqual(response.stats.collapse_rejections, 3)
+        self.assertEqual(response.stats.collapse_exhaustions, 1)
+        self.assertEqual(response.stats.documents_fetched, 2)
         self.assertEqual(response.documents[0].meta["_treedb_search"]["type"], "hybrid")
 
 
