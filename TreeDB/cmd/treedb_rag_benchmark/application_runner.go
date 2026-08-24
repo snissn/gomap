@@ -146,9 +146,9 @@ type qualityMetrics struct {
 }
 
 type applicationIndexQuerySnapshot struct {
-	TextChildIDs    []string
-	VectorChildIDs  []string
-	ScalarParentIDs []string
+	TextChildIDs      []string
+	VectorChildIDs    []string
+	ScalarDocumentIDs []string
 }
 
 type applicationRow struct {
@@ -541,13 +541,9 @@ func applicationCellMatrix(embeddingCell string) []applicationCellIdentity {
 func unsupportedCapability(cell applicationCellIdentity) *capabilityError {
 	issues := []int{}
 	codes := []string{}
-	if cell.Filter != filterUnfiltered {
-		issues = append(issues, 4290)
-		codes = append(codes, "source_metadata_not_propagated")
-		if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
-			issues = append(issues, 4292)
-			codes = append(codes, "multi_field_filter_unavailable")
-		}
+	if cell.Filter == filterTenantAlphaWorkspaceRed || cell.Filter == filterModerateRange {
+		issues = append(issues, 4292)
+		codes = append(codes, "multi_field_filter_unavailable")
 	}
 	if cell.Collapse != "disabled" {
 		issues = append(issues, 4291)
@@ -672,7 +668,7 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 	lifecycle.ColdReopenParity = beforeDigest == afterDigest
 	lifecycle.TextIndexParity = equalStrings(beforeIndexes.TextChildIDs, afterIndexes.TextChildIDs)
 	lifecycle.VectorIndexParity = equalStrings(beforeIndexes.VectorChildIDs, afterIndexes.VectorChildIDs)
-	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarParentIDs, afterIndexes.ScalarParentIDs)
+	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarDocumentIDs, afterIndexes.ScalarDocumentIDs)
 	lifecycle.FinalSources = len(applicationSourceDocuments(fixture, true))
 	lifecycle.FinalChunks = len(childIDs)
 	if err := validateApplicationIndexQueryParity(beforeIndexes, afterIndexes, expectedIndexes); err != nil {
@@ -993,10 +989,10 @@ func queryApplicationIndexes(col *collections.Collection, fixture *applicationFi
 			return snapshot, fmt.Errorf("scalar index query updated_year=%d: %w", year, err)
 		}
 		for _, id := range ids {
-			snapshot.ScalarParentIDs = append(snapshot.ScalarParentIDs, string(id))
+			snapshot.ScalarDocumentIDs = append(snapshot.ScalarDocumentIDs, string(id))
 		}
 	}
-	sort.Strings(snapshot.ScalarParentIDs)
+	sort.Strings(snapshot.ScalarDocumentIDs)
 	return snapshot, nil
 }
 
@@ -1006,13 +1002,14 @@ func expectedApplicationIndexQuerySnapshot(fixture *applicationFixture, childIDs
 	}
 	for i, id := range childIDs {
 		expected.TextChildIDs[i], expected.VectorChildIDs[i] = string(id), string(id)
+		expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, string(id))
 	}
 	for _, source := range fixture.Sources {
 		if !source.Deleted {
-			expected.ScalarParentIDs = append(expected.ScalarParentIDs, source.ID)
+			expected.ScalarDocumentIDs = append(expected.ScalarDocumentIDs, source.ID)
 		}
 	}
-	sort.Strings(expected.ScalarParentIDs)
+	sort.Strings(expected.ScalarDocumentIDs)
 	return expected
 }
 
@@ -1020,7 +1017,7 @@ func validateApplicationIndexQueryParity(before, after, expected applicationInde
 	for name, values := range map[string][3][]string{
 		"text":   {before.TextChildIDs, after.TextChildIDs, expected.TextChildIDs},
 		"vector": {before.VectorChildIDs, after.VectorChildIDs, expected.VectorChildIDs},
-		"scalar": {before.ScalarParentIDs, after.ScalarParentIDs, expected.ScalarParentIDs},
+		"scalar": {before.ScalarDocumentIDs, after.ScalarDocumentIDs, expected.ScalarDocumentIDs},
 	} {
 		if !equalStrings(values[0], values[2]) {
 			return fmt.Errorf("%s index before reopen does not match fixture live set: got=%q want=%q", name, values[0], values[2])
