@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,118 @@ func TestApplicationContractRejectsOriginalHarnessDefects(t *testing.T) {
 					t.Fatal("mismatched comparison accepted")
 				}
 			})
+		}
+	})
+}
+
+func TestApplicationEvidenceIntegrityContracts(t *testing.T) {
+	t.Run("cold reopen and index parity fail closed", func(t *testing.T) {
+		good := lifecycleEvidence{
+			ColdReopenParity: true, TextIndexParity: true,
+			VectorIndexParity: true, ScalarIndexParity: true,
+		}
+		for name, mutate := range map[string]func(*lifecycleEvidence){
+			"cold reopen":  func(e *lifecycleEvidence) { e.ColdReopenParity = false },
+			"text index":   func(e *lifecycleEvidence) { e.TextIndexParity = false },
+			"vector index": func(e *lifecycleEvidence) { e.VectorIndexParity = false },
+			"scalar index": func(e *lifecycleEvidence) { e.ScalarIndexParity = false },
+		} {
+			t.Run(name, func(t *testing.T) {
+				bad := good
+				mutate(&bad)
+				if err := validateLifecycleEvidence("fixture", bad); err == nil {
+					t.Fatal("non-parity lifecycle accepted")
+				}
+			})
+		}
+	})
+
+	t.Run("queried index results must match across reopen and fixture", func(t *testing.T) {
+		want := applicationIndexQuerySnapshot{
+			TextChildIDs:    []string{"source#0", "source#1"},
+			VectorChildIDs:  []string{"source#0", "source#1"},
+			ScalarParentIDs: []string{"source"},
+		}
+		if err := validateApplicationIndexQueryParity(want, want, want); err != nil {
+			t.Fatalf("valid parity: %v", err)
+		}
+		for name, mutate := range map[string]func(*applicationIndexQuerySnapshot){
+			"text stale":     func(s *applicationIndexQuerySnapshot) { s.TextChildIDs = append(s.TextChildIDs, "deleted#0") },
+			"vector missing": func(s *applicationIndexQuerySnapshot) { s.VectorChildIDs = s.VectorChildIDs[:1] },
+			"scalar corrupt": func(s *applicationIndexQuerySnapshot) { s.ScalarParentIDs = []string{"other"} },
+		} {
+			t.Run(name, func(t *testing.T) {
+				after := want
+				after.TextChildIDs = append([]string(nil), want.TextChildIDs...)
+				after.VectorChildIDs = append([]string(nil), want.VectorChildIDs...)
+				after.ScalarParentIDs = append([]string(nil), want.ScalarParentIDs...)
+				mutate(&after)
+				if err := validateApplicationIndexQueryParity(want, after, want); err == nil {
+					t.Fatal("bad queried index parity accepted")
+				}
+			})
+		}
+	})
+
+	t.Run("build revision is exact and clean", func(t *testing.T) {
+		const revision = "0123456789abcdef0123456789abcdef01234567"
+		cfg := defaultApplicationConfig()
+		cfg.HarnessRevision = revision
+		settings := map[string]string{"vcs.revision": revision, "vcs.modified": "false"}
+		if got, err := resolveApplicationHarnessRevision(cfg, settings, true); err != nil || got != revision {
+			t.Fatalf("clean revision got=%q err=%v", got, err)
+		}
+		for name, mutate := range map[string]func(*applicationConfig, map[string]string, *bool){
+			"dirty":   func(_ *applicationConfig, s map[string]string, _ *bool) { s["vcs.modified"] = "true" },
+			"unbound": func(_ *applicationConfig, _ map[string]string, ok *bool) { *ok = false },
+			"mismatch": func(c *applicationConfig, _ map[string]string, _ *bool) {
+				c.HarnessRevision = "1123456789abcdef0123456789abcdef01234567"
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				badCfg := cfg
+				badSettings := map[string]string{"vcs.revision": revision, "vcs.modified": "false"}
+				ok := true
+				mutate(&badCfg, badSettings, &ok)
+				if _, err := resolveApplicationHarnessRevision(badCfg, badSettings, ok); err == nil {
+					t.Fatal("invalid final binary binding accepted")
+				}
+			})
+		}
+	})
+
+	t.Run("config digest contains workload only", func(t *testing.T) {
+		base := defaultApplicationConfig()
+		base.Dir = "/tmp/base"
+		base.ProductBaseSHA = strings.Repeat("a", 40)
+		base.HarnessRevision = strings.Repeat("b", 40)
+		base.HostNote = "host a"
+		base.Command = []string{"base", "--flag"}
+		other := base
+		other.Dir = "/different/path"
+		other.KeepDir = !base.KeepDir
+		other.ProductBaseSHA = strings.Repeat("c", 40)
+		other.HarnessRevision = strings.Repeat("d", 40)
+		other.HostNote = "host b"
+		other.Command = []string{"candidate"}
+		if got, want := applicationConfigDigest(other), applicationConfigDigest(base); got != want {
+			t.Fatalf("provenance/path changed workload digest %s != %s", got, want)
+		}
+		other.TopK++
+		if applicationConfigDigest(other) == applicationConfigDigest(base) {
+			t.Fatal("workload mismatch produced identical digest")
+		}
+	})
+
+	t.Run("warmup rotates through full query set", func(t *testing.T) {
+		fixture := mustApplicationFixture(t)
+		var got []string
+		for i := range 5 {
+			got = append(got, applicationWarmupQuery(&fixture, i).ID)
+		}
+		want := []string{"q-billing", "q-outage", "q-access", "q-billing", "q-outage"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("warmup order=%v want %v", got, want)
 		}
 	})
 }

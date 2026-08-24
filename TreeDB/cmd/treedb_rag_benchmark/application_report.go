@@ -29,6 +29,14 @@ type applicationArtifactManifest struct {
 }
 
 func writeApplicationArtifacts(report *applicationReport, outDir string) (jsonPath, markdownPath, manifestPath string, err error) {
+	if report == nil {
+		return "", "", "", fmt.Errorf("report: nil application report")
+	}
+	for name, lifecycle := range report.Lifecycle {
+		if err := validateLifecycleEvidence(name, lifecycle); err != nil {
+			return "", "", "", err
+		}
+	}
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", "", "", err
 	}
@@ -103,6 +111,7 @@ func renderApplicationMarkdown(report *applicationReport) []byte {
 
 	fmt.Fprintf(&b, "## Supported retained rows\n\n")
 	fmt.Fprintf(&b, "Every supported row has >=1000 timed queries and three forward/reverse/forward repetitions.\n\n")
+	fmt.Fprintf(&b, "Quality is measured by separate untimed queries. Direct score-only rows use compact responses with identical work, route, and filter to retain source attribution while timed score-only rows still fetch zero documents.\n\n")
 	fmt.Fprintf(&b, "| embedding | surface | clients | route | projection | QPS | p50 ms | p95 ms | p99 ms | chunk R@10 | parent R@10 | nDCG@10 | B/op | allocs/op |\n")
 	b.WriteString("|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	rows := append([]applicationRow(nil), report.Rows...)

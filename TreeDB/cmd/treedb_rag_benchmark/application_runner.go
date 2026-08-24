@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	applicationReportSchema     = "treedb_rag_application_baseline/v2"
+	applicationReportSchema     = "treedb_rag_application_baseline/v3"
 	applicationCollection       = "rag_application"
 	applicationSourceCollection = "rag_application_sources"
 	applicationVectorIndex      = "embedding"
@@ -142,6 +142,13 @@ type qualityMetrics struct {
 	TextAttributedResults         int     `json:"text_attributed_results"`
 	VectorAttributedResults       int     `json:"vector_attributed_results"`
 	TextVectorOverlapResults      int     `json:"text_vector_overlap_results"`
+	AttributionMode               string  `json:"attribution_mode"`
+}
+
+type applicationIndexQuerySnapshot struct {
+	TextChildIDs    []string
+	VectorChildIDs  []string
+	ScalarParentIDs []string
 }
 
 type applicationRow struct {
@@ -329,8 +336,8 @@ func validateApplicationConfig(cfg applicationConfig) error {
 	if cfg.Repetitions <= 0 || cfg.SamplesPerRep <= 0 || cfg.IngestionReps <= 0 {
 		return fmt.Errorf("config: repetitions, samples, and ingestion reps must be positive")
 	}
-	if cfg.FinalEvidence && (len(cfg.ProductBaseSHA) != 40 || len(cfg.HarnessRevision) != 40) {
-		return fmt.Errorf("config: final baseline requires full 40-character product and harness revisions")
+	if cfg.FinalEvidence && (!isFullRevision(cfg.ProductBaseSHA) || !isFullRevision(cfg.HarnessRevision)) {
+		return fmt.Errorf("config: final baseline requires full 40-character hexadecimal product and harness revisions")
 	}
 	if cfg.FinalEvidence && (cfg.Repetitions < 3 || cfg.SamplesPerRep*cfg.Repetitions < 1000 || cfg.IngestionReps < 5) {
 		return fmt.Errorf("config: final baseline requires >=3 reps, >=1000 samples/cell, and >=5 ingestion reps")
@@ -338,9 +345,54 @@ func validateApplicationConfig(cfg applicationConfig) error {
 	return nil
 }
 
+func isFullRevision(revision string) bool {
+	if len(revision) != 40 {
+		return false
+	}
+	_, err := hex.DecodeString(revision)
+	return err == nil
+}
+
+func applicationConfigDigest(cfg applicationConfig) string {
+	raw, _ := json.Marshal(struct {
+		TopK, CandidateLimit, EfSearch, M         int
+		WarmupQueries, Repetitions, SamplesPerRep int
+		IngestionReps                             int
+	}{
+		TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, M: cfg.M,
+		WarmupQueries: cfg.WarmupQueries, Repetitions: cfg.Repetitions,
+		SamplesPerRep: cfg.SamplesPerRep, IngestionReps: cfg.IngestionReps,
+	})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func resolveApplicationHarnessRevision(cfg applicationConfig, settings map[string]string, buildInfoOK bool) (string, error) {
+	revision := strings.TrimSpace(settings["vcs.revision"])
+	if !buildInfoOK || !isFullRevision(revision) {
+		if cfg.FinalEvidence {
+			return "", fmt.Errorf("provenance: final evidence binary is not bound to a full debug.ReadBuildInfo vcs.revision")
+		}
+		return "unavailable", nil
+	}
+	if cfg.HarnessRevision != "" && cfg.HarnessRevision != revision {
+		return "", fmt.Errorf("provenance: requested harness revision %q does not match binary vcs.revision %q", cfg.HarnessRevision, revision)
+	}
+	if cfg.FinalEvidence && settings["vcs.modified"] != "false" {
+		return "", fmt.Errorf("provenance: final evidence binary is dirty or lacks vcs.modified=false")
+	}
+	return revision, nil
+}
+
 func runApplicationBaseline(cfg applicationConfig) (*applicationReport, error) {
 	if err := validateApplicationConfig(cfg); err != nil {
 		return nil, err
+	}
+	if cfg.FinalEvidence {
+		settings, ok := runtimeBuildInfo()
+		if _, err := resolveApplicationHarnessRevision(cfg, settings, ok); err != nil {
+			return nil, err
+		}
 	}
 	fixture := buildApplicationFixture()
 	if err := validateApplicationFixture(&fixture); err != nil {
@@ -584,9 +636,13 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 	if err := db.Checkpoint(); err != nil {
 		return nil, lifecycle, err
 	}
-	beforeDigest, _, _, err := sourceChildSnapshot(sourceCol, fixture)
+	beforeDigest, beforeChildIDs, beforeChildDocs, err := sourceChildSnapshot(sourceCol, fixture)
 	if err != nil {
 		return nil, lifecycle, err
+	}
+	beforeIndexes, err := queryApplicationIndexes(sourceCol, fixture, beforeChildIDs, beforeChildDocs, cfg.EfSearch)
+	if err != nil {
+		return nil, lifecycle, fmt.Errorf("before reopen index queries: %w", err)
 	}
 	if err := db.Close(); err != nil {
 		return nil, lifecycle, err
@@ -607,12 +663,26 @@ func openApplicationEnvironment(cfg applicationConfig, fixture *applicationFixtu
 		_ = db.Close()
 		return nil, lifecycle, err
 	}
+	afterIndexes, err := queryApplicationIndexes(sourceCol, fixture, childIDs, childDocs, cfg.EfSearch)
+	if err != nil {
+		_ = db.Close()
+		return nil, lifecycle, fmt.Errorf("after reopen index queries: %w", err)
+	}
+	expectedIndexes := expectedApplicationIndexQuerySnapshot(fixture, childIDs)
 	lifecycle.ColdReopenParity = beforeDigest == afterDigest
-	lifecycle.TextIndexParity = lifecycle.ColdReopenParity
-	lifecycle.VectorIndexParity = lifecycle.ColdReopenParity
-	lifecycle.ScalarIndexParity = lifecycle.ColdReopenParity
+	lifecycle.TextIndexParity = equalStrings(beforeIndexes.TextChildIDs, afterIndexes.TextChildIDs)
+	lifecycle.VectorIndexParity = equalStrings(beforeIndexes.VectorChildIDs, afterIndexes.VectorChildIDs)
+	lifecycle.ScalarIndexParity = equalStrings(beforeIndexes.ScalarParentIDs, afterIndexes.ScalarParentIDs)
 	lifecycle.FinalSources = len(applicationSourceDocuments(fixture, true))
 	lifecycle.FinalChunks = len(childIDs)
+	if err := validateApplicationIndexQueryParity(beforeIndexes, afterIndexes, expectedIndexes); err != nil {
+		_ = db.Close()
+		return nil, lifecycle, err
+	}
+	if err := validateLifecycleEvidence("cold reopen", lifecycle); err != nil {
+		_ = db.Close()
+		return nil, lifecycle, err
+	}
 
 	service := documentservice.New(manager)
 	if _, err := service.CreateIndex(context.Background(), applicationIndexRequest(cfg, dims)); err != nil {
@@ -780,6 +850,135 @@ func sourceChildSnapshot(col *collections.Collection, fixture *applicationFixtur
 	return hex.EncodeToString(hash.Sum(nil)), ids, documents, nil
 }
 
+func queryApplicationIndexes(col *collections.Collection, fixture *applicationFixture, childIDs, childDocs [][]byte, efSearch int) (applicationIndexQuerySnapshot, error) {
+	var snapshot applicationIndexQuerySnapshot
+	expectedTextIDs := make(map[string]bool, len(childIDs)+len(fixture.Sources))
+	for _, id := range childIDs {
+		expectedTextIDs[string(id)] = true
+	}
+	for _, source := range fixture.Sources {
+		if !source.Deleted {
+			expectedTextIDs[source.ID] = true
+		}
+	}
+	textTopK := len(expectedTextIDs)
+	text, err := col.SearchText(collections.TextSearchOptions{
+		IndexName: applicationTextField, Query: "guidance", TopK: textTopK,
+		ResultMode:     collections.TextSearchResultModeScoreOnly,
+		CandidateLimit: textTopK + 1, MaxPostingsScanned: textTopK * 32,
+	})
+	if err != nil {
+		return snapshot, err
+	}
+	if text.Stats.FailClosed != 0 || text.Stats.FullDocumentScanFallbacks != 0 || text.Stats.DocumentsFetched != 0 {
+		return snapshot, fmt.Errorf("text index returned unhealthy stats: %+v", text.Stats)
+	}
+	for _, result := range text.Results {
+		id := string(result.DocumentID)
+		if !expectedTextIDs[id] {
+			return snapshot, fmt.Errorf("text index returned stale or duplicate ID %q", id)
+		}
+		delete(expectedTextIDs, id)
+		if _, _, child := chunking.ParseChildID(id); child {
+			snapshot.TextChildIDs = append(snapshot.TextChildIDs, id)
+		}
+	}
+	if len(expectedTextIDs) != 0 {
+		return snapshot, fmt.Errorf("text index omitted %d live parent/child IDs", len(expectedTextIDs))
+	}
+	sort.Strings(snapshot.TextChildIDs)
+
+	var buffer collections.VectorIndexSearchBuffer
+	for i, document := range childDocs {
+		var decoded struct {
+			Embedding []float32 `json:"embedding"`
+		}
+		if err := json.Unmarshal(document, &decoded); err != nil {
+			return snapshot, fmt.Errorf("decode vector query document %q: %w", childIDs[i], err)
+		}
+		if len(decoded.Embedding) == 0 {
+			return snapshot, fmt.Errorf("vector query document %q has no embedding", childIDs[i])
+		}
+		response, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
+			IndexName: applicationVectorIndex, Query: decoded.Embedding,
+			QueryMode: collections.VectorIndexQueryModeExact, TopK: 1,
+			EfSearch: max(efSearch, len(childIDs)), StatsMode: collections.VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil {
+			return snapshot, fmt.Errorf("vector index query %q: %w", childIDs[i], err)
+		}
+		if response.Path != collections.VectorIndexSearchPathNativeRuntime || len(response.Results) != 1 {
+			return snapshot, fmt.Errorf("vector index query %q path=%q results=%d", childIDs[i], response.Path, len(response.Results))
+		}
+		snapshot.VectorChildIDs = append(snapshot.VectorChildIDs, string(response.Results[0].ID))
+	}
+	sort.Strings(snapshot.VectorChildIDs)
+
+	years := map[int]bool{}
+	for _, source := range fixture.Sources {
+		years[source.UpdatedYear] = true
+	}
+	orderedYears := make([]int, 0, len(years))
+	for year := range years {
+		orderedYears = append(orderedYears, year)
+	}
+	sort.Ints(orderedYears)
+	for _, year := range orderedYears {
+		ids, err := col.FindByIndexValue("meta_updated_year", int64(year))
+		if err != nil {
+			return snapshot, fmt.Errorf("scalar index query updated_year=%d: %w", year, err)
+		}
+		for _, id := range ids {
+			snapshot.ScalarParentIDs = append(snapshot.ScalarParentIDs, string(id))
+		}
+	}
+	sort.Strings(snapshot.ScalarParentIDs)
+	return snapshot, nil
+}
+
+func expectedApplicationIndexQuerySnapshot(fixture *applicationFixture, childIDs [][]byte) applicationIndexQuerySnapshot {
+	expected := applicationIndexQuerySnapshot{
+		TextChildIDs: make([]string, len(childIDs)), VectorChildIDs: make([]string, len(childIDs)),
+	}
+	for i, id := range childIDs {
+		expected.TextChildIDs[i], expected.VectorChildIDs[i] = string(id), string(id)
+	}
+	for _, source := range fixture.Sources {
+		if !source.Deleted {
+			expected.ScalarParentIDs = append(expected.ScalarParentIDs, source.ID)
+		}
+	}
+	sort.Strings(expected.ScalarParentIDs)
+	return expected
+}
+
+func validateApplicationIndexQueryParity(before, after, expected applicationIndexQuerySnapshot) error {
+	for name, values := range map[string][3][]string{
+		"text":   {before.TextChildIDs, after.TextChildIDs, expected.TextChildIDs},
+		"vector": {before.VectorChildIDs, after.VectorChildIDs, expected.VectorChildIDs},
+		"scalar": {before.ScalarParentIDs, after.ScalarParentIDs, expected.ScalarParentIDs},
+	} {
+		if !equalStrings(values[0], values[2]) {
+			return fmt.Errorf("%s index before reopen does not match fixture live set: got=%q want=%q", name, values[0], values[2])
+		}
+		if !equalStrings(values[1], values[2]) {
+			return fmt.Errorf("%s index after reopen does not match fixture live set: got=%q want=%q", name, values[1], values[2])
+		}
+	}
+	return nil
+}
+
+func validateLifecycleEvidence(name string, lifecycle lifecycleEvidence) error {
+	if !lifecycle.ColdReopenParity {
+		return fmt.Errorf("report: %s cold reopen parity is false", name)
+	}
+	if !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity {
+		return fmt.Errorf("report: %s queried index parity text/vector/scalar=%t/%t/%t",
+			name, lifecycle.TextIndexParity, lifecycle.VectorIndexParity, lifecycle.ScalarIndexParity)
+	}
+	return nil
+}
+
 func countIngestedChunks(result collections.IngestResult) int {
 	total := 0
 	for _, source := range result.Ingested {
@@ -822,6 +1021,10 @@ type queryResult struct {
 	Sources       map[string][2]bool
 }
 
+func applicationWarmupQuery(fixture *applicationFixture, ordinal int) applicationQuery {
+	return fixture.Queries[ordinal%len(fixture.Queries)]
+}
+
 func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env *applicationEnvironment, queryVectors map[string][]float32, cell applicationCellIdentity) (applicationRow, error) {
 	row := applicationRow{Cell: cell, Status: "supported", Counters: map[string]float64{}}
 	qualityDigest := applicationFixtureDigest(fixture)
@@ -840,15 +1043,24 @@ func runApplicationCell(cfg applicationConfig, fixture *applicationFixture, env 
 		if cell.Surface == "http_service" {
 			return runHTTPQuery(cfg, env, query, queryVectors[query.ID], cell)
 		}
-		return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell)
+		return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, false)
 	}
-	quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, call)
+	qualityCall := call
+	attributionMode := "untimed_projection_query_sources"
+	if cell.Surface == "direct_collection" && cell.Projection == "score_only" {
+		qualityCall = func(query applicationQuery) (queryResult, error) {
+			return runDirectQuery(cfg, env.col, query, queryVectors[query.ID], cell, true)
+		}
+		attributionMode = "untimed_compact_same_work_route_filter"
+	}
+	quality, err := measureApplicationQuality(fixture, cell.Filter, cfg.TopK, qualityCall)
 	if err != nil {
 		return row, err
 	}
+	quality.AttributionMode = attributionMode
 	row.Quality = quality
-	for range cfg.WarmupQueries {
-		query := fixture.Queries[len(row.Samples)%len(fixture.Queries)]
+	for i := range cfg.WarmupQueries {
+		query := applicationWarmupQuery(fixture, i)
 		if _, err := call(query); err != nil {
 			return row, fmt.Errorf("warmup query %s: %w", query.ID, err)
 		}
@@ -980,7 +1192,7 @@ func runApplicationRepetition(cfg applicationConfig, fixture *applicationFixture
 	return samples, perf, counters, firstErr
 }
 
-func runDirectQuery(cfg applicationConfig, col *collections.Collection, query applicationQuery, vector []float32, cell applicationCellIdentity) (queryResult, error) {
+func runDirectQuery(cfg applicationConfig, col *collections.Collection, query applicationQuery, vector []float32, cell applicationCellIdentity, attributionQuery bool) (queryResult, error) {
 	opts := collections.HybridSearchOptions{TopK: cfg.TopK}
 	if cell.Route == "text_only" || cell.Route == "hybrid" {
 		opts.Text = &collections.HybridTextQuery{IndexName: "content", Query: query.Text, CandidateLimit: cfg.CandidateLimit}
@@ -988,11 +1200,14 @@ func runDirectQuery(cfg applicationConfig, col *collections.Collection, query ap
 	if cell.Route == "vector_only" || cell.Route == "hybrid" {
 		opts.Vector = &collections.HybridVectorQuery{IndexName: applicationVectorIndex, Query: vector, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, QueryMode: collections.VectorIndexQueryModeExact}
 	}
-	if cell.Projection == "fetch_topk" {
+	switch {
+	case cell.Projection == "fetch_topk":
 		opts.ResultMode = collections.HybridResultModeFull
 		opts.IncludeDocuments = true
 		opts.DocumentFetchOptions = collections.DocumentFetchOptions{ExcludePaths: []string{applicationVectorField}}
-	} else {
+	case attributionQuery:
+		opts.ResultMode = collections.HybridResultModeCompact
+	default:
 		opts.ResultMode = collections.HybridResultModeScoreOnly
 	}
 	response, err := col.SearchHybrid(opts)
@@ -1448,6 +1663,27 @@ func validateApplicationReport(report *applicationReport, cfg applicationConfig)
 	if report == nil || report.Schema != applicationReportSchema {
 		return fmt.Errorf("report: missing schema")
 	}
+	if got, want := report.Provenance.ConfigSHA256, applicationConfigDigest(cfg); got != want {
+		return fmt.Errorf("report: config SHA-256=%q want workload digest %q", got, want)
+	}
+	if len(report.Lifecycle) != len(applicationEmbeddings) {
+		return fmt.Errorf("report: lifecycle rows=%d want %d", len(report.Lifecycle), len(applicationEmbeddings))
+	}
+	for name, lifecycle := range report.Lifecycle {
+		if err := validateLifecycleEvidence(name, lifecycle); err != nil {
+			return err
+		}
+	}
+	if cfg.FinalEvidence {
+		settings, ok := runtimeBuildInfo()
+		revision, err := resolveApplicationHarnessRevision(cfg, settings, ok)
+		if err != nil {
+			return err
+		}
+		if report.Provenance.HarnessRevision != revision {
+			return fmt.Errorf("report: harness revision %q does not equal binary vcs.revision %q", report.Provenance.HarnessRevision, revision)
+		}
+	}
 	if cfg.FinalEvidence && len(report.IngestionRuns) < 5 {
 		return fmt.Errorf("report: final evidence has %d ingestion repetitions, want >=5", len(report.IngestionRuns))
 	}
@@ -1477,6 +1713,20 @@ func validateApplicationReport(report *applicationReport, cfg applicationConfig)
 		}
 		if row.Cell.Projection == "fetch_topk" && row.Counters["documents_fetched"] > float64(cfg.TopK) {
 			return fmt.Errorf("report: fetch row exceeded topK %+v", row.Cell)
+		}
+		if row.Quality.AttributionMode == "" {
+			return fmt.Errorf("report: supported row lacks quality attribution semantics %+v", row.Cell)
+		}
+		if row.Cell.Surface == "direct_collection" && row.Cell.Projection == "score_only" {
+			if row.Quality.AttributionMode != "untimed_compact_same_work_route_filter" {
+				return fmt.Errorf("report: direct score-only attribution mode=%q %+v", row.Quality.AttributionMode, row.Cell)
+			}
+			if row.Cell.Route != "vector_only" && row.Quality.TextAttributedResults == 0 {
+				return fmt.Errorf("report: direct score-only text attribution unavailable %+v", row.Cell)
+			}
+			if row.Cell.Route != "text_only" && row.Quality.VectorAttributedResults == 0 {
+				return fmt.Errorf("report: direct score-only vector attribution unavailable %+v", row.Cell)
+			}
 		}
 	}
 	if supported == 0 || len(report.ExactControls) != len(applicationEmbeddings) {
@@ -1539,15 +1789,17 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 			binaryHash = hex.EncodeToString(sum[:])
 		}
 	}
-	configRaw, _ := json.Marshal(cfg)
-	configSum := sha256.Sum256(configRaw)
+	if cfg.FinalEvidence && binaryHash == "unavailable" {
+		return applicationProvenance{}, fmt.Errorf("provenance: final evidence binary SHA-256 unavailable")
+	}
 	hashingSum := sha256.Sum256([]byte("embedding.ProviderHashing|dims=64|fixture=" + applicationFixtureDigest(fixture)))
-	revision := cfg.HarnessRevision
+	info, buildInfoOK := runtimeBuildInfo()
+	revision, err := resolveApplicationHarnessRevision(cfg, info, buildInfoOK)
+	if err != nil {
+		return applicationProvenance{}, err
+	}
 	cgo := "unknown"
-	if info, ok := runtimeBuildInfo(); ok {
-		if revision == "" {
-			revision = info["vcs.revision"]
-		}
+	if buildInfoOK {
 		cgo = info["CGO_ENABLED"]
 	}
 	if len(cfg.Command) == 0 {
@@ -1555,7 +1807,7 @@ func buildApplicationProvenance(cfg applicationConfig, fixture *applicationFixtu
 	}
 	return applicationProvenance{
 		ProductBaseSHA: cfg.ProductBaseSHA, HarnessRevision: revision, BinarySHA256: binaryHash,
-		FixtureSHA256: applicationFixtureDigest(fixture), ConfigSHA256: hex.EncodeToString(configSum[:]),
+		FixtureSHA256: applicationFixtureDigest(fixture), ConfigSHA256: applicationConfigDigest(cfg),
 		SemanticVectorSHA256: bundle.Digest(), HashingRegressionSHA256: hex.EncodeToString(hashingSum[:]),
 		GoVersion: runtime.Version(), GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, CGOEnabled: cgo,
 		Hostname: hostname, HostNote: cfg.HostNote, Command: cfg.Command,

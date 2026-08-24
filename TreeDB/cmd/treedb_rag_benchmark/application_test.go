@@ -67,6 +67,17 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 		if row.Errors != 0 || row.Quality.ChunkRecallAt10 <= 0 || len(row.Samples) != cfg.SamplesPerRep {
 			t.Fatalf("supported row invalid: %+v", row)
 		}
+		if row.Cell.Surface == "direct_collection" && row.Cell.Projection == "score_only" {
+			if row.Counters["documents_fetched"] != 0 || row.Quality.AttributionMode != "untimed_compact_same_work_route_filter" {
+				t.Fatalf("direct score-only projection/attribution invalid: %+v", row)
+			}
+			if row.Cell.Route != "vector_only" && row.Quality.TextAttributedResults == 0 {
+				t.Fatalf("direct score-only text attribution missing: %+v", row.Cell)
+			}
+			if row.Cell.Route != "text_only" && row.Quality.VectorAttributedResults == 0 {
+				t.Fatalf("direct score-only vector attribution missing: %+v", row.Cell)
+			}
+		}
 		direct = direct || row.Cell.Surface == "direct_collection"
 		service = service || row.Cell.Surface == "http_service"
 	}
@@ -82,6 +93,19 @@ func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
 		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
 			t.Fatalf("artifact %s info=%v err=%v", path, info, err)
 		}
+	}
+	bad := *report
+	bad.Lifecycle = make(map[string]lifecycleEvidence, len(report.Lifecycle))
+	for name, lifecycle := range report.Lifecycle {
+		bad.Lifecycle[name] = lifecycle
+	}
+	for name, lifecycle := range bad.Lifecycle {
+		lifecycle.ColdReopenParity = false
+		bad.Lifecycle[name] = lifecycle
+		break
+	}
+	if _, _, _, err := writeApplicationArtifacts(&bad, filepath.Join(t.TempDir(), "bad-artifacts")); err == nil {
+		t.Fatal("artifact writer accepted cold_reopen_parity=false")
 	}
 }
 
