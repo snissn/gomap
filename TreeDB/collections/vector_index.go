@@ -2872,41 +2872,57 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		trace.Strategy = "ann_postfilter"
 	}
-	idx.mu.RLock()
-	if idx.nativePersistent && !idx.sourceDocumentRootsValid {
-		idx.mu.RUnlock()
-		return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
-	}
-	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
-	trace.CandidatesExamined = len(candidates)
 	filter := opts.Filter
 	if rangeFilter != nil {
 		filter = rangeFilter
 	}
-	fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
 	var results []VectorSearchResult
-	var resultNodeIDs []int
-	var resultNodeIDStack [64]int
-	var candidateIDs [][]byte
-	if fastRerank {
-		rerankLimit := len(candidates)
-		resultNodeIDs = resultNodeIDStack[:0]
-		if rerankLimit > len(resultNodeIDStack) {
-			resultNodeIDs = make([]int, 0, rerankLimit)
+	idx.mu.RLock()
+	if idx.liveDelta != nil {
+		idx.mu.RUnlock()
+		var buffer VectorIndexSearchBuffer
+		candidates, _, searchErr := idx.searchGraphOnlyWithBuffer(query, candidateLimit, ef, &buffer)
+		if searchErr != nil {
+			return nil, trace, searchErr
 		}
-		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
-	} else {
-		candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
+		candidateIDs := make([][]byte, len(candidates))
+		for i := range candidates {
+			candidateIDs[i] = candidates[i].ID
+		}
+		trace.CandidatesExamined = len(candidateIDs)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
-	}
-	idx.putSearchScratch(scratch)
-	idx.mu.RUnlock()
-
-	if fastRerank && err == nil {
-		results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
-	} else if !fastRerank {
 		results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+	} else {
+		if idx.nativePersistent && !idx.sourceDocumentRootsValid {
+			idx.mu.RUnlock()
+			return nil, trace, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, idx.name)
+		}
+		scratch := idx.getSearchScratch()
+		candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
+		trace.CandidatesExamined = len(candidates)
+		fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
+		var resultNodeIDs []int
+		var resultNodeIDStack [64]int
+		var candidateIDs [][]byte
+		if fastRerank {
+			rerankLimit := len(candidates)
+			resultNodeIDs = resultNodeIDStack[:0]
+			if rerankLimit > len(resultNodeIDStack) {
+				resultNodeIDs = make([]int, 0, rerankLimit)
+			}
+			results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
+		} else {
+			candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
+			trace.CandidatesAfterTombstone = len(candidateIDs)
+		}
+		idx.putSearchScratch(scratch)
+		idx.mu.RUnlock()
+
+		if fastRerank && err == nil {
+			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+		} else if !fastRerank {
+			results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
+		}
 	}
 	if err != nil {
 		return nil, trace, err
@@ -3014,6 +3030,9 @@ func (idx *VectorIndex) searchGraphOnlyWithBuffer(query []float32, topK, efSearc
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
+	if idx.liveDelta != nil {
+		return nil, vectorIndexNativeSearchState{}, fmt.Errorf("%w: native_runtime vector index %q has no published live generation", ErrVectorIndexSearchUnavailable, idx.name)
+	}
 	candidates, err := idx.searchGraphOnlyCandidatesLocked(query, topK, efSearch, &buffer.nativeSearchScratch)
 	if err != nil {
 		return nil, vectorIndexNativeSearchState{}, err
@@ -4987,6 +5006,7 @@ func (idx *VectorIndex) Rebuild() error {
 	rebuilt.mu.RUnlock()
 
 	idx.mu.Lock()
+	idx.liveDelta = nil
 	idx.nodes = nodes
 	idx.currentNode = currentNode
 	idx.entry = entry

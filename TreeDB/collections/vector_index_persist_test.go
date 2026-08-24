@@ -376,6 +376,12 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 		_ = d.Close()
 		t.Fatalf("search live delta response=%+v err=%v", response, err)
 	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("direct search live delta: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "a")
 	if err := col.Flush(); err != nil {
 		_ = d.Close()
 		t.Fatalf("flush live delta: %v", err)
@@ -404,11 +410,53 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 	if stats := loaded.Stats(); stats.LiveANNFullRebuilds != 0 {
 		t.Fatalf("live delta reopened through rebuild: %+v", stats)
 	}
-	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	results, _, err = loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search live delta graph: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexRebuildClearsLiveDelta(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		t.Fatalf("save seed graph: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil {
+		t.Fatalf("seal native base: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert live delta: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 1 {
+		t.Fatalf("live delta stats=%+v", stats)
+	}
+	if err := index.Rebuild(); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 0 || stats.LiveDocs != 2 || stats.Nodes != 2 {
+		t.Fatalf("rebuilt stats=%+v", stats)
+	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search rebuilt index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "a")
 }
 
 func TestCollectionVectorIndexNativeRootUnchangedVectorPersistsDocumentCoverage(t *testing.T) {
