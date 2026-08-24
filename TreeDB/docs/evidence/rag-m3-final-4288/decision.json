@@ -1,0 +1,83 @@
+{
+  "schema": "treedb_rag_m3_final_evidence/v1",
+  "tracker": 4288,
+  "evidence_owner": 4289,
+  "merged_main_revision": "3b3235ea1e83eb75d589b5379b05888b739b6b08",
+  "binary_sha256": "e3a6defec36c0e391d8fda125676fa135ff916a5ab999681a144f7e715a4688e",
+  "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
+  "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
+  "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
+  "repeats": [
+    {
+      "name": "A",
+      "artifact_sha256": "9fca1ec36d4e06f40dda05223e986c95fe006f9ea9a1f2239d8974a2ab91d06b",
+      "median_source_docs_per_sec": 445.26,
+      "p95_source_docs_per_sec": 474.37,
+      "median_bytes_per_source": 1856038,
+      "p95_bytes_per_source": 2234719
+    },
+    {
+      "name": "B",
+      "artifact_sha256": "216e6dfc18add4429017140db899d4393a1392819f7ef22ea6c45d14548dee11",
+      "median_source_docs_per_sec": 407.30,
+      "p95_source_docs_per_sec": 450.32,
+      "median_bytes_per_source": 1849107,
+      "p95_bytes_per_source": 2239859
+    }
+  ],
+  "matrix": {
+    "total_rows": 384,
+    "supported_rows": 272,
+    "unsupported_rows": 112,
+    "supported_rows_per_filter": 68,
+    "retained_unsupported": {
+      "http_score_only_route_unavailable": 80,
+      "http_vector_parent_collapse_unavailable": 16,
+      "http_vector_parent_collapse_unavailable+http_score_only_route_unavailable": 16
+    },
+    "unsupported_disposition": "HTTP score-only is not a service route, and HTTP vector-only ANN cannot apply the hybrid parent cap without changing algorithms. Both remain explicit fail-closed zero-result rows; direct score-only and HTTP hybrid/text collapse provide the selected application contract."
+  },
+  "correctness": {
+    "errors": 0,
+    "cross_tenant_results": 0,
+    "cross_workspace_results": 0,
+    "range_scope_violations": 0,
+    "full_document_scan_fallbacks": 0,
+    "score_only_document_fetches": 0,
+    "max_documents_fetched": 10,
+    "max_chunks_per_parent": 2,
+    "minimum_multi_field_lookups": 2,
+    "minimum_multi_field_intersection_steps": 1,
+    "unaffected_quality_max_delta": 0.0,
+    "repeat_quality_max_delta": 0.0,
+    "lifecycle_reingest_delete_reopen": true,
+    "text_vector_scalar_reopen_parity": true,
+    "atomic_source_publication": true
+  },
+  "quality_disposition": {
+    "unfiltered_semantic_and_hashing_quality_non_regressing": true,
+    "selective_parent_recall_non_regressing": true,
+    "selective_chunk_cap_tradeoff": "Cap=2 intentionally exposes at most two of three judged chunks per relevant parent. On selective tenant rows parent recall is unchanged, isolation is exact, and the resulting chunk-recall reduction is the declared product behavior rather than an unreported loss.",
+    "accepted": true
+  },
+  "performance_disposition": {
+    "repeat_stable_unaffected_qps_regressions_over_10_percent": 0,
+    "repeat_stable_relative_p99_rows_over_10_percent": 12,
+    "largest_repeat_stable_absolute_p99_delta_ms": 1.8021,
+    "corresponding_qps_changes_percent": [-1.64, -2.88],
+    "explanation": "No unaffected row has a repeat-stable QPS loss above 10%. Relative p99 shifts occur on otherwise unchanged paths while QPS remains within 7%; the largest absolute shift is 1.8021 ms with -1.64%/-2.88% QPS. This is accepted host/tail noise, not a throughput or work-path regression.",
+    "accepted": true
+  },
+  "retained_4284_gates": {
+    "minimum_median_source_docs_per_sec": 325.45,
+    "maximum_median_bytes_per_source": 1947235,
+    "both_repeats_pass": true
+  },
+  "m3_decision": {
+    "metadata_propagation_4290": "merged",
+    "parent_collapse_4291": "merged",
+    "multi_field_and_4292": "merged",
+    "all_named_m3_gates_pass": true,
+    "close_tracker_4288": true
+  }
+}

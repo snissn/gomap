@@ -1,0 +1,21 @@
+{
+  "schema": "treedb_rag_application_manifest/v1",
+  "product_base_sha": "3b3235ea1e83eb75d589b5379b05888b739b6b08",
+  "harness_revision": "3b3235ea1e83eb75d589b5379b05888b739b6b08",
+  "fixture_sha256": "df71c11510a64b09a4b991a17a9062c8090dddf2d0a1e993b19bebd37d4c5db2",
+  "config_sha256": "1bac1adb8f5bfd7037ae0e832656d448c1461c21bd302d1287d987a3a7bb2a0e",
+  "semantic_vector_sha256": "aff8b31fad35f45c862c943b19717ddf9979b09726b2ac9352e159a4815663a4",
+  "binary_sha256": "e3a6defec36c0e391d8fda125676fa135ff916a5ab999681a144f7e715a4688e",
+  "artifacts": [
+    {
+      "path": "treedb_rag_application_baseline.json",
+      "sha256": "9fca1ec36d4e06f40dda05223e986c95fe006f9ea9a1f2239d8974a2ab91d06b",
+      "bytes": 57576811
+    },
+    {
+      "path": "treedb_rag_application_baseline.md",
+      "sha256": "523c11e3265c3f9ea8ade10c76fb14e2fdf6d5dc675d1f5f4dc34b4f97942528",
+      "bytes": 61826
+    }
+  ]
+}
