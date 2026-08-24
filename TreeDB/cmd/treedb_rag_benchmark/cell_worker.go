@@ -14,15 +14,18 @@ import (
 // The coordinator also binds the resulting binary SHA-256.
 var applicationCellWorkerBuildRevision string
 
+const applicationCellWorkerEnvironmentPolicy = "fresh_per_cell"
+
 type applicationCellWorkerRequest struct {
 	Ordinal int `json:"ordinal"`
 }
 
 type applicationCellWorkerReady struct {
-	Ready           bool   `json:"ready"`
-	CellCount       int    `json:"cell_count"`
-	ProductBaseSHA  string `json:"product_base_sha"`
-	HarnessRevision string `json:"harness_revision"`
+	Ready             bool   `json:"ready"`
+	CellCount         int    `json:"cell_count"`
+	ProductBaseSHA    string `json:"product_base_sha"`
+	HarnessRevision   string `json:"harness_revision"`
+	EnvironmentPolicy string `json:"environment_policy"`
 }
 
 type applicationCellWorkerResponse struct {
@@ -109,18 +112,13 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		defer os.RemoveAll(root)
 	}
 
-	environments := make(map[string]*applicationCellWorkerEnvironment, len(applicationEmbeddings))
-	defer func() {
-		for _, state := range environments {
-			state.env.close()
-		}
-	}()
 	openEnvironment := func(embeddingCell string) (*applicationCellWorkerEnvironment, error) {
-		if state := environments[embeddingCell]; state != nil {
-			return state, nil
+		environmentDir := filepath.Join(root, embeddingCell)
+		if err := os.RemoveAll(environmentDir); err != nil {
+			return nil, err
 		}
 		dims, provider := embeddingCellConfig(embeddingCell, bundle)
-		env, lifecycle, err := openApplicationEnvironment(cfg, &fixture, bundle, embeddingCell, provider, dims, filepath.Join(root, embeddingCell))
+		env, lifecycle, err := openApplicationEnvironment(cfg, &fixture, bundle, embeddingCell, provider, dims, environmentDir)
 		if err != nil {
 			return nil, err
 		}
@@ -133,14 +131,12 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			env.close()
 			return nil, err
 		}
-		state := &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors}
-		environments[embeddingCell] = state
-		return state, nil
+		return &applicationCellWorkerEnvironment{env: env, queryVectors: queryVectors}, nil
 	}
 
 	buffered := bufio.NewWriter(output)
 	encoder := json.NewEncoder(buffered)
-	if err := encoder.Encode(applicationCellWorkerReady{Ready: true, CellCount: applicationCellCount(), ProductBaseSHA: cfg.ProductBaseSHA, HarnessRevision: cfg.HarnessRevision}); err != nil {
+	if err := encoder.Encode(applicationCellWorkerReady{Ready: true, CellCount: applicationCellCount(), ProductBaseSHA: cfg.ProductBaseSHA, HarnessRevision: cfg.HarnessRevision, EnvironmentPolicy: applicationCellWorkerEnvironmentPolicy}); err != nil {
 		return err
 	}
 	if err := buffered.Flush(); err != nil {
@@ -168,16 +164,10 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			continue
 		}
 
+		var state *applicationCellWorkerEnvironment
 		var env *applicationEnvironment
 		var queryVectors map[string][]float32
 		if unsupportedCapability(cell) == nil {
-			for name, existing := range environments {
-				if name == cell.Embedding {
-					continue
-				}
-				existing.env.close()
-				delete(environments, name)
-			}
 			state, err := openEnvironment(cell.Embedding)
 			if err != nil {
 				response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Error: err.Error()}
@@ -188,6 +178,9 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 			env, queryVectors = state.env, state.queryVectors
 		}
 		row, err := runApplicationCell(cfg, &fixture, env, queryVectors, cell)
+		if state != nil {
+			state.env.close()
+		}
 		response := applicationCellWorkerResponse{Ordinal: request.Ordinal, Row: &row}
 		if err != nil {
 			response.Row = nil
