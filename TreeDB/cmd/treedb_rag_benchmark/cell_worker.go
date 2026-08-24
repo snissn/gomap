@@ -9,6 +9,11 @@ import (
 	"path/filepath"
 )
 
+// applicationCellWorkerBuildRevision is set with -ldflags=-X for exact
+// cross-revision workers when the Go toolchain cannot stamp a linked worktree.
+// The coordinator also binds the resulting binary SHA-256.
+var applicationCellWorkerBuildRevision string
+
 type applicationCellWorkerRequest struct {
 	Ordinal int `json:"ordinal"`
 }
@@ -58,9 +63,15 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		return err
 	}
 	if cfg.FinalEvidence {
-		settings, ok := runtimeBuildInfo()
-		if _, err := resolveApplicationHarnessRevision(cfg, settings, ok); err != nil {
-			return err
+		if applicationCellWorkerBuildRevision != "" {
+			if !isFullRevision(applicationCellWorkerBuildRevision) || cfg.HarnessRevision != applicationCellWorkerBuildRevision {
+				return fmt.Errorf("provenance: requested harness revision %q does not match linked cell-worker revision %q", cfg.HarnessRevision, applicationCellWorkerBuildRevision)
+			}
+		} else {
+			settings, ok := runtimeBuildInfo()
+			if _, err := resolveApplicationHarnessRevision(cfg, settings, ok); err != nil {
+				return err
+			}
 		}
 	}
 	fixture := buildApplicationFixture()
