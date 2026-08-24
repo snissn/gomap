@@ -111,7 +111,7 @@ func renderApplicationMarkdown(report *applicationReport) []byte {
 
 	fmt.Fprintf(&b, "## Supported retained rows\n\n")
 	fmt.Fprintf(&b, "Every supported row has >=1000 timed queries and three forward/reverse/forward repetitions.\n\n")
-	fmt.Fprintf(&b, "Quality is measured by separate untimed queries. Direct score-only rows use compact responses with identical work, route, and filter to retain source attribution while timed score-only rows still fetch zero documents.\n\n")
+	fmt.Fprintf(&b, "Quality is measured by separate untimed queries. Direct score-only rows use compact responses with identical work, route, and filter to retain source attribution while timed score-only rows still fetch zero documents. Declared bounded scalar-intersection or parent-collapse exhaustions are scored with nonrelevant empty ranks through TopK; any other short ranking fails closed.\n\n")
 	fmt.Fprintf(&b, "| embedding | surface | clients | route | vector route | projection | filter | collapse | QPS | p50 ms | p95 ms | p99 ms | chunk R@10 | parent R@10 | nDCG@10 | B/op | allocs/op |\n")
 	b.WriteString("|---|---|---:|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	rows := append([]applicationRow(nil), report.Rows...)
