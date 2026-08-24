@@ -159,19 +159,20 @@ A bounded diagnostic uses `-smoke`. Its authority is
 
 Host: Apple M3, Darwin arm64, 8 logical CPUs, Go 1.26.0, CGO enabled.
 
-Actual `IngestSources` fresh-DB source docs/s:
-`138.34, 234.42, 235.80, 238.99, 296.52` in execution order. Median/p95 are
-`235.80 / 285.02` docs/s. Median/p95 allocation is
-`2,164,257 / 2,565,956` B/source. Every repetition reopened with identical
-parent/child and queried text/vector/scalar index state.
+Actual final repaired `IngestSources` fresh-DB source docs/s:
+`160.18, 232.21, 283.00, 291.75, 297.29` in execution order. Median/p95 are
+`283.00 / 296.18` docs/s. Median/p95 allocation is
+`2,163,595 / 2,577,008` B/source. Every repetition reopened with identical
+parent/child and queried text/vector/scalar index state. The retained artifact
+binds harness `43e9568e0059806b9a7f735a5e383800880d1865`.
 
 The historical 37.59 docs/s / 132 GiB-per-operation regime did not reproduce.
-Because the evidence-integrity repair required exact regeneration, the
-prospective #4284/#4288 handoff replaces the prior noisy M1 gate. Before any
-#4284 candidate is measured, the frozen attainable objective is:
+The final repaired M1 artifact replaced the earlier evidence-integrity sample
+before #4284 candidate construction. Its prospective frozen #4284/#4288
+objective is:
 
-- source docs/s >= `271.17` (15% over the M1 median);
-- B/source <= `1,947,831` (10% below the M1 median);
+- source docs/s >= `325.45` (15% over the retained M1 median);
+- B/source <= `1,947,235` (10% below the retained M1 median);
 - all structural, durability, and matched-quality gates remain mandatory.
 
 Noise policy: fresh DB per ingestion repetition; median is the decision
