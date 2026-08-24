@@ -152,7 +152,7 @@
         "rationale": "The candidate adds one bounded plan/stats allocation (about 115-149 B/op) on this existing row. Exact work and quality digests match; throughput remains 67k-68k QPS and p99 <=0.181 ms. This measured implementation cost is explicitly accepted."
       }
     ],
-    "p99_gate_semantics": "Every row with a positive p99 delta in both ABBA pairs is individually classified below; no unstated relative threshold is used.",
+    "p99_gate_semantics": "The frozen pre-candidate policy says any p99 regression blocks and defines no prospective numeric/noise exception. A positive delta in both ABBA pairs is therefore a failure; no post-hoc exception is applied.",
     "repeat_stable_positive_p99_rows": 35,
     "p99_exceptions": [
       {
@@ -176,8 +176,8 @@
           "p99_change_percent": 15.79,
           "p99_change_ms": 0.128712
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -200,8 +200,8 @@
           "p99_change_percent": 0.37,
           "p99_change_ms": 0.00908
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -224,8 +224,8 @@
           "p99_change_percent": 23.47,
           "p99_change_ms": 1.135703
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -248,8 +248,8 @@
           "p99_change_percent": 3.07,
           "p99_change_ms": 0.010456
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -272,8 +272,8 @@
           "p99_change_percent": 0.93,
           "p99_change_ms": 0.02306
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -296,8 +296,8 @@
           "p99_change_percent": 1.73,
           "p99_change_ms": 0.042603
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -320,8 +320,8 @@
           "p99_change_percent": 7.16,
           "p99_change_ms": 0.295947
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -344,8 +344,8 @@
           "p99_change_percent": 3.23,
           "p99_change_ms": 0.039212
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -368,8 +368,8 @@
           "p99_change_percent": 48.35,
           "p99_change_ms": 2.561867
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -392,8 +392,8 @@
           "p99_change_percent": 9.08,
           "p99_change_ms": 0.007546
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -416,8 +416,8 @@
           "p99_change_percent": 127.77,
           "p99_change_ms": 0.155767
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -440,8 +440,8 @@
           "p99_change_percent": 117.93,
           "p99_change_ms": 0.153501
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -464,8 +464,8 @@
           "p99_change_percent": 5.85,
           "p99_change_ms": 0.02136
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -488,8 +488,8 @@
           "p99_change_percent": 1.28,
           "p99_change_ms": 0.035229
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -512,8 +512,8 @@
           "p99_change_percent": 1.59,
           "p99_change_ms": 0.062535
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -536,8 +536,8 @@
           "p99_change_percent": 27.77,
           "p99_change_ms": 0.196302
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -560,8 +560,8 @@
           "p99_change_percent": 20.7,
           "p99_change_ms": 0.140285
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -584,8 +584,8 @@
           "p99_change_percent": 14.86,
           "p99_change_ms": 0.521231
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -608,8 +608,8 @@
           "p99_change_percent": 3.7,
           "p99_change_ms": 0.084768
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -632,8 +632,8 @@
           "p99_change_percent": 15.35,
           "p99_change_ms": 0.509386
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -656,8 +656,8 @@
           "p99_change_percent": 26.21,
           "p99_change_ms": 0.172538
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -680,8 +680,8 @@
           "p99_change_percent": 3.03,
           "p99_change_ms": 0.068794
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -704,8 +704,8 @@
           "p99_change_percent": 6.5,
           "p99_change_ms": 0.043133
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -728,8 +728,8 @@
           "p99_change_percent": 35.34,
           "p99_change_ms": 0.071542
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -752,8 +752,8 @@
           "p99_change_percent": 52.93,
           "p99_change_ms": 0.037946
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -776,8 +776,8 @@
           "p99_change_percent": 2.6,
           "p99_change_ms": 0.004403
         },
-        "classification": "accepted_bounded_plan_observability_cost",
-        "rationale": "Candidate adds one bounded plan/stats allocation; exact work and quality digests match, throughput remains >=67,038 QPS, and p99 remains <=0.181 ms."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -800,8 +800,8 @@
           "p99_change_percent": 46.79,
           "p99_change_ms": 0.028428
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -824,8 +824,8 @@
           "p99_change_percent": 16.66,
           "p99_change_ms": 0.040346
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -848,8 +848,8 @@
           "p99_change_percent": 18.67,
           "p99_change_ms": 0.04049
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -872,8 +872,8 @@
           "p99_change_percent": 5.22,
           "p99_change_ms": 0.093199
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -896,8 +896,8 @@
           "p99_change_percent": 6.54,
           "p99_change_ms": 0.036815
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -920,8 +920,8 @@
           "p99_change_percent": 2.18,
           "p99_change_ms": 0.048923
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -944,8 +944,8 @@
           "p99_change_percent": 2.43,
           "p99_change_ms": 0.08098
         },
-        "classification": "permitted_non_material_host_tail_variance",
-        "rationale": "Both p99 deltas are positive, but magnitudes are not repeat-stable across the ABBA pairs; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -968,8 +968,8 @@
           "p99_change_percent": 4.98,
           "p99_change_ms": 0.184334
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       },
       {
         "cell": {
@@ -992,19 +992,21 @@
           "p99_change_percent": 2.67,
           "p99_change_ms": 0.06127
         },
-        "classification": "permitted_non_material_timer_tail_variance",
-        "rationale": "Both p99 deltas are positive but <=0.200 ms absolute; no repeat-stable >10% QPS loss and exact work/quality digests match."
+        "classification": "frozen_p99_gate_failure",
+        "rationale": "P99 increased in both ABBA pairs. The frozen pre-candidate policy defines no numeric or noise exception, so this row blocks M3 regardless of absolute magnitude."
       }
     ],
-    "no_unaccepted_performance_regression": true,
-    "accepted": true
+    "no_unaccepted_performance_regression": false,
+    "accepted": false,
+    "blocked_repeat_positive_p99_rows": 35
   },
   "m3_decision": {
     "metadata_propagation_4290": "merged",
     "parent_collapse_4291": "merged",
     "multi_field_and_4292": "merged",
     "both_repeats_pass_retained_4284_gate": true,
-    "all_named_m3_gates_pass": true,
-    "close_tracker_4288": true
+    "all_named_m3_gates_pass": false,
+    "close_tracker_4288": false,
+    "blocker": "Thirty-five matched existing rows have positive p99 deltas in both exact ABBA pairs. The frozen policy supplies no prospective p99 noise threshold or exception contract; final independent review rejected post-hoc acceptance."
   }
 }
