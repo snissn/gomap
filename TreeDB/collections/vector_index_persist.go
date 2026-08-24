@@ -204,6 +204,9 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *b
 		return status, err
 	}
 
+	if err := idx.foldLiveDeltaForPersistence(); err != nil {
+		return status, err
+	}
 	snapshot, snapshotSeq := idx.persistSnapshot()
 	table, bytesDisk, err := buildVectorIndexNativeSnapshotTable(snapshot)
 	if err != nil {
@@ -470,6 +473,9 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		return status, err
 	}
 
+	if err := idx.foldLiveDeltaForPersistence(); err != nil {
+		return status, err
+	}
 	table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
 	if err != nil {
 		return status, err

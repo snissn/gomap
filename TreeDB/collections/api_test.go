@@ -9785,7 +9785,7 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 
 	mutationLocked := false
 	var unlockMutation collectionMutationUnlock
-	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, false, 0, 0, plan)
+	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, nil, catalog, meta, rootNames, baseRootIDs, false, 0, 0, false, plan)
 	if err != nil {
 		t.Fatalf("validate disjoint root drift: %v", err)
 	}
@@ -9797,6 +9797,86 @@ func TestCollectionLockAndValidateInsertBatchPlanAllowsDisjointRootDrift(t *test
 	}
 	if got, ok := insertBatchBaseRootID(rootNames, baseRootIDs, collectionPrimaryRootName("users")); !ok || got != currentPrimaryRoot {
 		t.Fatalf("rebased primary root=%d want %d", got, currentPrimaryRoot)
+	}
+}
+
+func TestCollectionLockAndValidateInsertBatchPlanRefreshesVacuumedSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"a"}`)}); err != nil {
+		t.Fatalf("insert initial: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	oldPager := snap.Pager()
+	catalog, err := loadCollectionCatalog(snap, "users")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptions(meta)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("planner options: %v", err)
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	plan, err := (insertBatchPlanner{
+		collection:     meta.Name,
+		primaryRoot:    collectionPrimaryRootName(meta.Name),
+		templateRoot:   collectionTemplateRootName(meta.Name),
+		indexStateRoot: collectionIndexStateRootName(meta.Name),
+		indexes:        plannerIndexes(meta.Indexes),
+		options:        plannerOptions,
+	}).planInsertBatch([][]byte{[]byte("u2")}, [][]byte{[]byte(`{"city":"b"}`)})
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("plan insert: %v", err)
+	}
+	defer resetCollectionRunTables(plan.runs)
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		_ = snap.Close()
+		t.Fatalf("vacuum: %v", err)
+	}
+	mutationUnlock := col.lockMutation()
+	mutationLocked := true
+	var unlockMutation collectionMutationUnlock
+	pin, currentCatalog, _, _, err := col.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, false, 0, 0, true, plan)
+	mutationUnlock.Unlock()
+	if err != nil {
+		t.Fatalf("refresh validation: %v", err)
+	}
+	defer func() { _ = pin.Close() }()
+	if pin.Pager() == oldPager {
+		t.Fatal("validation retained the pre-vacuum snapshot")
+	}
+	for i, rootName := range rootNames {
+		if got, want := baseRootIDs[i], currentCatalog.rootID(rootName); got != want {
+			t.Fatalf("base root %q=%d want current %d", rootName, got, want)
+		}
 	}
 }
 

@@ -358,13 +358,37 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 		_ = d.Close()
 		t.Fatalf("save seed graph: %v", err)
 	}
+	if results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true}); err != nil || len(results) != 1 || string(results[0].DocumentID) != "a" {
+		_ = d.Close()
+		t.Fatalf("seal native base results=%+v err=%v", results, err)
+	}
+	baseNodes := index.Stats().Nodes
 	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
 		_ = d.Close()
 		t.Fatalf("insert live delta: %v", err)
 	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 1 || stats.Nodes != baseNodes+1 || stats.LiveDocs != 2 {
+		_ = d.Close()
+		t.Fatalf("live delta stats=%+v", stats)
+	}
+	var buffer VectorIndexSearchBuffer
+	if response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0, 1}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" || response.Stats.SearchRouteNativeRuntime != 1 {
+		_ = d.Close()
+		t.Fatalf("search live delta response=%+v err=%v", response, err)
+	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("direct search live delta: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "a")
 	if err := col.Flush(); err != nil {
 		_ = d.Close()
 		t.Fatalf("flush live delta: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 0 || stats.LiveDeltaCutovers != 1 || stats.LiveDocs != 2 {
+		_ = d.Close()
+		t.Fatalf("folded live delta stats=%+v", stats)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("close live delta db: %v", err)
@@ -386,11 +410,281 @@ func TestCollectionVectorIndexNativeRootLiveDeltaReopensWithoutRebuild(t *testin
 	if stats := loaded.Stats(); stats.LiveANNFullRebuilds != 0 {
 		t.Fatalf("live delta reopened through rebuild: %+v", stats)
 	}
-	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	results, _, err = loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search live delta graph: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeSearchDoesNotFlushBufferedDocuments(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	pendingBefore := col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if pendingBefore != 1 {
+		t.Fatalf("pending documents before search=%d want 1", pendingBefore)
+	}
+
+	var buffer VectorIndexSearchBuffer
+	response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      1,
+		EfSearch:  8,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}, &buffer)
+	if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != "b" {
+		t.Fatalf("search buffered native vector response=%+v err=%v", response, err)
+	}
+	col.writeDomain.mu.RLock()
+	pendingAfter := col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if pendingAfter != pendingBefore {
+		t.Fatalf("pending documents after search=%d want %d", pendingAfter, pendingBefore)
+	}
+}
+
+func TestCollectionVectorIndexNativeSearchRefreshesStaleCatalogWithoutFlushing(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{BufferedIndexedWrites: true, DisableBufferedIndexedAsyncFlush: true},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"kind":"x","embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := writer.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	reader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	search := func(want string) {
+		t.Helper()
+		response, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name,
+			Query:     []float32{1, 0},
+			TopK:      1,
+			EfSearch:  8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != want {
+			t.Fatalf("search response=%+v err=%v want %s", response, err, want)
+		}
+	}
+	search("a")
+	if _, err := writer.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"kind":"x","embedding":[0.8,0.2]}`)}); err != nil {
+		t.Fatalf("insert committed document: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush committed document: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("c")}, [][]byte{[]byte(`{"kind":"x","embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert buffered document: %v", err)
+	}
+	pendingBefore := mgr.StatsSnapshot().PendingDocuments
+	if pendingBefore == 0 {
+		t.Fatal("expected pending document before stale-handle search")
+	}
+	search("c")
+	if pendingAfter := mgr.StatsSnapshot().PendingDocuments; pendingAfter != pendingBefore {
+		t.Fatalf("pending documents after stale-handle search=%d want %d", pendingAfter, pendingBefore)
+	}
+}
+
+func TestCollectionVectorIndexNativeSearchDoesNotWaitForCatalogDuringMutation(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed document: %v", err)
+	}
+	if _, err := writer.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	reader, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	if _, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil {
+		t.Fatalf("prime reader: %v", err)
+	}
+
+	unlockCoverage := writer.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	if _, err := writer.insertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}, false, nil); err != nil {
+		t.Fatalf("commit document before native reconciliation: %v", err)
+	}
+	writer.writeDomain.mu.Lock()
+	searchDone := make(chan error, 1)
+	go func() {
+		var searchBuffer VectorIndexSearchBuffer
+		response, err := reader.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: VectorIndexSearchStatsModeProduction}, &searchBuffer)
+		if err == nil && (len(response.Results) != 1 || string(response.Results[0].ID) != "a") {
+			err = fmt.Errorf("search results=%+v want prior published document a", response.Results)
+		}
+		searchDone <- err
+	}()
+	select {
+	case err := <-searchDone:
+		writer.writeDomain.mu.Unlock()
+		if err != nil {
+			t.Fatalf("search during mutation: %v", err)
+		}
+	case <-time.After(time.Second):
+		writer.writeDomain.mu.Unlock()
+		t.Fatal("search waited for the write-domain catalog during native mutation")
+	}
+}
+
+func TestCollectionVectorIndexNativeSearchTracksBufferedUpdateAndDelete(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{BufferedIndexedWrites: true, DisableBufferedIndexedAsyncFlush: true},
+		Indexes:       []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"kind":"x","embedding":[0,1]}`), []byte(`{"kind":"x","embedding":[0.8,0.2]}`)},
+	); err != nil {
+		t.Fatalf("insert seed documents: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("rebuild seed index: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	search := func(want string) {
+		t.Helper()
+		response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+			IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
+			StatsMode: VectorIndexSearchStatsModeProduction,
+		}, &buffer)
+		if err != nil || len(response.Results) != 1 || string(response.Results[0].ID) != want {
+			t.Fatalf("search response=%+v err=%v want %s", response, err, want)
+		}
+	}
+	search("b")
+	if matched, err := col.Replace([]byte("a"), []byte(`{"kind":"x","embedding":[1,0]}`)); err != nil || !matched {
+		t.Fatalf("replace a matched=%v err=%v", matched, err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("replace did not remain buffered")
+	}
+	search("a")
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("search flushed buffered replacement")
+	}
+	if deleted, err := col.DeleteDocument([]byte("a")); err != nil || !deleted {
+		t.Fatalf("delete a deleted=%v err=%v", deleted, err)
+	}
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("delete did not remain buffered")
+	}
+	search("b")
+	if got := mgr.StatsSnapshot().PendingDocuments; got == 0 {
+		t.Fatal("search flushed buffered delete")
+	}
+}
+
+func TestCollectionVectorIndexRebuildClearsLiveDelta(t *testing.T) {
+	d := openCollectionCommandWALDB(t, t.TempDir())
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index := col.registeredVectorIndex(def.Name)
+	if _, err := index.SaveNativeSnapshot(); err != nil {
+		t.Fatalf("save seed graph: %v", err)
+	}
+	var buffer VectorIndexSearchBuffer
+	if _, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, StatsMode: VectorIndexSearchStatsModeProduction}, &buffer); err != nil {
+		t.Fatalf("seal native base: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("b")}, [][]byte{[]byte(`{"embedding":[0,1]}`)}); err != nil {
+		t.Fatalf("insert live delta: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 1 {
+		t.Fatalf("live delta stats=%+v", stats)
+	}
+	if err := index.Rebuild(); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDeltaDocs != 0 || stats.LiveDocs != 2 || stats.Nodes != 2 {
+		t.Fatalf("rebuilt stats=%+v", stats)
+	}
+	results, _, err := index.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search rebuilt index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "a")
 }
 
 func TestCollectionVectorIndexNativeRootUnchangedVectorPersistsDocumentCoverage(t *testing.T) {

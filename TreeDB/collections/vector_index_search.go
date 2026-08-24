@@ -836,10 +836,16 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
-	results             []VectorIndexSearchResult
-	idBytes             []byte
-	searchScratch       columnVectorGraphNativeSearchScratch
-	nativeSearchScratch vectorIndexSearchScratch
+	results                 []VectorIndexSearchResult
+	idBytes                 []byte
+	baseResults             []VectorIndexSearchResult
+	baseIDBytes             []byte
+	deltaResults            []VectorIndexSearchResult
+	deltaIDBytes            []byte
+	searchScratch           columnVectorGraphNativeSearchScratch
+	nativeSearchScratch     vectorIndexSearchScratch
+	nativeSearchWorkEnabled bool
+	nativeSearchWork        vectorIndexNativeSearchWork
 }
 
 // Reset clears the buffer's current response view while retaining reusable
@@ -850,12 +856,17 @@ func (b *VectorIndexSearchBuffer) Reset() {
 		return
 	}
 	clear(b.results)
+	b.nativeSearchWork = vectorIndexNativeSearchWork{}
 	b.resetView()
 }
 
 func (b *VectorIndexSearchBuffer) resetView() {
 	b.results = b.results[:0]
 	b.idBytes = b.idBytes[:0]
+	b.baseResults = b.baseResults[:0]
+	b.baseIDBytes = b.baseIDBytes[:0]
+	b.deltaResults = b.deltaResults[:0]
+	b.deltaIDBytes = b.deltaIDBytes[:0]
 }
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.
@@ -1243,11 +1254,15 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, errCollectionDBNil
 	}
+	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	if found && catalogCurrent && vectorIndexDefinitionUsesNativeRuntime(def) {
+		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
-	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
+	def, found, catalogCurrent = c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
 	if !catalogCurrent {
 		snap := c.db.AcquireSnapshot()
 		if snap == nil {
@@ -1512,15 +1527,43 @@ func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (Ve
 
 func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
 	c.catalogMu.RLock()
-	defer c.catalogMu.RUnlock()
-	if c.catalog == nil || state.SystemRootPageID == 0 || c.catalogSystemRoot != state.SystemRootPageID || (c.catalogCommitSeq != state.CommitSeq && !c.canReuseCachedCatalogAcrossDataOnlyCommits(c.catalog)) {
+	catalog := c.catalog
+	current := catalog != nil &&
+		state.SystemRootPageID != 0 &&
+		c.catalogSystemRoot == state.SystemRootPageID &&
+		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
+	c.catalogMu.RUnlock()
+	if !current && catalog != nil && c.nativeVectorIndexMutationActive() && c.writeDomain != nil {
+		if c.writeDomain.mu.TryRLock() {
+			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil {
+				catalog, current = currentCatalog, true
+			}
+			c.writeDomain.mu.RUnlock()
+		} else if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+			return def, catalog.rootID(rootName), true, true
+		}
+	}
+	if !current {
+		catalog = cachedWriteDomainCatalogForState(c.writeDomain, state.SystemRootPageID, state.CommitSeq)
+		if catalog == nil {
+			return VectorIndexDefinition{}, 0, false, false
+		}
+		c.catalogMu.Lock()
+		if c.catalogCommitSeq <= state.CommitSeq {
+			c.catalog = catalog
+			c.catalogSystemRoot = state.SystemRootPageID
+			c.catalogCommitSeq = state.CommitSeq
+		}
+		c.catalogMu.Unlock()
+	}
+	if catalog == nil {
 		return VectorIndexDefinition{}, 0, false, false
 	}
-	def, ok := findVectorIndex(c.catalog.meta.VectorIndexes, name)
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexDefinition{}, 0, false, true
 	}
-	return def, c.catalog.rootID(rootName), true, true
+	return def, catalog.rootID(rootName), true, true
 }
 
 func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {

@@ -1234,6 +1234,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.trackIndex(newGen)
 
 		var oldState *DBState
+		var valueLogRefTrackerErr error
 		oldRootPublication := db.rootPublication
 		previousDurableResources := append([]*rootpublication.StableResourceSet(nil), db.durableRoot.slotResources[:]...)
 		db.mu.Lock()
@@ -1263,6 +1264,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 		}
 		db.state.Store(newState)
+		// Vacuum rewrites physical index pages without changing logical value-log
+		// references, so advance the exact tracker with an empty delta.
+		if err := db.valueLogRefTracker.applyDelta(newState.CommitSeq, &valueLogRefDelta{}); err != nil {
+			db.valueLogRefTracker.invalidate()
+			valueLogRefTrackerErr = err
+		}
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
 		db.rootPublication = replacementRuntime
 		replacementRuntime = nil
@@ -1270,6 +1277,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.clearLeafGenerationReachabilityCaches()
 
 		unlockCutover(true)
+		if valueLogRefTrackerErr != nil {
+			db.reportError(valueLogRefTrackerErr)
+		}
 		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
 		for _, resources := range previousDurableResources {
 			resources.Release()

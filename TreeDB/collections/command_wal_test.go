@@ -2695,6 +2695,56 @@ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing
 	}
 }
 
+func TestCollectionCommandWALNoIndexInsertRefreshesVacuumedSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("doc-1")}, [][]byte{[]byte(`{"name":"before"}`)}); err != nil {
+		t.Fatalf("InsertBatch initial: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush initial: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	plannerOptions, err := collectionPlannerOptions(catalog.meta)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("planner options: %v", err)
+	}
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		_ = snap.Close()
+		t.Fatalf("VacuumIndexOnline: %v", err)
+	}
+	if _, err := col.insertBatchNoIndex(
+		catalog, snap, snapshotCommitSeq(snap), snapshotSystemRoot(snap), plannerOptions,
+		[][]byte{[]byte("doc-2")}, [][]byte{[]byte(`{"name":"after"}`)}, nil,
+		insertBatchExecutionOptions{returnResultIDs: true},
+	); err != nil {
+		t.Fatalf("insert with pre-vacuum snapshot: %v", err)
+	}
+	assertCollectionDocument(t, col, "doc-1", `{"name":"before"}`)
+	assertCollectionDocument(t, col, "doc-2", `{"name":"after"}`)
+}
+
 func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
