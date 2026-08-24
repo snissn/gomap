@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -127,15 +128,21 @@ type cellEvidence struct {
 	Legs    []legRow `json:"legs"`
 }
 
+type coordinatorEvidence struct {
+	Revision     string `json:"revision"`
+	BinarySHA256 string `json:"binary_sha256"`
+}
+
 type artifact struct {
-	SchemaVersion int              `json:"schema_version"`
-	StartedAt     time.Time        `json:"started_at"`
-	FinishedAt    time.Time        `json:"finished_at"`
-	Root          string           `json:"root"`
-	SourceRepo    string           `json:"source_repo"`
-	CellCount     int              `json:"cell_count"`
-	Workers       []workerEvidence `json:"workers"`
-	Cells         []cellEvidence   `json:"cells"`
+	Coordinator   coordinatorEvidence `json:"coordinator"`
+	SchemaVersion int                 `json:"schema_version"`
+	StartedAt     time.Time           `json:"started_at"`
+	FinishedAt    time.Time           `json:"finished_at"`
+	Root          string              `json:"root"`
+	SourceRepo    string              `json:"source_repo"`
+	CellCount     int                 `json:"cell_count"`
+	Workers       []workerEvidence    `json:"workers"`
+	Cells         []cellEvidence      `json:"cells"`
 }
 
 type worker struct {
@@ -239,6 +246,33 @@ func validateProductAncestor(repo, productRevision, buildRevision string) error 
 	return fmt.Errorf("git ancestry check failed for %s and %s: %w: %s", productRevision, buildRevision, err, strings.TrimSpace(string(output)))
 }
 
+func resolveCoordinatorIdentity() (coordinatorEvidence, error) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return coordinatorEvidence{}, errors.New("coordinator build info unavailable")
+	}
+	settings := make(map[string]string, len(info.Settings))
+	for _, setting := range info.Settings {
+		settings[setting.Key] = setting.Value
+	}
+	revision := strings.TrimSpace(settings["vcs.revision"])
+	if !isRevision(revision) {
+		return coordinatorEvidence{}, errors.New("coordinator build lacks a full VCS revision")
+	}
+	if settings["vcs.modified"] != "false" {
+		return coordinatorEvidence{}, errors.New("coordinator build is dirty")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return coordinatorEvidence{}, err
+	}
+	binaryHash, err := hashFile(executable)
+	if err != nil {
+		return coordinatorEvidence{}, err
+	}
+	return coordinatorEvidence{Revision: revision, BinarySHA256: binaryHash}, nil
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -310,6 +344,10 @@ func parseConfig(args []string) (config, error) {
 }
 
 func runCoordinator(cfg config) error {
+	coordinator, err := resolveCoordinatorIdentity()
+	if err != nil {
+		return fmt.Errorf("coordinator identity: %w", err)
+	}
 	startedAt := time.Now().UTC()
 	for _, leg := range cfg.Legs {
 		if err := validateProductAncestor(cfg.SourceRepo, leg.ProductBaseSHA, leg.HarnessRevision); err != nil {
@@ -437,6 +475,7 @@ func runCoordinator(cfg config) error {
 	}
 	finishedAt := time.Now().UTC()
 	return writeArtifact(cfg.Output, artifact{
+		Coordinator:   coordinator,
 		SchemaVersion: 1,
 		StartedAt:     startedAt,
 		FinishedAt:    finishedAt,
