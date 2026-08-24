@@ -29,7 +29,7 @@ const (
 	defaultVectorIndexRebuildPPM              = 250_000
 	defaultVectorIndexExactFilterMax          = 1024
 	defaultVectorRecallBatchCells             = 1 << 20
-	defaultVectorIndexLiveDeltaRows           = 32 << 10
+	defaultVectorIndexLiveDeltaRows           = 128 << 10
 	maxVectorIndexEagerNeighborCap            = 64
 	minVectorIndexParallelReciprocalNeighbors = 4
 )
