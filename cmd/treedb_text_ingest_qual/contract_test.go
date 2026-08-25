@@ -71,6 +71,14 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 				}
 			}
 		}, "batch accounting"},
+		{"source generation accounting", func(_ *manifest, r *report) {
+			for i := range r.Rows {
+				if r.Rows[i].Mode == "source_chunk" {
+					r.Rows[i].Generations++
+					break
+				}
+			}
+		}, "batch accounting"},
 		{"maintenance count semantics", func(_ *manifest, r *report) {
 			for i := range r.Rows {
 				if r.Rows[i].Mode == "maintenance" {
@@ -202,7 +210,7 @@ func validRow(mode string, scale, rep int) row {
 	if mode == "maintenance" {
 		live = scale / 2
 	}
-	return row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: func() int {
+	r := row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: func() int {
 		if mode == "source_chunk" {
 			return source
 		}
@@ -223,6 +231,10 @@ func validRow(mode string, scale, rep int) row {
 		}
 		return 0
 	}(), SourceDocsPerSec: float64(source), ChunksPerSec: float64(chunks), IndexedRowsPerSec: float64(live), WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, CumulativeAllocs: metric{State: "observed", Value: 1}, PeakRSSBytes: metric{State: "observed", Value: 1}, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: scale*100 + rep*10 + modeOffset, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
+	if mode == "source_chunk" {
+		r.Generations = uint64(r.ChunkBatchCount + 1)
+	}
+	return r
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	rate := validRow(mode, scale, 1).IndexedRowsPerSec

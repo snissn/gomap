@@ -210,7 +210,7 @@ func validateRow(r row) error {
 	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize != min(sourceChunkBatchLimit, r.SourceDocuments) || r.ChunkBatchCount != (r.SourceDocuments+sourceChunkBatchLimit-1)/sourceChunkBatchLimit) {
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize != min(sourceChunkBatchLimit, r.SourceDocuments) || r.ChunkBatchCount != (r.SourceDocuments+sourceChunkBatchLimit-1)/sourceChunkBatchLimit || r.Generations != uint64(r.ChunkBatchCount+1)) {
 		return fmt.Errorf("source_chunk requires returned parent, generated child, live-row, and batch accounting")
 	}
 	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
