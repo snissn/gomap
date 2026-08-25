@@ -502,8 +502,14 @@ func parseFlags(args []string) (config, error) {
 		if profile.value == "" {
 			continue
 		}
-		if profile.value == filepath.Join(outDir, "scale_report.json") || profile.value == filepath.Join(outDir, "scale_report.md") {
-			return config{}, fmt.Errorf("%s must not resolve to a scale report artifact", profile.name)
+		for _, reportPath := range []string{filepath.Join(outDir, "scale_report.json"), filepath.Join(outDir, "scale_report.md")} {
+			overlapsReport, err := pathsOverlap(profile.value, reportPath)
+			if err != nil {
+				return config{}, fmt.Errorf("compare %s and scale report artifact: %w", profile.name, err)
+			}
+			if overlapsReport {
+				return config{}, fmt.Errorf("%s must not overlap a scale report artifact", profile.name)
+			}
 		}
 		outDirInsideProfile, err := pathIsSameOrDescendant(outDir, profile.value)
 		if err != nil {
@@ -1336,7 +1342,7 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	guard := hybridGuardrail(name, warm.Stats)
 	stopProfile, err := startQueryProfiles(cfg)
 	if err != nil {
-		return queryReport{}, guardrailResult{}, err
+		return failedHybridProfileSetup(cfg, name, shape, warm, err)
 	}
 	durations, last, guard, allocations, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
 	profileErr := stopProfile()
@@ -1514,6 +1520,12 @@ func failedHybridWarmup(cfg config, name, shape string, response collections.Hyb
 		return row, guard, nil
 	}
 	return row, guard, warmErr
+}
+
+func failedHybridProfileSetup(cfg config, name, shape string, response collections.HybridSearchResponse, profileErr error) (queryReport, guardrailResult, error) {
+	row := failedHybridQueryRow(cfg, name, shape, response, nil, profileErr)
+	guard := hybridFailureGuard(name, response.Stats, profileErr)
+	return row, guard, profileErr
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {

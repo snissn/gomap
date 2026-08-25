@@ -482,10 +482,12 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 		wantCPU string
 		wantMem string
 	}{
-		{name: "JSON report collision", args: []string{"-cpu-profile", filepath.Join(outDir, "scale_report.json")}, wantErr: "must not resolve to a scale report artifact"},
-		{name: "Markdown report collision", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md")}, wantErr: "must not resolve to a scale report artifact"},
-		{name: "output directory", args: []string{"-cpu-profile", outDir}, wantErr: "must not resolve to -out-dir or its ancestor"},
-		{name: "output directory ancestor", args: []string{"-alloc-profile", filepath.Dir(outDir)}, wantErr: "must not resolve to -out-dir or its ancestor"},
+		{name: "JSON report collision", args: []string{"-cpu-profile", filepath.Join(outDir, "scale_report.json")}, wantErr: "must not overlap a scale report artifact"},
+		{name: "Markdown report collision", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md")}, wantErr: "must not overlap a scale report artifact"},
+		{name: "JSON report descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "scale_report.json", "cpu.pprof")}, wantErr: "must not overlap a scale report artifact"},
+		{name: "Markdown report descendant", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md", "allocs.pprof")}, wantErr: "must not overlap a scale report artifact"},
+		{name: "output directory", args: []string{"-cpu-profile", outDir}, wantErr: "must not overlap a scale report artifact"},
+		{name: "output directory ancestor", args: []string{"-alloc-profile", filepath.Dir(outDir)}, wantErr: "must not overlap a scale report artifact"},
 		{name: "default DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "primary_db", "profiles", "cpu.pprof")}, wantErr: "must not overlap the effective -db-dir"},
 		{name: "custom DB descendant", args: []string{"-db-dir", customDBDir, "-alloc-profile", filepath.Join(customDBDir, "profiles", "allocs.pprof")}, wantErr: "must not overlap the effective -db-dir"},
 		{name: "custom DB ancestor", args: []string{"-db-dir", filepath.Join(root, "custom", "db"), "-alloc-profile", filepath.Join(root, "custom")}, wantErr: "must not overlap the effective -db-dir"},
@@ -639,6 +641,23 @@ func TestProfiledWarmupFailurePreservesNamedRow4327(t *testing.T) {
 		t.Fatalf("row=%+v guard=%+v err=%v", row, guard, err)
 	}
 	if row.GuardrailOK || !strings.Contains(row.GuardrailFailure, warmErr.Error()) {
+		t.Fatalf("failed row guardrail=%t failure=%q", row.GuardrailOK, row.GuardrailFailure)
+	}
+}
+
+func TestProfileSetupFailurePreservesNamedRow4327(t *testing.T) {
+	profileErr := errors.New("create CPU profile: permission denied")
+	row, guard, err := failedHybridProfileSetup(
+		config{},
+		queryRowHybridTextScalar,
+		"hybrid scalar",
+		collections.HybridSearchResponse{},
+		profileErr,
+	)
+	if !errors.Is(err, profileErr) || row.Name != queryRowHybridTextScalar || guard.Name != queryRowHybridTextScalar {
+		t.Fatalf("row=%+v guard=%+v err=%v", row, guard, err)
+	}
+	if row.GuardrailOK || !strings.Contains(row.GuardrailFailure, profileErr.Error()) {
 		t.Fatalf("failed row guardrail=%t failure=%q", row.GuardrailOK, row.GuardrailFailure)
 	}
 }
