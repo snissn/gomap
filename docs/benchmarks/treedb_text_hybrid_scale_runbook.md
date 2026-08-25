@@ -114,30 +114,8 @@ input, not as a passing latency row.
 
 ### Optional allocation benchmark rows
 
-The scale command records wall-clock latency and counters. For one selected
-hybrid row allocation profile, start the process with `GODEBUG=memprofilerate=1`,
-select exactly one hybrid row with `-query-rows`, and pass `-alloc-profile`.
-For example, this complete small capture selects the real
-`hybrid_text_scalar_no_docs` row:
-
-```sh
-OUT=/tmp/gomap_text_hybrid_alloc_$(date +%Y%m%d_%H%M%S)
-GODEBUG=memprofilerate=1 GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
-  -out-dir "$OUT" -rows 96 -batch-size 48 -dims 4 -m 4 \
-  -ef-construction 32 -ef-search 32 -top-k 5 -candidate-limit 16 -queries 3 \
-  -include-vector=false -phases=retrieval -run-reopen=false \
-  -query-rows=hybrid_text_scalar_no_docs -alloc-profile "$OUT/allocs.pprof"
-go tool pprof -focus='main.runProfiledHybridSamples' "$OUT/allocs.pprof"
-```
-
-It writes one cumulative post-query allocation profile. Attribute it only with
-the timed stack boundary shown above: `runProfiledHybridSamples` is a
-non-inlined helper containing only timed hybrid samples. Fixture construction
-and warm-up occur before it; profile serialization and report writing occur
-after it. Those activities have no helper frame and are excluded by
-construction when focused. The profile is cumulative rather than a delta; old
-allocation profiles must be regenerated. Use companion Go benchmarks when
-making allocation claims:
+The scale command records wall-clock latency and counters. Use companion Go
+benchmarks when making allocation claims:
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_scale_bench_$(date +%Y%m%d_%H%M%S) \
