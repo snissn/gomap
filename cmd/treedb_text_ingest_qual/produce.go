@@ -111,7 +111,26 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		_ = closeDB()
 		return row{}, err
 	}
-	ids, docs := qualificationDocuments(scale)
+	var ids, docs [][]byte
+	var sources []collections.SourceDocument
+	var logicalPayloadBytes int64
+	if mode == "source_chunk" {
+		ids = qualificationIDs(scale)
+		sources = qualificationSourceDocuments(ids)
+		for _, source := range sources {
+			encoded, encodeErr := json.Marshal(source.Fields)
+			if encodeErr != nil {
+				_ = closeDB()
+				return row{}, encodeErr
+			}
+			logicalPayloadBytes += int64(len(encoded))
+		}
+	} else {
+		ids, docs = qualificationDocuments(scale)
+		for _, doc := range docs {
+			logicalPayloadBytes += int64(len(doc))
+		}
+	}
 	def := collections.TextIndexDefinition{Name: "lexical", Version: collections.TextIndexVersionV2, Fields: []collections.TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}}
 
 	var before runtime.MemStats
@@ -134,7 +153,6 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		// one normal durable parent/child/index publication.
 		if _, _, err = col.CreateTextIndex(def); err == nil {
 			cfg := chunking.Config{Strategy: chunking.StrategyFixedWindow, SizeUnit: chunking.SizeUnitRunes, Size: 32, Overlap: 0}
-			sources := qualificationSourceDocuments(ids)
 			for start := 0; start < len(sources); start += sourceChunkBatchLimit {
 				end := start + sourceChunkBatchLimit
 				if end > len(sources) {
@@ -246,15 +264,21 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 	if endCPUReason == "" {
 		rssMetric = metric{State: "observed", Value: maxRSS}
 	}
-	return row{Mode: mode, Scale: scale, Repetition: repetition, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: os.Getpid(), SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, TombstoneDebt: stats.V2DeletedDocs, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
+	return row{Mode: mode, Scale: scale, Repetition: repetition, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: os.Getpid(), SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, TombstoneDebt: stats.V2DeletedDocs, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayloadBytes(physical, logicalPayloadBytes), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
 }
 
-func withLogicalPayload(s storage, docs [][]byte) storage {
-	for _, doc := range docs {
-		s.LogicalPrimaryPayloadBytes += int64(len(doc))
-	}
+func withLogicalPayloadBytes(s storage, bytes int64) storage {
+	s.LogicalPrimaryPayloadBytes = bytes
 	s.LogicalTextV2Overlap = "logical_text_v2_components_overlap_physical_storage_non_additive"
 	return s
+}
+
+func qualificationIDs(n int) [][]byte {
+	ids := make([][]byte, n)
+	for i := range n {
+		ids[i] = []byte(fmt.Sprintf("doc-%08d", i))
+	}
+	return ids
 }
 func qualificationDocuments(n int) ([][]byte, [][]byte) {
 	ids, docs := make([][]byte, n), make([][]byte, n)
