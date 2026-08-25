@@ -442,6 +442,7 @@ type StableResourceToken struct {
 	stability          ResourceStability
 	namespace          *StableNamespaceToken
 	pinned             *os.File
+	pinnedRefs         *atomic.Int64
 	flush              resourceOperation
 	sync               resourceOperation
 	syncedFrontier     DurableFrontier
@@ -496,6 +497,8 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
+	pinnedRefs := &atomic.Int64{}
+	pinnedRefs.Store(1)
 	closeOnError := true
 	defer func() {
 		if closeOnError {
@@ -551,7 +554,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
-		stability: stability, namespace: spec.Namespace, pinned: pinned,
+		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
 	}
 	if spec.ContentSynced {
@@ -570,6 +573,52 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	}
 	closeOnError = false
 	return token, nil
+}
+
+// cloneSharedPinned retains already-certified immutable state without
+// re-opening, re-statting, or revalidating the exact pinned resource.
+func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, onRelease func()) (*StableResourceToken, error) {
+	if err := token.retainPinned(); err != nil {
+		return nil, err
+	}
+	retainedPinned := true
+	defer func() {
+		if retainedPinned {
+			token.releasePinnedReference()
+		}
+	}()
+	var identityPin *IdentityPin
+	if token.identityPin != nil {
+		var err error
+		identityPin, err = token.identityPin.registry.Pin(token.identity)
+		if err != nil {
+			return nil, fmt.Errorf("pin stable resource identity: %w", err)
+		}
+		defer func() {
+			if retainedPinned {
+				identityPin.Release()
+			}
+		}()
+	}
+	if token.namespace != nil {
+		if err := token.namespace.retain(); err != nil {
+			return nil, err
+		}
+	}
+	cloned := &StableResourceToken{
+		kind: token.kind, logicalLane: logicalLane, resourceID: resourceID,
+		generation: token.generation, diagnosticPath: diagnosticPath,
+		identity: token.identity, frontier: cloneDurableFrontier(frontier), digest: token.digest,
+		reachability: reachability, logicalObligations: stableLogicalObligationList(logicalObligations),
+		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
+		flush: token.flush, sync: token.sync, syncedFrontier: cloneDurableFrontier(frontier), hasSyncedFrontier: true,
+		onRelease: onRelease, identityPin: identityPin,
+	}
+	cloned.owner.Store(uint32(ResourceOwnerToken))
+	cloned.metrics.registeredNanos = time.Now().UnixNano()
+	cloned.metrics.physicalFileSyncs.Store(1)
+	retainedPinned = false
+	return cloned, nil
 }
 
 func validateDiagnosticPath(path string) error {
@@ -709,7 +758,7 @@ func (token *StableResourceToken) releasePinned() {
 	if token.released.Swap(true) {
 		return
 	}
-	_ = token.pinned.Close()
+	token.releasePinnedReference()
 	if token.namespace != nil {
 		token.namespace.release()
 	}
@@ -717,6 +766,24 @@ func (token *StableResourceToken) releasePinned() {
 	if token.onRelease != nil {
 		token.onRelease()
 	}
+}
+
+func (token *StableResourceToken) releasePinnedReference() {
+	if token.pinnedRefs == nil || token.pinnedRefs.Add(-1) == 0 {
+		_ = token.pinned.Close()
+	}
+}
+
+func (token *StableResourceToken) retainPinned() error {
+	if token == nil || token.pinned == nil || token.pinnedRefs == nil {
+		return ErrResourceOwnership
+	}
+	for refs := token.pinnedRefs.Load(); refs > 0; refs = token.pinnedRefs.Load() {
+		if token.pinnedRefs.CompareAndSwap(refs, refs+1) {
+			return nil
+		}
+	}
+	return ErrResourceOwnership
 }
 
 type stableLogicalResourceKey struct {

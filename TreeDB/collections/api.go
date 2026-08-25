@@ -561,6 +561,7 @@ type ColumnPublishCandidateResourceWork struct {
 	CopiedEntries                   uint64
 	CopiedObligations               uint64
 	PhysicalHandleCopies            uint64
+	PhysicalHandleShares            uint64
 	LogicalObligationNormalizations uint64
 	RetainedIndexNodeVisits         uint64
 	RetainedIndexNodeCopies         uint64
@@ -596,6 +597,7 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.CopiedEntries += other.CopiedEntries
 	work.CopiedObligations += other.CopiedObligations
 	work.PhysicalHandleCopies += other.PhysicalHandleCopies
+	work.PhysicalHandleShares += other.PhysicalHandleShares
 	work.LogicalObligationNormalizations += other.LogicalObligationNormalizations
 	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
 	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
