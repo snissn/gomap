@@ -1,0 +1,32 @@
+File: treedb_text_hybrid_scale
+Type: alloc_space
+Time: 2026-08-24 17:23:43 HST
+Showing nodes accounting for 6774841.80kB, 99.15% of 6832892.70kB total
+Dropped 170 nodes (cum <= 34164.46kB)
+Showing top 25 nodes out of 58
+      flat  flat%   sum%        cum   cum%
+1408667.75kB 20.62% 20.62% 1408667.75kB 20.62%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchNormBlock
+1217661.75kB 17.82% 38.44% 1217661.75kB 17.82%  github.com/snissn/gomap/TreeDB/collections.decodeTextV2SearchDocMapBlock
+992663.81kB 14.53% 52.96% 992700.19kB 14.53%  github.com/snissn/gomap/TreeDB/collections.FuseHybridSearchCandidates
+691986.49kB 10.13% 63.09% 691986.49kB 10.13%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+  595008kB  8.71% 71.80%   595008kB  8.71%  github.com/snissn/gomap/TreeDB/collections.appendHybridSearchCandidates (inline)
+  513024kB  7.51% 79.31% 3943196.93kB 57.71%  github.com/snissn/gomap/TreeDB/collections.executeTextV2ORBlockMaxSearchAtSnapshot
+  416400kB  6.09% 85.40%   416400kB  6.09%  github.com/snissn/gomap/TreeDB/collections.resizeColumnVectorGraphNativeCandidateScratch (inline)
+  204800kB  3.00% 88.40%   204800kB  3.00%  github.com/snissn/gomap/TreeDB/collections.hybridVectorCandidatesFromSearchResponse
+  172032kB  2.52% 90.92%   172032kB  2.52%  github.com/snissn/gomap/TreeDB/collections.hybridTextCandidatesFromSearchResponse
+  166400kB  2.44% 93.35%   166400kB  2.44%  github.com/snissn/gomap/TreeDB/collections.resizeColumnVectorGraphNativeResultScratch (inline)
+  102400kB  1.50% 94.85%   102400kB  1.50%  github.com/snissn/gomap/TreeDB/collections.resizeVectorIndexSearchResultBuffer (inline)
+   89600kB  1.31% 96.16%    89600kB  1.31%  github.com/snissn/gomap/TreeDB/collections.resizeColumnVectorGraphNativeRowRefScratch (inline)
+62043.32kB  0.91% 97.07% 1664296.29kB 24.36%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).normBlockAtOptional
+   49000kB  0.72% 97.79%    49000kB  0.72%  github.com/snissn/gomap/TreeDB/collections.resizeColumnVectorGraphNativeUint16Scratch (inline)
+43401.35kB  0.64% 98.42% 1765427.63kB 25.84%  github.com/snissn/gomap/TreeDB/collections.(*textV2SearchBlockCache).docMapBlockAtOptional
+   38400kB  0.56% 98.98%    38400kB  0.56%  github.com/snissn/gomap/TreeDB/collections.resizeColumnVectorGraphNativeIDBuffersScratch
+11221.88kB  0.16% 99.15% 4721611.30kB 69.10%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates
+  131.25kB 0.0019% 99.15% 1115139.06kB 16.32%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridVectorCandidatesWithAllowSetBudget
+    0.20kB 3e-06% 99.15% 5715467.99kB 83.65%  main.runHybridQueryRow
+         0     0% 99.15% 5714315.01kB 83.63%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchHybrid
+         0     0% 99.15% 910207.81kB 13.32%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchVectorIndexWithBuffer
+         0     0% 99.15% 1115139.06kB 16.32%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates.func1
+         0     0% 99.15% 4721611.30kB 69.10%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesFixedBudget
+         0     0% 99.15% 4721611.30kB 69.10%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesWithBudgetPolicy
+         0     0% 99.15% 5714315.01kB 83.63%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybrid (inline)
