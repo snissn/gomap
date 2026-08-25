@@ -734,6 +734,15 @@ type stablePhysicalResourceKey struct {
 	generation uint64
 }
 
+// stablePhysicalIdentityKey deliberately excludes kind and generation because
+// stableResourcesCoalesce makes those distinctions after matching the pinned
+// filesystem identity.
+type stablePhysicalIdentityKey struct {
+	platform string
+	volumeID uint64
+	objectID [16]byte
+}
+
 func (token *StableResourceToken) logicalKey() stableLogicalResourceKey {
 	return stableLogicalResourceKey{
 		kind: token.kind, lane: token.logicalLane, resourceID: token.resourceID, generation: token.generation,
@@ -747,6 +756,20 @@ func (token *StableResourceToken) identityKey() stablePhysicalResourceKey {
 func (token *StableResourceToken) samePhysicalIdentity(other *StableResourceToken) bool {
 	return token != nil && other != nil && token.identity.Platform == other.identity.Platform &&
 		token.identity.VolumeID == other.identity.VolumeID && token.identity.ObjectID == other.identity.ObjectID
+}
+
+func (token *StableResourceToken) physicalIdentityKey() stablePhysicalIdentityKey {
+	return stablePhysicalIdentityKey{
+		platform: token.identity.Platform, volumeID: token.identity.VolumeID, objectID: token.identity.ObjectID,
+	}
+}
+
+func (token *StableResourceToken) physicalCoalescingKey() stablePhysicalResourceKey {
+	key := token.mutablePhysicalKey()
+	if token.stability == ResourceImmutable {
+		key.kind = ""
+	}
+	return key
 }
 
 func (token *StableResourceToken) mutablePhysicalKey() stablePhysicalResourceKey {

@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,187 @@ func stableTokenFixture(t testing.TB, dir, name string, generation, frontier uin
 		t.Fatalf("NewStableResourceToken: %v", err)
 	}
 	return token
+}
+
+func distinctPhysicalTokenFixture(t testing.TB, file *os.File, id uint64) *StableResourceToken {
+	t.Helper()
+	var objectID [16]byte
+	binary.LittleEndian.PutUint64(objectID[:], id)
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: fmt.Sprintf("%d", id), Generation: 1,
+		DiagnosticPath: "columns/scale.bin", File: file, Frontier: DurableFrontier{Bytes: 1},
+		Reachability: ReachabilityColumnManifest, ContentSynced: true,
+		StableIdentityOverride: StableIdentity{Platform: "scale-test", ObjectID: objectID},
+	})
+	if err != nil {
+		t.Fatalf("new distinct physical token %d: %v", id, err)
+	}
+	return token
+}
+
+func immutableGenerationTokenFixture(t testing.TB, file *os.File, generation uint64, digest [32]byte) *StableResourceToken {
+	t.Helper()
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceOuterLeafPack, LogicalLane: "packs", ResourceID: fmt.Sprint(generation),
+		Generation: generation, DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
+		Frontier: DurableFrontier{Bytes: 1}, Digest: digest,
+		Reachability: ReachabilityOuterLeafPackedPointer,
+	})
+	if err != nil {
+		t.Fatalf("new immutable generation token %d: %v", generation, err)
+	}
+	return token
+}
+
+func TestStableResourceBuilderDistinctPhysicalLookupWorkIsBounded(t *testing.T) {
+	const entries = 4096
+	file := writeStableResourceFixture(t, t.TempDir(), "scale.bin", "x")
+	builder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= entries; id++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+	}
+	work := builder.ClosureWorkSnapshot()
+	indexedEntries := uint64(entries - stableResourceEntryLinearLookupLimit)
+	if work.PhysicalEntryLookupProbes != indexedEntries || work.PhysicalEntryLookupComparisons != 0 || work.PhysicalEntryLookupAdmissions != indexedEntries {
+		builder.Abandon()
+		t.Fatalf("distinct physical lookup work=%+v want %d probes, zero comparisons, and %d admissions", work, indexedEntries, indexedEntries)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if got := resources.Len(); got != entries {
+		t.Fatalf("frozen entries=%d want %d", got, entries)
+	}
+}
+
+func TestStableResourceBuilderMergeDistinctPhysicalLookupWorkIsBounded(t *testing.T) {
+	const entries = 2048
+	file := writeStableResourceFixture(t, t.TempDir(), "scale.bin", "x")
+	parent := NewStableResourceSetBuilder()
+	childBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= entries; id++ {
+		if err := parent.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := childBuilder.Add(distinctPhysicalTokenFixture(t, file, id+entries)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Release()
+	if err := parent.Merge(child); err != nil {
+		t.Fatal(err)
+	}
+	work := parent.ClosureWorkSnapshot()
+	indexedEntries := uint64(entries*2 - stableResourceEntryLinearLookupLimit)
+	if work.PhysicalEntryLookupProbes != indexedEntries || work.PhysicalEntryLookupComparisons != 0 || work.PhysicalEntryLookupAdmissions != indexedEntries {
+		parent.Abandon()
+		t.Fatalf("distinct physical merge work=%+v", work)
+	}
+	resources, err := parent.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if got := resources.Len(); got != entries*2 {
+		t.Fatalf("frozen entries=%d want %d", got, entries*2)
+	}
+}
+
+func TestStableResourceBuilderRepresentativeReplacementUpdatesLogicalLookup(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "shared.bin", "x")
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "shared.bin", DiagnosticPath: "columns/shared.bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := namespace.Stabilize(); err != nil {
+		t.Fatal(err)
+	}
+	newToken := func(lane, resourceID, path string, file *os.File, ns *StableNamespaceToken) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: lane, ResourceID: resourceID, Generation: 1,
+			DiagnosticPath: path, File: file, Frontier: DurableFrontier{Bytes: 1},
+			Digest: sha256.Sum256([]byte("shared")), Reachability: ReachabilityColumnManifest,
+			Namespace: ns, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	builder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, resource, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Add(newToken("old", "old", "columns/old.bin", resource, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Add(newToken("new", "new", "columns/shared.bin", resource, namespace)); err != nil {
+		t.Fatal(err)
+	}
+	other := writeStableResourceFixture(t, dir, "other.bin", "x")
+	if err := builder.Add(newToken("old", "old", "columns/other.bin", other, nil)); err != nil {
+		t.Fatalf("stale logical representative lookup rejected a distinct replacement: %v", err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if got := set.Len(); got != stableResourceEntryLinearLookupLimit+2 {
+		t.Fatalf("entries=%d want %d after representative replacement", got, stableResourceEntryLinearLookupLimit+2)
+	}
+}
+
+func TestStableResourceBuilderClosureWorkSnapshotConcurrentWithAdd(t *testing.T) {
+	file := writeStableResourceFixture(t, t.TempDir(), "scale.bin", "x")
+	builder := NewStableResourceSetBuilder()
+	tokens := make([]*StableResourceToken, 64)
+	for index := range tokens {
+		tokens[index] = distinctPhysicalTokenFixture(t, file, uint64(index+1))
+	}
+	done := make(chan error, 1)
+	go func() {
+		for _, token := range tokens {
+			if err := builder.Add(token); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			builder.Abandon()
+			return
+		default:
+			_ = builder.State()
+			_ = builder.ClosureWorkSnapshot()
+		}
+	}
 }
 
 func testStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing.T) {
@@ -984,6 +1166,9 @@ func TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts(t 
 		if err := builder.Add(second); !errors.Is(err, ErrResourceConflict) {
 			t.Fatalf("error=%v want ErrResourceConflict", err)
 		}
+		if _, err := second.ReadAt(make([]byte, 1), 0); !errors.Is(err, ErrResourceOwnership) {
+			t.Fatalf("rejected token remains builder-owned: ReadAt error=%v want ErrResourceOwnership", err)
+		}
 		builder.Abandon()
 	})
 	t.Run("logical generation identity", func(t *testing.T) {
@@ -1280,11 +1465,17 @@ func TestImmutableAliasesPreserveDistinctGenerationPins(t *testing.T) {
 	file := writeStableResourceFixture(t, dir, "generation.pack", "immutable-pack")
 	digest := sha256.Sum256([]byte("immutable-pack"))
 	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	tokens := make([]*StableResourceToken, 0, 2)
-	for i := range 2 {
+	for _, generation := range []uint64{7, 8, 7} {
+		i := len(tokens)
 		token, err := NewStableResourceToken(StableResourceSpec{
 			Kind: ResourceOuterLeafPack, LogicalLane: fmt.Sprintf("pack-lane-%d", i),
-			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: uint64(i + 1),
+			ResourceID: fmt.Sprintf("pack-alias-%d", i), Generation: generation,
 			DiagnosticPath: "maindb/outer_leaf/generation.pack", File: file,
 			Frontier: DurableFrontier{Bytes: uint64(i + 1)}, Digest: digest,
 			Reachability: ReachabilityOuterLeafPackedPointer,
@@ -1296,24 +1487,66 @@ func TestImmutableAliasesPreserveDistinctGenerationPins(t *testing.T) {
 			builder.Abandon()
 			t.Fatalf("Add immutable generation: %v", err)
 		}
-		tokens = append(tokens, token)
+		if generation != 7 || len(tokens) == 0 {
+			tokens = append(tokens, token)
+		}
+	}
+	if work := builder.ClosureWorkSnapshot(); work.PhysicalEntryLookupComparisons != 1 || work.PhysicalEntryLookupAdmissions != 2 {
+		builder.Abandon()
+		t.Fatalf("indexed immutable collision work=%+v want one same-generation comparison and two admissions", work)
 	}
 	set, err := builder.Freeze()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer set.Release()
-	if set.Len() != len(tokens) {
-		t.Fatalf("immutable generations retained %d physical pins, want %d", set.Len(), len(tokens))
+	if set.Len() != stableResourceEntryLinearLookupLimit+len(tokens) {
+		t.Fatalf("immutable generations retained %d physical pins, want %d", set.Len(), stableResourceEntryLinearLookupLimit+len(tokens))
 	}
 	guard := set.DeletionGuard()
 	for _, token := range tokens {
 		if err := guard.Check(token.Identity(), token.Generation()); !errors.Is(err, ErrResourcePinned) {
 			t.Fatalf("Check generation %d=%v want ErrResourcePinned", token.Generation(), err)
 		}
-		if got, want := set.FrontierFor(token.Identity(), token.Generation()), token.Frontier(); got.Bytes != want.Bytes {
+		want := token.Frontier()
+		if token.Generation() == 7 {
+			want.Bytes = 3 // the indexed same-generation alias coalesces at its larger frontier.
+		}
+		if got := set.FrontierFor(token.Identity(), token.Generation()); got.Bytes != want.Bytes {
 			t.Fatalf("FrontierFor generation %d=%+v want %+v", token.Generation(), got, want)
 		}
+	}
+}
+
+func TestImmutableGenerationLookupWorkIsBounded(t *testing.T) {
+	const entries = 4096
+	file := writeStableResourceFixture(t, t.TempDir(), "generation.pack", "immutable-pack")
+	digest := sha256.Sum256([]byte("immutable-pack"))
+	builder := NewStableResourceSetBuilder(ReachabilityOuterLeafPackedPointer)
+	defer builder.Abandon()
+	for generation := uint64(1); generation <= entries; generation++ {
+		if err := builder.Add(immutableGenerationTokenFixture(t, file, generation, digest)); err != nil {
+			t.Fatalf("Add generation %d: %v", generation, err)
+		}
+	}
+	indexedEntries := uint64(entries - stableResourceEntryLinearLookupLimit)
+	work := builder.ClosureWorkSnapshot()
+	if work.PhysicalEntryLookupProbes != indexedEntries || work.PhysicalEntryLookupComparisons != 0 || work.PhysicalEntryLookupAdmissions != indexedEntries {
+		t.Fatalf("immutable-generation lookup work=%+v want %d probes, zero comparisons, and %d admissions", work, indexedEntries, indexedEntries)
+	}
+	if err := builder.Add(immutableGenerationTokenFixture(t, file, entries+1, sha256.Sum256([]byte("conflicting-pack")))); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("cross-generation digest conflict=%v want ErrResourceConflict", err)
+	}
+	mutable, err := NewStableResourceToken(StableResourceSpec{
+		Kind: ResourceIndex, LogicalLane: "main", ResourceID: "index", Generation: 1,
+		DiagnosticPath: "maindb/index.db", File: file, Frontier: DurableFrontier{Bytes: 1},
+		Digest: digest, Reachability: ReachabilityIndexFile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Add(mutable); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("cross-stability identity conflict=%v want ErrResourceConflict", err)
 	}
 }
 
@@ -1512,7 +1745,18 @@ func TestBuilderMergeConflictRetainsBothOwnersTransactionally(t *testing.T) {
 	if err := parent.Add(makeToken(first)); err != nil {
 		t.Fatal(err)
 	}
+	fillers := writeStableResourceFixture(t, dir, "fillers.bin", "x")
+	for id := uint64(1); id <= 7; id++ {
+		if err := parent.Add(distinctPhysicalTokenFixture(t, fillers, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	childBuilder := NewStableResourceSetBuilder()
+	for id := uint64(8); id <= 15; id++ {
+		if err := childBuilder.Add(distinctPhysicalTokenFixture(t, fillers, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := childBuilder.Add(makeToken(second)); err != nil {
 		t.Fatal(err)
 	}
@@ -1528,6 +1772,9 @@ func TestBuilderMergeConflictRetainsBothOwnersTransactionally(t *testing.T) {
 	}
 	if child.Owner() != ResourceOwnerBuilder {
 		t.Fatalf("failed merge child owner=%v want builder", child.Owner())
+	}
+	if err := parent.Add(distinctPhysicalTokenFixture(t, fillers, 100)); err != nil {
+		t.Fatalf("Add after failed indexed merge: %v", err)
 	}
 	parent.Abandon()
 	child.Release()

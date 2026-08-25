@@ -445,6 +445,11 @@ type StableResourceClosureWork struct {
 	AppendOnlyFallbacks             uint64
 	DestructiveFallbacks            uint64
 	FullClosureValidations          uint64
+	// PhysicalEntryLookup* counts only the indexed path, entered after the
+	// small <=16-entry linear fast path. They are the scale-gate witness.
+	PhysicalEntryLookupProbes      uint64
+	PhysicalEntryLookupComparisons uint64
+	PhysicalEntryLookupAdmissions  uint64
 }
 
 func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
@@ -475,6 +480,94 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 	work.AppendOnlyFallbacks += other.AppendOnlyFallbacks
 	work.DestructiveFallbacks += other.DestructiveFallbacks
 	work.FullClosureValidations += other.FullClosureValidations
+	work.PhysicalEntryLookupProbes += other.PhysicalEntryLookupProbes
+	work.PhysicalEntryLookupComparisons += other.PhysicalEntryLookupComparisons
+	work.PhysicalEntryLookupAdmissions += other.PhysicalEntryLookupAdmissions
+}
+
+// stableResourceEntryLookup is transient builder state. The frozen set remains
+// an ordered slice so deterministic publication and ownership behavior stay
+// unchanged.
+type stableResourceEntryLookup struct {
+	logical map[stableLogicalResourceKey]int
+	// physical points back into the ordered entries for identity-wide conflict
+	// metadata and the first exact candidate. Only identities with multiple
+	// generations need the collision map.
+	physical           map[stablePhysicalIdentityKey]int
+	physicalCollisions map[stablePhysicalResourceKey]int
+}
+
+const stableResourceEntryLinearLookupLimit = 16
+
+func newStableResourceEntryLookup(entries []stableResourceEntry) stableResourceEntryLookup {
+	lookup := stableResourceEntryLookup{
+		logical:  make(map[stableLogicalResourceKey]int, len(entries)),
+		physical: make(map[stablePhysicalIdentityKey]int, len(entries)),
+	}
+	for i := range entries {
+		lookup.add(entries, i)
+	}
+	return lookup
+}
+
+func (lookup *stableResourceEntryLookup) add(entries []stableResourceEntry, index int) {
+	entry := entries[index]
+	lookup.logical[entry.token.logicalKey()] = index
+	identityKey := entry.token.physicalIdentityKey()
+	coalescingKey := entry.token.physicalCoalescingKey()
+	position := index + 1
+	existingPosition := lookup.physical[identityKey]
+	if existingPosition == 0 {
+		lookup.physical[identityKey] = position
+		return
+	}
+	if entries[existingPosition-1].token.physicalCoalescingKey() == coalescingKey {
+		lookup.physical[identityKey] = position
+		return
+	}
+	if lookup.physicalCollisions == nil {
+		lookup.physicalCollisions = make(map[stablePhysicalResourceKey]int)
+	}
+	lookup.physicalCollisions[coalescingKey] = position
+}
+
+type stableResourceEntryLookupIterator struct {
+	single int
+}
+
+func (lookup *stableResourceEntryLookup) physicalIterator(entries []stableResourceEntry, token *StableResourceToken) (stableResourceEntryLookupIterator, error) {
+	position := lookup.physical[token.physicalIdentityKey()]
+	if position == 0 {
+		return stableResourceEntryLookupIterator{}, nil
+	}
+	representative := entries[position-1].token
+	if representative.stability != token.stability {
+		return stableResourceEntryLookupIterator{}, fmt.Errorf("%w: physical identity has conflicting stability policy", ErrResourceConflict)
+	}
+	if token.stability == ResourceImmutable && representative.digest != token.digest {
+		return stableResourceEntryLookupIterator{}, fmt.Errorf("%w: immutable physical identity has conflicting content digest", ErrResourceConflict)
+	}
+	coalescingKey := token.physicalCoalescingKey()
+	if representative.physicalCoalescingKey() == coalescingKey {
+		return stableResourceEntryLookupIterator{single: position}, nil
+	}
+	return stableResourceEntryLookupIterator{single: lookup.physicalCollisions[coalescingKey]}, nil
+}
+
+func (iterator *stableResourceEntryLookupIterator) Next() (int, bool) {
+	if iterator.single != 0 {
+		position := iterator.single
+		iterator.single = 0
+		return position - 1, true
+	}
+	return 0, false
+}
+
+func (lookup *stableResourceEntryLookup) replaceRepresentative(index int, old, replacement *StableResourceToken) {
+	if lookup.logical[old.logicalKey()] == index {
+		delete(lookup.logical, old.logicalKey())
+	}
+	lookup.logical[replacement.logicalKey()] = index
 }
 
 func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
@@ -599,6 +692,13 @@ type StableResourceSetBuilder struct {
 	closed    bool
 	abandoned bool
 	state     ResourceOwnerState
+	indexed   *stableResourceBuilderIndexedState
+}
+
+type stableResourceBuilderIndexedState struct {
+	// Keep scale-only state out of the common small builder allocation.
+	lookup stableResourceEntryLookup
+	work   StableResourceClosureWork
 }
 
 func NewStableResourceSetBuilder(required ...ReachabilityField) *StableResourceSetBuilder {
@@ -609,6 +709,20 @@ func NewStableResourceSetBuilder(required ...ReachabilityField) *StableResourceS
 		}
 	}
 	return &StableResourceSetBuilder{required: requiredSet, state: ResourceOwnerBuilder}
+}
+
+// ClosureWorkSnapshot returns exact builder-local closure work accumulated by
+// Add and Merge. It is reset by constructing a new builder.
+func (builder *StableResourceSetBuilder) ClosureWorkSnapshot() StableResourceClosureWork {
+	if builder == nil {
+		return StableResourceClosureWork{}
+	}
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	if builder.indexed == nil {
+		return StableResourceClosureWork{}
+	}
+	return builder.indexed.work
 }
 
 func (builder *StableResourceSetBuilder) State() ResourceOwnerState {
@@ -632,14 +746,26 @@ func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) error {
 	if err := token.claim(ResourceOwnerBuilder); err != nil {
 		return err
 	}
-	if err := mergeOwnedToken(&builder.entries, token); err != nil {
+	if builder.indexed == nil {
+		if len(builder.entries) < stableResourceEntryLinearLookupLimit {
+			err := mergeOwnedTokenLinear(&builder.entries, token)
+			if err != nil {
+				token.releaseFrom(ResourceOwnerBuilder)
+			}
+			return err
+		}
+		builder.indexed = &stableResourceBuilderIndexedState{
+			lookup: newStableResourceEntryLookup(builder.entries),
+		}
+	}
+	if err := mergeOwnedToken(&builder.entries, &builder.indexed.lookup, token, &builder.indexed.work); err != nil {
 		token.releaseFrom(ResourceOwnerBuilder)
 		return err
 	}
 	return nil
 }
 
-func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken) error {
+func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResourceToken) error {
 	logicalKey := token.logicalKey()
 	for i := range *entries {
 		entry := &(*entries)[i]
@@ -664,8 +790,6 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		entry.reachability[token.reachability] = struct{}{}
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
 		if existing.namespace == nil && token.namespace != nil {
-			// Preserve the one namespace-creation obligation independently of
-			// insertion order by making its exact-handle token representative.
 			entry.token = token
 			entry.pins = nil
 			entry.pinIndex = nil
@@ -681,6 +805,67 @@ func mergeOwnedToken(entries *[]stableResourceEntry, token *StableResourceToken)
 		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
 		logicalObligations: newStableLogicalObligationView(token.logicalObligations),
 	})
+	return nil
+}
+
+func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntryLookup, token *StableResourceToken, work *StableResourceClosureWork) error {
+	logicalKey := token.logicalKey()
+	work.PhysicalEntryLookupProbes++
+	if existingIndex, ok := lookup.logical[logicalKey]; ok {
+		existing := (*entries)[existingIndex].token
+		if !existing.samePhysicalIdentity(token) {
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		}
+	}
+	iterator, err := lookup.physicalIterator(*entries, token)
+	if err != nil {
+		return err
+	}
+	for {
+		i, ok := iterator.Next()
+		if !ok {
+			break
+		}
+		entry := &(*entries)[i]
+		existing := entry.token
+		work.PhysicalEntryLookupComparisons++
+		coalesce, err := stableResourcesCoalesce(existing, token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
+			continue
+		}
+		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
+		}
+		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
+			return err
+		}
+		entry.frontier = maxFrontier(entry.frontier, token.frontier)
+		entry.reachability[token.reachability] = struct{}{}
+		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
+		if existing.namespace == nil && token.namespace != nil {
+			// Preserve the one namespace-creation obligation independently of
+			// insertion order by making its exact-handle token representative.
+			entry.token = token
+			lookup.replaceRepresentative(i, existing, token)
+			entry.pins = nil
+			entry.pinIndex = nil
+			existing.releaseFrom(ResourceOwnerBuilder)
+		} else {
+			token.releaseFrom(ResourceOwnerBuilder)
+		}
+		return nil
+	}
+	*entries = append(*entries, stableResourceEntry{
+		token: token, logicalLane: token.logicalLane, resourceID: token.resourceID,
+		diagnosticPath: token.diagnosticPath, frontier: cloneDurableFrontier(token.frontier),
+		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
+		logicalObligations: newStableLogicalObligationView(token.logicalObligations),
+	})
+	lookup.add(*entries, len(*entries)-1)
+	work.PhysicalEntryLookupAdmissions++
 	return nil
 }
 
@@ -730,13 +915,90 @@ func stableResourcesCoalesce(existing, incoming *StableResourceToken) (bool, err
 	}
 }
 
-func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry, retainSourcePins bool) error {
+func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryLookup, incoming stableResourceEntry, retainSourcePins bool, work *StableResourceClosureWork) error {
 	logicalKey := incoming.token.logicalKey()
+	if work != nil {
+		work.PhysicalEntryLookupProbes++
+	}
+	if existingIndex, ok := lookup.logical[logicalKey]; ok {
+		existing := (*entries)[existingIndex].token
+		if !existing.samePhysicalIdentity(incoming.token) {
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		}
+	}
+	iterator, err := lookup.physicalIterator(*entries, incoming.token)
+	if err != nil {
+		return err
+	}
+	for {
+		i, ok := iterator.Next()
+		if !ok {
+			break
+		}
+		entry := &(*entries)[i]
+		existing := entry.token
+		if work != nil {
+			work.PhysicalEntryLookupComparisons++
+		}
+		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
+			continue
+		}
+		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
+		}
+		if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
+			return err
+		}
+		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
+		for field := range incoming.reachability {
+			entry.reachability[field] = struct{}{}
+		}
+		if retainSourcePins {
+			if len(entry.pins) == 0 {
+				entry.pins = []*StableResourceToken{entry.token}
+			}
+			if len(incoming.pins) == 0 {
+				appendUniquePins(entry, incoming.token)
+			} else {
+				appendUniquePins(entry, incoming.pins...)
+			}
+		}
+		if existing.namespace == nil && incoming.token.namespace != nil {
+			entry.token = incoming.token
+			lookup.replaceRepresentative(i, existing, incoming.token)
+			if !retainSourcePins {
+				entry.pins = nil
+				entry.pinIndex = nil
+			}
+		}
+		return nil
+	}
+	*entries = append(*entries, cloneStableResourceEntry(incoming))
+	lookup.add(*entries, len(*entries)-1)
+	if work != nil {
+		work.PhysicalEntryLookupAdmissions++
+	}
+	return nil
+}
+
+func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourceEntry, retainSourcePins bool, work *StableResourceClosureWork) error {
+	logicalKey := incoming.token.logicalKey()
+	if work != nil {
+		work.PhysicalEntryLookupProbes++
+	}
 	for i := range *entries {
 		entry := &(*entries)[i]
 		existing := entry.token
 		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
 			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		}
+		if work != nil {
+			work.PhysicalEntryLookupComparisons++
 		}
 		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
 		if err != nil {
@@ -776,6 +1038,47 @@ func mergeViewEntry(entries *[]stableResourceEntry, incoming stableResourceEntry
 		return nil
 	}
 	*entries = append(*entries, cloneStableResourceEntry(incoming))
+	if work != nil {
+		work.PhysicalEntryLookupAdmissions++
+	}
+	return nil
+}
+
+func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourceEntry, work *StableResourceClosureWork) error {
+	logicalKey := incoming.token.logicalKey()
+	for i := range *entries {
+		entry := &(*entries)[i]
+		existing := entry.token
+		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		}
+		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
+			continue
+		}
+		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
+		}
+		entry.logicalObligations, err = entry.logicalObligations.appendCertified(incoming.logicalObligations.slice(), work)
+		if err != nil {
+			return err
+		}
+		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
+		for field := range incoming.reachability {
+			entry.reachability[field] = struct{}{}
+		}
+		if existing.namespace == nil && incoming.token.namespace != nil {
+			entry.token = incoming.token
+			entry.pins = nil
+			entry.pinIndex = nil
+		}
+		return nil
+	}
+	*entries = append(*entries, cloneStableResourceEntry(incoming))
 	return nil
 }
 
@@ -798,8 +1101,22 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 		return ErrResourceOwnership
 	}
 	merged := cloneStableResourceEntries(builder.entries)
+	lookup := stableResourceEntryLookup{}
+	var indexedWork StableResourceClosureWork
+	if len(merged)+len(child.entries) > stableResourceEntryLinearLookupLimit {
+		lookup = newStableResourceEntryLookup(merged)
+		if builder.indexed != nil {
+			indexedWork = builder.indexed.work
+		}
+	}
 	for _, entry := range child.entries {
-		if err := mergeViewEntry(&merged, entry, false); err != nil {
+		var err error
+		if lookup.logical == nil {
+			err = mergeViewEntryLinear(&merged, entry, false, nil)
+		} else {
+			err = mergeViewEntry(&merged, &lookup, entry, false, &indexedWork)
+		}
+		if err != nil {
 			child.mu.Unlock()
 			builder.mu.Unlock()
 			return err
@@ -815,6 +1132,11 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	// from the committed merged view are released, and only after the child CAS
 	// makes the ownership transfer irreversible.
 	builder.entries = merged
+	if lookup.logical == nil {
+		builder.indexed = nil
+	} else {
+		builder.indexed = &stableResourceBuilderIndexedState{lookup: lookup, work: indexedWork}
+	}
 	child.entries = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
@@ -914,16 +1236,43 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 
 	merged := cloneStableResourceEntries(builder.entries)
+	lookup := stableResourceEntryLookup{}
+	if len(merged)+len(child.entries) > stableResourceEntryLinearLookupLimit {
+		lookup = newStableResourceEntryLookup(merged)
+	}
 	for _, incoming := range child.entries {
-		logicalKey := incoming.token.logicalKey()
-		coalesced := false
-		for i := range merged {
-			entry := &merged[i]
-			existing := entry.token
-			if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
-				err = fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		if lookup.logical == nil {
+			err = mergeAppendOnlyViewEntryLinear(&merged, incoming, &work)
+			if err != nil {
 				break
 			}
+			continue
+		}
+		logicalKey := incoming.token.logicalKey()
+		coalesced := false
+		work.PhysicalEntryLookupProbes++
+		if existingIndex, ok := lookup.logical[logicalKey]; ok {
+			existing := merged[existingIndex].token
+			if !existing.samePhysicalIdentity(incoming.token) {
+				err = fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+			}
+		}
+		if err != nil {
+			break
+		}
+		iterator, iteratorErr := lookup.physicalIterator(merged, incoming.token)
+		if iteratorErr != nil {
+			err = iteratorErr
+			break
+		}
+		for {
+			i, ok := iterator.Next()
+			if !ok {
+				break
+			}
+			entry := &merged[i]
+			existing := entry.token
+			work.PhysicalEntryLookupComparisons++
 			var canCoalesce bool
 			canCoalesce, err = stableResourcesCoalesce(existing, incoming.token)
 			if err != nil {
@@ -948,6 +1297,7 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 			}
 			if existing.namespace == nil && incoming.token.namespace != nil {
 				entry.token = incoming.token
+				lookup.replaceRepresentative(i, existing, incoming.token)
 				entry.pins = nil
 				entry.pinIndex = nil
 			}
@@ -959,6 +1309,8 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		}
 		if !coalesced {
 			merged = append(merged, cloneStableResourceEntry(incoming))
+			lookup.add(merged, len(merged)-1)
+			work.PhysicalEntryLookupAdmissions++
 		}
 	}
 	if err != nil {
@@ -973,6 +1325,14 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 	dropped := droppedStableResourceTokens(merged, builder.entries, child.entries)
 	builder.entries = merged
+	if lookup.logical == nil {
+		builder.indexed = nil
+	} else {
+		if builder.indexed == nil {
+			builder.indexed = &stableResourceBuilderIndexedState{}
+		}
+		builder.indexed.lookup = lookup
+	}
 	child.entries = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
@@ -1738,6 +2098,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 	if err != nil {
 		return nil, work, err
 	}
+	work.Add(builder.ClosureWorkSnapshot())
 	work.FreezeOperations++
 	// Obligations omitted from retained field projections are logical drops.
 	// Excluded physical entries have already been accounted above.
@@ -2043,13 +2404,23 @@ func (set *StableResourceSet) Release() {
 func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, error) {
 	view := &StableResourceSet{createdAt: time.Now()}
 	view.owner.Store(uint32(ResourceOwnerView))
+	lookup := stableResourceEntryLookup{}
 	for _, set := range sets {
 		if set == nil {
 			continue
 		}
 		set.mu.Lock()
 		for _, entry := range set.entries {
-			if err := mergeViewEntry(&view.entries, entry, true); err != nil {
+			var err error
+			if lookup.logical == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
+				err = mergeViewEntryLinear(&view.entries, entry, true, nil)
+			} else {
+				if lookup.logical == nil {
+					lookup = newStableResourceEntryLookup(view.entries)
+				}
+				err = mergeViewEntry(&view.entries, &lookup, entry, true, nil)
+			}
+			if err != nil {
 				set.mu.Unlock()
 				return nil, err
 			}

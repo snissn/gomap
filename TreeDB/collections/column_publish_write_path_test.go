@@ -14,6 +14,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -41,6 +42,21 @@ func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
 	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "InsertBatch")
 	assertColumnStoreDocumentMissingM10B(t, col, "e1")
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
+}
+
+func TestRecordColumnPublishTimingMirrorsPhysicalEntryLookupWork(t *testing.T) {
+	stats := &CollectionInsertStats{}
+	recordColumnPublishTiming(stats, backenddb.CommandWALPublishTiming{
+		FinalizeCandidateResourceWork: rootpublication.StableResourceClosureWork{
+			PhysicalEntryLookupProbes:      11,
+			PhysicalEntryLookupComparisons: 7,
+			PhysicalEntryLookupAdmissions:  5,
+		},
+	})
+	got := stats.ColumnPublishFinalizeCandidateResourceWork
+	if got.PhysicalEntryLookupProbes != 11 || got.PhysicalEntryLookupComparisons != 7 || got.PhysicalEntryLookupAdmissions != 5 {
+		t.Fatalf("physical lookup work=%+v, want probes=11 comparisons=7 admissions=5", got)
+	}
 }
 
 func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
