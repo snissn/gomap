@@ -1699,7 +1699,18 @@ func TestBuilderMergeConflictRetainsBothOwnersTransactionally(t *testing.T) {
 	if err := parent.Add(makeToken(first)); err != nil {
 		t.Fatal(err)
 	}
+	fillers := writeStableResourceFixture(t, dir, "fillers.bin", "x")
+	for id := uint64(1); id <= 7; id++ {
+		if err := parent.Add(distinctPhysicalTokenFixture(t, fillers, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	childBuilder := NewStableResourceSetBuilder()
+	for id := uint64(8); id <= 15; id++ {
+		if err := childBuilder.Add(distinctPhysicalTokenFixture(t, fillers, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := childBuilder.Add(makeToken(second)); err != nil {
 		t.Fatal(err)
 	}
@@ -1715,6 +1726,9 @@ func TestBuilderMergeConflictRetainsBothOwnersTransactionally(t *testing.T) {
 	}
 	if child.Owner() != ResourceOwnerBuilder {
 		t.Fatalf("failed merge child owner=%v want builder", child.Owner())
+	}
+	if err := parent.Add(distinctPhysicalTokenFixture(t, fillers, 100)); err != nil {
+		t.Fatalf("Add after failed indexed merge: %v", err)
 	}
 	parent.Abandon()
 	child.Release()

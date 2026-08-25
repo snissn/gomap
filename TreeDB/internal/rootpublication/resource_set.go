@@ -1046,10 +1046,11 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	}
 	merged := cloneStableResourceEntries(builder.entries)
 	lookup := stableResourceEntryLookup{}
+	var indexedWork StableResourceClosureWork
 	if len(merged)+len(child.entries) > stableResourceEntryLinearLookupLimit {
 		lookup = newStableResourceEntryLookup(merged)
-		if builder.indexed == nil {
-			builder.indexed = &stableResourceBuilderIndexedState{}
+		if builder.indexed != nil {
+			indexedWork = builder.indexed.work
 		}
 	}
 	for _, entry := range child.entries {
@@ -1057,7 +1058,7 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 		if lookup.logical == nil {
 			err = mergeViewEntryLinear(&merged, entry, false, nil)
 		} else {
-			err = mergeViewEntry(&merged, &lookup, entry, false, &builder.indexed.work)
+			err = mergeViewEntry(&merged, &lookup, entry, false, &indexedWork)
 		}
 		if err != nil {
 			child.mu.Unlock()
@@ -1078,7 +1079,7 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	if lookup.logical == nil {
 		builder.indexed = nil
 	} else {
-		builder.indexed.lookup = lookup
+		builder.indexed = &stableResourceBuilderIndexedState{lookup: lookup, work: indexedWork}
 	}
 	child.entries = nil
 	child.mu.Unlock()
