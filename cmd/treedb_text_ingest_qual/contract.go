@@ -434,6 +434,11 @@ func writeIdentityValue(h hash.Hash, value string) {
 	_, _ = h.Write(size[:])
 	_, _ = h.Write([]byte(value))
 }
+
+// sourceChunkBatchLimit is part of the frozen retained-evidence contract.
+// Changing it invalidates every source_chunk artifact.
+const sourceChunkBatchLimit = 256
+
 func validateRow(r row) error {
 	validMode := false
 	for _, m := range requiredModes {
@@ -458,8 +463,8 @@ func validateRow(r row) error {
 	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize != min(sourceChunkBatchLimit, r.SourceDocuments) || r.ChunkBatchCount != (r.SourceDocuments+sourceChunkBatchLimit-1)/sourceChunkBatchLimit || r.Generations != uint64(r.ChunkBatchCount+1)) {
 		return fmt.Errorf("source_chunk requires returned parent, generated child, live-row, and batch accounting")
 	}
-	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
-		return fmt.Errorf("non-source modes must not claim chunked parent or batch rows")
+	if r.Mode != "source_chunk" && (r.GeneratedChunks != 0 || r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
+		return fmt.Errorf("non-source modes must not claim generated chunks, chunked parents, or batches")
 	}
 	if (r.Mode == "indexed_insert" || r.Mode == "post_load_backfill") && r.IndexedLiveRows != r.SourceDocuments {
 		return fmt.Errorf("%s requires every source document to be live", r.Mode)

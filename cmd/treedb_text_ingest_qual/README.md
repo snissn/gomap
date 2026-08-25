@@ -77,7 +77,8 @@ go run ./cmd/treedb_text_ingest_qual \
 
 The command can create one real raw row for every mode using the public
 collection, text-v2, deterministic chunker, checkpoint, close/reopen, and
-score-only APIs. It writes DBs and raw rows under the supplied directory. The
+score-only APIs. It writes raw rows under the supplied directory and creates
+each child process's temporary DB under the system temporary directory. The
 raw smoke files are deliberately not retained qualification artifacts because
 they lack the complete retained 100k/1M repetition matrix and manifest-bound
 summaries.

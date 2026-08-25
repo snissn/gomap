@@ -380,6 +380,50 @@ func TestIngestChunkedDocumentsScansUnderCollectionMutationLock(t *testing.T) {
 	}
 }
 
+func TestIngestChunkedDocumentsSerializesCrossManagerMutationAfterStaleScan(t *testing.T) {
+	_, d, first := openChunkingTestCollection(t)
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+
+	writerStarted := make(chan struct{})
+	writerDone := make(chan struct{})
+	var writerErr error
+	committedDuringScan := false
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		go func() {
+			close(writerStarted)
+			_, writerErr = second.InsertBatch(
+				[][]byte{[]byte("cross-manager#999")},
+				[][]byte{[]byte(`{"title":"late child","body":"late child"}`)},
+			)
+			close(writerDone)
+		}()
+		<-writerStarted
+		select {
+		case <-writerDone:
+			committedDuringScan = true
+		case <-time.After(100 * time.Millisecond):
+		}
+	}}
+
+	if _, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": "replacement"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{hooks: hooks},
+	); err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	<-writerDone
+	if writerErr != nil {
+		t.Fatalf("cross-manager insert: %v", writerErr)
+	}
+	if committedDuringScan {
+		t.Fatal("cross-manager mutation published between stale-child scan and replacement")
+	}
+}
+
 func TestIngestChunkedDocumentCopiesMetadataWithoutLinkageOverride(t *testing.T) {
 	_, _, col := openChunkingTestCollection(t)
 	meta := map[string]any{

@@ -295,6 +295,10 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"missing fresh RSS process scope", func(_ *manifest, r *report) { r.Rows[0].PeakRSSScope = "" }, "fresh process"},
 		{"partial indexed live rows", func(_ *manifest, r *report) { r.Rows[0].IndexedLiveRows-- }, "every source document"},
 		{"stale throughput", func(_ *manifest, r *report) { r.Rows[0].IndexedRowsPerSec++ }, "throughput does not recompute"},
+		{"non-source generated chunks", func(_ *manifest, r *report) {
+			r.Rows[0].GeneratedChunks = 1
+			r.Rows[0].ChunksPerSec = 1 / r.Rows[0].WallSeconds
+		}, "must not claim generated chunks"},
 		{"storage overlap", func(_ *manifest, r *report) { r.Rows[0].Storage.PhysicalTotalBytes++ }, "physical total"},
 		{"source parent text index accounting", func(_ *manifest, r *report) {
 			r.Rows[0].Mode = "source_chunk"

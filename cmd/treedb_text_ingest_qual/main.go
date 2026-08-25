@@ -31,17 +31,17 @@ func main() {
 			os.Exit(2)
 		}
 		if err := produceOneMode(produceModeDir, produceModeName, produceScale, repetition); err != nil {
-			fmt.Fprintf(os.Stderr, "produce mode: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "produce mode: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 	if produceDir != "" {
 		if err := produceSmoke(produceDir, produceScale, repetition); err != nil {
-			fmt.Fprintf(os.Stderr, "produce smoke: %v\\n", err)
+			fmt.Fprintf(os.Stderr, "produce smoke: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("wrote raw smoke rows to %s (not a retained report)\\n", produceDir)
+		fmt.Printf("wrote raw smoke rows to %s (not a retained report)\n", produceDir)
 		return
 	}
 	if manifestPath == "" || reportPath == "" {
@@ -98,9 +98,12 @@ func decodeStrictJSON(data []byte, value any) error {
 type gitResolver func(args ...string) (string, error)
 
 func resolveLocalGit(args ...string) (string, error) {
-	output, err := exec.Command("git", args...).CombinedOutput()
+	var stderr bytes.Buffer
+	cmd := exec.Command("git", args...)
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(output)), nil
 }

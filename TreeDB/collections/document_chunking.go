@@ -403,9 +403,9 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	return results, nil
 }
 
-// replaceChunkedDocumentBatch holds the ordinary collection mutation lock from
-// stale-child discovery through durable publication. InsertBatch cannot publish
-// a child after the prefix scan but before the replacement plan commits.
+// replaceChunkedDocumentBatch holds the collection-wide mutation coordinator
+// from stale-child discovery through durable publication. Mutations from
+// another manager therefore cannot publish between the scan and replacement.
 func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err

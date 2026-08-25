@@ -73,7 +73,7 @@ func produceOneMode(dir, mode string, scale, repetition int) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dbDir)
+	defer func() { _ = os.RemoveAll(dbDir) }()
 	r, err := produceMode(dbDir, mode, scale, repetition)
 	if err != nil {
 		return err
@@ -84,8 +84,6 @@ func produceOneMode(dir, mode string, scale, repetition int) error {
 	}
 	return os.WriteFile(filepath.Join(dir, mode+".raw.json"), append(raw, '\n'), 0o644)
 }
-
-const sourceChunkBatchLimit = 256
 
 func produceMode(dir, mode string, scale, repetition int) (row, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -219,7 +217,7 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		_ = closeDB()
 		return row{}, err
 	}
-	preCloseProbe, err := qualificationScoreOnlyProbe(col, scale)
+	preCloseProbe, err := qualificationScoreOnlyProbe(col, int(stats.V2LiveDocuments))
 	if err != nil {
 		_ = closeDB()
 		return row{}, fmt.Errorf("pre-close probe: %w", err)
@@ -251,7 +249,7 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		}
 		return row{}, err
 	}
-	reopenProbe, err := qualificationScoreOnlyProbe(col2, scale)
+	reopenProbe, err := qualificationScoreOnlyProbe(col2, int(reopenStats.V2LiveDocuments))
 	if err != nil {
 		closeErr := d2.Close()
 		if closeErr != nil {
@@ -317,10 +315,10 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 	return result, nil
 }
 
-func qualificationScoreOnlyProbe(col *collections.Collection, scale int) (scoreOnlyProbe, error) {
+func qualificationScoreOnlyProbe(col *collections.Collection, liveRows int) (scoreOnlyProbe, error) {
 	response, err := col.SearchText(collections.TextSearchOptions{
 		IndexName: "lexical", Query: qualificationProbeQuery, TopK: 10,
-		CandidateLimit: scale * 3, MaxPostingsScanned: scale * 24,
+		CandidateLimit: liveRows, MaxPostingsScanned: liveRows * 8,
 		ResultMode: collections.TextSearchResultModeScoreOnly,
 	})
 	if err != nil {
