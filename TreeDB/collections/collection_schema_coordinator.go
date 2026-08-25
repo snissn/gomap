@@ -13,7 +13,6 @@ type chunkLifecycleLock struct {
 	refs  int
 }
 type collectionSchemaCoordinator struct {
-	mutationMu              sync.Mutex
 	schemaMu                sync.RWMutex
 	nativeVectorAdmissionMu sync.RWMutex
 	nativeVectorBaseline    atomic.Pointer[uint64]

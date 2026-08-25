@@ -380,47 +380,57 @@ func TestIngestChunkedDocumentsScansUnderCollectionMutationLock(t *testing.T) {
 	}
 }
 
-func TestIngestChunkedDocumentsSerializesCrossManagerMutationAfterStaleScan(t *testing.T) {
+func TestIngestChunkedDocumentsRetriesCrossManagerMutationAfterStaleScan(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		t.Fatalf("open second collection handle: %v", err)
 	}
+	cfg := fixedWindowCfg(8, 1)
+	seed, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": strings.Repeat("seed child ", 8)}}},
+		cfg,
+		ChunkedIngestOptions{},
+	)
+	if err != nil || len(seed) != 1 || len(seed[0].ChildIDs) < 2 {
+		t.Fatalf("seed batch=%+v err=%v", seed, err)
+	}
 
-	writerStarted := make(chan struct{})
-	writerDone := make(chan struct{})
+	lateOrdinal := len(seed[0].ChildIDs)
+	lateID := []byte(fmt.Sprintf("cross-manager#%d", lateOrdinal))
+	lateDocument, err := json.Marshal(map[string]any{
+		"body":                    "late child",
+		chunking.MetaFieldParent:  "cross-manager",
+		chunking.MetaFieldOrdinal: lateOrdinal,
+		chunking.MetaFieldKind:    chunking.KindChunk,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
 	var writerErr error
-	committedDuringScan := false
 	hooks := &chunkedIngestHooks{afterBatchScan: func() {
-		go func() {
-			close(writerStarted)
-			_, writerErr = second.InsertBatch(
-				[][]byte{[]byte("cross-manager#999")},
-				[][]byte{[]byte(`{"title":"late child","body":"late child"}`)},
-			)
-			close(writerDone)
-		}()
-		<-writerStarted
-		select {
-		case <-writerDone:
-			committedDuringScan = true
-		case <-time.After(100 * time.Millisecond):
-		}
+		once.Do(func() {
+			_, writerErr = second.InsertBatch([][]byte{lateID}, [][]byte{lateDocument})
+		})
 	}}
 
-	if _, err := first.IngestChunkedDocuments(
+	replacement, err := first.IngestChunkedDocuments(
 		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": "replacement"}}},
-		fixedWindowCfg(8, 1),
+		cfg,
 		ChunkedIngestOptions{hooks: hooks},
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("replacement batch: %v", err)
 	}
-	<-writerDone
 	if writerErr != nil {
 		t.Fatalf("cross-manager insert: %v", writerErr)
 	}
-	if committedDuringScan {
-		t.Fatal("cross-manager mutation published between stale-child scan and replacement")
+	if len(replacement) != 1 || replacement[0].Replaced != len(seed[0].ChildIDs)+1 {
+		t.Fatalf("replacement=%+v want replaced=%d", replacement, len(seed[0].ChildIDs)+1)
+	}
+	if got, err := first.Get(lateID); err != nil || got != nil {
+		t.Fatalf("late stale child survived replacement: %s err=%v", got, err)
 	}
 }
 

@@ -403,9 +403,9 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	return results, nil
 }
 
-// replaceChunkedDocumentBatch holds the collection-wide mutation coordinator
-// from stale-child discovery through durable publication. Mutations from
-// another manager therefore cannot publish between the scan and replacement.
+// replaceChunkedDocumentBatch discovers stale children from the same snapshot
+// used to plan each publication attempt. Cross-manager root drift forces a
+// retry and a fresh scan before the replacement can commit.
 func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
@@ -420,18 +420,9 @@ func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPla
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}
 
-	deleteIDs := make([][]byte, 0, len(plans)*2)
 	insertIDs := make([][]byte, 0, len(plans)*2)
 	insertDocs := make([][]byte, 0, len(plans)*2)
-	replaced := make([]int, len(plans))
-	for i, plan := range plans {
-		oldChildren, _, err := c.chunkChildrenUnlocked(plan.parentID)
-		if err != nil {
-			return nil, err
-		}
-		replaced[i] = len(oldChildren)
-		deleteIDs = append(deleteIDs, oldChildren...)
-		deleteIDs = append(deleteIDs, plan.parentID)
+	for _, plan := range plans {
 		for _, child := range plan.children {
 			insertIDs = append(insertIDs, child.id)
 			insertDocs = append(insertDocs, child.document)
@@ -439,13 +430,33 @@ func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPla
 		insertIDs = append(insertIDs, plan.parentID)
 		insertDocs = append(insertDocs, plan.parent)
 	}
-	if hooks != nil && hooks.afterBatchScan != nil {
-		hooks.afterBatchScan()
-	}
+
+	var deleteIDs [][]byte
+	var replaced []int
+	hookCalled := false
 
 	var lastErr error
 	for attempt := range maxCollectionMutationRetries {
-		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, nil)
+		attemptReplaced := make([]int, len(plans))
+		deletePlanner := func(snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, error) {
+			attemptDeleteIDs := make([][]byte, 0, len(plans)*2)
+			for i, plan := range plans {
+				oldChildren, _, err := c.chunkChildrenAtSnapshot(plan.parentID, snap, catalog)
+				if err != nil {
+					return nil, err
+				}
+				attemptReplaced[i] = len(oldChildren)
+				attemptDeleteIDs = append(attemptDeleteIDs, oldChildren...)
+				attemptDeleteIDs = append(attemptDeleteIDs, plan.parentID)
+			}
+			if !hookCalled && hooks != nil && hooks.afterBatchScan != nil {
+				hookCalled = true
+				hooks.afterBatchScan()
+			}
+			deleteIDs = attemptDeleteIDs
+			return attemptDeleteIDs, nil
+		}
+		plan, err := c.buildSourceReplacementPlan(nil, insertIDs, insertDocs, deletePlanner, nil, nil)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -454,6 +465,7 @@ func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPla
 			}
 			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
 		}
+		replaced = attemptReplaced
 		publishErr := c.publishSourceReplacementPlan(plan, nil)
 		plan.close()
 		if isRetriableCollectionMutationError(publishErr) {
@@ -549,6 +561,16 @@ func (c *Collection) ChunkChildrenWithStats(parentID []byte) ([][]byte, ChunkChi
 }
 
 func (c *Collection) chunkChildrenUnlocked(parentID []byte) ([][]byte, ChunkChildrenScanStats, error) {
+	return c.chunkChildrenWithScanner(parentID, c.scanChunkDocumentsByParentPrefix)
+}
+
+func (c *Collection) chunkChildrenAtSnapshot(parentID []byte, snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, ChunkChildrenScanStats, error) {
+	return c.chunkChildrenWithScanner(parentID, func(prefix []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error) {
+		return c.scanChunkDocumentsByParentPrefixAtSnapshot(snap, catalog, prefix, maxDocuments, fn)
+	})
+}
+
+func (c *Collection) chunkChildrenWithScanner(parentID []byte, scan func([]byte, int, func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error)) ([][]byte, ChunkChildrenScanStats, error) {
 	prefix := append(append([]byte(nil), parentID...), '#')
 	ordinals := map[int][]byte{}
 	inspect := func(record DocumentRecord) (bool, error) {
@@ -572,7 +594,7 @@ func (c *Collection) chunkChildrenUnlocked(parentID []byte) ([][]byte, ChunkChil
 		ordinals[meta.Ordinal] = bytes.Clone(id)
 		return true, nil
 	}
-	truncated, stats, err := c.scanChunkDocumentsByParentPrefix(prefix, chunkingScanMaxDocuments, inspect)
+	truncated, stats, err := scan(prefix, chunkingScanMaxDocuments, inspect)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -618,6 +640,17 @@ func (c *Collection) scanChunkDocumentsByParentPrefix(prefix []byte, maxDocument
 	}
 	if catalog == nil {
 		return false, stats, errCollectionNotFound
+	}
+	return c.scanChunkDocumentsByParentPrefixAtSnapshot(snap, catalog, prefix, maxDocuments, fn)
+}
+
+func (c *Collection) scanChunkDocumentsByParentPrefixAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, prefix []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, ChunkChildrenScanStats, error) {
+	var stats ChunkChildrenScanStats
+	if snap == nil || catalog == nil {
+		return false, stats, fmt.Errorf("collections: chunk child snapshot and catalog are required")
+	}
+	if len(prefix) == 0 || maxDocuments <= 0 || fn == nil {
+		return false, stats, fmt.Errorf("collections: chunk child prefix, positive bound, and callback are required")
 	}
 	it, err := collectionIteratorAtCatalogRoot(
 		snap,

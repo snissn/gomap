@@ -3200,7 +3200,6 @@ func (c *Collection) tryLockMutation() (collectionMutationUnlock, bool) {
 
 type collectionMutationUnlock struct {
 	domain    *collectionWriteDomain
-	shared    *sync.Mutex
 	holdStart time.Time
 	wait      time.Duration
 }
@@ -3210,35 +3209,20 @@ func lockCollectionDomainMutation(domain *collectionWriteDomain) collectionMutat
 		return collectionMutationUnlock{}
 	}
 	lockStart := time.Now()
-	var shared *sync.Mutex
-	if domain.schemaCoordinator != nil {
-		shared = &domain.schemaCoordinator.mutationMu
-		shared.Lock()
-	}
 	domain.mutationMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
-	return collectionMutationUnlock{domain: domain, shared: shared, holdStart: holdStart, wait: wait}
+	return collectionMutationUnlock{domain: domain, holdStart: holdStart, wait: wait}
 }
 
 func tryLockCollectionDomainMutation(domain *collectionWriteDomain) (collectionMutationUnlock, bool) {
 	if domain == nil {
 		return collectionMutationUnlock{}, false
 	}
-	var shared *sync.Mutex
-	if domain.schemaCoordinator != nil {
-		shared = &domain.schemaCoordinator.mutationMu
-		if !shared.TryLock() {
-			return collectionMutationUnlock{}, false
-		}
-	}
 	if !domain.mutationMu.TryLock() {
-		if shared != nil {
-			shared.Unlock()
-		}
 		return collectionMutationUnlock{}, false
 	}
-	return collectionMutationUnlock{domain: domain, shared: shared, holdStart: time.Now()}, true
+	return collectionMutationUnlock{domain: domain, holdStart: time.Now()}, true
 }
 
 func (unlock collectionMutationUnlock) Unlock() {
@@ -3247,9 +3231,6 @@ func (unlock collectionMutationUnlock) Unlock() {
 	}
 	hold := time.Since(unlock.holdStart)
 	unlock.domain.mutationMu.Unlock()
-	if unlock.shared != nil {
-		unlock.shared.Unlock()
-	}
 	unlock.domain.observeMutationLock(unlock.wait, hold)
 }
 

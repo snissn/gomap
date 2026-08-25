@@ -39,6 +39,8 @@ type sourceReplacementPlan struct {
 	commandWAL       *backenddb.CommandWALIntent
 }
 
+type sourceReplacementDeletePlanner func(*backenddb.Snapshot, *collectionCatalog) ([][]byte, error)
+
 func (plan *sourceReplacementPlan) close() {
 	if plan == nil {
 		return
@@ -99,7 +101,7 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, replay, hooks)
+		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, replay, hooks)
 		if err != nil {
 			if isRetriableCollectionMutationError(err) {
 				lastErr = err
@@ -147,7 +149,7 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	return 0, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks) (*sourceReplacementPlan, error) {
+func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs [][]byte, deletePlanner sourceReplacementDeletePlanner, replay *backenddb.CommandWALIntent, hooks *sourcePublicationHooks) (*sourceReplacementPlan, error) {
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -186,6 +188,13 @@ func (c *Collection) buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs
 	plan.baseSystemRoot = snapshotSystemRoot(snap)
 	plan.baseCommitSeq = snapshotCommitSeq(snap)
 	plan.baseRootIDs = make(map[string]uint64)
+
+	if deletePlanner != nil {
+		deleteIDs, err = deletePlanner(snap, catalog)
+		if err != nil {
+			return fail(err)
+		}
+	}
 
 	if err := c.appendSourceDeleteDeltas(plan, deleteIDs, plannerOptions); err != nil {
 		return fail(err)
