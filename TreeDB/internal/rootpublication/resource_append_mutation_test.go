@@ -20,6 +20,20 @@ func appendMutationTestObligation(partID uint64) StableLogicalObligation {
 	return obligation
 }
 
+func appendMutationResourceToken(t testing.TB, file *os.File, kind ResourceKind, resourceID string, frontier uint64, reachability ReachabilityField, obligations ...StableLogicalObligation) *StableResourceToken {
+	t.Helper()
+	token, err := NewStableResourceToken(StableResourceSpec{
+		Kind: kind, LogicalLane: string(kind), ResourceID: resourceID, Generation: 1,
+		DiagnosticPath: string(kind) + "/" + resourceID, File: file, Frontier: DurableFrontier{Bytes: frontier},
+		Digest: sha256.Sum256([]byte("append-mutation-header")), Reachability: reachability,
+		LogicalObligations: obligations, ContentSynced: true,
+	})
+	if err != nil {
+		t.Fatalf("new append mutation token: %v", err)
+	}
+	return token
+}
+
 func TestStableLogicalObligationFreshBulkBuildDoesNotPathCopy(t *testing.T) {
 	const obligationCount = 64
 	obligations := make([]StableLogicalObligation, obligationCount)
@@ -465,6 +479,545 @@ func TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear(t *testing.T) 
 	}
 	if candidate.indexed != nil {
 		t.Fatal("subsequent small Add activated indexed state")
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *testing.T) {
+	// This is the physical-collision scale witness. Before the certified path,
+	// one existing physical identity forced a full retained-closure clone.
+	const retained = 4096
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "asset.bin", "x")
+	newToken := func(obligation StableLogicalObligation) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "asset", Generation: 1,
+			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: 1},
+			Digest: sha256.Sum256([]byte("asset")), Reachability: ReachabilityColumnManifest,
+			LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	baseObligation, added := appendMutationTestObligation(1), appendMutationTestObligation(2)
+	parentBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id < retained; id++ {
+		if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parentBuilder.Add(newToken(baseObligation)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release()
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(newToken(added)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := NewStableResourceSetBuilder()
+	defer candidate.Abandon()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.AppendOnlyCollisionFastPath != 1 || work.AppendOnlyCollisionFallbacks != 0 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 {
+		t.Fatalf("physical collision retained work=%+v want certified mutation-local path", work)
+	}
+	if got := stableResourceKindViewCount(candidate.kindViews); got != retained {
+		t.Fatalf("candidate entries=%d want %d", got, retained)
+	}
+	merged, err := candidate.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Release()
+	if merged.Len() != retained {
+		t.Fatalf("merged entries=%d want %d (coalesced producer must not remain visible)", merged.Len(), retained)
+	}
+	var got []StableLogicalObligation
+	merged.rangeEntries(func(entry *stableResourceEntry) bool {
+		if entry.token.ResourceID() == "asset" {
+			got = entry.logicalObligations.slice()
+		}
+		return true
+	})
+	if !slices.Equal(got, []StableLogicalObligation{baseObligation, added}) {
+		t.Fatalf("coalesced obligations=%+v want exact base+addition", got)
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducerTokens(t *testing.T) {
+	const publications = 512
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	collisionFile := writeStableResourceFixture(t, dir, "current.bin", string(make([]byte, publications+2)))
+	var baseReleases, producerReleases atomic.Uint64
+	base := appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, appendMutationTestObligation(1))
+	base.onRelease = func() { baseReleases.Add(1) }
+	builder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Add(base); err != nil {
+		t.Fatal(err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := NewStableResourceSetBuilder()
+	if err := candidate.Merge(resources); err != nil {
+		t.Fatal(err)
+	}
+	root := candidate.kindViews[ResourceColumnAsset].root
+	var rootDepth func(*stableResourceEntryNode) int
+	rootDepth = func(node *stableResourceEntryNode) int {
+		if node == nil {
+			return 0
+		}
+		left, right := rootDepth(node.left), rootDepth(node.right)
+		if right > left {
+			left = right
+		}
+		return left + 1
+	}
+	initialDepth := rootDepth(root)
+	for publication := 0; publication < publications; publication++ {
+		added := appendMutationTestObligation(uint64(publication + 2))
+		producerToken := appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", uint64(publication+2), ReachabilityColumnManifest, added)
+		producerToken.onRelease = func() { producerReleases.Add(1) }
+		producerBuilder := NewStableResourceSetBuilder()
+		if err := producerBuilder.Add(producerToken); err != nil {
+			t.Fatal(err)
+		}
+		producer, err := producerBuilder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+			ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if work.AppendOnlyCollisionFastPath != 1 || candidate.kindViews[ResourceColumnAsset].root != root {
+			t.Fatalf("publication %d work=%+v root grew on collision-only append", publication, work)
+		}
+		if got := producerReleases.Load(); got != uint64(publication+1) {
+			t.Fatalf("publication %d released producers=%d want %d", publication, got, publication+1)
+		}
+	}
+	ownedEntries := 0
+	root.rangeEntries(func(*stableResourceEntry) bool {
+		ownedEntries++
+		return true
+	})
+	if ownedEntries != stableResourceEntryLinearLookupLimit+1 || stableResourceKindViewCount(candidate.kindViews) != ownedEntries || rootDepth(candidate.kindViews[ResourceColumnAsset].root) != initialDepth {
+		t.Fatalf("ownership entries=%d canonical=%d depth=%d want entries=%d depth=%d", ownedEntries, stableResourceKindViewCount(candidate.kindViews), rootDepth(candidate.kindViews[ResourceColumnAsset].root), stableResourceEntryLinearLookupLimit+1, initialDepth)
+	}
+	merged, err := candidate.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := merged.Descriptors(); len(got) != ownedEntries {
+		t.Fatalf("descriptors=%d want %d", len(got), ownedEntries)
+	}
+	merged.Release()
+	if baseReleases.Load() != 1 || producerReleases.Load() != publications {
+		t.Fatalf("final releases base=%d producer=%d", baseReleases.Load(), producerReleases.Load())
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	currentFile := writeStableResourceFixture(t, dir, "current.bin", "xxxx")
+	newFile := writeStableResourceFixture(t, dir, "new.bin", "xxx")
+	baseObligation := appendMutationTestObligation(1)
+	addedCollision, addedDistinct := appendMutationTestObligation(2), appendMutationTestObligation(3)
+	parentBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parentBuilder.Add(appendMutationResourceToken(t, currentFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, baseObligation)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(appendMutationResourceToken(t, currentFile, ResourceColumnAsset, "current", 4, ReachabilityColumnManifest, addedCollision)); err != nil {
+		t.Fatal(err)
+	}
+	if err := producerBuilder.Add(appendMutationResourceToken(t, newFile, ResourceColumnAsset, "new", 3, ReachabilityColumnManifest, addedDistinct)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := NewStableResourceSetBuilder()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{addedCollision, addedDistinct},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.AppendOnlyCollisionFastPath != 1 || work.AppendOnlyCollisionFallbacks != 0 || work.SourceEntriesInspected != 2 || work.PhysicalEntryLookupProbes != 2 || work.PhysicalEntryLookupComparisons != 1 || work.PhysicalEntryLookupAdmissions != 1 || work.CopiedEntries != 1 || work.PhysicalHandleShares != 1 {
+		t.Fatalf("mixed mutation work=%+v", work)
+	}
+	merged, err := candidate.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Release()
+	if merged.Len() != stableResourceEntryLinearLookupLimit+2 || len(merged.Tokens()) != merged.Len() || len(merged.PhysicalDescriptors()) != merged.Len() {
+		t.Fatalf("mixed canonical sizes len=%d tokens=%d physical=%d", merged.Len(), len(merged.Tokens()), len(merged.PhysicalDescriptors()))
+	}
+	if err := merged.validateResolved(); err != nil {
+		t.Fatal(err)
+	}
+	var current, admitted *StableResourceDescriptor
+	for _, descriptor := range merged.Descriptors() {
+		descriptor := descriptor
+		switch descriptor.ResourceID() {
+		case "current":
+			current = &descriptor
+		case "new":
+			admitted = &descriptor
+		}
+	}
+	if current == nil || current.Frontier().Bytes != 4 || !slices.Equal(current.LogicalObligations(), []StableLogicalObligation{baseObligation, addedCollision}) {
+		t.Fatalf("current descriptor=%+v", current)
+	}
+	if admitted == nil || admitted.Frontier().Bytes != 3 || !slices.Equal(admitted.LogicalObligations(), []StableLogicalObligation{addedDistinct}) {
+		t.Fatalf("admitted descriptor=%+v", admitted)
+	}
+	if _, _, err := merged.DependencyManifestV1(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	oldFile := writeStableResourceFixture(t, dir, "old.bin", "x")
+	newFile := writeStableResourceFixture(t, dir, "new.bin", "x")
+	distinctFile := writeStableResourceFixture(t, dir, "distinct.bin", "x")
+	parentBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parentBuilder.Add(appendMutationResourceToken(t, oldFile, ResourceColumnAsset, "z-conflict", 1, ReachabilityColumnManifest, appendMutationTestObligation(1))); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	first, late := appendMutationTestObligation(2), appendMutationTestObligation(3)
+	if err := producerBuilder.Add(appendMutationResourceToken(t, distinctFile, ResourceColumnAsset, "a-distinct", 1, ReachabilityColumnManifest, first)); err != nil {
+		t.Fatal(err)
+	}
+	if err := producerBuilder.Add(appendMutationResourceToken(t, newFile, ResourceColumnAsset, "z-conflict", 1, ReachabilityColumnManifest, late)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Release()
+	candidate := NewStableResourceSetBuilder()
+	defer candidate.Abandon()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	beforeCandidate, beforeProducer := candidate.kindViews[ResourceColumnAsset], producer.kindViews[ResourceColumnAsset]
+	_, err = candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{first, late},
+	})
+	if !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("late conflict=%v want %v", err, ErrResourceConflict)
+	}
+	afterCandidate, afterProducer := candidate.kindViews[ResourceColumnAsset], producer.kindViews[ResourceColumnAsset]
+	if ResourceOwnerState(producer.owner.Load()) != ResourceOwnerBuilder || afterCandidate.root != beforeCandidate.root || afterCandidate.logical != beforeCandidate.logical || afterCandidate.physical != beforeCandidate.physical || afterCandidate.count != beforeCandidate.count || afterProducer.root != beforeProducer.root || afterProducer.logical != beforeProducer.logical || afterProducer.physical != beforeProducer.physical || afterProducer.count != beforeProducer.count {
+		t.Fatalf("late conflict mutated inputs: producer owner=%v", ResourceOwnerState(producer.owner.Load()))
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders(t *testing.T) {
+	for _, candidateFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "source-first", true: "candidate-first"}[candidateFirst], func(t *testing.T) {
+			dir := t.TempDir()
+			scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+			collisionFile := writeStableResourceFixture(t, dir, "current.bin", "xx")
+			var sourceReleases, producerReleases atomic.Uint64
+			baseToken := appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, appendMutationTestObligation(1))
+			baseToken.onRelease = func() { sourceReleases.Add(1) }
+			baseBuilder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+				if err := baseBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := baseBuilder.Add(baseToken); err != nil {
+				t.Fatal(err)
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			added := appendMutationTestObligation(2)
+			producerToken := appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", 2, ReachabilityColumnManifest, added)
+			producerToken.onRelease = func() { producerReleases.Add(1) }
+			producerBuilder := NewStableResourceSetBuilder()
+			if err := producerBuilder.Add(producerToken); err != nil {
+				t.Fatal(err)
+			}
+			producer, err := producerBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateBuilder := NewStableResourceSetBuilder()
+			if err := candidateBuilder.Merge(inherited); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added}}); err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := candidateBuilder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if producerReleases.Load() != 1 || sourceReleases.Load() != 0 {
+				t.Fatalf("after merge source=%d producer=%d", sourceReleases.Load(), producerReleases.Load())
+			}
+			if candidateFirst {
+				candidate.Release()
+				if sourceReleases.Load() != 0 || base.Len() == 0 {
+					t.Fatalf("candidate-first released source early: source=%d base=%d", sourceReleases.Load(), base.Len())
+				}
+				base.Release()
+			} else {
+				base.Release()
+				if sourceReleases.Load() != 0 || candidate.Len() == 0 {
+					t.Fatalf("source-first released candidate early: source=%d candidate=%d", sourceReleases.Load(), candidate.Len())
+				}
+				candidate.Release()
+			}
+			if sourceReleases.Load() != 1 || producerReleases.Load() != 1 {
+				t.Fatalf("final source=%d producer=%d", sourceReleases.Load(), producerReleases.Load())
+			}
+		})
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback(t *testing.T) {
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	immutableFile := writeStableResourceFixture(t, dir, "immutable.bin", "x")
+	digest := sha256.Sum256([]byte("immutable"))
+	parentBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parentBuilder.Add(immutableGenerationTokenFixture(t, immutableFile, 1, digest)); err != nil {
+		t.Fatal(err)
+	}
+	if err := parentBuilder.Add(immutableGenerationTokenFixture(t, immutableFile, 2, digest)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(immutableGenerationTokenFixture(t, immutableFile, 1, digest)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := NewStableResourceSetBuilder()
+	defer candidate.Abandon()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.AppendOnlyCollisionFastPath != 0 || work.AppendOnlyCollisionFallbacks != 1 || work.CopiedEntries == 0 || work.PhysicalHandleShares == 0 {
+		t.Fatalf("ambiguous physical fallback work=%+v", work)
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback(t *testing.T) {
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	sharedFile := writeStableResourceFixture(t, dir, "shared.bin", "x")
+	parentBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := parentBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := parentBuilder.Add(appendMutationResourceToken(t, sharedFile, ResourceColumnAsset, "column", 1, ReachabilityColumnManifest)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(appendMutationResourceToken(t, sharedFile, ResourceValueLog, "vlog", 1, ReachabilityValueLogPointer)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Release()
+	candidate := NewStableResourceSetBuilder()
+	defer candidate.Abandon()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+	if err != nil || work.AppendOnlyCollisionFastPath != 0 || work.AppendOnlyCollisionFallbacks != 1 {
+		t.Fatalf("cross-kind collision error=%v work=%+v", err, work)
+	}
+	if ResourceOwnerState(producer.owner.Load()) != ResourceOwnerTransferred || len(candidate.entries) != stableResourceEntryLinearLookupLimit+2 {
+		t.Fatal("cross-kind exact fallback did not atomically admit the distinct resource")
+	}
+	merged, err := candidate.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer merged.Release()
+	kinds := map[ResourceKind]bool{}
+	for _, descriptor := range merged.Descriptors() {
+		kinds[descriptor.Kind()] = true
+	}
+	if !kinds[ResourceColumnAsset] || !kinds[ResourceValueLog] || merged.Len() != stableResourceEntryLinearLookupLimit+2 {
+		t.Fatalf("cross-kind descriptors kinds=%v len=%d", kinds, merged.Len())
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback(t *testing.T) {
+	dir := t.TempDir()
+	parent, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	resource := writeStableResourceFixture(t, dir, "replacement.bin", "x")
+	namespace, err := NewStableNamespaceToken(StableNamespaceSpec{
+		Parent: parent, LinkedResource: resource, ParentGeneration: 1, Operation: NamespaceCreate,
+		NewName: "replacement.bin", DiagnosticPath: "columns/replacement.bin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := namespace.Stabilize(); err != nil {
+		t.Fatal(err)
+	}
+	newToken := func(namespace *StableNamespaceToken) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "replacement", Generation: 1,
+			DiagnosticPath: "columns/replacement.bin", File: resource, Frontier: DurableFrontier{Bytes: 1},
+			Digest: sha256.Sum256([]byte("replacement")), Reachability: ReachabilityColumnManifest,
+			Namespace: namespace, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	var baseReleases, producerReleases atomic.Uint64
+	candidate := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := candidate.Add(distinctPhysicalTokenFixture(t, resource, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	baseToken := newToken(nil)
+	baseToken.onRelease = func() { baseReleases.Add(1) }
+	logicalKey := baseToken.logicalKey()
+	if err := candidate.Add(baseToken); err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	producerToken := newToken(namespace)
+	producerToken.onRelease = func() { producerReleases.Add(1) }
+	if err := producerBuilder.Add(producerToken); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+	if err != nil {
+		candidate.Abandon()
+		t.Fatal(err)
+	}
+	if work.AppendOnlyCollisionFastPath != 0 || work.AppendOnlyCollisionFallbacks != 1 {
+		candidate.Abandon()
+		t.Fatalf("representative replacement work=%+v want exact fallback", work)
+	}
+	if ResourceOwnerState(producer.owner.Load()) != ResourceOwnerTransferred || baseReleases.Load() != 1 || producerReleases.Load() != 1 {
+		candidate.Abandon()
+		t.Fatalf("replacement ownership=%v releases=(base=%d producer=%d)", ResourceOwnerState(producer.owner.Load()), baseReleases.Load(), producerReleases.Load())
+	}
+	producer.Release()
+	if producerReleases.Load() != 1 {
+		candidate.Abandon()
+		t.Fatalf("transferred producer released twice: %d", producerReleases.Load())
+	}
+	resources, err := candidate.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	entry := findStableResourceLogical(resources.kindViews[ResourceColumnAsset].logical, logicalKey)
+	if entry == nil || entry.token.namespace == nil {
+		t.Fatal("exact fallback did not install the namespace-bearing representative")
+	}
+	if err := resources.validateResolved(); err != nil {
+		t.Fatal(err)
 	}
 }
 
