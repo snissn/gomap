@@ -210,11 +210,14 @@ func validateRow(r row) error {
 	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize < 1 || r.ChunkBatchCount != (r.SourceDocuments+r.ChunkBatchSize-1)/r.ChunkBatchSize) {
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize < 1 || r.ChunkBatchCount != (r.SourceDocuments+r.ChunkBatchSize-1)/r.ChunkBatchSize) {
 		return fmt.Errorf("source_chunk requires returned parent, generated child, live-row, and batch accounting")
 	}
 	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
 		return fmt.Errorf("non-source modes must not claim chunked parent or batch rows")
+	}
+	if (r.Mode == "indexed_insert" || r.Mode == "post_load_backfill") && r.IndexedLiveRows != r.SourceDocuments {
+		return fmt.Errorf("%s requires every source document to be live", r.Mode)
 	}
 	if r.Mode == "maintenance" && (r.IndexedLiveRows != r.SourceDocuments/2 || r.TombstoneDebt != uint64(r.SourceDocuments-r.IndexedLiveRows)) {
 		return fmt.Errorf("maintenance must record deleted-document tombstone debt")
@@ -222,8 +225,11 @@ func validateRow(r row) error {
 	if r.Mode != "maintenance" && r.TombstoneDebt != 0 {
 		return fmt.Errorf("non-maintenance modes must not claim tombstone debt")
 	}
-	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.IndexedRowsPerSec <= 0 || r.WallSeconds <= 0 {
+	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.WallSeconds <= 0 {
 		return fmt.Errorf("text-v2 counts or timing incomplete")
+	}
+	if !same(r.SourceDocsPerSec, float64(r.SourceDocuments)/r.WallSeconds) || !same(r.ChunksPerSec, float64(r.GeneratedChunks)/r.WallSeconds) || !same(r.IndexedRowsPerSec, float64(r.IndexedLiveRows)/r.WallSeconds) {
+		return fmt.Errorf("throughput does not recompute from counts and wall time")
 	}
 	for _, name := range []string{"analyzer", "posting_builder", "root_mutation", "value_log", "checkpoint", "reopen"} {
 		v, ok := r.Stages[name]
