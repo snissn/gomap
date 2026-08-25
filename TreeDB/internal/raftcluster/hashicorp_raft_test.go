@@ -687,22 +687,28 @@ func testHashicorpRaftProviderLeaderCrashRestartCatchUp(t *testing.T, waitForBac
 		// First catch-up resets HashiCorp Raft's private replication-failure
 		// generation. Start the controlled backoff phase from that known state
 		// instead of racing failures accumulated while the old leader was down.
-		target := hraft.ServerAddress(peerAddress(t, restarted.cfg, crashedID))
-		newLeader.raftTransport.resetAppendFailures(target)
-		cluster.disconnectNode(t, crashedID)
+		controlledLeader := cluster.waitForLeader(t)
+		backoffNode := restarted
+		if controlledLeader.id == restarted.id {
+			backoffNode = cluster.firstFollower(t, controlledLeader.id)
+		}
+		controlledLeader.submitter = newHashicorpRaftDBSubmitter(t, controlledLeader, collectionCountCatalogVersion(controlledLeader, 7))
+		target := hraft.ServerAddress(peerAddress(t, backoffNode.cfg, backoffNode.id))
+		controlledLeader.raftTransport.resetAppendFailures(target)
+		cluster.disconnectNode(t, backoffNode.id)
 
 		thirdCtx, thirdCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer thirdCancel()
-		third, err := newLeader.submitter.SubmitCommandEntryV1(thirdCtx, testClusterCreateCollectionEntryNamed(t, "invoices", "raftcluster/create/invoices/failover", 9), raftentry.RequestMetadataV1{
+		third, err := controlledLeader.submitter.SubmitCommandEntryV1(thirdCtx, testClusterCreateCollectionEntryNamed(t, "invoices", "raftcluster/create/invoices/failover", 9), raftentry.RequestMetadataV1{
 			RequestID: 723,
 			AckPolicy: iwire.AckRaftCommitted,
 		})
 		if err != nil {
-			t.Fatalf("new leader SubmitCommandEntryV1 during controlled restart backoff: %v", err)
+			t.Fatalf("controlled leader SubmitCommandEntryV1 during restart backoff: %v", err)
 		}
-		cluster.waitRestartBackoff(t, newLeader.id, crashedID, third.CommittedEntry.EntryID())
+		cluster.waitRestartBackoff(t, controlledLeader.id, backoffNode.id, third.CommittedEntry.EntryID())
 		cluster.connectAllTransports(t)
-		cluster.waitRestartCatchUp(t, crashedID, third.CommittedEntry.EntryID())
+		cluster.waitRestartCatchUp(t, backoffNode.id, third.CommittedEntry.EntryID())
 		finalEntry = third.CommittedEntry.EntryID()
 	}
 	assertHashicorpRaftStoreFiles(t, restarted, "after leader restart")
