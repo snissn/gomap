@@ -1026,6 +1026,44 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 	return nil
 }
 
+func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourceEntry, work *StableResourceClosureWork) error {
+	logicalKey := incoming.token.logicalKey()
+	for i := range *entries {
+		entry := &(*entries)[i]
+		existing := entry.token
+		if existing.logicalKey() == logicalKey && !existing.samePhysicalIdentity(incoming.token) {
+			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
+		}
+		coalesce, err := stableResourcesCoalesce(existing, incoming.token)
+		if err != nil {
+			return err
+		}
+		if !coalesce {
+			continue
+		}
+		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
+			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
+		}
+		entry.logicalObligations, err = entry.logicalObligations.appendCertified(incoming.logicalObligations.slice(), work)
+		if err != nil {
+			return err
+		}
+		entry.frontier = maxFrontier(entry.frontier, incoming.frontier)
+		mergeStableResourceDescriptorIdentity(entry, incoming.logicalLane, incoming.resourceID, incoming.diagnosticPath)
+		for field := range incoming.reachability {
+			entry.reachability[field] = struct{}{}
+		}
+		if existing.namespace == nil && incoming.token.namespace != nil {
+			entry.token = incoming.token
+			entry.pins = nil
+			entry.pinIndex = nil
+		}
+		return nil
+	}
+	*entries = append(*entries, cloneStableResourceEntry(incoming))
+	return nil
+}
+
 // Merge consumes a child builder-owned set only after the complete transitive
 // union has passed conflict checks. This is the one-way child-to-parent
 // transfer used before a parent installs a child root or catalog ID.
@@ -1180,8 +1218,18 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 
 	merged := cloneStableResourceEntries(builder.entries)
-	lookup := newStableResourceEntryLookup(merged)
+	lookup := stableResourceEntryLookup{}
+	if len(merged)+len(child.entries) > stableResourceEntryLinearLookupLimit {
+		lookup = newStableResourceEntryLookup(merged)
+	}
 	for _, incoming := range child.entries {
+		if lookup.logical == nil {
+			err = mergeAppendOnlyViewEntryLinear(&merged, incoming, &work)
+			if err != nil {
+				break
+			}
+			continue
+		}
 		logicalKey := incoming.token.logicalKey()
 		coalesced := false
 		work.PhysicalEntryLookupProbes++
@@ -1254,10 +1302,14 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 	dropped := droppedStableResourceTokens(merged, builder.entries, child.entries)
 	builder.entries = merged
-	if builder.indexed == nil {
-		builder.indexed = &stableResourceBuilderIndexedState{}
+	if lookup.logical == nil {
+		builder.indexed = nil
+	} else {
+		if builder.indexed == nil {
+			builder.indexed = &stableResourceBuilderIndexedState{}
+		}
+		builder.indexed.lookup = lookup
 	}
-	builder.indexed.lookup = lookup
 	child.entries = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -143,6 +144,69 @@ func TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations(t
 	})
 	if !errors.Is(err, ErrUnresolvedResource) {
 		t.Fatalf("empty scoped producer entry error=%v want %v", err, ErrUnresolvedResource)
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "asset.bin", "x")
+	newToken := func(obligation StableLogicalObligation) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "asset", Generation: 1,
+			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: 1},
+			Digest: sha256.Sum256([]byte("asset")), Reachability: ReachabilityColumnManifest,
+			LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	baseObligation := appendMutationTestObligation(1)
+	added := appendMutationTestObligation(2)
+	parentBuilder := NewStableResourceSetBuilder()
+	if err := parentBuilder.Add(newToken(baseObligation)); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Release()
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(newToken(added)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Release()
+	candidate := NewStableResourceSetBuilder()
+	defer candidate.Abandon()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.PhysicalEntryLookupProbes != 0 || work.PhysicalEntryLookupComparisons != 0 || work.PhysicalEntryLookupAdmissions != 0 {
+		t.Fatalf("small append-only merge used indexed lookup: %+v", work)
+	}
+	if candidate.indexed != nil {
+		t.Fatal("small append-only merge retained indexed state")
+	}
+	if got := candidate.entries[0].logicalObligations.slice(); !slices.Equal(got, []StableLogicalObligation{baseObligation, added}) {
+		t.Fatalf("obligations=%+v want exact base+addition", got)
+	}
+	if err := candidate.Add(stableTokenFixture(t, dir, "other.bin", 1, 8, ReachabilityColumnManifest, "other")); err != nil {
+		t.Fatal(err)
+	}
+	if candidate.indexed != nil {
+		t.Fatal("subsequent small Add activated indexed state")
 	}
 }
 
