@@ -7,10 +7,13 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 The post-fix public `IngestChunkedDocuments` 10k fixture is
 `smoke-10k-r5/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
 batches of at most 256 sources, 41 text generations, 0.471 s source/chunk wall,
-82,411,520-byte peak RSS, and 40,370,550 WAL-excluded physical bytes. Against
-the frozen baseline (20,001 generations, 155.567 s, 4,180,574,208-byte RSS,
-5,621,678,453-byte physical), it meets the generation, sub-1-GiB physical, and
->=2x throughput gates without a correctness/RSS/allocation/storage regression.
+82,411,520-byte peak RSS, 3,617,300 cumulative allocations, and 40,370,550
+WAL-excluded physical bytes. Against the frozen baseline (20,001 generations,
+155.567 s, 4,180,574,208-byte RSS, 82,293,880 cumulative allocations, and
+5,621,678,453-byte WAL-excluded physical), it meets the generation, sub-1-GiB
+physical, and >=2x throughput gates without an RSS, allocation, or storage
+regression. The manifest hash-binds these typed baseline values and thresholds;
+the validator rejects a report row that violates any one of them.
 
 `smoke-100k-r{1,2,3}/` and `smoke-1m-r{1,2,3}/` retain all four raw modes for
 the required repetitions. Each mode/repetition was measured in a fresh child
@@ -35,8 +38,18 @@ derived fixture identities to the retained JSON; they did not alter measured
 values or relabel the generating commit. `SHA256SUMS` binds the final retained
 manifest, report, and raw rows.
 
-Validate each retained artifact with:
+JSON shape validation alone does not prove those Git relationships. The CLI
+must run inside the candidate repository checkout with the measured objects
+available locally. It resolves the measured commit to the manifest tree, the
+tree/path to the manifest blob, and independently requires the current
+`HEAD:TreeDB/collections/document_chunking.go` blob to equal the measured blob.
+Missing Git objects, an unavailable Git object database, or any mismatch fails
+closed.
+
+From the candidate repository root, validate the retained artifact with:
 
 ```sh
-go run ./cmd/treedb_text_ingest_qual -manifest manifest.json -report report.json
+go run ./cmd/treedb_text_ingest_qual \
+  -manifest artifacts/4328-text-ingestion-qualification/manifest.json \
+  -report artifacts/4328-text-ingestion-qualification/report.json
 ```

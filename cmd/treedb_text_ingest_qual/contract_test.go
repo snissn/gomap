@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,15 @@ func TestValidateCompleteMatrix(t *testing.T) {
 	m := validManifest()
 	r := validReport(t, m)
 	if err := validate(m, r, manifestHash(t, m)); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyGitProvenance(m, func(args ...string) (string, error) {
+		value, ok := validGitOutputs(m)[gitKey(args...)]
+		if !ok {
+			return "", errors.New("unexpected Git invocation")
+		}
+		return value, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -44,6 +54,85 @@ func TestValidateAllowsReusedNumericPID(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSourceChunkAcceptanceThresholds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*row, sourceChunkAcceptance)
+		want string
+	}{
+		{"physical ceiling", func(r *row, a sourceChunkAcceptance) {
+			setWALExcludedPhysicalBytes(r, a.MaximumPhysicalTotalWALExcludedBytes+1)
+		}, "physical storage ceiling"},
+		{"throughput", func(r *row, a sourceChunkAcceptance) {
+			r.WallSeconds = a.BaselineWallSeconds/a.MinimumSourceDocsPerSecondMultiple + 1
+			r.SourceDocsPerSec = float64(r.SourceDocuments) / r.WallSeconds
+			r.ChunksPerSec = float64(r.GeneratedChunks) / r.WallSeconds
+			r.IndexedRowsPerSec = float64(r.IndexedLiveRows) / r.WallSeconds
+		}, "throughput is below"},
+		{"peak RSS", func(r *row, a sourceChunkAcceptance) {
+			r.PeakRSSBytes.Value = float64(a.BaselinePeakRSSBytes + 1)
+		}, "peak RSS regresses"},
+		{"allocations", func(r *row, a sourceChunkAcceptance) {
+			r.CumulativeAllocs.Value = float64(a.BaselineCumulativeAllocations + 1)
+		}, "allocations regress"},
+		{"storage regression", func(r *row, a sourceChunkAcceptance) {
+			setWALExcludedPhysicalBytes(r, a.BaselinePhysicalTotalWALExcludedBytes+1)
+		}, "storage regresses"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := validManifest()
+			r := validReport(t, m)
+			candidate := sourceChunk10KRow(t, &r)
+			tc.edit(candidate, m.Acceptance.SourceChunk10K)
+			if err := validate(m, r, manifestHash(t, m)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T) {
+	m := validManifest()
+	commitType := gitKey("cat-file", "-t", m.Commit)
+	tree := gitKey("rev-parse", "--verify", m.Commit+"^{tree}")
+	measuredPath := gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath)
+	blobType := gitKey("cat-file", "-t", m.ImplementationBlobOID)
+	candidatePath := gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath)
+	for _, tc := range []struct {
+		name, key, value, fail, want string
+	}{
+		{name: "Git unavailable", key: commitType, fail: "git unavailable", want: "resolve measured commit"},
+		{name: "commit type", key: commitType, value: "blob", want: "want commit"},
+		{name: "commit tree", key: tree, value: strings.Repeat("d", 40), want: "measured commit tree"},
+		{name: "measured path unavailable", key: measuredPath, fail: "missing path", want: "resolve measured implementation path"},
+		{name: "measured path blob", key: measuredPath, value: strings.Repeat("d", 40), want: "measured implementation blob"},
+		{name: "blob type", key: blobType, value: "tree", want: "want blob"},
+		{name: "candidate path unavailable", key: candidatePath, fail: "missing HEAD path", want: "resolve candidate HEAD implementation path"},
+		{name: "candidate blob", key: candidatePath, value: strings.Repeat("d", 40), want: "candidate HEAD implementation blob"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outputs := validGitOutputs(m)
+			if tc.value != "" {
+				outputs[tc.key] = tc.value
+			}
+			resolve := func(args ...string) (string, error) {
+				key := gitKey(args...)
+				if key == tc.key && tc.fail != "" {
+					return "", errors.New(tc.fail)
+				}
+				value, ok := outputs[key]
+				if !ok {
+					return "", errors.New("unexpected Git invocation")
+				}
+				return value, nil
+			}
+			if err := verifyGitProvenance(m, resolve); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsContractFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -53,7 +142,8 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"vectors", func(m *manifest, _ *report) { m.Observed.VectorsEnabled = true }, "vectors disabled"},
 		{"stale fixture manifest", func(m *manifest, _ *report) { m.FixtureSHA256 = "stale" }, "qualification generator"},
 		{"row fixture drift", func(_ *manifest, r *report) { r.Rows[0].IDsSHA256 = "stale" }, "fixture identity"},
-		{"unverifiable measured revision", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "verifiable commit URL"},
+		{"unverifiable measured revision", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "pinned commit"},
+		{"weakened acceptance", func(m *manifest, _ *report) { m.Acceptance.SourceChunk10K.MinimumSourceDocsPerSecondMultiple = 1 }, "pinned frozen"},
 		{"wrong analyzer", func(m *manifest, _ *report) { m.Analyzer = "keyword" }, "match the producer"},
 		{"wrong field weights", func(m *manifest, _ *report) { m.FieldWeights = "title=1,body=1" }, "match the producer"},
 		{"missing matrix", func(_ *manifest, r *report) { r.Rows = r.Rows[1:] }, "missing required mode/scale"},
@@ -194,8 +284,8 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
-	commit := strings.Repeat("a", 40)
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("c", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}}
+	commit := qualificationMeasuredCommit
+	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: qualificationMeasuredTreeOID, ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: qualificationImplementationBlob, Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}, Acceptance: expectedQualificationAcceptance()}
 }
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()
@@ -265,4 +355,38 @@ func validRow(mode string, scale, rep int) row {
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	rate := validRow(mode, scale, 1).IndexedRowsPerSec
 	return modeScaleSummary{Mode: mode, Scale: scale, MedianWallSeconds: 1, P95WallSeconds: 1, MedianIndexedRowsPerSec: rate, P95IndexedRowsPerSec: rate}
+}
+
+func sourceChunk10KRow(t *testing.T, r *report) *row {
+	t.Helper()
+	for i := range r.Rows {
+		if r.Rows[i].Mode == "source_chunk" && r.Rows[i].Scale == 10_000 {
+			return &r.Rows[i]
+		}
+	}
+	t.Fatal("source_chunk/10000 row missing")
+	return nil
+}
+
+func setWALExcludedPhysicalBytes(r *row, value int64) {
+	r.Storage.PhysicalIndexPageBytes = value
+	r.Storage.PhysicalValueLogBytes = 0
+	r.Storage.PhysicalWALBytes = 0
+	r.Storage.PhysicalOtherBytes = 0
+	r.Storage.PhysicalTotalBytes = value
+	r.Storage.PhysicalTotalWALExcludedBytes = value
+}
+
+func gitKey(args ...string) string {
+	return strings.Join(args, "\x00")
+}
+
+func validGitOutputs(m manifest) map[string]string {
+	return map[string]string{
+		gitKey("cat-file", "-t", m.Commit):                                  "commit",
+		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                 m.TreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath): m.ImplementationBlobOID,
+		gitKey("cat-file", "-t", m.ImplementationBlobOID):                   "blob",
+		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):       m.ImplementationBlobOID,
+	}
 }

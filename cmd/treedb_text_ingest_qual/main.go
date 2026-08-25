@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strings"
 )
 
 func main() {
@@ -43,7 +45,7 @@ func main() {
 		return
 	}
 	if manifestPath == "" || reportPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: treedb_text_ingest_qual -manifest manifest.json -report report.json")
+		fmt.Fprintln(os.Stderr, "usage: treedb_text_ingest_qual -manifest manifest.json -report report.json (run inside the candidate Git checkout)")
 		os.Exit(2)
 	}
 	manifestBytes, err := os.ReadFile(manifestPath)
@@ -71,6 +73,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact: %v\n", err)
 		os.Exit(1)
 	}
+	if err := verifyGitProvenance(manifest, resolveLocalGit); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid qualification artifact Git provenance: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("valid pure-text qualification artifact")
 }
 
@@ -85,6 +91,55 @@ func decodeStrictJSON(data []byte, value any) error {
 			return fmt.Errorf("multiple JSON values")
 		}
 		return fmt.Errorf("trailing JSON: %w", err)
+	}
+	return nil
+}
+
+type gitResolver func(args ...string) (string, error)
+
+func resolveLocalGit(args ...string) (string, error) {
+	output, err := exec.Command("git", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func verifyGitProvenance(m manifest, resolve gitResolver) error {
+	objectType, err := resolve("cat-file", "-t", m.Commit)
+	if err != nil {
+		return fmt.Errorf("resolve measured commit: %w", err)
+	}
+	if objectType != "commit" {
+		return fmt.Errorf("measured commit object has type %q, want commit", objectType)
+	}
+	measuredTree, err := resolve("rev-parse", "--verify", m.Commit+"^{tree}")
+	if err != nil {
+		return fmt.Errorf("resolve measured commit tree: %w", err)
+	}
+	if measuredTree != m.TreeOID {
+		return fmt.Errorf("measured commit tree is %s, want %s", measuredTree, m.TreeOID)
+	}
+	measuredBlob, err := resolve("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath)
+	if err != nil {
+		return fmt.Errorf("resolve measured implementation path: %w", err)
+	}
+	if measuredBlob != m.ImplementationBlobOID {
+		return fmt.Errorf("measured implementation blob is %s, want %s", measuredBlob, m.ImplementationBlobOID)
+	}
+	objectType, err = resolve("cat-file", "-t", m.ImplementationBlobOID)
+	if err != nil {
+		return fmt.Errorf("resolve measured implementation blob: %w", err)
+	}
+	if objectType != "blob" {
+		return fmt.Errorf("measured implementation object has type %q, want blob", objectType)
+	}
+	candidateBlob, err := resolve("rev-parse", "--verify", "HEAD:"+m.ImplementationPath)
+	if err != nil {
+		return fmt.Errorf("resolve candidate HEAD implementation path: %w", err)
+	}
+	if candidateBlob != m.ImplementationBlobOID {
+		return fmt.Errorf("candidate HEAD implementation blob is %s, want measured blob %s", candidateBlob, m.ImplementationBlobOID)
 	}
 	return nil
 }

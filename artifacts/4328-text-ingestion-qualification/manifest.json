@@ -20,5 +20,17 @@
   "commit_url": "https://github.com/snissn/gomap/commit/0679eb28135a731d9699311b36364d1c9b27db71",
   "tree_oid": "876ea6c3f9e213cf178448cd242212e208d5c7e2",
   "implementation_path": "TreeDB/collections/document_chunking.go",
-  "implementation_blob_oid": "76697734b60a5086d7d186088c0321a510b4909c"
+  "implementation_blob_oid": "76697734b60a5086d7d186088c0321a510b4909c",
+  "acceptance": {
+    "source_chunk_10000": {
+      "frozen_baseline_row_sha256": "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc",
+      "baseline_source_documents": 10000,
+      "baseline_wall_seconds": 155.566929083,
+      "baseline_peak_rss_bytes": 4180574208,
+      "baseline_cumulative_allocations": 82293880,
+      "baseline_physical_total_wal_excluded_bytes": 5621678453,
+      "minimum_source_docs_per_second_multiple": 2,
+      "maximum_physical_total_wal_excluded_bytes": 1073741824
+    }
+  }
 }

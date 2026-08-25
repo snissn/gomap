@@ -13,34 +13,60 @@ import (
 )
 
 const (
-	contractVersion                 = "treedb_text_ingest_qualification/v2"
-	qualificationAnalyzer           = "simple"
-	qualificationFieldWeights       = "title=3,body=1"
-	qualificationTitleWeight        = 3.0
-	qualificationBodyWeight         = 1.0
-	qualificationImplementationPath = "TreeDB/collections/document_chunking.go"
+	contractVersion                            = "treedb_text_ingest_qualification/v2"
+	qualificationAnalyzer                      = "simple"
+	qualificationFieldWeights                  = "title=3,body=1"
+	qualificationTitleWeight                   = 3.0
+	qualificationBodyWeight                    = 1.0
+	qualificationImplementationPath            = "TreeDB/collections/document_chunking.go"
+	qualificationMeasuredCommit                = "0679eb28135a731d9699311b36364d1c9b27db71"
+	qualificationMeasuredTreeOID               = "876ea6c3f9e213cf178448cd242212e208d5c7e2"
+	qualificationImplementationBlob            = "76697734b60a5086d7d186088c0321a510b4909c"
+	sourceChunkBaselineRowSHA256               = "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc"
+	sourceChunkBaselineWallSeconds             = 155.566929083
+	sourceChunkBaselineRSSBytes                = 4_180_574_208
+	sourceChunkBaselineAllocations             = 82_293_880
+	sourceChunkBaselinePhysicalBytes           = 5_621_678_453
+	sourceChunkMinimumThroughputMultiple       = 2.0
+	sourceChunkPhysicalCeilingBytes      int64 = 1 << 30
 )
 
 var requiredModes = []string{"indexed_insert", "post_load_backfill", "source_chunk", "maintenance"}
 var requiredScales = []int{10_000, 100_000, 1_000_000}
 
 type manifest struct {
-	SchemaVersion         string           `json:"schema_version"`
-	FixtureSHA256         string           `json:"fixture_sha256"`
-	Analyzer              string           `json:"analyzer"`
-	FieldWeights          string           `json:"field_weights"`
-	IDsSHA256             string           `json:"ids_sha256"`
-	Command               string           `json:"command"`
-	Commit                string           `json:"commit"`
-	CommitURL             string           `json:"commit_url"`
-	TreeOID               string           `json:"tree_oid"`
-	ImplementationPath    string           `json:"implementation_path"`
-	ImplementationBlobOID string           `json:"implementation_blob_oid"`
-	Host                  string           `json:"host"`
-	CacheState            string           `json:"cache_state"`
-	Durability            string           `json:"durability"`
-	TimedBoundary         string           `json:"timed_boundary"`
-	Observed              observedIdentity `json:"observed"`
+	SchemaVersion         string                  `json:"schema_version"`
+	FixtureSHA256         string                  `json:"fixture_sha256"`
+	Analyzer              string                  `json:"analyzer"`
+	FieldWeights          string                  `json:"field_weights"`
+	IDsSHA256             string                  `json:"ids_sha256"`
+	Command               string                  `json:"command"`
+	Commit                string                  `json:"commit"`
+	CommitURL             string                  `json:"commit_url"`
+	TreeOID               string                  `json:"tree_oid"`
+	ImplementationPath    string                  `json:"implementation_path"`
+	ImplementationBlobOID string                  `json:"implementation_blob_oid"`
+	Host                  string                  `json:"host"`
+	CacheState            string                  `json:"cache_state"`
+	Durability            string                  `json:"durability"`
+	TimedBoundary         string                  `json:"timed_boundary"`
+	Observed              observedIdentity        `json:"observed"`
+	Acceptance            qualificationAcceptance `json:"acceptance"`
+}
+
+type qualificationAcceptance struct {
+	SourceChunk10K sourceChunkAcceptance `json:"source_chunk_10000"`
+}
+
+type sourceChunkAcceptance struct {
+	FrozenBaselineRowSHA256               string  `json:"frozen_baseline_row_sha256"`
+	BaselineSourceDocuments               int     `json:"baseline_source_documents"`
+	BaselineWallSeconds                   float64 `json:"baseline_wall_seconds"`
+	BaselinePeakRSSBytes                  int64   `json:"baseline_peak_rss_bytes"`
+	BaselineCumulativeAllocations         int64   `json:"baseline_cumulative_allocations"`
+	BaselinePhysicalTotalWALExcludedBytes int64   `json:"baseline_physical_total_wal_excluded_bytes"`
+	MinimumSourceDocsPerSecondMultiple    float64 `json:"minimum_source_docs_per_second_multiple"`
+	MaximumPhysicalTotalWALExcludedBytes  int64   `json:"maximum_physical_total_wal_excluded_bytes"`
 }
 
 type observedIdentity struct {
@@ -160,8 +186,11 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.Observed.Commit != m.Commit || m.Observed.Durability != m.Durability {
 		return fmt.Errorf("observed product identity disagrees with manifest")
 	}
-	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit || !validHexOID(m.Commit, 20) || !validHexOID(m.TreeOID, 20) || m.ImplementationPath != qualificationImplementationPath || !validHexOID(m.ImplementationBlobOID, 20) {
-		return fmt.Errorf("measured revision requires a verifiable commit URL and Git object identities")
+	if m.Commit != qualificationMeasuredCommit || m.CommitURL != "https://github.com/snissn/gomap/commit/"+qualificationMeasuredCommit || m.TreeOID != qualificationMeasuredTreeOID || m.ImplementationPath != qualificationImplementationPath || m.ImplementationBlobOID != qualificationImplementationBlob {
+		return fmt.Errorf("measured revision must match the pinned commit, tree, path, and implementation blob")
+	}
+	if m.Acceptance != expectedQualificationAcceptance() {
+		return fmt.Errorf("manifest acceptance must match the pinned frozen source_chunk/10000 baseline and thresholds")
 	}
 	wantFixtureSHA, wantIDsSHA := qualificationManifestIdentity()
 	if m.FixtureSHA256 != wantFixtureSHA || m.IDsSHA256 != wantIDsSHA {
@@ -210,6 +239,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 			}
 		}
 	}
+	if err := validateQualificationThresholds(m.Acceptance.SourceChunk10K, groups); err != nil {
+		return err
+	}
 	if len(r.Summaries) != len(groups) {
 		return fmt.Errorf("summaries must appear exactly once per mode/scale")
 	}
@@ -228,9 +260,38 @@ func validate(m manifest, r report, manifestSHA string) error {
 	return nil
 }
 
-func validHexOID(value string, bytes int) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == bytes
+func expectedQualificationAcceptance() qualificationAcceptance {
+	return qualificationAcceptance{SourceChunk10K: sourceChunkAcceptance{
+		FrozenBaselineRowSHA256:               sourceChunkBaselineRowSHA256,
+		BaselineSourceDocuments:               10_000,
+		BaselineWallSeconds:                   sourceChunkBaselineWallSeconds,
+		BaselinePeakRSSBytes:                  sourceChunkBaselineRSSBytes,
+		BaselineCumulativeAllocations:         sourceChunkBaselineAllocations,
+		BaselinePhysicalTotalWALExcludedBytes: sourceChunkBaselinePhysicalBytes,
+		MinimumSourceDocsPerSecondMultiple:    sourceChunkMinimumThroughputMultiple,
+		MaximumPhysicalTotalWALExcludedBytes:  sourceChunkPhysicalCeilingBytes,
+	}}
+}
+
+func validateQualificationThresholds(a sourceChunkAcceptance, groups map[string]map[int]row) error {
+	r := groups["source_chunk/10000"][1]
+	if r.Storage.PhysicalTotalWALExcludedBytes > a.BaselinePhysicalTotalWALExcludedBytes {
+		return fmt.Errorf("source_chunk/10000 WAL-excluded physical storage regresses from frozen baseline")
+	}
+	if r.Storage.PhysicalTotalWALExcludedBytes > a.MaximumPhysicalTotalWALExcludedBytes {
+		return fmt.Errorf("source_chunk/10000 exceeds WAL-excluded physical storage ceiling")
+	}
+	minSourceDocsPerSecond := a.MinimumSourceDocsPerSecondMultiple * (float64(a.BaselineSourceDocuments) / a.BaselineWallSeconds)
+	if r.SourceDocsPerSec < minSourceDocsPerSecond {
+		return fmt.Errorf("source_chunk/10000 throughput is below frozen baseline multiple")
+	}
+	if r.PeakRSSBytes.State != "observed" || r.PeakRSSBytes.Value > float64(a.BaselinePeakRSSBytes) {
+		return fmt.Errorf("source_chunk/10000 peak RSS regresses from frozen baseline")
+	}
+	if r.CumulativeAllocs.State != "observed" || r.CumulativeAllocs.Value > float64(a.BaselineCumulativeAllocations) {
+		return fmt.Errorf("source_chunk/10000 cumulative allocations regress from frozen baseline")
+	}
+	return nil
 }
 
 func qualificationManifestIdentity() (string, string) {
