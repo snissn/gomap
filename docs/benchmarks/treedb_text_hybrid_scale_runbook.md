@@ -58,6 +58,36 @@ GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
   -base-sha "$(git merge-base HEAD origin/main)"
 ```
 
+### Retrieval-only qualification
+
+Use the Go command directly when load and query evidence is required without
+running concurrent, maintenance, or backfill probes:
+
+```sh
+OUT=/tmp/gomap_text_hybrid_retrieval_1m_$(date +%Y%m%d_%H%M%S)
+GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
+  -out-dir "$OUT" \
+  -rows 1000000 -batch-size 16384 -dims 16 -m 8 \
+  -ef-construction 128 -ef-search 128 \
+  -top-k 10 -candidate-limit 65536 -queries 25 -readers 4 \
+  -phases retrieval -keep-db=false -base-ref origin/main \
+  -base-sha "$(git merge-base HEAD origin/main)"
+```
+
+`-phases retrieval` selects load, queries, and reopen; the default `-phases all`
+retains the full historical campaign. The wrapper equivalent is
+`PHASES=retrieval`. For the selected 1M wrapper row, set
+`RETRIEVAL_REPETITIONS=N` to run `N` fresh processes in separate output
+directories; values greater than one are rejected unless `PHASES=retrieval`.
+
+The command atomically rewrites its JSON and Markdown reports after each
+completed phase and guardrail failure. `selected_phases`, `completed_phases`,
+and `complete` distinguish surviving partial evidence from a completed run. A
+failed guardrail is always incomplete evidence: strict mode returns the
+guardrail error after persisting phase data, while
+`-allow-guardrail-failures` may continue eligible later diagnostic phases
+without completing the failed phase or report.
+
 ### Selected 10M matrix (approval gated)
 
 The script writes `$RUN_DIR/10m_selected_matrix_commands.md` on every run. A
@@ -84,8 +114,30 @@ input, not as a passing latency row.
 
 ### Optional allocation benchmark rows
 
-The scale command records wall-clock latency and counters. Use companion Go
-benchmarks when making allocation claims:
+The scale command records wall-clock latency and counters. For one selected
+hybrid row allocation profile, start the process with `GODEBUG=memprofilerate=1`,
+select exactly one hybrid row with `-query-rows`, and pass `-alloc-profile`.
+For example, this complete small capture selects the real
+`hybrid_text_scalar_no_docs` row:
+
+```sh
+OUT=/tmp/gomap_text_hybrid_alloc_$(date +%Y%m%d_%H%M%S)
+GODEBUG=memprofilerate=1 GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
+  -out-dir "$OUT" -rows 96 -batch-size 48 -dims 4 -m 4 \
+  -ef-construction 32 -ef-search 32 -top-k 5 -candidate-limit 16 -queries 3 \
+  -include-vector=false -phases=retrieval -run-reopen=false \
+  -query-rows=hybrid_text_scalar_no_docs -alloc-profile "$OUT/allocs.pprof"
+go tool pprof -focus='main.runProfiledHybridSamples' "$OUT/allocs.pprof"
+```
+
+It writes one cumulative post-query allocation profile. Attribute it only with
+the timed stack boundary shown above: `runProfiledHybridSamples` is a
+non-inlined helper containing only timed hybrid samples. Fixture construction
+and warm-up occur before it; profile serialization and report writing occur
+after it. Those activities have no helper frame and are excluded by
+construction when focused. The profile is cumulative rather than a delta; old
+allocation profiles must be regenerated. Use companion Go benchmarks when
+making allocation claims:
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_scale_bench_$(date +%Y%m%d_%H%M%S) \
