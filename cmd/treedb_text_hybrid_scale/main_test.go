@@ -472,7 +472,7 @@ func TestQueryRowFlagContracts4327(t *testing.T) {
 
 func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 	root := t.TempDir()
-	outDir := filepath.Join(root, "out")
+	outDir := filepath.Join(root, "generated", "out")
 	customDBDir := filepath.Join(root, "custom_db")
 	tests := []struct {
 		name    string
@@ -483,8 +483,11 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 	}{
 		{name: "JSON report collision", args: []string{"-cpu-profile", filepath.Join(outDir, "scale_report.json")}, wantErr: "must not resolve to a scale report artifact"},
 		{name: "Markdown report collision", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md")}, wantErr: "must not resolve to a scale report artifact"},
-		{name: "default DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "primary_db", "profiles", "cpu.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
-		{name: "custom DB descendant", args: []string{"-db-dir", customDBDir, "-alloc-profile", filepath.Join(customDBDir, "profiles", "allocs.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
+		{name: "output directory", args: []string{"-cpu-profile", outDir}, wantErr: "must not resolve to -out-dir or its ancestor"},
+		{name: "output directory ancestor", args: []string{"-alloc-profile", filepath.Dir(outDir)}, wantErr: "must not resolve to -out-dir or its ancestor"},
+		{name: "default DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "primary_db", "profiles", "cpu.pprof")}, wantErr: "must not overlap the effective -db-dir"},
+		{name: "custom DB descendant", args: []string{"-db-dir", customDBDir, "-alloc-profile", filepath.Join(customDBDir, "profiles", "allocs.pprof")}, wantErr: "must not overlap the effective -db-dir"},
+		{name: "custom DB ancestor", args: []string{"-db-dir", filepath.Join(root, "custom", "db"), "-alloc-profile", filepath.Join(root, "custom")}, wantErr: "must not overlap the effective -db-dir"},
 		{name: "maintenance DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "maintenance_db", "cpu.pprof")}, wantErr: "maintenance database directory"},
 		{name: "backfill DB descendant", args: []string{"-alloc-profile", filepath.Join(outDir, "backfill_db", "profiles", "allocs.pprof")}, wantErr: "backfill database directory"},
 		{name: "distinct profiles under output directory", args: []string{"-cpu-profile", filepath.Join(outDir, "profiles", "cpu.pprof"), "-alloc-profile", filepath.Join(outDir, "profiles", "allocs.pprof")}, wantCPU: filepath.Join(outDir, "profiles", "cpu.pprof"), wantMem: filepath.Join(outDir, "profiles", "allocs.pprof")},

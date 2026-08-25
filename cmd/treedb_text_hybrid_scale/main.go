@@ -505,12 +505,19 @@ func parseFlags(args []string) (config, error) {
 		if profile.value == filepath.Join(outDir, "scale_report.json") || profile.value == filepath.Join(outDir, "scale_report.md") {
 			return config{}, fmt.Errorf("%s must not resolve to a scale report artifact", profile.name)
 		}
-		inDBDir, err := pathIsSameOrDescendant(profile.value, dbDir)
+		outDirInsideProfile, err := pathIsSameOrDescendant(outDir, profile.value)
+		if err != nil {
+			return config{}, fmt.Errorf("compare %s and -out-dir: %w", profile.name, err)
+		}
+		if outDirInsideProfile {
+			return config{}, fmt.Errorf("%s must not resolve to -out-dir or its ancestor", profile.name)
+		}
+		overlapsDBDir, err := pathsOverlap(profile.value, dbDir)
 		if err != nil {
 			return config{}, fmt.Errorf("compare %s and effective -db-dir: %w", profile.name, err)
 		}
-		if inDBDir {
-			return config{}, fmt.Errorf("%s must not resolve to the effective -db-dir or its descendant", profile.name)
+		if overlapsDBDir {
+			return config{}, fmt.Errorf("%s must not overlap the effective -db-dir", profile.name)
 		}
 		for _, reserved := range []struct {
 			name string
@@ -523,12 +530,12 @@ func parseFlags(args []string) (config, error) {
 			if err != nil {
 				return config{}, fmt.Errorf("resolve %s database directory: %w", reserved.name, err)
 			}
-			inReservedDir, err := pathIsSameOrDescendant(profile.value, reservedDir)
+			overlapsReservedDir, err := pathsOverlap(profile.value, reservedDir)
 			if err != nil {
 				return config{}, fmt.Errorf("compare %s and %s database directory: %w", profile.name, reserved.name, err)
 			}
-			if inReservedDir {
-				return config{}, fmt.Errorf("%s must not resolve to the %s database directory or its descendant", profile.name, reserved.name)
+			if overlapsReservedDir {
+				return config{}, fmt.Errorf("%s must not overlap the %s database directory", profile.name, reserved.name)
 			}
 		}
 		if prior, exists := seenProfiles[profile.value]; exists {
@@ -851,6 +858,14 @@ func pathIsSameOrDescendant(path, dir string) (bool, error) {
 		return false, err
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
+}
+
+func pathsOverlap(a, b string) (bool, error) {
+	aInsideB, err := pathIsSameOrDescendant(a, b)
+	if err != nil || aInsideB {
+		return aInsideB, err
+	}
+	return pathIsSameOrDescendant(b, a)
 }
 
 func resolvePathSymlinks(path string) (string, error) {
