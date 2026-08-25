@@ -58,6 +58,36 @@ GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
   -base-sha "$(git merge-base HEAD origin/main)"
 ```
 
+### Retrieval-only qualification
+
+Use the Go command directly when load and query evidence is required without
+running concurrent, maintenance, or backfill probes:
+
+```sh
+OUT=/tmp/gomap_text_hybrid_retrieval_1m_$(date +%Y%m%d_%H%M%S)
+GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
+  -out-dir "$OUT" \
+  -rows 1000000 -batch-size 16384 -dims 16 -m 8 \
+  -ef-construction 128 -ef-search 128 \
+  -top-k 10 -candidate-limit 65536 -queries 25 -readers 4 \
+  -phases retrieval -keep-db=false -base-ref origin/main \
+  -base-sha "$(git merge-base HEAD origin/main)"
+```
+
+`-phases retrieval` selects load, queries, and reopen; the default `-phases all`
+retains the full historical campaign. The wrapper equivalent is
+`PHASES=retrieval`. For the selected 1M wrapper row, set
+`RETRIEVAL_REPETITIONS=N` to run `N` fresh processes in separate output
+directories; values greater than one are rejected unless `PHASES=retrieval`.
+
+The command atomically rewrites its JSON and Markdown reports after each
+completed phase and guardrail failure. `selected_phases`, `completed_phases`,
+and `complete` distinguish surviving partial evidence from a completed run. A
+failed guardrail is always incomplete evidence: strict mode returns the
+guardrail error after persisting phase data, while
+`-allow-guardrail-failures` may continue eligible later diagnostic phases
+without completing the failed phase or report.
+
 ### Selected 10M matrix (approval gated)
 
 The script writes `$RUN_DIR/10m_selected_matrix_commands.md` on every run. A
