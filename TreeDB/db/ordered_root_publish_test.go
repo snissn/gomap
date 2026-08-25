@@ -870,6 +870,11 @@ func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *test
 			enableCommandWALFormat(t, dir)
 			db := openCommandWALDB(t, dir)
 			defer db.Close()
+			var foregroundPublications atomic.Int64
+			unregisterForeground := db.RegisterLogicalOrderedRootPublicationObserver(func() {
+				foregroundPublications.Add(1)
+			})
+			defer unregisterForeground()
 
 			intent := mustRawKVCommandWALIntent(t, db, "ordered/"+test.name, "covered")
 			db.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
@@ -885,6 +890,9 @@ func TestOrderedRootCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle(t *test
 			}
 			if got := db.State().AppliedCommandLSN; seenLSN == 0 || got != seenLSN {
 				t.Fatalf("visible AppliedCommandLSN after accepted error=%d, want builder LSN %d", got, seenLSN)
+			}
+			if got := foregroundPublications.Load(); got != 1 {
+				t.Fatalf("accepted-error foreground publications=%d want 1", got)
 			}
 			if err := db.CheckCommandWALPublishReady(); err != nil {
 				t.Fatalf("CheckCommandWALPublishReady after accepted ordered-root error: %v", err)
@@ -1082,7 +1090,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 		barrierCalled.Store(true)
 		return barrierErr
 	})
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(
+	_, err = db.finalizeOrderedRootPublishWithCommandWALOptions(
 		userRoot,
 		systemRoot,
 		nil,
@@ -1109,7 +1117,7 @@ func TestFinalizeOrderedRootPublishExistingCoverageSyncRunsRawPublishBarriers(t 
 	}
 	unregister()
 
-	if err := db.finalizeOrderedRootPublishWithCommandWALOptions(
+	if _, err := db.finalizeOrderedRootPublishWithCommandWALOptions(
 		userRoot,
 		systemRoot,
 		nil,
@@ -1165,6 +1173,11 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	enableCommandWALFormat(t, dir)
 	db := openCommandWALDB(t, dir)
 	defer db.Close()
+	var foregroundPublications atomic.Int64
+	unregister := db.RegisterLogicalOrderedRootPublicationObserver(func() {
+		foregroundPublications.Add(1)
+	})
+	defer unregister()
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(
 		nil,
@@ -1176,6 +1189,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	)
 	if !errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("ordinary publish error=%v want ErrCommandWALUnsupported", err)
+	}
+	if got := foregroundPublications.Load(); got != 0 {
+		t.Fatalf("rejected logical foreground publications=%d want 0", got)
 	}
 
 	rootDelta := mustFrozenSystemMemtable(t, "root/k", "v")
@@ -1204,6 +1220,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	}
 	if err := db.CheckCommandWALPublishReady(); err != nil {
 		t.Fatalf("CheckCommandWALPublishReady after maintenance publish: %v", err)
+	}
+	if got := foregroundPublications.Load(); got != 0 {
+		t.Fatalf("storage-maintenance foreground publications=%d want 0", got)
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
