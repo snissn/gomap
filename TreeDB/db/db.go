@@ -583,7 +583,14 @@ type DB struct {
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
 	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
-	publicationPoisoned              atomic.Bool
+	publicationPoisoned atomic.Bool
+
+	durableRootManifestBuildCount     atomic.Uint64
+	durableRootManifestBuildNs        atomic.Uint64
+	durableRootManifestEntriesSeen    atomic.Uint64
+	durableRootManifestEntriesEncoded atomic.Uint64
+	durableRootManifestBytesEncoded   atomic.Uint64
+
 	commandWALStatsMu                sync.Mutex
 	commandWALRequiredFeature        bool
 	commandWALRequiredErr            string

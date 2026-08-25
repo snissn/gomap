@@ -136,30 +136,26 @@ func (db *DB) durableRootReuseCapabilityV1(current durableRootRuntimeV1) (freeli
 }
 
 func durableManifestFromResourcesV1(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, error) {
+	manifest, _, err := durableManifestFromResourcesV1WithWork(resources)
+	return manifest, err
+}
+
+func durableManifestFromResourcesV1WithWork(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, rootpublication.DependencyManifestBuildWorkV1, error) {
 	if resources == nil {
-		return rootpublication.NewDependencyManifestV1(nil)
+		return rootpublication.NewDependencyManifestV1WithWork(nil)
 	}
-	descriptors := resources.Descriptors()
-	entries := make([]rootpublication.DependencyManifestEntryV1, len(descriptors))
-	for i, descriptor := range descriptors {
-		entries[i] = rootpublication.DependencyManifestEntryV1{
-			Kind: descriptor.Kind(), LogicalLane: descriptor.LogicalLane(),
-			ResourceID: descriptor.ResourceID(), DiagnosticPath: descriptor.DiagnosticPath(),
-			Identity: descriptor.Identity(), Generation: descriptor.Generation(), Digest: descriptor.Digest(),
-			Frontier: descriptor.Frontier(), Reachability: descriptor.ReachabilityFields(),
-			LogicalObligations: descriptor.LogicalObligations(),
-		}
-		if namespace, ok := descriptor.Namespace(); ok {
-			entries[i].Namespace = &rootpublication.DependencyManifestNamespaceV1{
-				ParentIdentity: namespace.ParentIdentity,
-				Operation:      namespace.Operation,
-				OldName:        namespace.OldName,
-				NewName:        namespace.NewName,
-				DiagnosticPath: namespace.DiagnosticPath,
-			}
-		}
-	}
-	return rootpublication.NewDependencyManifestV1(entries)
+	return resources.DependencyManifestV1()
+}
+
+func (db *DB) durableManifestFromResourcesV1WithStats(resources *rootpublication.StableResourceSet) (*rootpublication.DependencyManifestV1, error) {
+	started := time.Now()
+	manifest, work, err := durableManifestFromResourcesV1WithWork(resources)
+	db.durableRootManifestBuildCount.Add(1)
+	db.durableRootManifestBuildNs.Add(uint64(time.Since(started)))
+	db.durableRootManifestEntriesSeen.Add(work.EntriesVisited)
+	db.durableRootManifestEntriesEncoded.Add(work.EntriesEncoded)
+	db.durableRootManifestBytesEncoded.Add(work.BytesEncoded)
+	return manifest, err
 }
 
 func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublication.DurableRootRecordV1) ([]uint64, error) {
@@ -1012,7 +1008,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 			resources.Release()
 		}
 	}()
-	manifest, err := durableManifestFromResourcesV1(resources)
+	manifest, err := db.durableManifestFromResourcesV1WithStats(resources)
 	if err != nil {
 		return nil, err
 	}

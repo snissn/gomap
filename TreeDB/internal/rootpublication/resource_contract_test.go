@@ -1,6 +1,7 @@
 package rootpublication
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -108,6 +109,81 @@ func TestStableResourceBuilderDistinctPhysicalLookupWorkIsBounded(t *testing.T) 
 	defer resources.Release()
 	if got := resources.Len(); got != entries {
 		t.Fatalf("frozen entries=%d want %d", got, entries)
+	}
+}
+
+func TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries(t *testing.T) {
+	const entries = 4096
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "manifest-cache.bin", "x")
+	makeToken := func(id uint64) *StableResourceToken {
+		return distinctPhysicalTokenFixture(t, file, id)
+	}
+	builder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= entries; id++ {
+		if err := builder.Add(makeToken(id)); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	inherited, _, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, firstWork, err := source.DependencyManifestV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstWork.EntriesVisited != entries || firstWork.EntriesEncoded != entries || firstWork.BytesEncoded == 0 {
+		t.Fatalf("first manifest work=%+v", firstWork)
+	}
+	second, secondWork, err := source.DependencyManifestV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondWork.EntriesVisited != entries || secondWork.EntriesEncoded != 0 || secondWork.BytesEncoded != 0 {
+		t.Fatalf("cached manifest work=%+v", secondWork)
+	}
+	if !bytes.Equal(first.payload, second.payload) || first.digest != second.digest {
+		t.Fatal("cached manifest changed canonical V1 encoding")
+	}
+
+	childBuilder := NewStableResourceSetBuilder()
+	if err := childBuilder.Add(makeToken(entries + 1)); err != nil {
+		inherited.Release()
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		inherited.Release()
+		t.Fatal(err)
+	}
+	candidateBuilder := NewStableResourceSetBuilder()
+	if err := candidateBuilder.Merge(inherited); err != nil {
+		child.Release()
+		t.Fatal(err)
+	}
+	if err := candidateBuilder.Merge(child); err != nil {
+		candidateBuilder.Abandon()
+		t.Fatal(err)
+	}
+	candidate, err := candidateBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	_, candidateWork, err := candidate.DependencyManifestV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidateWork.EntriesVisited != entries+1 || candidateWork.EntriesEncoded != 1 || candidateWork.BytesEncoded == 0 {
+		t.Fatalf("one-entry append manifest work=%+v", candidateWork)
 	}
 }
 

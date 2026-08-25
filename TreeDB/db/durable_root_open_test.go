@@ -126,6 +126,11 @@ func TestStatsRenderSelectedDurableRootV1(t *testing.T) {
 		"treedb.durable_root.freelist.retired_count",
 		"treedb.durable_root.manifest.first_page",
 		"treedb.durable_root.manifest.bytes",
+		"treedb.durable_root.manifest_build.count",
+		"treedb.durable_root.manifest_build.nanos",
+		"treedb.durable_root.manifest_build.entries_visited",
+		"treedb.durable_root.manifest_build.entries_encoded",
+		"treedb.durable_root.manifest_build.bytes_encoded",
 	} {
 		if stats[key] == "" {
 			t.Errorf("missing %s", key)

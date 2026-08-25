@@ -148,3 +148,37 @@ func BenchmarkStableResourceSetCloneDistinctPhysical(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkStableResourceSetDependencyManifestCached(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "manifest-cache.bin", "x")
+			builder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= uint64(entries); id++ {
+				if err := builder.Add(distinctPhysicalTokenFixture(b, file, id)); err != nil {
+					builder.Abandon()
+					b.Fatal(err)
+				}
+			}
+			resources, err := builder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer resources.Release()
+			if _, _, err := resources.DependencyManifestV1(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, work, err := resources.DependencyManifestV1()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if work.EntriesEncoded != 0 || work.BytesEncoded != 0 {
+					b.Fatalf("cached manifest work=%+v", work)
+				}
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"testing"
 )
 
@@ -158,6 +159,9 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{[]byte(doc)}); err != nil {
 			t.Fatalf("InsertBatch %d: %v", i, err)
 		}
+		if err := d.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint %d: %v", i, err)
+		}
 		stats := col.LastInsertStats()
 		candidateChildren := stats.ColumnPublishFinalizeCandidateVisibleBaseClone +
 			stats.ColumnPublishFinalizeCandidateInheritedFilter +
@@ -203,6 +207,21 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 			t.Fatalf("publish %d logical manifest bytes=%d want growth beyond %d", i, stats.ColumnPublishManifestBytes, lastLogicalBytes)
 		}
 		lastLogicalBytes = stats.ColumnPublishManifestBytes
+	}
+	publicationStats := d.Stats()
+	readCounter := func(key string) uint64 {
+		value, err := strconv.ParseUint(publicationStats[key], 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", key, publicationStats[key], err)
+		}
+		return value
+	}
+	builds := readCounter("treedb.durable_root.manifest_build.count")
+	visited := readCounter("treedb.durable_root.manifest_build.entries_visited")
+	encoded := readCounter("treedb.durable_root.manifest_build.entries_encoded")
+	encodedBytes := readCounter("treedb.durable_root.manifest_build.bytes_encoded")
+	if builds < 8 || visited == 0 || encoded == 0 || encodedBytes == 0 || encoded > visited {
+		t.Fatalf("dependency manifest build accounting is incomplete: builds=%d visited=%d encoded=%d bytes=%d", builds, visited, encoded, encodedBytes)
 	}
 	lastLSN := d.State().AppliedCommandLSN
 	assertColumnManifestStateM10B(t, col, 8, lastLSN)
