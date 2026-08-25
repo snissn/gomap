@@ -998,6 +998,165 @@ func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
 	}
 }
 
+func TestServiceDenseNativeRuntimeOrdinaryRouteLifecycleAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	open := func() (*Service, *backenddb.DB) {
+		t.Helper()
+		db, err := backenddb.Open(testBackendOptions(dir))
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		return New(collections.NewCollectionManager(db)), db
+	}
+	svc, db := open()
+	create := CreateIndexRequest{
+		Name:               "native_dense",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if !info.Capabilities.NoDocumentVectorSearch || info.Capabilities.ColumnGraphVectorSearch {
+		t.Fatalf("native capabilities=%+v", info.Capabilities)
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+		Documents: []Document{
+			{ID: "a", Content: "old-a", Embedding: []float32{1, 0}},
+			{ID: "b", Content: "b", Embedding: []float32{0, 1}},
+		},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	assertSearch := func(route Route, query []float32, topK int, wantIDs ...string) DenseVectorSearchResponse {
+		t.Helper()
+		got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{
+			QueryEmbedding:  query,
+			TopK:            topK,
+			Route:           route,
+			EfSearch:        8,
+			ReturnEmbedding: true,
+		})
+		if err != nil {
+			t.Fatalf("SearchDenseVector route=%q: %v", route, err)
+		}
+		if got.Route != RouteAnn || got.Exact || got.Candidates != len(got.Documents) || len(got.Documents) != len(wantIDs) {
+			t.Fatalf("dense native response=%+v want ids=%v", got, wantIDs)
+		}
+		for i, want := range wantIDs {
+			if got.Documents[i].ID != want || got.Documents[i].Score == nil || len(got.Documents[i].Embedding) != 2 {
+				t.Fatalf("dense native document[%d]=%+v want id=%q score and embedding", i, got.Documents[i], want)
+			}
+		}
+		return got
+	}
+	defaultRoute := assertSearch("", []float32{1, 0}, 2, "a", "b")
+	explicitRoute := assertSearch(RouteAnn, []float32{1, 0}, 2, "a", "b")
+	if math.Abs(*defaultRoute.Documents[0].Score-*explicitRoute.Documents[0].Score) > 1e-9 {
+		t.Fatalf("default and explicit ANN score mismatch: default=%v explicit=%v", *defaultRoute.Documents[0].Score, *explicitRoute.Documents[0].Score)
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "a", Content: "new-a", Embedding: []float32{-1, 0}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("update a: %v", err)
+	}
+	updated := assertSearch("", []float32{-1, 0}, 1, "a")
+	if updated.Documents[0].Content != "new-a" {
+		t.Fatalf("updated document=%+v", updated.Documents[0])
+	}
+	if _, err := svc.DeleteDocuments(ctx, create.Name, DeleteDocumentsRequest{IDs: []string{"a"}}); err != nil {
+		t.Fatalf("DeleteDocuments: %v", err)
+	}
+	assertSearch("", []float32{-1, 0}, 1, "b")
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close service: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	svc, db = open()
+	defer func() {
+		_ = svc.Close()
+		_ = db.Close()
+	}()
+	reopened := assertSearch("", []float32{0, 1}, 1, "b")
+	if reopened.Documents[0].Content != "b" {
+		t.Fatalf("reopened document=%+v", reopened.Documents[0])
+	}
+}
+
+func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:               "native_retry",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}
+	if _, err := svc.CreateIndex(ctx, create); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "a", Content: "v0", Embedding: []float32{1, 0}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("initial UpsertDocuments: %v", err)
+	}
+	hookCalls := 0
+	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
+		hookCalls++
+		diagnostics := search.Diagnostics()
+		if diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
+			!diagnostics.LiveANN.Enabled || diagnostics.LiveANN.ExactFallbacks != 0 ||
+			diagnostics.LiveANN.FullRebuilds != 0 || search.Stats.SearchRouteNativeRuntime != 1 {
+			return fmt.Errorf("unexpected native attempt=%d response=%+v diagnostics=%+v", attempt, search, diagnostics)
+		}
+		if attempt != 0 {
+			return nil
+		}
+		_, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "a", Content: "v1", Embedding: []float32{0, 1}}},
+			DeferVectorIndexRebuild: true,
+		})
+		return err
+	}
+	got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
+	if err != nil || hookCalls != 2 || len(got.Documents) != 1 ||
+		got.Documents[0].Content != "v1" ||
+		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{0, 1}) ||
+		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 {
+		t.Fatalf("retry success response=%+v err=%v hookCalls=%d", got, err, hookCalls)
+	}
+
+	hookCalls = 0
+	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
+		hookCalls++
+		vector := []float32{1, 0}
+		if attempt%2 != 0 {
+			vector = []float32{0, 1}
+		}
+		_, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+			Documents:               []Document{{ID: "a", Content: fmt.Sprintf("unstable-%d", attempt), Embedding: vector}},
+			DeferVectorIndexRebuild: true,
+		})
+		return err
+	}
+	_, err = svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
+	if ErrorCodeOf(err) != CodeSnapshotMismatch || hookCalls != denseVectorNativeSnapshotAttempts {
+		t.Fatalf("persistent mismatch err=%v code=%s hookCalls=%d want code=%s attempts=%d", err, ErrorCodeOf(err), hookCalls, CodeSnapshotMismatch, denseVectorNativeSnapshotAttempts)
+	}
+}
+
 func TestServiceBenchmarkNativeRuntimeCompatibleCreateAfterEmptyReopen(t *testing.T) {
 	dir := t.TempDir()
 	open := func() (*Service, *backenddb.DB) {

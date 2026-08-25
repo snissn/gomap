@@ -11,6 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
+// ErrVectorIndexSnapshotMismatch reports that a buffered native vector search
+// cannot be materialized from a read view with the same document visibility.
+var ErrVectorIndexSnapshotMismatch = errors.New("collections: vector index search snapshot mismatch")
+
 // DocumentFetchOptions configures snapshot-bound document materialization. The
 // zero value preserves Collection.Get-style full-document output and verified
 // column-asset reads. Projection paths are explicit JSON top-level fields:
@@ -213,6 +217,47 @@ func (c *Collection) OpenCollectionReadView() (*CollectionReadView, error) {
 	}
 	view := newCollectionReadViewAtSnapshot(c, snap, catalog, true, mappedresource.ScopeCollectionReadView)
 	closeOnErr = false
+	return view, nil
+}
+
+// OpenCollectionReadViewForVectorIndexSearch opens a document read view and
+// validates it against the opaque combined native publication identity carried
+// by response. The identity is intentionally not part of the public wire shape.
+func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorIndexSearchResponse) (*CollectionReadView, error) {
+	view, err := c.OpenCollectionReadView()
+	if err != nil {
+		return nil, err
+	}
+	closeWithError := func(err error) (*CollectionReadView, error) {
+		return nil, errors.Join(err, view.Close())
+	}
+	visibility := response.visibility
+	if visibility.runtime == nil ||
+		visibility.collectionName != view.catalog.meta.Name ||
+		visibility.indexName != response.IndexName ||
+		visibility.strategy != response.Strategy {
+		return closeWithError(fmt.Errorf("%w: response has no matching native visibility identity", ErrVectorIndexSnapshotMismatch))
+	}
+	def, ok := findVectorIndex(view.catalog.meta.VectorIndexes, visibility.indexName)
+	if !ok ||
+		def.Strategy != visibility.strategy ||
+		def.SchemaGeneration != visibility.schemaGeneration ||
+		c.registeredVectorIndex(visibility.indexName) != visibility.runtime {
+		return closeWithError(fmt.Errorf("%w: vector index %q identity changed", ErrVectorIndexSnapshotMismatch, visibility.indexName))
+	}
+	generation, err := vectorIndexDocumentGeneration(view.snapshot, view.catalog)
+	if err != nil {
+		return closeWithError(err)
+	}
+	if generation != visibility.sourceDocumentGeneration {
+		return closeWithError(fmt.Errorf(
+			"%w: vector index %q searched document generation %d but read view has generation %d",
+			ErrVectorIndexSnapshotMismatch,
+			visibility.indexName,
+			visibility.sourceDocumentGeneration,
+			generation,
+		))
+	}
 	return view, nil
 }
 

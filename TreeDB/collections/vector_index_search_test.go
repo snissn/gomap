@@ -5090,6 +5090,113 @@ func TestSearchVectorIndexWithBufferNativeRuntimeLiveRoute(t *testing.T) {
 	}
 }
 
+func TestNativeRuntimeSearchVisibilityTokenValidatesBoundedDocumentReadView(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding_native",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+		Strategy:   VectorIndexStrategyNativeRuntime,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	opts := VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0},
+		TopK:      2,
+		EfSearch:  8,
+		StatsMode: VectorIndexSearchStatsModeProduction,
+	}
+	var buffer VectorIndexSearchBuffer
+	empty, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("empty SearchVectorIndexWithBuffer: %v", err)
+	}
+	if empty.visibility.runtime == nil {
+		t.Fatal("empty native search did not carry an opaque visibility token")
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{[]byte(`{"embedding":[1,0],"content":"old-a"}`), []byte(`{"embedding":[0,1],"content":"b"}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	inserted, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("inserted SearchVectorIndexWithBuffer: %v", err)
+	}
+	if inserted.visibility.runtime == nil ||
+		inserted.visibility.mutationSeq == empty.visibility.mutationSeq ||
+		inserted.visibility.sourceDocumentGeneration == empty.visibility.sourceDocumentGeneration {
+		t.Fatalf("insert visibility token did not change: empty=%+v inserted=%+v", empty.visibility, inserted.visibility)
+	}
+	view, err := col.OpenCollectionReadViewForVectorIndexSearch(inserted)
+	if err != nil {
+		t.Fatalf("OpenCollectionReadViewForVectorIndexSearch: %v", err)
+	}
+	fetched, err := view.FetchDocumentsForVectorIndexSearchResults(inserted.Results, DocumentFetchOptions{})
+	closeErr := view.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("bounded fetch err=%v closeErr=%v", err, closeErr)
+	}
+	if fetched.Stats.DocumentsRequested != uint64(len(inserted.Results)) ||
+		fetched.Stats.DocumentsFetched != uint64(len(inserted.Results)) ||
+		len(fetched.Results) != len(inserted.Results) {
+		t.Fatalf("bounded fetch stats=%+v results=%d candidates=%d", fetched.Stats, len(fetched.Results), len(inserted.Results))
+	}
+	if string(fetched.Results[0].ID) != "a" || !fetched.Results[0].Found || string(fetched.Results[0].Document) != `{"embedding":[1,0],"content":"old-a"}` {
+		t.Fatalf("first fetched result=%+v", fetched.Results[0])
+	}
+
+	if matched, err := col.Replace([]byte("a"), []byte(`{"embedding":[-1,0],"content":"new-a"}`)); err != nil || !matched {
+		t.Fatalf("Replace matched=%v err=%v", matched, err)
+	}
+	if stale, err := col.OpenCollectionReadViewForVectorIndexSearch(inserted); stale != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		if stale != nil {
+			_ = stale.Close()
+		}
+		t.Fatalf("stale read view=%v err=%v want snapshot mismatch", stale, err)
+	}
+	updated, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("updated SearchVectorIndexWithBuffer: %v", err)
+	}
+	if updated.visibility.mutationSeq == inserted.visibility.mutationSeq ||
+		updated.visibility.sourceDocumentGeneration == inserted.visibility.sourceDocumentGeneration {
+		t.Fatalf("update visibility token did not change: inserted=%+v updated=%+v", inserted.visibility, updated.visibility)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("b")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	afterDelete, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("deleted SearchVectorIndexWithBuffer: %v", err)
+	}
+	if afterDelete.visibility.mutationSeq == updated.visibility.mutationSeq ||
+		afterDelete.visibility.sourceDocumentGeneration == updated.visibility.sourceDocumentGeneration {
+		t.Fatalf("delete visibility token did not change: updated=%+v deleted=%+v", updated.visibility, afterDelete.visibility)
+	}
+}
+
 func TestSearchVectorIndexWithBufferNativeRuntimeSteadyStateAllocations(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

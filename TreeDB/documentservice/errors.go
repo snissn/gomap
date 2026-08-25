@@ -18,6 +18,7 @@ const (
 	CodeIndexNotFound    ErrorCode = "index_not_found"
 	CodeIndexUnavailable ErrorCode = "index_unavailable"
 	CodeIndexStale       ErrorCode = "index_stale"
+	CodeSnapshotMismatch ErrorCode = "snapshot_mismatch"
 	CodeConflict         ErrorCode = "conflict"
 	CodeUnsupported      ErrorCode = "unsupported"
 	CodeInternal         ErrorCode = "internal"
@@ -81,7 +82,7 @@ func httpStatusForError(err error) int {
 		return http.StatusBadRequest
 	case CodeIndexNotFound:
 		return http.StatusNotFound
-	case CodeConflict, CodeIndexStale:
+	case CodeConflict, CodeIndexStale, CodeSnapshotMismatch:
 		return http.StatusConflict
 	case CodeIndexUnavailable:
 		return http.StatusServiceUnavailable
