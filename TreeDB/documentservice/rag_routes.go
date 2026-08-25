@@ -199,10 +199,16 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 }
 
 func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	s.benchmarkSearchCacheMu.RLock()
+	if s.closed {
+		s.benchmarkSearchCacheMu.RUnlock()
+		return DenseVectorSearchResponse{}, serviceClosedError()
+	}
 	buffer := s.benchmarkSearchBufferPool.Get().(*collections.VectorIndexSearchBuffer)
 	defer func() {
 		buffer.Reset()
 		s.benchmarkSearchBufferPool.Put(buffer)
+		s.benchmarkSearchCacheMu.RUnlock()
 	}()
 	for attempt := range denseVectorNativeSnapshotAttempts {
 		if err := ctxErr(ctx); err != nil {

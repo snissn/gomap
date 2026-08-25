@@ -1103,7 +1103,8 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 		Metric:             MetricCosine,
 		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
 	}
-	if _, err := svc.CreateIndex(ctx, create); err != nil {
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
 		t.Fatalf("CreateIndex: %v", err)
 	}
 	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
@@ -1111,6 +1112,21 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 		DeferVectorIndexRebuild: true,
 	}); err != nil {
 		t.Fatalf("initial UpsertDocuments: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, create.Name, 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	replace := func(doc Document) error {
+		prepared, err := prepareDocumentsForWrite([]Document{doc}, info)
+		if err != nil {
+			return err
+		}
+		matched, err := col.Replace([]byte(doc.ID), prepared[0].raw)
+		if err == nil && !matched {
+			return fmt.Errorf("document %q disappeared before replacement", doc.ID)
+		}
+		return err
 	}
 	hookCalls := 0
 	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
@@ -1124,11 +1140,7 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 		if attempt != 0 {
 			return nil
 		}
-		_, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-			Documents:               []Document{{ID: "a", Content: "v1", Embedding: []float32{0, 1}}},
-			DeferVectorIndexRebuild: true,
-		})
-		return err
+		return replace(Document{ID: "a", Content: "v1", Embedding: []float32{0, 1}})
 	}
 	got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
 	if err != nil || hookCalls != 2 || len(got.Documents) != 1 ||
@@ -1145,15 +1157,74 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 		if attempt%2 != 0 {
 			vector = []float32{0, 1}
 		}
-		_, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-			Documents:               []Document{{ID: "a", Content: fmt.Sprintf("unstable-%d", attempt), Embedding: vector}},
-			DeferVectorIndexRebuild: true,
-		})
-		return err
+		return replace(Document{ID: "a", Content: fmt.Sprintf("unstable-%d", attempt), Embedding: vector})
 	}
 	_, err = svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
 	if ErrorCodeOf(err) != CodeSnapshotMismatch || hookCalls != denseVectorNativeSnapshotAttempts {
 		t.Fatalf("persistent mismatch err=%v code=%s hookCalls=%d want code=%s attempts=%d", err, ErrorCodeOf(err), hookCalls, CodeSnapshotMismatch, denseVectorNativeSnapshotAttempts)
+	}
+}
+
+func TestServiceDenseNativeRuntimeCloseWaitsForPooledSearch(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer db.Close()
+	create := CreateIndexRequest{
+		Name:               "native_close",
+		Dimension:          2,
+		Metric:             MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
+	}
+	if _, err := svc.CreateIndex(ctx, create); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
+		Documents:               []Document{{ID: "a", Content: "a", Embedding: []float32{1, 0}}},
+		DeferVectorIndexRebuild: true,
+	}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	searchEntered := make(chan struct{})
+	releaseSearch := make(chan struct{})
+	var enterOnce sync.Once
+	svc.denseVectorNativeAfterSearch = func(int, collections.VectorIndexSearchResponse) error {
+		enterOnce.Do(func() { close(searchEntered) })
+		<-releaseSearch
+		return nil
+	}
+	type searchResult struct {
+		response DenseVectorSearchResponse
+		err      error
+	}
+	searchDone := make(chan searchResult, 1)
+	go func() {
+		response, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
+		searchDone <- searchResult{response: response, err: err}
+	}()
+	<-searchEntered
+
+	closeStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		close(closeStarted)
+		closeDone <- svc.Close()
+	}()
+	<-closeStarted
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned while native dense search held the pooled-search read lock: %v", err)
+	default:
+	}
+	close(releaseSearch)
+	searched := <-searchDone
+	if searched.err != nil || len(searched.response.Documents) != 1 || searched.response.Documents[0].ID != "a" {
+		t.Fatalf("in-flight search response=%+v err=%v", searched.response, searched.err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("post-close native dense search err=%v code=%s", err, ErrorCodeOf(err))
 	}
 }
 
