@@ -612,6 +612,15 @@ func TestProfileFinalizationAttemptsBothOutputs4327(t *testing.T) {
 	}
 }
 
+func TestProfileFinalizationPreservesSampleError4327(t *testing.T) {
+	sampleErr := errors.New("timed query failed")
+	profileErr := errors.New("profile finalization failed")
+	err := combineProfiledQueryErrors(sampleErr, profileErr)
+	if !errors.Is(err, sampleErr) || !errors.Is(err, profileErr) {
+		t.Fatalf("combined error=%v", err)
+	}
+}
+
 func TestProfiledWarmupFailureCannotBeAllowed4327(t *testing.T) {
 	warmErr := errors.New("warm hybrid_scalar returned no results")
 	if err := profiledWarmupError(config{allowGuardrailFails: true}, warmErr); err != nil {

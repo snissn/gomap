@@ -1348,9 +1348,10 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	profileErr := stopProfile()
 	if profileErr != nil {
 		profileErr = fmt.Errorf("write %s profile: %w", name, profileErr)
-		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, profileErr), cfg, allocations)
-		guard = hybridFailureGuard(name, last.Stats, profileErr)
-		return row, guard, profileErr
+		combinedErr := combineProfiledQueryErrors(sampleErr, profileErr)
+		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, combinedErr), cfg, allocations)
+		guard = hybridFailureGuard(name, last.Stats, combinedErr)
+		return row, guard, combinedErr
 	}
 	if sampleErr != nil {
 		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr), cfg, allocations)
@@ -1508,6 +1509,10 @@ func profiledWarmupError(cfg config, warmErr error) error {
 		return nil
 	}
 	return fmt.Errorf("%w; cannot produce requested profile without successful warm-up", warmErr)
+}
+
+func combineProfiledQueryErrors(sampleErr, profileErr error) error {
+	return errors.Join(sampleErr, profileErr)
 }
 
 func failedHybridWarmup(cfg config, name, shape string, response collections.HybridSearchResponse, warmErr error) (queryReport, guardrailResult, error) {
