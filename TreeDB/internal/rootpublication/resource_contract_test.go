@@ -403,8 +403,25 @@ func testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	clone, err := CloneStableResourceSetExcludingKinds(source)
+	clone, work, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{})
 	if err != nil {
+		source.Release()
+		t.Fatal(err)
+	}
+	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 1 {
+		clone.Release()
+		source.Release()
+		t.Fatalf("clone handle work=%+v, want one share and no copy", work)
+	}
+	if err := source.Tokens()[0].WithPinnedFile(func(sourceFile *os.File) error {
+		return clone.Tokens()[0].WithPinnedFile(func(cloneFile *os.File) error {
+			if sourceFile != cloneFile {
+				return errors.New("clone did not share the exact retained handle")
+			}
+			return nil
+		})
+	}); err != nil {
+		clone.Release()
 		source.Release()
 		t.Fatal(err)
 	}
@@ -446,6 +463,41 @@ func testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) 
 	clone.Release()
 	if got := registry.Stats().ActivePins; got != 0 {
 		t.Fatalf("active pins after clone release = %d, want 0", got)
+	}
+}
+
+func TestCloneStableResourceSetSharesCustomSyncHandle(t *testing.T) {
+	var syncs atomic.Uint64
+	token := stableTokenFixture(t, t.TempDir(), "custom-sync.bin", 1, 8, ReachabilityValueLogPointer, "custom-sync", func(spec *StableResourceSpec) {
+		spec.ContentSynced = true
+		spec.SyncThrough = func(*os.File, DurableFrontier) error {
+			syncs.Add(1)
+			return nil
+		}
+	})
+	builder := NewStableResourceSetBuilder()
+	if err := builder.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	clone, work, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Release()
+	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 1 {
+		t.Fatalf("custom-sync clone work=%+v, want one shared exact handle", work)
+	}
+	source.Release()
+	if err := clone.Tokens()[0].syncThrough(DurableFrontier{Bytes: 9}); err != nil {
+		t.Fatal(err)
+	}
+	if syncs.Load() != 1 {
+		t.Fatalf("custom sync calls=%d, want 1 after source release", syncs.Load())
 	}
 }
 

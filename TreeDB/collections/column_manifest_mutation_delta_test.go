@@ -186,8 +186,11 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 		if work.RetainedIndexNodeVisits > work.NewlyAdmittedObligations*16 || work.RetainedIndexNodeCopies > work.NewlyAdmittedObligations*16 {
 			t.Fatalf("publish %d persistent-index work exceeds mutation-local depth bound: %+v", i, work)
 		}
-		if work.PhysicalHandleCopies > 12 {
-			t.Fatalf("publish %d physical handle copies=%d grow with retained history: %+v", i, work.PhysicalHandleCopies, work)
+		if work.PhysicalHandleShares == 0 {
+			t.Fatalf("publish %d did not share retained physical handles: %+v", i, work)
+		}
+		if work.PhysicalHandleCopies != 0 {
+			t.Fatalf("publish %d copied %d retained physical handles: %+v", i, work.PhysicalHandleCopies, work)
 		}
 		if work.PhysicalEntryLookupComparisons > 128 {
 			t.Fatalf("publish %d physical lookup work is unbounded: %+v", i, work)

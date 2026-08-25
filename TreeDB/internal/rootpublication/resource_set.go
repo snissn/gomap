@@ -440,6 +440,7 @@ type StableResourceClosureWork struct {
 	CopiedEntries                   uint64
 	CopiedObligations               uint64
 	PhysicalHandleCopies            uint64
+	PhysicalHandleShares            uint64
 	LogicalObligationNormalizations uint64
 	RetainedIndexNodeVisits         uint64
 	RetainedIndexNodeCopies         uint64
@@ -475,6 +476,7 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 	work.CopiedEntries += other.CopiedEntries
 	work.CopiedObligations += other.CopiedObligations
 	work.PhysicalHandleCopies += other.PhysicalHandleCopies
+	work.PhysicalHandleShares += other.PhysicalHandleShares
 	work.LogicalObligationNormalizations += other.LogicalObligationNormalizations
 	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
 	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
@@ -2074,8 +2076,8 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			if allFieldsUnscoped {
 				// A wholly unscoped physical entry is retained byte-for-byte. Its
 				// immutable obligation view and complete reachability-field set are
-				// shared while one independently duplicated handle preserves the
-				// candidate's ownership. Multi-field entries must not re-walk the
+				// shared with an independent token reference to the exact pinned
+				// handle. Multi-field entries must not re-walk the
 				// same cumulative obligation history once per field.
 				sharedObligations = entry.logicalObligations
 			} else {
@@ -2105,44 +2107,73 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			}
 			work.RetainedObligations += uint64(retainedObligations)
 			work.CopiedEntries++
-			work.PhysicalHandleCopies++
-			namespace, err := token.namespace.cloneStable()
-			if err != nil {
-				return nil, work, err
-			}
-			var registry *IdentityPinRegistry
-			if token.identityPin != nil {
-				registry = token.identityPin.registry
-				if err := registry.Observe(token.identity); err != nil {
+			var cloned *StableResourceToken
+			var namespace *StableNamespaceToken
+			if allFieldsUnscoped {
+				if err := token.namespace.validateStable(); err != nil {
+					return nil, work, err
+				}
+				identity := token.identity
+				var registry *IdentityPinRegistry
+				if token.identityPin != nil {
+					registry = token.identityPin.registry
+					if err := registry.Observe(identity); err != nil {
+						return nil, work, err
+					}
+				}
+				cloned, err = token.cloneSharedPinned(
+					entry.logicalLane, entry.resourceID, entry.diagnosticPath,
+					entry.frontier, field, obligations, func() {
+						if registry != nil {
+							_ = registry.Unobserve(identity)
+						}
+					})
+				if err != nil {
+					if registry != nil {
+						_ = registry.Unobserve(identity)
+					}
+					return nil, work, err
+				}
+				work.PhysicalHandleShares++
+			} else {
+				work.PhysicalHandleCopies++
+				namespace, err = token.namespace.cloneStable()
+				if err != nil {
+					return nil, work, err
+				}
+				var registry *IdentityPinRegistry
+				if token.identityPin != nil {
+					registry = token.identityPin.registry
+					if err := registry.Observe(token.identity); err != nil {
+						namespace.Release()
+						return nil, work, err
+					}
+				}
+				observed := registry != nil
+				err = token.WithPinnedFile(func(file *os.File) error {
+					var constructErr error
+					cloned, constructErr = newStableResourceToken(StableResourceSpec{
+						Kind: token.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID,
+						Generation: token.generation, DiagnosticPath: entry.diagnosticPath,
+						File: file, Frontier: cloneDurableFrontier(entry.frontier), Digest: token.digest,
+						Reachability: field, Namespace: namespace, LogicalObligations: obligations,
+						ContentSynced: true, PinRegistry: registry,
+						StableIdentityOverride: token.identity,
+						OnRelease: func() {
+							if registry != nil {
+								_ = registry.Unobserve(token.identity)
+							}
+						},
+					}, obligations)
+					return constructErr
+				})
+				if err != nil {
+					if observed {
+						_ = registry.Unobserve(token.identity)
+					}
 					namespace.Release()
 					return nil, work, err
 				}
-			}
-			observed := registry != nil
-			var cloned *StableResourceToken
-			err = token.WithPinnedFile(func(file *os.File) error {
-				var constructErr error
-				cloned, constructErr = newStableResourceToken(StableResourceSpec{
-					Kind: token.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID,
-					Generation: token.generation, DiagnosticPath: entry.diagnosticPath,
-					File: file, Frontier: cloneDurableFrontier(entry.frontier), Digest: token.digest,
-					Reachability: field, Namespace: namespace, LogicalObligations: obligations,
-					ContentSynced: true, PinRegistry: registry,
-					StableIdentityOverride: token.identity,
-					OnRelease: func() {
-						if registry != nil {
-							_ = registry.Unobserve(token.identity)
-						}
-					},
-				}, obligations)
-				return constructErr
-			})
-			if err != nil {
-				if observed {
-					_ = registry.Unobserve(token.identity)
-				}
-				namespace.Release()
-				return nil, work, err
 			}
 			if err := builder.Add(cloned); err != nil {
 				cloned.Release()

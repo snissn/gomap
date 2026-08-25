@@ -136,11 +136,11 @@ func BenchmarkStableResourceSetCloneDistinctPhysical(b *testing.B) {
 					b.Fatal(err)
 				}
 				b.StopTimer()
-				if work.SourceEntriesInspected != uint64(entries) || work.PhysicalHandleCopies != uint64(entries) {
+				if work.SourceEntriesInspected != uint64(entries) || work.PhysicalHandleShares != uint64(entries) || work.PhysicalHandleCopies != 0 {
 					b.Fatalf("clone work=%+v", work)
 				}
 				b.ReportMetric(float64(work.SourceEntriesInspected)/float64(entries), "source-entry-visits/entry")
-				b.ReportMetric(float64(work.PhysicalHandleCopies)/float64(entries), "physical-handle-copies/entry")
+				b.ReportMetric(float64(work.PhysicalHandleShares)/float64(entries), "physical-handle-shares/entry")
 				cloned.Release()
 				source.Release()
 				b.StartTimer()
