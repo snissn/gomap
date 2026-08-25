@@ -1748,7 +1748,7 @@ func reportStatus(complete bool) string {
 	if complete {
 		return "COMPLETE"
 	}
-	return "INCOMPLETE (partial/resumable evidence; not a completed qualification)"
+	return "INCOMPLETE (partial evidence; not a completed qualification)"
 }
 
 func queryCounters(row queryReport) string {

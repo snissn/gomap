@@ -149,7 +149,7 @@ func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
 		t.Fatalf("partial report invalid or complete: decoded=%+v err=%v", decoded, err)
 	}
 	markdown, err := os.ReadFile(rep.Artifacts.Markdown)
-	if err != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial/resumable evidence; not a completed qualification)") {
+	if err != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial evidence; not a completed qualification)") {
 		t.Fatalf("markdown did not fail closed: err=%v content=%s", err, markdown)
 	}
 }
@@ -220,7 +220,7 @@ func TestStrictQueryFailurePersistsPartialEvidence4327(t *testing.T) {
 		t.Fatalf("persisted strict evidence incomplete/lost: %+v", persisted)
 	}
 	markdown, readErr := os.ReadFile(rep.Artifacts.Markdown)
-	if readErr != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial/resumable evidence; not a completed qualification)") || !strings.Contains(string(markdown), failed.Name) || !strings.Contains(string(markdown), failed.GuardrailFailure) {
+	if readErr != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial evidence; not a completed qualification)") || !strings.Contains(string(markdown), failed.Name) || !strings.Contains(string(markdown), failed.GuardrailFailure) {
 		t.Fatalf("markdown did not preserve strict query evidence: err=%v content=%s", readErr, markdown)
 	}
 }
