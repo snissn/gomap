@@ -126,7 +126,10 @@ rm -rf /tmp/gomap_text_hybrid_scale_1m_YYYYmmdd_HHMMSS
 ## Artifacts and schema
 
 `cmd/treedb_text_hybrid_scale` writes schema
-`treedb_text_hybrid_scale/v1`.
+`treedb_text_hybrid_scale/v2`.  V2 retains raw per-query latency samples with
+the row's boundary and query-shape provenance, so each atomic retrieval claim
+can be independently inspected rather than inferred only from summary
+percentiles.
 
 Primary artifacts:
 
@@ -146,7 +149,10 @@ The JSON/Markdown report includes:
   postings, norms, positions, term stats, status/format);
 - text-only common, rare, multi-term AND, and multi-term OR score-only query rows;
 - hybrid text-only, text+scalar, and optional text+vector(+scalar) query rows;
-- p50/p95/p99/mean latency and derived ops/sec for each retrieval row;
+- raw per-query latency samples plus p50/p95/p99/mean latency and derived
+  ops/sec for each retrieval row;
+- optional CPU (`-cpu-profile`) or allocation (`-alloc-profile`) profile capture
+  for one selected hybrid retrieval row via `-query-rows`;
 - reopen close/open/probe timings;
 - concurrent reader/write sanity timing and guardrail state;
 - maintenance update/delete/rewrite/checkpoint timings and stale-posting purge
