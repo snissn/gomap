@@ -1,5 +1,5 @@
 {
-  "mode": "indexed_insert",
+  "mode": "post_load_backfill",
   "scale": 10000,
   "repetition": 1,
   "source_documents": 10000,
@@ -11,17 +11,17 @@
   "chunk_batch_count": 0,
   "postings": 10000,
   "terms": 10008,
-  "blocks": 11822,
-  "generations": 2,
+  "blocks": 10395,
+  "generations": 1,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 121252.66075323097,
+  "source_docs_per_second": 172764.9079918887,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 121252.66075323097,
-  "wall_seconds": 0.082472417,
+  "indexed_rows_per_second": 172764.9079918887,
+  "wall_seconds": 0.057882125,
   "cpu_seconds": {
     "state": "observed",
-    "value": 0.118176
+    "value": 0.075213
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -33,11 +33,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 633951
+    "value": 599056
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 70385664
+    "value": 71450624
   },
   "stages": {
     "analyzer": {
@@ -46,7 +46,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.00657875
+      "value": 0.006206125
     },
     "posting_builder": {
       "state": "unavailable",
@@ -54,7 +54,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.010716292
+      "value": 0.006059958
     },
     "root_mutation": {
       "state": "unavailable",
@@ -69,9 +69,9 @@
     "physical_index_page_bytes": 4194304,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 373,
-    "physical_total_bytes": 4194677,
-    "physical_total_wal_excluded_bytes": 4194677,
+    "physical_other_bytes": 374,
+    "physical_total_bytes": 4194678,
+    "physical_total_wal_excluded_bytes": 4194678,
     "other_paths": [
       "LOCK",
       "format.json",
@@ -83,10 +83,10 @@
   "text_v2": {
     "docid_bytes": 189873,
     "docmap_bytes": 171214,
-    "posting_bytes": 1068615,
+    "posting_bytes": 896409,
     "norm_bytes": 61293,
     "position_bytes": 0,
-    "term_bytes": 119018,
+    "term_bytes": 119013,
     "status_bytes": 161
   },
   "checkpoint_ok": true,

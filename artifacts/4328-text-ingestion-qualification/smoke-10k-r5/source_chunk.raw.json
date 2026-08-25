@@ -1,27 +1,27 @@
 {
-  "mode": "post_load_backfill",
+  "mode": "source_chunk",
   "scale": 10000,
   "repetition": 1,
   "source_documents": 10000,
-  "generated_chunks": 0,
-  "indexed_live_rows": 10000,
-  "parents_text_indexed": false,
-  "indexed_parent_rows": 0,
-  "chunk_batch_size": 0,
-  "chunk_batch_count": 0,
-  "postings": 10000,
-  "terms": 10008,
-  "blocks": 10395,
-  "generations": 1,
+  "generated_chunks": 30000,
+  "indexed_live_rows": 40000,
+  "parents_text_indexed": true,
+  "indexed_parent_rows": 10000,
+  "chunk_batch_size": 256,
+  "chunk_batch_count": 40,
+  "postings": 40000,
+  "terms": 10012,
+  "blocks": 25059,
+  "generations": 41,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 172443.77453486912,
-  "chunks_per_second": 0,
-  "indexed_rows_per_second": 172443.77453486912,
-  "wall_seconds": 0.057989916,
+  "source_docs_per_second": 22710.115389937328,
+  "chunks_per_second": 68130.34616981198,
+  "indexed_rows_per_second": 90840.46155974931,
+  "wall_seconds": 0.440332417,
   "cpu_seconds": {
     "state": "observed",
-    "value": 0.077346
+    "value": 0.5143490000000001
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -33,11 +33,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 599051
+    "value": 3695473
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 75055104
+    "value": 107102208
   },
   "stages": {
     "analyzer": {
@@ -46,7 +46,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.006461167
+      "value": 0.013739583
     },
     "posting_builder": {
       "state": "unavailable",
@@ -54,7 +54,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.009861708
+      "value": 0.017169333
     },
     "root_mutation": {
       "state": "unavailable",
@@ -66,12 +66,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 4194304,
+    "physical_index_page_bytes": 38273024,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 373,
-    "physical_total_bytes": 4194677,
-    "physical_total_wal_excluded_bytes": 4194677,
+    "physical_other_bytes": 374,
+    "physical_total_bytes": 38273398,
+    "physical_total_wal_excluded_bytes": 38273398,
     "other_paths": [
       "LOCK",
       "format.json",
@@ -81,13 +81,13 @@
     "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
   },
   "text_v2": {
-    "docid_bytes": 189873,
-    "docmap_bytes": 171214,
-    "posting_bytes": 896409,
-    "norm_bytes": 61293,
+    "docid_bytes": 843490,
+    "docmap_bytes": 768994,
+    "posting_bytes": 2591004,
+    "norm_bytes": 269307,
     "position_bytes": 0,
-    "term_bytes": 119013,
-    "status_bytes": 161
+    "term_bytes": 119083,
+    "status_bytes": 163
   },
   "checkpoint_ok": true,
   "close_ok": true,

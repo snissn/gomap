@@ -5,14 +5,14 @@
   "field_weights": "title=3,body=1",
   "ids_sha256": "fcdcdec6c7f7d072405f27d0c713dcac60df80c398bf77cdd155d595a959edeb",
   "command": "GOROOT=/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64 PATH=$GOROOT/bin:$PATH GOTOOLCHAIN=local GOCACHE=/tmp/gomap-4328-gocache go run ./cmd/treedb_text_ingest_qual -produce-smoke /tmp/gomap-4328-batch-smoke-{scale}-r{repetition} -scale {scale}",
-  "commit": "18e6c139c8e34be5fef263104f1d0bdcabff5d64",
+  "commit": "b0fadbc4c2b0bfa40a235e8ff5c4615aa9f7fac9",
   "host": "Darwin 25.2.0 arm64",
   "cache_state": "node-local GOCACHE=/tmp/gomap-4328-gocache; runs sequentially share compiled package cache",
   "durability": "TreeDB default WAL-on durability",
   "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen, and score-only probe are separately observed after timed wall",
   "observed": {
     "vcs_clean": true,
-    "commit": "18e6c139c8e34be5fef263104f1d0bdcabff5d64",
+    "commit": "b0fadbc4c2b0bfa40a235e8ff5c4615aa9f7fac9",
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false

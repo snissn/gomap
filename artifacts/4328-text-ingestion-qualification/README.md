@@ -5,9 +5,9 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 `IngestChunkedDocument` baseline remains under `smoke-10k-r3/`.
 
 The post-fix public `IngestChunkedDocuments` 10k fixture is
-`smoke-10k-r4/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
-batches of at most 256 sources, 41 text generations, 0.433 s source/chunk wall,
-111,738,880-byte peak RSS, and 40,108,405 WAL-excluded physical bytes. Against
+`smoke-10k-r5/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
+batches of at most 256 sources, 41 text generations, 0.440 s source/chunk wall,
+107,102,208-byte peak RSS, and 38,273,398 WAL-excluded physical bytes. Against
 the frozen baseline (20,001 generations, 155.567 s, 4,180,574,208-byte RSS,
 5,621,678,453-byte physical), it meets the generation, sub-1-GiB physical, and
 >=2x throughput gates without a correctness/RSS/allocation/storage regression.

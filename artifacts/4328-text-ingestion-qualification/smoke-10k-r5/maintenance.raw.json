@@ -15,13 +15,13 @@
   "generations": 3,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 114784.04100085943,
+  "source_docs_per_second": 112954.57112860605,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 57392.02050042972,
-  "wall_seconds": 0.087120125,
+  "indexed_rows_per_second": 56477.28556430303,
+  "wall_seconds": 0.088531167,
   "cpu_seconds": {
     "state": "observed",
-    "value": 0.10991299999999993
+    "value": 0.11467799999999995
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -33,11 +33,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 876592
+    "value": 876596
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 113164288
+    "value": 109969408
   },
   "stages": {
     "analyzer": {
@@ -46,7 +46,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.009499666
+      "value": 0.008099333
     },
     "posting_builder": {
       "state": "unavailable",
@@ -54,7 +54,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.010386459
+      "value": 0.009515708
     },
     "root_mutation": {
       "state": "unavailable",
@@ -69,9 +69,9 @@
     "physical_index_page_bytes": 5505024,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 373,
-    "physical_total_bytes": 5505397,
-    "physical_total_wal_excluded_bytes": 5505397,
+    "physical_other_bytes": 374,
+    "physical_total_bytes": 5505398,
+    "physical_total_wal_excluded_bytes": 5505398,
     "other_paths": [
       "LOCK",
       "format.json",
