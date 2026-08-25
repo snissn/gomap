@@ -16,6 +16,10 @@ The expensive 1M hybrid rows are directional fixed-budget measurements, not text
 
 The accepted profiles were produced from clean commit `c11afbf0486a51083d0ec2c0efb46e597e61330b`, base `4a5448e22`, on Darwin 25.2.0 arm64 / Apple M3 with Go 1.26.0. Each uses 1,000,000 rows, 25 warm samples, isolated CPU-or-allocation capture, and a differential `alloc_space` baseline. The profiling harness from that commit was subsequently merged by #4351.
 
+## Source provenance
+
+`source_provenance/manifest.json` records every experiment commit and root tree. The accepted profile tree `1908b84e9baf287fc2fb75a591bf77cf9f538c33` is byte-identical to reachable merged commit `3fabb00682f3776cb047215de98cbddd4a6208c8` (#4351). The earlier 100k, 1M, and historical-profile trees are retained as full-index binary patches against recorded base `6b07740e25bf663b2df3594ed74532601c23ac96`; applying each patch to that base reconstructs its recorded tree. Patch hashes and sizes are bound in the provenance manifest and root `SHA256SUMS`.
+
 ## Allocation attribution
 
 The exact command for each retained profile is:
