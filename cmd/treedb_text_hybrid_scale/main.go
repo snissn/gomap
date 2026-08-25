@@ -94,6 +94,7 @@ type config struct {
 	queryRows           map[string]bool
 	cpuProfile          string
 	allocProfile        string
+	allocProfileBase    string
 }
 
 type report struct {
@@ -319,11 +320,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: %v\n", err)
 		os.Exit(2)
 	}
-	if cfg.allocProfile != "" {
-		// Do not sample fixture construction: allocation attribution begins at
-		// startQueryProfiles immediately after the selected row's warm query.
-		runtime.MemProfileRate = 0
-	}
 	rep, err := run(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: %v\n", err)
@@ -365,7 +361,7 @@ func parseFlags(args []string) (config, error) {
 	var queryRows string
 	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
 	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
-	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write an allocation profile after the selected single hybrid query row")
+	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write before/after allocation profiles for the selected single hybrid query row")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -466,19 +462,37 @@ func parseFlags(args []string) (config, error) {
 			return config{}, fmt.Errorf("resolve %s: %w", profile.name, err)
 		}
 		*profile.value = resolved
-		if resolved == filepath.Join(outDir, "scale_report.json") || resolved == filepath.Join(outDir, "scale_report.md") {
+	}
+	if cfg.allocProfile != "" {
+		cfg.allocProfileBase = cfg.allocProfile + ".base"
+	}
+	profilePaths := []struct {
+		name  string
+		value string
+	}{
+		{name: "-cpu-profile", value: cfg.cpuProfile},
+		{name: "-alloc-profile", value: cfg.allocProfile},
+		{name: "generated -alloc-profile baseline", value: cfg.allocProfileBase},
+	}
+	seenProfiles := make(map[string]string)
+	for _, profile := range profilePaths {
+		if profile.value == "" {
+			continue
+		}
+		if profile.value == filepath.Join(outDir, "scale_report.json") || profile.value == filepath.Join(outDir, "scale_report.md") {
 			return config{}, fmt.Errorf("%s must not resolve to a scale report artifact", profile.name)
 		}
-		inDBDir, err := pathIsSameOrDescendant(resolved, dbDir)
+		inDBDir, err := pathIsSameOrDescendant(profile.value, dbDir)
 		if err != nil {
 			return config{}, fmt.Errorf("compare %s and effective -db-dir: %w", profile.name, err)
 		}
 		if inDBDir {
 			return config{}, fmt.Errorf("%s must not resolve to the effective -db-dir or its descendant", profile.name)
 		}
-	}
-	if cfg.cpuProfile != "" && cfg.allocProfile != "" && cfg.cpuProfile == cfg.allocProfile {
-		return config{}, errors.New("-cpu-profile and -alloc-profile must not resolve to the same path")
+		if prior, exists := seenProfiles[profile.value]; exists {
+			return config{}, fmt.Errorf("%s and %s must not resolve to the same path", prior, profile.name)
+		}
+		seenProfiles[profile.value] = profile.name
 	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
@@ -540,6 +554,9 @@ func selectedPhaseNames(selected map[string]bool) []string {
 }
 
 func run(cfg config) (report, error) {
+	if err := requireExactMemProfileRate(cfg.allocProfile != "", runtime.MemProfileRate); err != nil {
+		return report{}, err
+	}
 	if cfg.selectedPhases == nil {
 		cfg.selectedPhases, _ = parsePhaseSelector("all")
 		cfg.phases = "all"
@@ -1192,31 +1209,57 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}, guard, nil
 }
 
+func requireExactMemProfileRate(allocProfile bool, memProfileRate int) error {
+	if allocProfile && memProfileRate != 1 {
+		return fmt.Errorf("-alloc-profile requires runtime.MemProfileRate == 1 at process startup; launch with GODEBUG=memprofilerate=1")
+	}
+	return nil
+}
+
 func startQueryProfiles(cfg config) (func() error, error) {
+	return startQueryProfilesAtMemProfileRate(cfg, runtime.MemProfileRate)
+}
+
+func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() error, error) {
+	if cfg.allocProfile != "" && cfg.allocProfileBase == "" {
+		cfg.allocProfileBase = cfg.allocProfile + ".base"
+	}
 	if cfg.cpuProfile == "" && cfg.allocProfile == "" {
 		return func() error { return nil }, nil
 	}
-	oldMemProfileRate := runtime.MemProfileRate
-	if cfg.allocProfile != "" {
-		runtime.MemProfileRate = 1
+	if err := requireExactMemProfileRate(cfg.allocProfile != "", memProfileRate); err != nil {
+		return nil, err
 	}
-	writeAllocs := func() error {
-		if cfg.allocProfile == "" {
-			return nil
-		}
-		defer func() { runtime.MemProfileRate = oldMemProfileRate }()
-		if err := os.MkdirAll(filepath.Dir(cfg.allocProfile), 0o755); err != nil {
+	writeProfile := func(path string) error {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		f, err := os.Create(cfg.allocProfile)
+		f, err := os.Create(path)
 		if err != nil {
 			return err
 		}
-		defer f.Close()
-		return pprof.Lookup("allocs").WriteTo(f, 0)
+		writeErr := pprof.Lookup("allocs").WriteTo(f, 0)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	if cfg.allocProfile != "" {
+		if err := writeProfile(cfg.allocProfileBase); err != nil {
+			return nil, fmt.Errorf("write allocation baseline: %w", err)
+		}
+	}
+	writeAllocsAfter := func() error {
+		if cfg.allocProfile == "" {
+			return nil
+		}
+		return writeProfile(cfg.allocProfile)
 	}
 	if cfg.cpuProfile == "" {
-		return writeAllocs, nil
+		var once sync.Once
+		var stopErr error
+		return func() error { once.Do(func() { stopErr = writeAllocsAfter() }); return stopErr }, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.cpuProfile), 0o755); err != nil {
 		return nil, err
@@ -1229,12 +1272,17 @@ func startQueryProfiles(cfg config) (func() error, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	var once sync.Once
+	var stopErr error
 	return func() error {
-		pprof.StopCPUProfile()
-		if err := f.Close(); err != nil {
-			return err
-		}
-		return writeAllocs()
+		once.Do(func() {
+			pprof.StopCPUProfile()
+			stopErr = f.Close()
+			if stopErr == nil {
+				stopErr = writeAllocsAfter()
+			}
+		})
+		return stopErr
 	}, nil
 }
 

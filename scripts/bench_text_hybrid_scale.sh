@@ -76,7 +76,7 @@ not as a passing latency row.
 Primary selected 10M text/hybrid/load/reopen/concurrent row:
 
 \`\`\`sh
-RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true \\
+RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true PHASES=$PHASES \\
 TEN_M_ROWS=$TEN_M_ROWS TEN_M_QUERIES=$TEN_M_QUERIES TEN_M_BATCH_SIZE=$TEN_M_BATCH_SIZE \\
 TEN_M_CANDIDATE_LIMIT=$TEN_M_CANDIDATE_LIMIT \\
 TEN_M_BACKFILL_ROWS=$TEN_M_BACKFILL_ROWS TEN_M_MAINTENANCE_UPDATES=$TEN_M_MAINTENANCE_UPDATES TEN_M_MAINTENANCE_DELETES=$TEN_M_MAINTENANCE_DELETES \\
@@ -93,7 +93,7 @@ GOWORK=off $GO_BIN run ./cmd/treedb_text_hybrid_scale \\
   -top-k $TOP_K -candidate-limit $TEN_M_CANDIDATE_LIMIT -queries $TEN_M_QUERIES \\
   -readers $READERS -backfill-rows $TEN_M_BACKFILL_ROWS \\
   -maintenance-updates $TEN_M_MAINTENANCE_UPDATES -maintenance-deletes $TEN_M_MAINTENANCE_DELETES \\
-  -keep-db=$KEEP_DB -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  -keep-db=$KEEP_DB -phases "$PHASES" -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
 \`\`\`
 
 For allocation evidence on selected Go benchmark rows, run with an explicit row
