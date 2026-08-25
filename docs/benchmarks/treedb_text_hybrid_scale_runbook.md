@@ -78,9 +78,12 @@ nonpositive repetition counts and repeated full campaigns before writing plans.
 For direct invocation, pass `-phases retrieval`.
 
 The harness atomically rewrites its JSON and Markdown reports after each
-completed phase. `selected_phases`, `completed_phases`, and `complete` distinguish
-surviving partial evidence from a completed run. A phase is not marked complete
-until its strict guardrails pass.
+completed phase and guardrail failure. `selected_phases`, `completed_phases`, and
+`complete` distinguish surviving partial evidence from a completed run. A
+failed guardrail is always incomplete evidence: strict mode returns the
+guardrail error after persisting the
+phase data, while `-allow-guardrail-failures` may continue eligible later
+diagnostic phases without completing the failed phase or report.
 
 ### Selected 10M matrix (approval gated)
 
@@ -150,7 +153,7 @@ rm -rf /tmp/gomap_text_hybrid_scale_1m_YYYYmmdd_HHMMSS
 ## Artifacts and schema
 
 `cmd/treedb_text_hybrid_scale` writes schema
-`treedb_text_hybrid_scale/v1`.
+`treedb_text_hybrid_scale/v2`.
 
 Primary artifacts:
 

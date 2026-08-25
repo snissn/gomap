@@ -187,8 +187,8 @@ func TestGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
 		Queries: []queryReport{{Name: "failed_query"}}, Guardrails: []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
 	}
 	err := completeGuardedPhase(&rep, "queries", rep.Guardrails, false)
-	if err == nil || rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
-		t.Fatalf("failed guardrail marked phase complete: report=%+v err=%v", rep, err)
+	if err == nil || !strings.Contains(err.Error(), "guardrail queries failed: fail closed") || rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
+		t.Fatalf("failed guardrail marked phase complete or lost strict error: report=%+v err=%v", rep, err)
 	}
 	payload, readErr := os.ReadFile(rep.Artifacts.JSONReport)
 	if readErr != nil {
@@ -197,6 +197,39 @@ func TestGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
 	var persisted report
 	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load" || len(persisted.Guardrails) != 1 {
 		t.Fatalf("persisted report was not honest partial evidence: report=%+v err=%v", persisted, err)
+	}
+}
+
+func TestAllowedGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion: scaleSchemaVersion,
+		Artifacts: reportArtifacts{
+			OutDir:     outDir,
+			JSONReport: filepath.Join(outDir, "scale_report.json"),
+			Markdown:   filepath.Join(outDir, "scale_report.md"),
+		},
+		SelectedPhases:  []string{"load", "queries", "reopen"},
+		CompletedPhases: []string{"load"},
+		Queries:         []queryReport{{Name: "failed_query"}},
+		Guardrails:      []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	if err := completeGuardedPhase(&rep, "queries", rep.Guardrails, true); err != nil {
+		t.Fatalf("allowed diagnostic guardrail failure stopped execution: %v", err)
+	}
+	if err := completePhase(&rep, "reopen"); err != nil {
+		t.Fatalf("complete eligible later phase: %v", err)
+	}
+	if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load,reopen" {
+		t.Fatalf("allowed failed guardrail qualified report: %+v", rep)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read persisted diagnostic report: %v", err)
+	}
+	var persisted report
+	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load,reopen" || len(persisted.Guardrails) != 1 || persisted.Guardrails[0].OK {
+		t.Fatalf("persisted allowed diagnostic report was qualified: report=%+v err=%v", persisted, err)
 	}
 }
 
@@ -303,25 +336,30 @@ func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
 
 func TestRetrievalRepetitionsRequireRetrievalPhase4327(t *testing.T) {
 	for _, tc := range []struct {
-		name, phases string
-		wantErr      bool
+		name, phases, repetitions, want string
 	}{
-		{name: "reject all", phases: "all", wantErr: true},
-		{name: "accept retrieval", phases: "retrieval"},
+		{name: "reject repeated all", phases: "all", repetitions: "2", want: "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval"},
+		{name: "accept repeated retrieval", phases: "retrieval", repetitions: "2"},
+		{name: "reject zero before plans", phases: "retrieval", repetitions: "0", want: "RETRIEVAL_REPETITIONS must be a positive integer"},
+		{name: "reject negative before plans", phases: "retrieval", repetitions: "-1", want: "RETRIEVAL_REPETITIONS must be a positive integer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
+			runDir := filepath.Join(t.TempDir(), "run")
 			cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
 			cmd.Dir = filepath.Join("..", "..")
-			cmd.Env = append(os.Environ(), "RUN_DIR="+t.TempDir(), "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES="+tc.phases, "RETRIEVAL_REPETITIONS=2", "GO_BIN=true")
+			cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES="+tc.phases, "RETRIEVAL_REPETITIONS="+tc.repetitions, "GO_BIN=true")
 			output, err := cmd.CombinedOutput()
 			if ctx.Err() != nil {
 				t.Fatalf("repetition contract timed out: %v\n%s", ctx.Err(), output)
 			}
-			if tc.wantErr {
-				if err == nil || !strings.Contains(string(output), "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval") {
-					t.Fatalf("expected repetition rejection, err=%v output=%s", err, output)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(string(output), tc.want) {
+					t.Fatalf("expected repetition rejection %q, err=%v output=%s", tc.want, err, output)
+				}
+				if _, statErr := os.Stat(runDir); !os.IsNotExist(statErr) {
+					t.Fatalf("rejected repetition count generated a run directory: stat err=%v", statErr)
 				}
 				return
 			}

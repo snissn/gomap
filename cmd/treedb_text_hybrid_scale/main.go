@@ -595,14 +595,19 @@ func run(cfg config) (report, error) {
 }
 
 func completeGuardedPhase(rep *report, phase string, guards []guardrailResult, allow bool) error {
-	if err := failOnGuardrails(guards, allow); err != nil {
-		// Do not mark a phase complete until its guardrails qualify it. Persist the
-		// observed rows and failed guards as explicitly incomplete evidence first.
+	if err := failOnGuardrails(guards, false); err != nil {
+		// Diagnostic continuation is distinct from qualification: persist the
+		// observed rows and failed guards as incomplete evidence, but never mark
+		// this phase (or its containing report) complete.
 		if rep != nil {
+			rep.Complete = false
 			rep.Bottlenecks = rankBottlenecks(*rep)
 			if writeErr := writeReports(*rep); writeErr != nil {
 				return writeErr
 			}
+		}
+		if allow {
+			return nil
 		}
 		return err
 	}
