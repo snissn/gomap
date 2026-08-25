@@ -35,7 +35,34 @@ const (
 
 	rareTextTerm = "raretoken2731"
 	rareTenant   = "tenant-rare-06pct"
+
+	queryRowTextCommon          = "text_common_score_only"
+	queryRowTextRare            = "text_rare_score_only"
+	queryRowTextMultiTermAND    = "text_multi_term_and_score_only"
+	queryRowTextMultiTermOR     = "text_multi_term_or_score_only"
+	queryRowHybridText          = "hybrid_text_only_no_docs"
+	queryRowHybridTextScalar    = "hybrid_text_scalar_no_docs"
+	queryRowHybridTextVector    = "hybrid_text_vector_no_docs"
+	queryRowHybridTextVecScalar = "hybrid_text_vector_scalar_no_docs"
 )
+
+type queryRowClass struct {
+	hybrid         bool
+	vectorRequired bool
+}
+
+// queryRowClasses is the public -query-rows contract and classifies every row
+// emitted by runQueryMatrix.
+var queryRowClasses = map[string]queryRowClass{
+	queryRowTextCommon:          {},
+	queryRowTextRare:            {},
+	queryRowTextMultiTermAND:    {},
+	queryRowTextMultiTermOR:     {},
+	queryRowHybridText:          {hybrid: true},
+	queryRowHybridTextScalar:    {hybrid: true},
+	queryRowHybridTextVector:    {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecScalar: {hybrid: true, vectorRequired: true},
+}
 
 type config struct {
 	outDir              string
@@ -397,9 +424,20 @@ func parseFlags(args []string) (config, error) {
 			cfg.queryRows[name] = true
 		}
 	}
+	var selectedRow queryRowClass
+	for name := range cfg.queryRows {
+		class, ok := queryRowClasses[name]
+		if !ok {
+			return config{}, fmt.Errorf("unknown -query-rows value %q", name)
+		}
+		if class.vectorRequired && !cfg.includeVector {
+			return config{}, fmt.Errorf("-query-rows value %q requires -include-vector=true", name)
+		}
+		selectedRow = class
+	}
 	if cfg.cpuProfile != "" || cfg.allocProfile != "" {
-		if len(cfg.queryRows) != 1 {
-			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one -query-rows value")
+		if len(cfg.queryRows) != 1 || !selectedRow.hybrid {
+			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one hybrid -query-rows value")
 		}
 	}
 	if cfg.backfillRows <= 0 {
@@ -971,10 +1009,10 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		operator collections.TextSearchOperator
 		shape    string
 	}{
-		{name: "text_common_score_only", query: "refund", shape: "common single-term BM25F block-max top-k"},
-		{name: "text_rare_score_only", query: rareTextTerm, shape: "rare single-term BM25F top-k"},
-		{name: "text_multi_term_and_score_only", query: "refund AND policy", operator: collections.TextSearchOperatorAND, shape: "multi-term AND exact BM25F"},
-		{name: "text_multi_term_or_score_only", query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
+		{name: queryRowTextCommon, query: "refund", shape: "common single-term BM25F block-max top-k"},
+		{name: queryRowTextRare, query: rareTextTerm, shape: "rare single-term BM25F top-k"},
+		{name: queryRowTextMultiTermAND, query: "refund AND policy", operator: collections.TextSearchOperatorAND, shape: "multi-term AND exact BM25F"},
+		{name: queryRowTextMultiTermOR, query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
 	}
 	for _, tc := range textCases {
 		if !selectedQueryRow(cfg, tc.name) {
@@ -994,12 +1032,12 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		opts  collections.HybridSearchOptions
 	}{
 		{
-			name:  "hybrid_text_only_no_docs",
+			name:  queryRowHybridText,
 			shape: "hybrid executor text source only, score-only result mode",
 			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}},
 		},
 		{
-			name:  "hybrid_text_scalar_no_docs",
+			name:  queryRowHybridTextScalar,
 			shape: "hybrid executor text source plus scalar prefilter, score-only result mode",
 			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
 		},
@@ -1011,7 +1049,7 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 				shape string
 				opts  collections.HybridSearchOptions
 			}{
-				name:  "hybrid_text_vector_no_docs",
+				name:  queryRowHybridTextVector,
 				shape: "text+vector RRF, score-only result mode",
 				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}},
 			},
@@ -1020,7 +1058,7 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 				shape string
 				opts  collections.HybridSearchOptions
 			}{
-				name:  "hybrid_text_vector_scalar_no_docs",
+				name:  queryRowHybridTextVecScalar,
 				shape: "text+vector RRF with scalar prefilter, score-only result mode",
 				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
 			},
