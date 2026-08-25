@@ -19,10 +19,12 @@ mode/scale, never in raw rows, and are recomputed from those raw repetitions.
 Every row separately accounts for source documents, generated chunks, returned
 indexed parent rows, total live indexed rows, and whether source parents are
 text-indexed (maintenance may intentionally have fewer live rows). For
-`source_chunk`, live rows must equal returned parents plus returned children. `source_chunk` uses the public
-`IngestChunkedDocument` parent-and-child lifecycle with no vector index or
-embedder; its timed wall boundary includes deterministic chunk planning and the
-durable parent/child text writes. Stages
+`source_chunk`, live rows must equal returned parents plus returned children.
+`source_chunk` uses the public text-only `IngestChunkedDocuments` parent-and-child
+lifecycle with no vector index or embedder; rows record the actual maximum batch
+size and batch count. Its timed wall boundary includes deterministic chunk
+planning and normal durable parent/child text writes. One bounded public batch
+is the atomicity unit. Stages
 and resource metrics are either `observed` or `unavailable` with a reason;
 zero is not used as a made-up measurement. The manifest binds clean VCS and
 vectors-disabled/zero-vector-index state as observed product identity. Every row records stage timing, physical storage, logical text-v2 component

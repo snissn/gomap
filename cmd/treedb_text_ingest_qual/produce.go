@@ -37,6 +37,8 @@ func produceSmoke(dir string, scale int) error {
 	return nil
 }
 
+const sourceChunkBatchLimit = 256
+
 func produceMode(dir, mode string, scale int) (row, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return row{}, err
@@ -70,7 +72,7 @@ func produceMode(dir, mode string, scale int) (row, error) {
 	runtime.ReadMemStats(&before)
 	cpuStart, _, cpuReason := processUsage()
 	started := time.Now()
-	chunks, indexedParents, parentsIndexed := 0, 0, false
+	chunks, indexedParents, batchSize, batchCount, parentsIndexed := 0, 0, 0, 0, false
 	switch mode {
 	case "indexed_insert":
 		if _, _, err = col.CreateTextIndex(def); err == nil {
@@ -81,22 +83,41 @@ func produceMode(dir, mode string, scale int) (row, error) {
 			_, _, err = col.CreateTextIndex(def)
 		}
 	case "source_chunk":
-		// IngestChunkedDocument is the public lifecycle API: timing includes its
-		// deterministic planning, parent upsert, and child text-index writes.
+		// IngestChunkedDocuments is the public text-only lifecycle API. Bounded
+		// calls keep 100k/1M planning memory controlled while each call performs
+		// one normal durable parent/child/index publication.
 		if _, _, err = col.CreateTextIndex(def); err == nil {
 			cfg := chunking.Config{Strategy: chunking.StrategyFixedWindow, SizeUnit: chunking.SizeUnitRunes, Size: 32, Overlap: 0}
-			for i, doc := range docs {
-				result, ingestErr := col.IngestChunkedDocument(ids[i], doc, cfg, collections.ChunkedIngestOptions{})
+			sources := qualificationSourceDocuments(ids)
+			for start := 0; start < len(sources); start += sourceChunkBatchLimit {
+				end := start + sourceChunkBatchLimit
+				if end > len(sources) {
+					end = len(sources)
+				}
+				results, ingestErr := col.IngestChunkedDocuments(sources[start:end], cfg, collections.ChunkedIngestOptions{})
 				if ingestErr != nil {
 					err = ingestErr
 					break
 				}
-				if string(result.ParentID()) != string(ids[i]) {
-					err = fmt.Errorf("chunked ingest returned unexpected parent ID %q", result.ParentID())
+				if len(results) != end-start {
+					err = fmt.Errorf("chunked ingest returned %d results for %d sources", len(results), end-start)
 					break
 				}
-				indexedParents++
-				chunks += len(result.ChildIDs)
+				batchCount++
+				if size := end - start; size > batchSize {
+					batchSize = size
+				}
+				for i, result := range results {
+					if string(result.ParentID()) != string(ids[start+i]) {
+						err = fmt.Errorf("chunked ingest returned unexpected parent ID %q", result.ParentID())
+						break
+					}
+					indexedParents++
+					chunks += len(result.ChildIDs)
+				}
+				if err != nil {
+					break
+				}
 			}
 			parentsIndexed = indexedParents == scale
 		}
@@ -179,7 +200,7 @@ func produceMode(dir, mode string, scale int) (row, error) {
 	if endCPUReason == "" {
 		rssMetric = metric{State: "observed", Value: maxRSS}
 	}
-	return row{Mode: mode, Scale: scale, Repetition: 1, SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
+	return row{Mode: mode, Scale: scale, Repetition: 1, SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
 }
 
 func withLogicalPayload(s storage, docs [][]byte) storage {
@@ -196,4 +217,15 @@ func qualificationDocuments(n int) ([][]byte, [][]byte) {
 		docs[i] = []byte(fmt.Sprintf(`{"title":"refund policy %d","body":"refund policy support common customer refund policy support common customer %d"}`, i, i%257))
 	}
 	return ids, docs
+}
+
+func qualificationSourceDocuments(ids [][]byte) []collections.SourceDocument {
+	sources := make([]collections.SourceDocument, len(ids))
+	for i, id := range ids {
+		sources[i] = collections.SourceDocument{ID: id, Fields: map[string]any{
+			"title": fmt.Sprintf("refund policy %d", i),
+			"body":  fmt.Sprintf("refund policy support common customer refund policy support common customer %d", i%257),
+		}}
+	}
+	return sources
 }

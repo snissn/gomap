@@ -43,36 +43,41 @@ type report struct {
 }
 
 type row struct {
-	Mode               string            `json:"mode"`
-	Scale              int               `json:"scale"`
-	Repetition         int               `json:"repetition"`
-	SourceDocuments    int               `json:"source_documents"`
-	GeneratedChunks    int               `json:"generated_chunks"`
-	IndexedLiveRows    int               `json:"indexed_live_rows"`
-	ParentsTextIndexed bool              `json:"parents_text_indexed"`
-	IndexedParentRows  int               `json:"indexed_parent_rows"`
-	Postings           uint64            `json:"postings"`
-	Terms              uint64            `json:"terms"`
-	Blocks             uint64            `json:"blocks"`
-	Generations        uint64            `json:"generations"`
-	StaleDebt          uint64            `json:"stale_debt"`
-	TombstoneDebt      uint64            `json:"tombstone_debt"`
-	SourceDocsPerSec   float64           `json:"source_docs_per_second"`
-	ChunksPerSec       float64           `json:"chunks_per_second"`
-	IndexedRowsPerSec  float64           `json:"indexed_rows_per_second"`
-	WallSeconds        float64           `json:"wall_seconds"`
-	CPUSeconds         metric            `json:"cpu_seconds"`
-	BytesPerOp         metric            `json:"bytes_per_op"`
-	AllocsPerOp        metric            `json:"allocs_per_op"`
-	CumulativeAllocs   metric            `json:"cumulative_allocations"`
-	PeakRSSBytes       metric            `json:"peak_rss_bytes"`
-	Stages             map[string]metric `json:"stages"`
-	Storage            storage           `json:"storage"`
-	TextV2             textV2            `json:"text_v2"`
-	CheckpointOK       bool              `json:"checkpoint_ok"`
-	CloseOK            bool              `json:"close_ok"`
-	ReopenOK           bool              `json:"reopen_ok"`
-	Probe              scoreOnlyProbe    `json:"score_only_probe"`
+	Mode               string `json:"mode"`
+	Scale              int    `json:"scale"`
+	Repetition         int    `json:"repetition"`
+	SourceDocuments    int    `json:"source_documents"`
+	GeneratedChunks    int    `json:"generated_chunks"`
+	IndexedLiveRows    int    `json:"indexed_live_rows"`
+	ParentsTextIndexed bool   `json:"parents_text_indexed"`
+	IndexedParentRows  int    `json:"indexed_parent_rows"`
+	// ChunkBatchSize and ChunkBatchCount record the largest actual public
+	// IngestChunkedDocuments call and the number of durable calls for source_chunk.
+	// They are zero for modes that do not use chunk ingestion.
+	ChunkBatchSize    int               `json:"chunk_batch_size"`
+	ChunkBatchCount   int               `json:"chunk_batch_count"`
+	Postings          uint64            `json:"postings"`
+	Terms             uint64            `json:"terms"`
+	Blocks            uint64            `json:"blocks"`
+	Generations       uint64            `json:"generations"`
+	StaleDebt         uint64            `json:"stale_debt"`
+	TombstoneDebt     uint64            `json:"tombstone_debt"`
+	SourceDocsPerSec  float64           `json:"source_docs_per_second"`
+	ChunksPerSec      float64           `json:"chunks_per_second"`
+	IndexedRowsPerSec float64           `json:"indexed_rows_per_second"`
+	WallSeconds       float64           `json:"wall_seconds"`
+	CPUSeconds        metric            `json:"cpu_seconds"`
+	BytesPerOp        metric            `json:"bytes_per_op"`
+	AllocsPerOp       metric            `json:"allocs_per_op"`
+	CumulativeAllocs  metric            `json:"cumulative_allocations"`
+	PeakRSSBytes      metric            `json:"peak_rss_bytes"`
+	Stages            map[string]metric `json:"stages"`
+	Storage           storage           `json:"storage"`
+	TextV2            textV2            `json:"text_v2"`
+	CheckpointOK      bool              `json:"checkpoint_ok"`
+	CloseOK           bool              `json:"close_ok"`
+	ReopenOK          bool              `json:"reopen_ok"`
+	Probe             scoreOnlyProbe    `json:"score_only_probe"`
 }
 
 type metric struct {
@@ -200,11 +205,11 @@ func validateRow(r row) error {
 	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks) {
-		return fmt.Errorf("source_chunk requires returned parent, generated child, and live-row accounting")
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize < 1 || r.ChunkBatchCount != (r.SourceDocuments+r.ChunkBatchSize-1)/r.ChunkBatchSize) {
+		return fmt.Errorf("source_chunk requires returned parent, generated child, live-row, and batch accounting")
 	}
-	if r.Mode != "source_chunk" && r.IndexedParentRows != 0 {
-		return fmt.Errorf("non-source modes must not claim chunked parent rows")
+	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
+		return fmt.Errorf("non-source modes must not claim chunked parent or batch rows")
 	}
 	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.IndexedRowsPerSec <= 0 || r.WallSeconds <= 0 {
 		return fmt.Errorf("text-v2 counts or timing incomplete")
