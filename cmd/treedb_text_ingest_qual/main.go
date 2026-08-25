@@ -11,15 +11,29 @@ import (
 )
 
 func main() {
-	var manifestPath, reportPath, produceDir string
-	var produceScale int
+	var manifestPath, reportPath, produceDir, produceModeDir, produceModeName string
+	var produceScale, repetition int
 	flag.StringVar(&manifestPath, "manifest", "", "path to manifest.json")
 	flag.StringVar(&reportPath, "report", "", "path to report.json")
 	flag.StringVar(&produceDir, "produce-smoke", "", "directory for real raw rows for all modes")
-	flag.IntVar(&produceScale, "scale", 10_000, "source documents for -produce-smoke")
+	flag.StringVar(&produceModeName, "produce-mode", "", "internal: produce one mode in a fresh child process")
+	flag.StringVar(&produceModeDir, "produce-dir", "", "internal: raw-row directory for -produce-mode")
+	flag.IntVar(&produceScale, "scale", 10_000, "source documents for producer modes")
+	flag.IntVar(&repetition, "repetition", 1, "retained repetition number for producer modes")
 	flag.Parse()
+	if produceModeName != "" {
+		if produceModeDir == "" {
+			fmt.Fprintln(os.Stderr, "-produce-mode requires -produce-dir")
+			os.Exit(2)
+		}
+		if err := produceOneMode(produceModeDir, produceModeName, produceScale, repetition); err != nil {
+			fmt.Fprintf(os.Stderr, "produce mode: %v\\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if produceDir != "" {
-		if err := produceSmoke(produceDir, produceScale); err != nil {
+		if err := produceSmoke(produceDir, produceScale, repetition); err != nil {
 			fmt.Fprintf(os.Stderr, "produce smoke: %v\\n", err)
 			os.Exit(1)
 		}

@@ -18,7 +18,9 @@ mode/scale, never in raw rows, and are recomputed from those raw repetitions.
 
 Every row separately accounts for source documents, generated chunks, returned
 indexed parent rows, total live indexed rows, and whether source parents are
-text-indexed (maintenance may intentionally have fewer live rows). For
+text-indexed (maintenance may intentionally have fewer live rows). Maintenance
+rows record the observed deleted-document tombstone debt and must account for
+exactly the half of source documents deleted by that workload. For
 `source_chunk`, live rows must equal returned parents plus returned children.
 `source_chunk` uses the public text-only `IngestChunkedDocuments` parent-and-child
 lifecycle with no vector index or embedder; rows record the actual maximum batch
@@ -40,7 +42,10 @@ Unknown regular files are retained in `other_paths`, never silently omitted.
 `logical_primary_payload_bytes` (known input documents) and the text-v2
 components are logical measures and explicitly overlap physical storage, so they
 are non-additive. CPU and max RSS use `getrusage` on Darwin/Linux; allocations
-are cumulative `runtime.MemStats` malloc counts, not B/op.
+are cumulative `runtime.MemStats` malloc counts, not B/op. The smoke parent
+starts one fresh child process per mode, and each row records that child's
+`peak_rss_scope: fresh_process_per_mode` and PID; the validator rejects reused
+or unscoped RSS measurements.
 
 ## Validate
 
@@ -63,9 +68,11 @@ summaries.
 
 ```sh
 go run ./cmd/treedb_text_ingest_qual \
-  -produce-smoke /tmp/gomap-4328-smoke -scale 10000
+  -produce-smoke /tmp/gomap-4328-smoke -scale 10000 -repetition 1
 ```
 
-It records unavailable stage/resource metrics with explicit reasons rather than
-inventing zeroes. Do not treat an unvalidated or partial 1M run as qualification
-evidence.
+It records the supplied `-repetition` in every raw row, runs each mode in a
+fresh child process, and removes each child's temporary DB after its raw row is
+written. It records unavailable stage/resource metrics with explicit reasons
+rather than inventing zeroes. Do not treat an unvalidated or partial 1M run as
+qualification evidence.

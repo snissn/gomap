@@ -46,6 +46,8 @@ type row struct {
 	Mode               string `json:"mode"`
 	Scale              int    `json:"scale"`
 	Repetition         int    `json:"repetition"`
+	PeakRSSScope       string `json:"peak_rss_scope"`
+	PeakRSSPID         int    `json:"peak_rss_pid"`
 	SourceDocuments    int    `json:"source_documents"`
 	GeneratedChunks    int    `json:"generated_chunks"`
 	IndexedLiveRows    int    `json:"indexed_live_rows"`
@@ -141,6 +143,7 @@ func validate(m manifest, r report, manifestSHA string) error {
 		return fmt.Errorf("manifest_sha256 does not match manifest bytes")
 	}
 	groups := map[string]map[int]row{}
+	peakRSSPIDs := map[int]bool{}
 	for i, x := range r.Rows {
 		if err := validateRow(x); err != nil {
 			return fmt.Errorf("row %d: %w", i, err)
@@ -152,6 +155,10 @@ func validate(m manifest, r report, manifestSHA string) error {
 		if _, ok := groups[key][x.Repetition]; ok {
 			return fmt.Errorf("duplicate repetition %s/%d", key, x.Repetition)
 		}
+		if peakRSSPIDs[x.PeakRSSPID] {
+			return fmt.Errorf("row %d: peak RSS process reused", i)
+		}
+		peakRSSPIDs[x.PeakRSSPID] = true
 		groups[key][x.Repetition] = x
 	}
 	for _, mode := range requiredModes {
@@ -202,6 +209,9 @@ func validateRow(r row) error {
 	if !validScale || r.Repetition < 1 {
 		return fmt.Errorf("invalid scale or repetition")
 	}
+	if r.PeakRSSScope != "fresh_process_per_mode" || r.PeakRSSPID < 1 {
+		return fmt.Errorf("peak RSS requires a fresh process measurement")
+	}
 	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
@@ -210,6 +220,12 @@ func validateRow(r row) error {
 	}
 	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
 		return fmt.Errorf("non-source modes must not claim chunked parent or batch rows")
+	}
+	if r.Mode == "maintenance" && (r.IndexedLiveRows != r.SourceDocuments/2 || r.TombstoneDebt != uint64(r.SourceDocuments-r.IndexedLiveRows)) {
+		return fmt.Errorf("maintenance must record deleted-document tombstone debt")
+	}
+	if r.Mode != "maintenance" && r.TombstoneDebt != 0 {
+		return fmt.Errorf("non-maintenance modes must not claim tombstone debt")
 	}
 	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.IndexedRowsPerSec <= 0 || r.WallSeconds <= 0 {
 		return fmt.Errorf("text-v2 counts or timing incomplete")

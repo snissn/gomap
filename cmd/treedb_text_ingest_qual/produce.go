@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -17,29 +19,73 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func produceSmoke(dir string, scale int) error {
+type modeProducer func(dir, mode string, scale, repetition int) error
+
+// produceSmoke runs every mode in a distinct child process. Peak RSS is a
+// process-lifetime high-water mark, so sharing the parent would contaminate
+// later modes with memory retained by earlier ones.
+func produceSmoke(dir string, scale, repetition int) error {
+	return produceSmokeWith(dir, scale, repetition, produceModeInFreshProcess)
+}
+
+func produceSmokeWith(dir string, scale, repetition int, produce modeProducer) error {
 	if scale < 1 {
 		return fmt.Errorf("scale must be positive")
 	}
+	if repetition < 1 {
+		return fmt.Errorf("repetition must be positive")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
 	for _, mode := range requiredModes {
-		r, err := produceMode(filepath.Join(dir, mode), mode, scale)
-		if err != nil {
+		if err := produce(dir, mode, scale, repetition); err != nil {
 			return fmt.Errorf("%s: %w", mode, err)
-		}
-		raw, err := json.MarshalIndent(r, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dir, mode+".raw.json"), append(raw, '\n'), 0o644); err != nil {
-			return err
 		}
 	}
 	return nil
 }
 
+func produceModeInFreshProcess(dir, mode string, scale, repetition int) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(executable,
+		"-produce-mode", mode,
+		"-produce-dir", dir,
+		"-scale", strconv.Itoa(scale),
+		"-repetition", strconv.Itoa(repetition),
+	)
+	cmd.Env = os.Environ()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("fresh child process: %w: %s", err, output)
+	}
+	return nil
+}
+
+// produceOneMode is called only by the fresh child. Its DB is deliberately
+// outside the raw-row directory and always removed after the row is copied.
+func produceOneMode(dir, mode string, scale, repetition int) error {
+	dbDir, err := os.MkdirTemp("", "gomap-4328-text-ingest-"+mode+"-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dbDir)
+	r, err := produceMode(dbDir, mode, scale, repetition)
+	if err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, mode+".raw.json"), append(raw, '\n'), 0o644)
+}
+
 const sourceChunkBatchLimit = 256
 
-func produceMode(dir, mode string, scale int) (row, error) {
+func produceMode(dir, mode string, scale, repetition int) (row, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return row{}, err
 	}
@@ -200,7 +246,7 @@ func produceMode(dir, mode string, scale int) (row, error) {
 	if endCPUReason == "" {
 		rssMetric = metric{State: "observed", Value: maxRSS}
 	}
-	return row{Mode: mode, Scale: scale, Repetition: 1, SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
+	return row{Mode: mode, Scale: scale, Repetition: repetition, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: os.Getpid(), SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, TombstoneDebt: stats.V2DeletedDocs, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
 }
 
 func withLogicalPayload(s storage, docs [][]byte) storage {
