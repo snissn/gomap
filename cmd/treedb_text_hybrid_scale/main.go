@@ -1812,7 +1812,7 @@ func captureContext(cfg config) reportContext {
 		CPU:         cpuLabel(),
 		NCPU:        runtime.NumCPU(),
 		Uptime:      strings.TrimSpace(runCmd("uptime")),
-		Command:     strings.Join(os.Args, " "),
+		Command:     "process_argv=" + strings.Join(os.Args, " "),
 		VCSClean:    vcsClean,
 		VCSStatus:   vcsStatus,
 		BinaryState: binaryState,

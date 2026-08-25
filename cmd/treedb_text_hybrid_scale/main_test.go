@@ -156,8 +156,8 @@ func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
 
 func TestCaptureContextUsesInvocationProvenance4327(t *testing.T) {
 	ctx := captureContext(config{baseRef: "origin/main"})
-	if ctx.VCSStatus == "" || ctx.BinaryState == "" || ctx.Command == "" || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
-		t.Fatalf("missing provenance: %+v", ctx)
+	if ctx.VCSStatus == "" || ctx.BinaryState == "" || !strings.HasPrefix(ctx.Command, "process_argv=") || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
+		t.Fatalf("missing or mislabeled provenance: %+v", ctx)
 	}
 	if ctx.RepoRoot != "" || ctx.Branch != "" || ctx.Commit != "" {
 		t.Fatalf("context used ambient checkout state: %+v", ctx)
