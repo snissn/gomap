@@ -3,7 +3,7 @@
   "scale": 1000000,
   "repetition": 3,
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 22674,
+  "peak_rss_pid": 28163,
   "source_documents": 1000000,
   "generated_chunks": 3000000,
   "indexed_live_rows": 4000000,
@@ -17,13 +17,13 @@
   "generations": 3908,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 1033.1754313352292,
-  "chunks_per_second": 3099.5262940056878,
-  "indexed_rows_per_second": 4132.701725340917,
-  "wall_seconds": 967.889837167,
+  "source_docs_per_second": 1004.6304789260462,
+  "chunks_per_second": 3013.8914367781385,
+  "indexed_rows_per_second": 4018.5219157041847,
+  "wall_seconds": 995.390863583,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1036.368533
+    "value": 1078.174115
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -35,11 +35,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 476916549
+    "value": 470302804
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 4231299072
+    "value": 3454304256
   },
   "stages": {
     "analyzer": {
@@ -48,7 +48,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.040394667
+      "value": 0.049466834
     },
     "posting_builder": {
       "state": "unavailable",
@@ -56,7 +56,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 1.8492415
+      "value": 1.903218709
     },
     "root_mutation": {
       "state": "unavailable",
@@ -68,12 +68,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 7853572096,
+    "physical_index_page_bytes": 8006664192,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
     "physical_other_bytes": 374,
-    "physical_total_bytes": 7853572470,
-    "physical_total_wal_excluded_bytes": 7853572470,
+    "physical_total_bytes": 8006664566,
+    "physical_total_wal_excluded_bytes": 8006664566,
     "other_paths": [
       "LOCK",
       "format.json",
