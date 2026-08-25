@@ -379,6 +379,9 @@ const (
 	ResourceOwnerCandidate
 	ResourceOwnerCoordinator
 	ResourceOwnerRecovery
+	// ResourceOwnerShared is internal immutable-chunk ownership. Published set
+	// wrappers retain/release chunk roots independently of their lifecycle phase.
+	ResourceOwnerShared
 	ResourceOwnerTransferred
 	ResourceOwnerView
 	ResourceOwnerReleased
