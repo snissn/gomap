@@ -1,0 +1,100 @@
+{
+  "mode": "source_chunk",
+  "scale": 100000,
+  "repetition": 1,
+  "source_documents": 100000,
+  "generated_chunks": 300000,
+  "indexed_live_rows": 400000,
+  "parents_text_indexed": true,
+  "indexed_parent_rows": 100000,
+  "chunk_batch_size": 256,
+  "chunk_batch_count": 391,
+  "postings": 400000,
+  "terms": 100012,
+  "blocks": 252868,
+  "generations": 392,
+  "stale_debt": 0,
+  "tombstone_debt": 0,
+  "source_docs_per_second": 7408.763714414281,
+  "chunks_per_second": 22226.29114324284,
+  "indexed_rows_per_second": 29635.054857657124,
+  "wall_seconds": 13.497528583,
+  "cpu_seconds": {
+    "state": "observed",
+    "value": 14.511083000000001
+  },
+  "bytes_per_op": {
+    "state": "unavailable",
+    "reason": "not a Go benchmark; see cumulative_allocations"
+  },
+  "allocs_per_op": {
+    "state": "unavailable",
+    "reason": "not a Go benchmark; see cumulative_allocations"
+  },
+  "cumulative_allocations": {
+    "state": "observed",
+    "value": 40435303
+  },
+  "peak_rss_bytes": {
+    "state": "observed",
+    "value": 696975360
+  },
+  "stages": {
+    "analyzer": {
+      "state": "unavailable",
+      "reason": "collection API does not separately expose analyzer time"
+    },
+    "checkpoint": {
+      "state": "observed",
+      "value": 0.012692709
+    },
+    "posting_builder": {
+      "state": "unavailable",
+      "reason": "collection API does not separately expose posting-builder time"
+    },
+    "reopen": {
+      "state": "observed",
+      "value": 0.107027208
+    },
+    "root_mutation": {
+      "state": "unavailable",
+      "reason": "collection API does not separately expose root-mutation time"
+    },
+    "value_log": {
+      "state": "unavailable",
+      "reason": "collection API does not separately expose value-log time"
+    }
+  },
+  "storage": {
+    "physical_index_page_bytes": 281542656,
+    "physical_value_log_bytes": 0,
+    "physical_wal_bytes": 0,
+    "physical_other_bytes": 373,
+    "physical_total_bytes": 281543029,
+    "physical_total_wal_excluded_bytes": 281543029,
+    "other_paths": [
+      "LOCK",
+      "format.json",
+      "vlog_ref_counts.meta"
+    ],
+    "logical_primary_payload_bytes": 11946063,
+    "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+  },
+  "text_v2": {
+    "docid_bytes": 8583490,
+    "docmap_bytes": 7839611,
+    "posting_bytes": 26424765,
+    "norm_bytes": 2842736,
+    "position_bytes": 0,
+    "term_bytes": 1357877,
+    "status_bytes": 168
+  },
+  "checkpoint_ok": true,
+  "close_ok": true,
+  "reopen_ok": true,
+  "score_only_probe": {
+    "results": 10,
+    "documents_fetched": 0,
+    "fail_closed": 0
+  }
+}
