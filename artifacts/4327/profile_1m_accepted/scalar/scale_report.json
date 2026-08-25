@@ -16,7 +16,7 @@
     "vcs_status": "clean (embedded build metadata)",
     "binary_state": "executable=/tmp/treedb_text_hybrid_scale-c11afbf04; build_main=github.com/snissn/gomap; build_go=go1.26.0; vcs_revision=c11afbf0486a51083d0ec2c0efb46e597e61330b; vcs_modified=false",
     "corpus": "deterministic synthetic customer-support corpus v1",
-    "cache": "warm in-process retrieval after fixture load/reopen",
+    "cache": "warm in-process retrieval after fixture load",
     "durability": "TreeDB default durability; checkpoint after load",
     "noise_policy": "warmup excluded; raw per-query samples summarized in-process; no null rows accepted"
   },
@@ -378,7 +378,7 @@
   ],
   "caveats": [
     "Synthetic corpus uses deterministic customer-support text, scalar tenants, and small dense vectors; do not use as relevance-quality evidence.",
-    "Retrieval rows time warm in-process queries after fixture load/reopen; B/op and allocs/op should be captured with the companion Go benchmark commands when making allocation claims."
+    "Retrieval rows time warm in-process queries after fixture load, before close/reopen; B/op and allocs/op should be captured with the companion Go benchmark commands when making allocation claims."
   ],
   "selected_phases": [
     "load",
