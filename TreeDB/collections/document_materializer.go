@@ -245,6 +245,12 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 		c.registeredVectorIndex(visibility.indexName) != visibility.runtime {
 		return closeWithError(fmt.Errorf("%w: vector index %q identity changed", ErrVectorIndexSnapshotMismatch, visibility.indexName))
 	}
+	if !visibility.runtime.nativeSearchStateCoversCurrentDocuments(vectorIndexNativeSearchState{
+		mutationSeq:              visibility.mutationSeq,
+		sourceDocumentGeneration: visibility.sourceDocumentGeneration,
+	}) {
+		return closeWithError(fmt.Errorf("%w: vector index %q publication identity changed", ErrVectorIndexSnapshotMismatch, visibility.indexName))
+	}
 	generation, err := vectorIndexDocumentGeneration(view.snapshot, view.catalog)
 	if err != nil {
 		return closeWithError(err)
