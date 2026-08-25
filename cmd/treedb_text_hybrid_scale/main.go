@@ -292,6 +292,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: %v\n", err)
 		os.Exit(2)
 	}
+	if cfg.allocProfile != "" {
+		// Do not sample fixture construction: allocation attribution begins at
+		// startQueryProfiles immediately after the selected row's warm query.
+		runtime.MemProfileRate = 0
+	}
 	rep, err := run(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "treedb_text_hybrid_scale: %v\n", err)
