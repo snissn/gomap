@@ -62,17 +62,19 @@ def shell_case(job: str, name: str) -> str:
 
 def read_weights(
     filename: str, shard_count: int, allowed_kinds: set[str]
-) -> dict[tuple[str, str], int]:
-    pins: dict[tuple[str, str], int] = {}
+) -> dict[tuple[str, str], tuple[int, bool]]:
+    pins: dict[tuple[str, str], tuple[int, bool]] = {}
     for line_number, raw in enumerate(
         (CI_DIR / filename).read_text(encoding="utf-8").splitlines(), start=1
     ):
         if not raw or raw.startswith("#"):
             continue
         fields = raw.split("\t")
-        if len(fields) != 4:
-            raise AssertionError(f"{filename}:{line_number}: expected four TSV fields")
-        kind, shard_text, item, seconds_text = fields
+        if len(fields) not in (4, 5):
+            raise AssertionError(f"{filename}:{line_number}: expected four or five TSV fields")
+        kind, shard_text, item, seconds_text, *options = fields
+        if options not in ([], ["preserve-fallback"]):
+            raise AssertionError(f"{filename}:{line_number}: invalid fallback option")
         if kind not in allowed_kinds:
             raise AssertionError(f"{filename}:{line_number}: unexpected kind {kind}")
         shard = int(shard_text)
@@ -83,22 +85,29 @@ def read_weights(
         key = (kind, item)
         if key in pins:
             raise AssertionError(f"{filename}:{line_number}: duplicate pin {key}")
-        pins[key] = shard
+        pins[key] = (shard, bool(options))
     if not pins:
         raise AssertionError(f"{filename}: no weighted pins")
     return pins
 
 
 def weighted_shards(
-    items: list[str], kind: str, shard_count: int, pins: dict[tuple[str, str], int]
+    items: list[str],
+    kind: str,
+    shard_count: int,
+    pins: dict[tuple[str, str], tuple[int, bool]],
 ) -> list[list[str]]:
     shards = [[] for _ in range(shard_count)]
     fallback = 0
     for item in items:
-        shard = pins.get((kind, item))
-        if shard is None:
+        pin = pins.get((kind, item))
+        if pin is None:
             shard = fallback % shard_count
             fallback += 1
+        else:
+            shard, preserve_fallback = pin
+            if preserve_fallback:
+                fallback += 1
         shards[shard].append(item)
     return shards
 
@@ -140,20 +149,27 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             3,
             {"package", "root", "caching", "db"},
         )
-        self.assertEqual(
-            windows[("package", "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark")],
-            5,
-        )
+        rag_benchmark = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
+        self.assertEqual(windows[("package", rag_benchmark)], (5, True))
         self.assertEqual(
             race[("package", "github.com/snissn/gomap/TreeDB/internal/raftcluster")],
-            1,
+            (1, False),
         )
+        shards = weighted_shards(
+            [rag_benchmark, "unrelated-package"], "package", 7, windows
+        )
+        self.assertEqual(shards[5], [rag_benchmark])
+        self.assertEqual(shards[1], ["unrelated-package"])
 
     def test_workflow_uses_one_complete_weighted_selector_per_test_job(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("weighted_shard_file() {"), 2)
         self.assertIn("NR == FNR {", workflow)
         self.assertIn("pinned[$3] = $2", workflow)
+        self.assertEqual(
+            workflow.count('preserve_fallback[$3] = ($5 == "preserve-fallback")'), 2
+        )
+        self.assertEqual(workflow.count("if (preserve_fallback[$0]) fallback++"), 2)
         self.assertIn("(fallback % n) == idx { print }", workflow)
 
 
