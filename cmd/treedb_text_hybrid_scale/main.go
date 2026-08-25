@@ -538,10 +538,19 @@ func parseFlags(args []string) (config, error) {
 				return config{}, fmt.Errorf("%s must not overlap the %s database directory", profile.name, reserved.name)
 			}
 		}
-		if prior, exists := seenProfiles[profile.value]; exists {
-			return config{}, fmt.Errorf("%s and %s must not resolve to the same path", prior, profile.name)
+		for priorPath, priorName := range seenProfiles {
+			overlapsProfile, err := pathsOverlap(profile.value, priorPath)
+			if err != nil {
+				return config{}, fmt.Errorf("compare %s and %s: %w", priorName, profile.name, err)
+			}
+			if overlapsProfile {
+				return config{}, fmt.Errorf("%s and %s must not overlap", priorName, profile.name)
+			}
 		}
 		seenProfiles[profile.value] = profile.name
+	}
+	if cfg.cpuProfile != "" && cfg.allocProfile != "" {
+		return config{}, errors.New("-cpu-profile and -alloc-profile must be captured in separate runs")
 	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows

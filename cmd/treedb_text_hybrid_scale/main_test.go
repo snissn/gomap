@@ -429,9 +429,10 @@ func TestQueryRowFlagContracts4327(t *testing.T) {
 		{name: "vector row with vectors disabled", args: []string{"-query-rows", queryRowHybridTextVector, "-include-vector=false"}, wantErr: "requires -include-vector=true"},
 		{name: "valid scalar hybrid profile row", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "cpu.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "cpu.pprof"},
 		{name: "valid vector hybrid profile row", args: []string{"-query-rows", queryRowHybridTextVector, "-alloc-profile", "allocs.pprof"}, wantQuery: queryRowHybridTextVector, wantAllocs: "allocs.pprof"},
-		{name: "identical profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
-		{name: "equivalent relative profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "./profiles/../profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
-		{name: "distinct profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/allocs.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "profiles/cpu.pprof", wantAllocs: "profiles/allocs.pprof"},
+		{name: "identical profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/cpu.pprof"}, wantErr: "must not overlap"},
+		{name: "equivalent relative profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "./profiles/../profiles/cpu.pprof"}, wantErr: "must not overlap"},
+		{name: "nested profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/cpu.pprof/allocs.pprof"}, wantErr: "must not overlap"},
+		{name: "distinct profile paths require separate runs", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/allocs.pprof"}, wantErr: "must be captured in separate runs"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -490,7 +491,7 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 		{name: "custom DB ancestor", args: []string{"-db-dir", filepath.Join(root, "custom", "db"), "-alloc-profile", filepath.Join(root, "custom")}, wantErr: "must not overlap the effective -db-dir"},
 		{name: "maintenance DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "maintenance_db", "cpu.pprof")}, wantErr: "maintenance database directory"},
 		{name: "backfill DB descendant", args: []string{"-alloc-profile", filepath.Join(outDir, "backfill_db", "profiles", "allocs.pprof")}, wantErr: "backfill database directory"},
-		{name: "distinct profiles under output directory", args: []string{"-cpu-profile", filepath.Join(outDir, "profiles", "cpu.pprof"), "-alloc-profile", filepath.Join(outDir, "profiles", "allocs.pprof")}, wantCPU: filepath.Join(outDir, "profiles", "cpu.pprof"), wantMem: filepath.Join(outDir, "profiles", "allocs.pprof")},
+		{name: "distinct profiles require separate runs", args: []string{"-cpu-profile", filepath.Join(outDir, "profiles", "cpu.pprof"), "-alloc-profile", filepath.Join(outDir, "profiles", "allocs.pprof")}, wantErr: "must be captured in separate runs"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
