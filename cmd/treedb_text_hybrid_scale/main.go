@@ -514,12 +514,15 @@ func run(cfg config) (report, error) {
 	}
 
 	if cfg.selectedPhases["queries"] {
-		queries, guards, err := runQueryMatrix(fixture.col, cfg)
-		if err != nil {
-			return rep, err
-		}
+		queries, guards, queryErr := runQueryMatrix(fixture.col, cfg)
 		rep.Queries = append(rep.Queries, queries...)
 		rep.Guardrails = append(rep.Guardrails, guards...)
+		if queryErr != nil {
+			if err := persistIncompleteReport(&rep); err != nil {
+				return rep, err
+			}
+			return rep, queryErr
+		}
 		if err := completeGuardedPhase(&rep, "queries", guards, cfg.allowGuardrailFails); err != nil {
 			return rep, err
 		}
@@ -599,12 +602,8 @@ func completeGuardedPhase(rep *report, phase string, guards []guardrailResult, a
 		// Diagnostic continuation is distinct from qualification: persist the
 		// observed rows and failed guards as incomplete evidence, but never mark
 		// this phase (or its containing report) complete.
-		if rep != nil {
-			rep.Complete = false
-			rep.Bottlenecks = rankBottlenecks(*rep)
-			if writeErr := writeReports(*rep); writeErr != nil {
-				return writeErr
-			}
+		if writeErr := persistIncompleteReport(rep); writeErr != nil {
+			return writeErr
 		}
 		if allow {
 			return nil
@@ -612,6 +611,15 @@ func completeGuardedPhase(rep *report, phase string, guards []guardrailResult, a
 		return err
 	}
 	return completePhase(rep, phase)
+}
+
+func persistIncompleteReport(rep *report) error {
+	if rep == nil {
+		return errors.New("nil report")
+	}
+	rep.Complete = false
+	rep.Bottlenecks = rankBottlenecks(*rep)
+	return writeReports(*rep)
 }
 
 func completePhase(rep *report, phase string) error {
@@ -943,7 +951,7 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 	for _, tc := range textCases {
 		report, guard, err := runTextQueryRow(col, cfg, tc.name, tc.query, tc.operator, tc.shape)
 		if err != nil {
-			return nil, nil, err
+			return rows, guards, err
 		}
 		rows = append(rows, report)
 		guards = append(guards, guard)
@@ -989,11 +997,11 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 	}
 	for _, tc := range hybridCases {
 		report, guard, err := runHybridQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
-		if err != nil {
-			return nil, nil, err
-		}
 		rows = append(rows, report)
 		guards = append(guards, guard)
+		if err != nil {
+			return rows, guards, err
+		}
 	}
 	return rows, guards, nil
 }
@@ -1034,17 +1042,22 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
+		queryErr := fmt.Errorf("warm %s: %w", name, err)
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
+		guard := hybridFailureGuard(name, warm.Stats, queryErr)
 		if cfg.allowGuardrailFails {
-			return failedHybridQueryRow(cfg, name, shape, warm, fmt.Errorf("warm %s: %w", name, err)), hybridFailureGuard(name, warm.Stats, err), nil
+			return row, guard, nil
 		}
-		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s: %w", name, err)
+		return row, guard, queryErr
 	}
 	if len(warm.Results) == 0 {
-		err := fmt.Errorf("warm %s returned no results", name)
+		queryErr := fmt.Errorf("warm %s returned no results", name)
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
+		guard := guardrailResult{Name: name, OK: false, Failure: queryErr.Error()}
 		if cfg.allowGuardrailFails {
-			return failedHybridQueryRow(cfg, name, shape, warm, err), guardrailResult{Name: name, OK: false, Failure: err.Error()}, nil
+			return row, guard, nil
 		}
-		return queryReport{}, guardrailResult{}, err
+		return row, guard, queryErr
 	}
 	guard := hybridGuardrail(name, warm.Stats)
 	durations := make([]int64, 0, cfg.queries)
@@ -1054,13 +1067,13 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 		got, err := col.SearchHybrid(opts)
 		elapsed := time.Since(start).Nanoseconds()
 		if err != nil {
+			queryErr := fmt.Errorf("%s query %d: %w", name, i, err)
+			row := failedHybridQueryRow(cfg, name, shape, got, durations, queryErr)
+			guard := hybridFailureGuard(name, got.Stats, queryErr)
 			if cfg.allowGuardrailFails {
-				lat := summarizeLatency(durations)
-				stats := got.Stats
-				guard = hybridFailureGuard(name, got.Stats, err)
-				return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(got.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
+				return row, guard, nil
 			}
-			return queryReport{}, guardrailResult{}, fmt.Errorf("%s query %d: %w", name, i, err)
+			return row, guard, queryErr
 		}
 		durations = append(durations, elapsed)
 		last = got
@@ -1077,10 +1090,11 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}, guard, nil
 }
 
-func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, err error) queryReport {
+func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {
 	stats := response.Stats
 	guard := hybridFailureGuard(name, response.Stats, err)
-	return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: 0, Results: len(response.Results), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
+	lat := summarizeLatency(durations)
+	return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
 }
 
 func hybridFailureGuard(name string, stats collections.HybridSearchStats, err error) guardrailResult {
