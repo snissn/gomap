@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +35,34 @@ const (
 
 	rareTextTerm = "raretoken2731"
 	rareTenant   = "tenant-rare-06pct"
+
+	queryRowTextCommon          = "text_common_score_only"
+	queryRowTextRare            = "text_rare_score_only"
+	queryRowTextMultiTermAND    = "text_multi_term_and_score_only"
+	queryRowTextMultiTermOR     = "text_multi_term_or_score_only"
+	queryRowHybridText          = "hybrid_text_only_no_docs"
+	queryRowHybridTextScalar    = "hybrid_text_scalar_no_docs"
+	queryRowHybridTextVector    = "hybrid_text_vector_no_docs"
+	queryRowHybridTextVecScalar = "hybrid_text_vector_scalar_no_docs"
 )
+
+type queryRowClass struct {
+	hybrid         bool
+	vectorRequired bool
+}
+
+// queryRowClasses is the public -query-rows contract and classifies every row
+// emitted by runQueryMatrix.
+var queryRowClasses = map[string]queryRowClass{
+	queryRowTextCommon:          {},
+	queryRowTextRare:            {},
+	queryRowTextMultiTermAND:    {},
+	queryRowTextMultiTermOR:     {},
+	queryRowHybridText:          {hybrid: true},
+	queryRowHybridTextScalar:    {hybrid: true},
+	queryRowHybridTextVector:    {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecScalar: {hybrid: true, vectorRequired: true},
+}
 
 type config struct {
 	outDir              string
@@ -64,6 +92,10 @@ type config struct {
 	baseSHA             string
 	phases              string
 	selectedPhases      map[string]bool
+	queryRows           map[string]bool
+	cpuProfile          string
+	allocProfile        string
+	allocBaseProfile    string
 }
 
 type report struct {
@@ -195,6 +227,10 @@ type queryReport struct {
 	Latency          latencySummary                 `json:"latency"`
 	RawLatencyNS     []int64                        `json:"raw_latency_ns,omitempty"`
 	OpsPerSec        float64                        `json:"ops_per_sec"`
+	AllocBytes       uint64                         `json:"allocation_bytes,omitempty"`
+	AllocObjects     uint64                         `json:"allocation_objects,omitempty"`
+	BytesPerOp       float64                        `json:"bytes_per_op,omitempty"`
+	AllocsPerOp      float64                        `json:"allocs_per_op,omitempty"`
 	TextStats        *collections.TextSearchStats   `json:"text_stats,omitempty"`
 	HybridStats      *collections.HybridSearchStats `json:"hybrid_stats,omitempty"`
 	GuardrailOK      bool                           `json:"guardrail_ok"`
@@ -208,6 +244,11 @@ type latencySummary struct {
 	P99NS  int64   `json:"p99_ns"`
 	MaxNS  int64   `json:"max_ns"`
 	MeanNS float64 `json:"mean_ns"`
+}
+
+type allocationSummary struct {
+	Bytes   uint64
+	Objects uint64
 }
 
 type concurrentReport struct {
@@ -327,6 +368,10 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.baseRef, "base-ref", "origin/main", "Base ref label for report context")
 	fs.StringVar(&cfg.baseSHA, "base-sha", "", "Base SHA for report context")
 	fs.StringVar(&cfg.phases, "phases", "all", "Comma-separated phase selector: all or retrieval (load,queries,reopen)")
+	var queryRows string
+	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
+	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
+	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write post-query and .base allocation profiles for one selected hybrid row")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -374,6 +419,139 @@ func parseFlags(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
+	if queryRows != "" {
+		cfg.queryRows = make(map[string]bool)
+		for _, name := range strings.Split(queryRows, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return config{}, errors.New("-query-rows contains an empty row name")
+			}
+			cfg.queryRows[name] = true
+		}
+	}
+	var selectedRow queryRowClass
+	for name := range cfg.queryRows {
+		class, ok := queryRowClasses[name]
+		if !ok {
+			return config{}, fmt.Errorf("unknown -query-rows value %q", name)
+		}
+		if class.vectorRequired && !cfg.includeVector {
+			return config{}, fmt.Errorf("-query-rows value %q requires -include-vector=true", name)
+		}
+		selectedRow = class
+	}
+	if cfg.cpuProfile != "" || cfg.allocProfile != "" {
+		if len(cfg.queryRows) != 1 || !selectedRow.hybrid {
+			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one hybrid -query-rows value")
+		}
+	}
+	effectiveDBDir := cfg.dbDir
+	if effectiveDBDir == "" {
+		effectiveDBDir = filepath.Join(cfg.outDir, "primary_db")
+	}
+	outDir, err := resolvePathSymlinks(cfg.outDir)
+	if err != nil {
+		return config{}, fmt.Errorf("resolve -out-dir: %w", err)
+	}
+	dbDir, err := resolvePathSymlinks(effectiveDBDir)
+	if err != nil {
+		return config{}, fmt.Errorf("resolve effective -db-dir: %w", err)
+	}
+	for _, profile := range []struct {
+		name  string
+		value *string
+	}{
+		{name: "-cpu-profile", value: &cfg.cpuProfile},
+		{name: "-alloc-profile", value: &cfg.allocProfile},
+	} {
+		if *profile.value == "" {
+			continue
+		}
+		resolved, err := resolvePathSymlinks(*profile.value)
+		if err != nil {
+			return config{}, fmt.Errorf("resolve %s: %w", profile.name, err)
+		}
+		if _, err := os.Lstat(resolved); err == nil {
+			return config{}, fmt.Errorf("%s destination must not already exist", profile.name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return config{}, fmt.Errorf("inspect %s destination: %w", profile.name, err)
+		}
+		*profile.value = resolved
+	}
+	if cfg.allocProfile != "" {
+		cfg.allocBaseProfile, err = resolvePathSymlinks(cfg.allocProfile + ".base")
+		if err != nil {
+			return config{}, fmt.Errorf("resolve allocation baseline profile: %w", err)
+		}
+		if _, err := os.Lstat(cfg.allocBaseProfile); err == nil {
+			return config{}, errors.New("allocation baseline profile destination must not already exist")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return config{}, fmt.Errorf("inspect allocation baseline profile destination: %w", err)
+		}
+	}
+	profilePaths := []struct {
+		name  string
+		value string
+	}{
+		{name: "-cpu-profile", value: cfg.cpuProfile},
+		{name: "-alloc-profile", value: cfg.allocProfile},
+		{name: "allocation baseline profile", value: cfg.allocBaseProfile},
+	}
+	seenProfiles := make(map[string]string)
+	for _, profile := range profilePaths {
+		if profile.value == "" {
+			continue
+		}
+		if profile.value == filepath.Join(outDir, "scale_report.json") || profile.value == filepath.Join(outDir, "scale_report.md") {
+			return config{}, fmt.Errorf("%s must not resolve to a scale report artifact", profile.name)
+		}
+		outDirInsideProfile, err := pathIsSameOrDescendant(outDir, profile.value)
+		if err != nil {
+			return config{}, fmt.Errorf("compare %s and -out-dir: %w", profile.name, err)
+		}
+		if outDirInsideProfile {
+			return config{}, fmt.Errorf("%s must not resolve to -out-dir or its ancestor", profile.name)
+		}
+		overlapsDBDir, err := pathsOverlap(profile.value, dbDir)
+		if err != nil {
+			return config{}, fmt.Errorf("compare %s and effective -db-dir: %w", profile.name, err)
+		}
+		if overlapsDBDir {
+			return config{}, fmt.Errorf("%s must not overlap the effective -db-dir", profile.name)
+		}
+		for _, reserved := range []struct {
+			name string
+			dir  string
+		}{
+			{name: "maintenance", dir: filepath.Join(outDir, "maintenance_db")},
+			{name: "backfill", dir: filepath.Join(outDir, "backfill_db")},
+		} {
+			reservedDir, err := resolvePathSymlinks(reserved.dir)
+			if err != nil {
+				return config{}, fmt.Errorf("resolve %s database directory: %w", reserved.name, err)
+			}
+			overlapsReservedDir, err := pathsOverlap(profile.value, reservedDir)
+			if err != nil {
+				return config{}, fmt.Errorf("compare %s and %s database directory: %w", profile.name, reserved.name, err)
+			}
+			if overlapsReservedDir {
+				return config{}, fmt.Errorf("%s must not overlap the %s database directory", profile.name, reserved.name)
+			}
+		}
+		for priorPath, priorName := range seenProfiles {
+			overlapsProfile, err := pathsOverlap(profile.value, priorPath)
+			if err != nil {
+				return config{}, fmt.Errorf("compare %s and %s: %w", priorName, profile.name, err)
+			}
+			if overlapsProfile {
+				return config{}, fmt.Errorf("%s and %s must not overlap", priorName, profile.name)
+			}
+		}
+		seenProfiles[profile.value] = profile.name
+	}
+	if cfg.cpuProfile != "" && cfg.allocProfile != "" {
+		return config{}, errors.New("-cpu-profile and -alloc-profile must be captured in separate runs")
+	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}
@@ -436,6 +614,9 @@ func selectedPhaseNames(selected map[string]bool) []string {
 }
 
 func run(cfg config) (report, error) {
+	if err := requireExactMemProfileRate(cfg.allocProfile != "", runtime.MemProfileRate); err != nil {
+		return report{}, err
+	}
 	if cfg.selectedPhases == nil {
 		selected, _ := parsePhaseSelector("all")
 		cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
@@ -669,19 +850,75 @@ func prepareEmptyDir(dir string) error {
 }
 
 func dbDirContainsOutDir(dbDir, outDir string) (bool, error) {
-	dbAbs, err := filepath.Abs(dbDir)
+	dbAbs, err := resolvePathSymlinks(dbDir)
 	if err != nil {
 		return false, fmt.Errorf("resolve db dir %q: %w", dbDir, err)
 	}
-	outAbs, err := filepath.Abs(outDir)
+	outAbs, err := resolvePathSymlinks(outDir)
 	if err != nil {
 		return false, fmt.Errorf("resolve out dir %q: %w", outDir, err)
 	}
-	rel, err := filepath.Rel(filepath.Clean(dbAbs), filepath.Clean(outAbs))
+	return pathIsSameOrDescendant(outAbs, dbAbs)
+}
+
+func pathIsSameOrDescendant(path, dir string) (bool, error) {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
 	if err != nil {
-		return false, fmt.Errorf("compare db dir %q and out dir %q: %w", dbDir, outDir, err)
+		return false, err
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
+}
+
+func pathsOverlap(a, b string) (bool, error) {
+	aInsideB, err := pathIsSameOrDescendant(a, b)
+	if err != nil || aInsideB {
+		return aInsideB, err
+	}
+	return pathIsSameOrDescendant(b, a)
+}
+
+func resolvePathSymlinks(path string) (string, error) {
+	resolved, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	for followed := 0; followed < 255; followed++ {
+		volume := filepath.VolumeName(resolved)
+		root := volume + string(os.PathSeparator)
+		parts := strings.Split(strings.TrimPrefix(resolved, root), string(os.PathSeparator))
+		current := root
+		restart := false
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if errors.Is(err, os.ErrNotExist) {
+				return filepath.Join(append([]string{current}, parts[i+1:]...)...), nil
+			}
+			if err != nil {
+				return "", err
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			target, err := os.Readlink(current)
+			if err != nil {
+				return "", err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			resolved = filepath.Join(append([]string{target}, parts[i+1:]...)...)
+			restart = true
+			break
+		}
+		if !restart {
+			return filepath.Clean(current), nil
+		}
+	}
+	return "", fmt.Errorf("too many symbolic links in %q", path)
 }
 
 func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
@@ -943,12 +1180,15 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		operator collections.TextSearchOperator
 		shape    string
 	}{
-		{name: "text_common_score_only", query: "refund", shape: "common single-term BM25F block-max top-k"},
-		{name: "text_rare_score_only", query: rareTextTerm, shape: "rare single-term BM25F top-k"},
-		{name: "text_multi_term_and_score_only", query: "refund AND policy", operator: collections.TextSearchOperatorAND, shape: "multi-term AND exact BM25F"},
-		{name: "text_multi_term_or_score_only", query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
+		{name: queryRowTextCommon, query: "refund", shape: "common single-term BM25F block-max top-k"},
+		{name: queryRowTextRare, query: rareTextTerm, shape: "rare single-term BM25F top-k"},
+		{name: queryRowTextMultiTermAND, query: "refund AND policy", operator: collections.TextSearchOperatorAND, shape: "multi-term AND exact BM25F"},
+		{name: queryRowTextMultiTermOR, query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
 	}
 	for _, tc := range textCases {
+		if !selectedQueryRow(cfg, tc.name) {
+			continue
+		}
 		report, guard, err := runTextQueryRow(col, cfg, tc.name, tc.query, tc.operator, tc.shape)
 		rows = append(rows, report)
 		guards = append(guards, guard)
@@ -963,12 +1203,12 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		opts  collections.HybridSearchOptions
 	}{
 		{
-			name:  "hybrid_text_only_no_docs",
+			name:  queryRowHybridText,
 			shape: "hybrid executor text source only, score-only result mode",
 			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}},
 		},
 		{
-			name:  "hybrid_text_scalar_no_docs",
+			name:  queryRowHybridTextScalar,
 			shape: "hybrid executor text source plus scalar prefilter, score-only result mode",
 			opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
 		},
@@ -980,7 +1220,7 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 				shape string
 				opts  collections.HybridSearchOptions
 			}{
-				name:  "hybrid_text_vector_no_docs",
+				name:  queryRowHybridTextVector,
 				shape: "text+vector RRF, score-only result mode",
 				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}},
 			},
@@ -989,13 +1229,16 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 				shape string
 				opts  collections.HybridSearchOptions
 			}{
-				name:  "hybrid_text_vector_scalar_no_docs",
+				name:  queryRowHybridTextVecScalar,
 				shape: "text+vector RRF with scalar prefilter, score-only result mode",
 				opts:  collections.HybridSearchOptions{TopK: cfg.topK, ResultMode: collections.HybridResultModeScoreOnly, Text: &collections.HybridTextQuery{IndexName: textIndexName, Query: "refund policy", CandidateLimit: cfg.candidateLimit}, Vector: &collections.HybridVectorQuery{IndexName: vectorIndexName, Query: queryVector(cfg.dims), CandidateLimit: cfg.candidateLimit, EfSearch: cfg.efSearch, QueryMode: collections.VectorIndexQueryModeExact}, ScalarFilter: &collections.HybridScalarFilter{IndexName: tenantIndexName, Value: rareTenant}},
 			},
 		)
 	}
 	for _, tc := range hybridCases {
+		if !selectedQueryRow(cfg, tc.name) {
+			continue
+		}
 		report, guard, err := runHybridQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
 		rows = append(rows, report)
 		guards = append(guards, guard)
@@ -1004,6 +1247,10 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		}
 	}
 	return rows, guards, nil
+}
+
+func selectedQueryRow(cfg config, name string) bool {
+	return len(cfg.queryRows) == 0 || cfg.queryRows[name]
 }
 
 func runTextQueryRow(col *collections.Collection, cfg config, name, query string, operator collections.TextSearchOperator, shape string) (queryReport, guardrailResult, error) {
@@ -1079,52 +1326,188 @@ func textFailureGuard(name string, stats collections.TextSearchStats, err error)
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
-		queryErr := fmt.Errorf("warm %s: %w", name, err)
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
-		guard := hybridFailureGuard(name, warm.Stats, queryErr)
+		warmErr := fmt.Errorf("warm %s: %w", name, err)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
+		}
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
+		guard := hybridFailureGuard(name, warm.Stats, warmErr)
 		if cfg.allowGuardrailFails {
 			return row, guard, nil
 		}
-		return row, guard, queryErr
+		return row, guard, warmErr
 	}
 	if len(warm.Results) == 0 {
-		queryErr := fmt.Errorf("warm %s returned no results", name)
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
-		guard := guardrailResult{Name: name, OK: false, Failure: queryErr.Error()}
+		warmErr := fmt.Errorf("warm %s returned no results", name)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
+		}
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
+		guard := guardrailResult{Name: name, OK: false, Failure: warmErr.Error()}
 		if cfg.allowGuardrailFails {
 			return row, guard, nil
 		}
-		return row, guard, queryErr
+		return row, guard, warmErr
 	}
 	guard := hybridGuardrail(name, warm.Stats)
+	stopProfile, err := startQueryProfiles(cfg)
+	if err != nil {
+		return queryReport{}, guardrailResult{}, err
+	}
+	durations, last, guard, allocations, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
+	profileErr := stopProfile()
+	if profileErr != nil {
+		profileErr = fmt.Errorf("write %s profile: %w", name, profileErr)
+		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, profileErr), cfg, allocations)
+		guard = hybridFailureGuard(name, last.Stats, profileErr)
+		return row, guard, profileErr
+	}
+	if sampleErr != nil {
+		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr), cfg, allocations)
+		guard = hybridFailureGuard(name, last.Stats, sampleErr)
+		if cfg.allowGuardrailFails {
+			return row, guard, nil
+		}
+		return row, guard, sampleErr
+	}
+	lat := summarizeLatency(durations)
+	stats := last.Stats
+	row := queryReport{
+		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
+		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
+		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
+	}
+	return withAllocationSummary(row, cfg, allocations), guard, nil
+}
+
+func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, allocationSummary, error) {
 	durations := make([]int64, 0, cfg.queries)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
 	var last collections.HybridSearchResponse
 	for i := 0; i < cfg.queries; i++ {
 		start := time.Now()
 		got, err := col.SearchHybrid(opts)
 		elapsed := time.Since(start).Nanoseconds()
+		last = got
 		if err != nil {
-			queryErr := fmt.Errorf("%s query %d: %w", name, i, err)
-			row := failedHybridQueryRow(cfg, name, shape, got, durations, queryErr)
-			guard := hybridFailureGuard(name, got.Stats, queryErr)
-			if cfg.allowGuardrailFails {
-				return row, guard, nil
-			}
-			return row, guard, queryErr
+			runtime.ReadMemStats(&after)
+			return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
 		durations = append(durations, elapsed)
-		last = got
 		if g := hybridGuardrail(name, got.Stats); !g.OK {
 			guard = g
 		}
 	}
-	lat := summarizeLatency(durations)
-	stats := last.Stats
-	return queryReport{
-		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
-		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
-	}, guard, nil
+	runtime.ReadMemStats(&after)
+	return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, nil
+}
+
+func withAllocationSummary(row queryReport, cfg config, allocations allocationSummary) queryReport {
+	if cfg.allocProfile == "" {
+		return row
+	}
+	row.AllocBytes = allocations.Bytes
+	row.AllocObjects = allocations.Objects
+	if row.Samples > 0 {
+		row.BytesPerOp = float64(allocations.Bytes) / float64(row.Samples)
+		row.AllocsPerOp = float64(allocations.Objects) / float64(row.Samples)
+	}
+	return row
+}
+
+func requireExactMemProfileRate(allocProfile bool, memProfileRate int) error {
+	if allocProfile && memProfileRate != 1 {
+		return fmt.Errorf("-alloc-profile requires runtime.MemProfileRate == 1 at process startup; launch with GODEBUG=memprofilerate=1")
+	}
+	return nil
+}
+
+func createProfileFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+}
+
+func startQueryProfiles(cfg config) (func() error, error) {
+	return startQueryProfilesAtMemProfileRate(cfg, runtime.MemProfileRate)
+}
+
+func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() error, error) {
+	if cfg.cpuProfile == "" && cfg.allocProfile == "" {
+		return func() error { return nil }, nil
+	}
+	if err := requireExactMemProfileRate(cfg.allocProfile != "", memProfileRate); err != nil {
+		return nil, err
+	}
+	writeProfile := func(path string) error {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		f, err := createProfileFile(path)
+		if err != nil {
+			return err
+		}
+		writeErr := pprof.Lookup("allocs").WriteTo(f, 0)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	baseProfile := cfg.allocBaseProfile
+	if baseProfile == "" && cfg.allocProfile != "" {
+		baseProfile = cfg.allocProfile + ".base"
+	}
+	if baseProfile != "" {
+		runtime.GC()
+		if err := writeProfile(baseProfile); err != nil {
+			return nil, fmt.Errorf("write allocation baseline profile: %w", err)
+		}
+	}
+	writeAllocsAfter := func() error {
+		if cfg.allocProfile == "" {
+			return nil
+		}
+		// Flush the current allocation cycle after the timed helper returns so
+		// allocs includes its recent samples without putting GC in that stack.
+		runtime.GC()
+		return writeProfile(cfg.allocProfile)
+	}
+	if cfg.cpuProfile == "" {
+		var once sync.Once
+		var stopErr error
+		return func() error { once.Do(func() { stopErr = writeAllocsAfter() }); return stopErr }, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.cpuProfile), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := createProfileFile(cfg.cpuProfile)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	var once sync.Once
+	var stopErr error
+	return func() error {
+		once.Do(func() {
+			pprof.StopCPUProfile()
+			stopErr = finalizeQueryProfiles(f.Close, writeAllocsAfter)
+		})
+		return stopErr
+	}, nil
+}
+
+func finalizeQueryProfiles(closeCPU, writeAllocs func() error) error {
+	return errors.Join(closeCPU(), writeAllocs())
+}
+
+func profiledWarmupError(cfg config, warmErr error) error {
+	if warmErr == nil || (cfg.cpuProfile == "" && cfg.allocProfile == "") {
+		return nil
+	}
+	return fmt.Errorf("%w; cannot produce requested profile without successful warm-up", warmErr)
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {
