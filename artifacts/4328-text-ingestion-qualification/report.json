@@ -1,6 +1,6 @@
 {
-  "schema_version": "treedb_text_ingest_qualification/v2",
-  "manifest_sha256": "fde48fb2596a415ae944f4946327f7ebd2d71dc678cf03a3f5fbf8b77c13aff2",
+  "schema_version": "treedb_text_ingest_qualification/v3",
+  "manifest_sha256": "738924db0a38ab6aa80da9b1f0a8d4ffcf08c2fc47b2964a22096ac79543b089",
   "rows": [
     {
       "mode": "indexed_insert",
@@ -9,7 +9,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59134,
+      "peak_rss_pid": 64956,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 10000,
@@ -21,15 +21,18 @@
       "terms": 10008,
       "blocks": 11822,
       "generations": 2,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 126542.03330902671,
+      "source_docs_per_second": 124416.15077406068,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 126542.03330902671,
-      "wall_seconds": 0.079025125,
+      "indexed_rows_per_second": 124416.15077406068,
+      "wall_seconds": 0.080375417,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.11332699999999998
+        "value": 0.11505300000000002
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -41,11 +44,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 633705
+        "value": 633707
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 69992448
+        "value": 71270400
       },
       "stages": {
         "analyzer": {
@@ -54,7 +57,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.009390792
+          "value": 0.007326667
         },
         "posting_builder": {
           "state": "unavailable",
@@ -62,7 +65,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.009501291
+          "value": 0.016654042
         },
         "root_mutation": {
           "state": "unavailable",
@@ -101,9 +104,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 10000,
+        "postings": 10000,
+        "terms": 10008,
+        "blocks": 11822,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 189873,
+          "docmap_bytes": 171214,
+          "posting_bytes": 1068615,
+          "norm_bytes": 61293,
+          "position_bytes": 0,
+          "term_bytes": 119018,
+          "status_bytes": 161
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -113,7 +142,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59135,
+      "peak_rss_pid": 64957,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 10000,
@@ -125,15 +154,18 @@
       "terms": 10008,
       "blocks": 10395,
       "generations": 1,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 154501.69503037108,
+      "source_docs_per_second": 160646.44127970954,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 154501.69503037108,
-      "wall_seconds": 0.064724209,
+      "indexed_rows_per_second": 160646.44127970954,
+      "wall_seconds": 0.0622485,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.08595900000000001
+        "value": 0.08533199999999999
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -145,11 +177,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 598899
+        "value": 598891
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 60145664
+        "value": 59523072
       },
       "stages": {
         "analyzer": {
@@ -158,7 +190,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.009093041
+          "value": 0.007228
         },
         "posting_builder": {
           "state": "unavailable",
@@ -166,7 +198,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.009547041
+          "value": 0.012365708
         },
         "root_mutation": {
           "state": "unavailable",
@@ -205,9 +237,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 10000,
+        "postings": 10000,
+        "terms": 10008,
+        "blocks": 10395,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 189873,
+          "docmap_bytes": 171214,
+          "posting_bytes": 896409,
+          "norm_bytes": 61293,
+          "position_bytes": 0,
+          "term_bytes": 119013,
+          "status_bytes": 161
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -217,7 +275,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59136,
+      "peak_rss_pid": 64958,
       "source_documents": 10000,
       "generated_chunks": 30000,
       "indexed_live_rows": 40000,
@@ -229,15 +287,18 @@
       "terms": 10012,
       "blocks": 25059,
       "generations": 41,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 21868.056891936812,
-      "chunks_per_second": 65604.17067581044,
-      "indexed_rows_per_second": 87472.22756774725,
-      "wall_seconds": 0.457288,
+      "source_docs_per_second": 22123.647018964006,
+      "chunks_per_second": 66370.94105689201,
+      "indexed_rows_per_second": 88494.58807585602,
+      "wall_seconds": 0.452005042,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.544405
+        "value": 0.550163
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -249,11 +310,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 3621432
+        "value": 3616697
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 83001344
+        "value": 84787200
       },
       "stages": {
         "analyzer": {
@@ -262,7 +323,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.021613958
+          "value": 0.014562917
         },
         "posting_builder": {
           "state": "unavailable",
@@ -270,7 +331,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.017834583
+          "value": 0.037724458
         },
         "root_mutation": {
           "state": "unavailable",
@@ -282,12 +343,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 39321600,
+        "physical_index_page_bytes": 40370176,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 39321974,
-        "physical_total_wal_excluded_bytes": 39321974,
+        "physical_total_bytes": 40370550,
+        "physical_total_wal_excluded_bytes": 40370550,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -309,9 +370,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "b6d6c5e1650b45362415717d429a9688bf76692037c78cc7a658807ac575f1bf",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 40000,
+        "postings": 40000,
+        "terms": 10012,
+        "blocks": 25059,
+        "generations": 41,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 843490,
+          "docmap_bytes": 768994,
+          "posting_bytes": 2591004,
+          "norm_bytes": 269307,
+          "position_bytes": 0,
+          "term_bytes": 119083,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "b6d6c5e1650b45362415717d429a9688bf76692037c78cc7a658807ac575f1bf",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -321,7 +408,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59137,
+      "peak_rss_pid": 64960,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 5000,
@@ -333,15 +420,18 @@
       "terms": 10008,
       "blocks": 11822,
       "generations": 3,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 5000,
-      "source_docs_per_second": 104621.70788702673,
+      "source_docs_per_second": 101232.12145829931,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 52310.853943513364,
-      "wall_seconds": 0.095582458,
+      "indexed_rows_per_second": 50616.060729149656,
+      "wall_seconds": 0.098782875,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.12385099999999999
+        "value": 0.125855
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -353,11 +443,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 876455
+        "value": 876454
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 75317248
+        "value": 76480512
       },
       "stages": {
         "analyzer": {
@@ -366,7 +456,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.011697792
+          "value": 0.0083395
         },
         "posting_builder": {
           "state": "unavailable",
@@ -374,7 +464,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.007536875
+          "value": 0.016369333
         },
         "root_mutation": {
           "state": "unavailable",
@@ -413,9 +503,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "a3dd6a3146a0ad8dd85fe172a7a1d4fd133eb0fbe7a14313b57221aa124753af",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 5000,
+        "postings": 10000,
+        "terms": 10008,
+        "blocks": 11822,
+        "generations": 3,
+        "tombstone_debt": 5000,
+        "text_v2": {
+          "docid_bytes": 189873,
+          "docmap_bytes": 171214,
+          "posting_bytes": 1068615,
+          "norm_bytes": 61293,
+          "position_bytes": 0,
+          "term_bytes": 119012,
+          "status_bytes": 162
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "a3dd6a3146a0ad8dd85fe172a7a1d4fd133eb0fbe7a14313b57221aa124753af",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -425,7 +541,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59146,
+      "peak_rss_pid": 64967,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -437,15 +553,18 @@
       "terms": 100008,
       "blocks": 118709,
       "generations": 2,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 117429.92274535508,
+      "source_docs_per_second": 112585.44883737229,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 117429.92274535508,
-      "wall_seconds": 0.851571709,
+      "indexed_rows_per_second": 112585.44883737229,
+      "wall_seconds": 0.88821425,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.1419990000000002
+        "value": 1.189049
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -457,11 +576,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 6314193
+        "value": 6314175
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 454705152
+        "value": 487833600
       },
       "stages": {
         "analyzer": {
@@ -470,7 +589,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.033688417
+          "value": 0.022925291
         },
         "posting_builder": {
           "state": "unavailable",
@@ -478,7 +597,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.023423542
+          "value": 0.087803125
         },
         "root_mutation": {
           "state": "unavailable",
@@ -517,9 +636,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -529,7 +674,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59148,
+      "peak_rss_pid": 64970,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -541,847 +686,18 @@
       "terms": 100008,
       "blocks": 104681,
       "generations": 1,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 155819.70024574714,
+      "source_docs_per_second": 152318.564553747,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 155819.70024574714,
-      "wall_seconds": 0.641767375,
+      "indexed_rows_per_second": 152318.564553747,
+      "wall_seconds": 0.656518792,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.909044
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 5969972
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 326909952
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.024227834
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.019653834
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 35651584,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 35651958,
-        "physical_total_wal_excluded_bytes": 35651958,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 9381629,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 163
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "source_chunk",
-      "scale": 100000,
-      "repetition": 1,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59149,
-      "source_documents": 100000,
-      "generated_chunks": 300000,
-      "indexed_live_rows": 400000,
-      "parents_text_indexed": true,
-      "indexed_parent_rows": 100000,
-      "chunk_batch_size": 256,
-      "chunk_batch_count": 391,
-      "postings": 400000,
-      "terms": 100012,
-      "blocks": 252868,
-      "generations": 392,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 6928.327202449317,
-      "chunks_per_second": 20784.98160734795,
-      "indexed_rows_per_second": 27713.30880979727,
-      "wall_seconds": 14.433498459,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 15.18727
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 39806104
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 463765504
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.035550625
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.130098583
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 301989888,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 301990262,
-        "physical_total_wal_excluded_bytes": 301990262,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 8583490,
-        "docmap_bytes": 7839611,
-        "posting_bytes": 26424765,
-        "norm_bytes": 2842736,
-        "position_bytes": 0,
-        "term_bytes": 1357877,
-        "status_bytes": 168
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "maintenance",
-      "scale": 100000,
-      "repetition": 1,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59158,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 50000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 118709,
-      "generations": 3,
-      "stale_debt": 0,
-      "tombstone_debt": 50000,
-      "source_docs_per_second": 91683.4304088955,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 45841.71520444775,
-      "wall_seconds": 1.090709625,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 1.442216
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 8724867
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 438599680
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.020244667
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.023298541
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 49020928,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 49021302,
-        "physical_total_wal_excluded_bytes": 49021302,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 11128802,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 165
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "indexed_insert",
-      "scale": 100000,
-      "repetition": 2,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59165,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 100000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 118709,
-      "generations": 2,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 115420.86197453932,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 115420.86197453932,
-      "wall_seconds": 0.8663945,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 1.144102
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 6314186
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 478150656
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.0356805
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.024305791
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 37224448,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 37224822,
-        "physical_total_wal_excluded_bytes": 37224822,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 11128802,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 163
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "post_load_backfill",
-      "scale": 100000,
-      "repetition": 2,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59166,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 100000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 104681,
-      "generations": 1,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 152341.02452385813,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 152341.02452385813,
-      "wall_seconds": 0.656422,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 0.9116850000000001
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 5969974
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 343146496
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.027163167
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.022776417
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 35651584,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 35651958,
-        "physical_total_wal_excluded_bytes": 35651958,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 9381629,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 163
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "source_chunk",
-      "scale": 100000,
-      "repetition": 2,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59167,
-      "source_documents": 100000,
-      "generated_chunks": 300000,
-      "indexed_live_rows": 400000,
-      "parents_text_indexed": true,
-      "indexed_parent_rows": 100000,
-      "chunk_batch_size": 256,
-      "chunk_batch_count": 391,
-      "postings": 400000,
-      "terms": 100012,
-      "blocks": 252868,
-      "generations": 392,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 7035.141773100374,
-      "chunks_per_second": 21105.42531930112,
-      "indexed_rows_per_second": 28140.567092401496,
-      "wall_seconds": 14.214354625,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 15.266594999999999
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 39778824
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 457097216
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.020682583
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.11045575
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 294125568,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 294125942,
-        "physical_total_wal_excluded_bytes": 294125942,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 8583490,
-        "docmap_bytes": 7839611,
-        "posting_bytes": 26424765,
-        "norm_bytes": 2842736,
-        "position_bytes": 0,
-        "term_bytes": 1357877,
-        "status_bytes": 168
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "maintenance",
-      "scale": 100000,
-      "repetition": 2,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59176,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 50000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 118709,
-      "generations": 3,
-      "stale_debt": 0,
-      "tombstone_debt": 50000,
-      "source_docs_per_second": 92348.37526202606,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 46174.18763101303,
-      "wall_seconds": 1.0828560839999999,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 1.40805
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 8724829
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 426065920
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.018391917
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.023634458
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 49020928,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 49021302,
-        "physical_total_wal_excluded_bytes": 49021302,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 11128802,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 165
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "indexed_insert",
-      "scale": 100000,
-      "repetition": 3,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59184,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 100000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 118709,
-      "generations": 2,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 116648.84769975564,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 116648.84769975564,
-      "wall_seconds": 0.857273792,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 1.140733
-      },
-      "bytes_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "allocs_per_op": {
-        "state": "unavailable",
-        "reason": "not a Go benchmark; see cumulative_allocations"
-      },
-      "cumulative_allocations": {
-        "state": "observed",
-        "value": 6314172
-      },
-      "peak_rss_bytes": {
-        "state": "observed",
-        "value": 411222016
-      },
-      "stages": {
-        "analyzer": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose analyzer time"
-        },
-        "checkpoint": {
-          "state": "observed",
-          "value": 0.034201375
-        },
-        "posting_builder": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose posting-builder time"
-        },
-        "reopen": {
-          "state": "observed",
-          "value": 0.024313417
-        },
-        "root_mutation": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose root-mutation time"
-        },
-        "value_log": {
-          "state": "unavailable",
-          "reason": "collection API does not separately expose value-log time"
-        }
-      },
-      "storage": {
-        "physical_index_page_bytes": 37224448,
-        "physical_value_log_bytes": 0,
-        "physical_wal_bytes": 0,
-        "physical_other_bytes": 374,
-        "physical_total_bytes": 37224822,
-        "physical_total_wal_excluded_bytes": 37224822,
-        "other_paths": [
-          "LOCK",
-          "format.json",
-          "vlog_ref_counts.meta"
-        ],
-        "logical_primary_payload_bytes": 11946063,
-        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
-      },
-      "text_v2": {
-        "docid_bytes": 1983490,
-        "docmap_bytes": 1797436,
-        "posting_bytes": 11128802,
-        "norm_bytes": 698218,
-        "position_bytes": 0,
-        "term_bytes": 1289540,
-        "status_bytes": 163
-      },
-      "checkpoint_ok": true,
-      "close_ok": true,
-      "reopen_ok": true,
-      "score_only_probe": {
-        "results": 10,
-        "documents_fetched": 0,
-        "fail_closed": 0
-      }
-    },
-    {
-      "mode": "post_load_backfill",
-      "scale": 100000,
-      "repetition": 3,
-      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
-      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
-      "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59185,
-      "source_documents": 100000,
-      "generated_chunks": 0,
-      "indexed_live_rows": 100000,
-      "parents_text_indexed": false,
-      "indexed_parent_rows": 0,
-      "chunk_batch_size": 0,
-      "chunk_batch_count": 0,
-      "postings": 100000,
-      "terms": 100008,
-      "blocks": 104681,
-      "generations": 1,
-      "stale_debt": 0,
-      "tombstone_debt": 0,
-      "source_docs_per_second": 155629.45793287118,
-      "chunks_per_second": 0,
-      "indexed_rows_per_second": 155629.45793287118,
-      "wall_seconds": 0.642551875,
-      "cpu_seconds": {
-        "state": "observed",
-        "value": 0.9031270000000001
+        "value": 0.933917
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1397,7 +713,7 @@
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 377323520
+        "value": 326057984
       },
       "stages": {
         "analyzer": {
@@ -1406,7 +722,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.0246365
+          "value": 0.017558625
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1414,7 +730,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.021873584
+          "value": 0.084057875
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1453,19 +769,45 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 104681,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 9381629,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
       "mode": "source_chunk",
       "scale": 100000,
-      "repetition": 3,
+      "repetition": 1,
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59186,
+      "peak_rss_pid": 64971,
       "source_documents": 100000,
       "generated_chunks": 300000,
       "indexed_live_rows": 400000,
@@ -1477,15 +819,18 @@
       "terms": 100012,
       "blocks": 252868,
       "generations": 392,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 6923.630959695571,
-      "chunks_per_second": 20770.892879086714,
-      "indexed_rows_per_second": 27694.523838782283,
-      "wall_seconds": 14.443288584,
+      "source_docs_per_second": 7314.526042961533,
+      "chunks_per_second": 21943.578128884597,
+      "indexed_rows_per_second": 29258.10417184613,
+      "wall_seconds": 13.671425792,
       "cpu_seconds": {
         "state": "observed",
-        "value": 15.378673000000001
+        "value": 15.45355
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1497,11 +842,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 39764061
+        "value": 39792338
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 452640768
+        "value": 456818688
       },
       "stages": {
         "analyzer": {
@@ -1510,7 +855,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.027590083
+          "value": 0.01452875
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1518,7 +863,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.111037542
+          "value": 0.295450292
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1530,12 +875,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 290455552,
+        "physical_index_page_bytes": 295960576,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 290455926,
-        "physical_total_wal_excluded_bytes": 290455926,
+        "physical_total_bytes": 295960950,
+        "physical_total_wal_excluded_bytes": 295960950,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -1557,19 +902,45 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 400000,
+        "postings": 400000,
+        "terms": 100012,
+        "blocks": 252868,
+        "generations": 392,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 8583490,
+          "docmap_bytes": 7839611,
+          "posting_bytes": 26424765,
+          "norm_bytes": 2842736,
+          "position_bytes": 0,
+          "term_bytes": 1357877,
+          "status_bytes": 168
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
       "mode": "maintenance",
       "scale": 100000,
-      "repetition": 3,
+      "repetition": 1,
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59190,
+      "peak_rss_pid": 64989,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 50000,
@@ -1581,15 +952,18 @@
       "terms": 100008,
       "blocks": 118709,
       "generations": 3,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 50000,
-      "source_docs_per_second": 91191.16865474069,
+      "source_docs_per_second": 89974.15717270608,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 45595.58432737034,
-      "wall_seconds": 1.096597417,
+      "indexed_rows_per_second": 44987.07858635304,
+      "wall_seconds": 1.11143025,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.446655
+        "value": 1.469711
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1601,11 +975,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 8724866
+        "value": 8724872
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 489930752
+        "value": 438714368
       },
       "stages": {
         "analyzer": {
@@ -1614,7 +988,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.01833325
+          "value": 0.014635792
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1622,7 +996,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.021364042
+          "value": 0.087854917
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1661,39 +1035,68 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 50000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 3,
+        "tombstone_debt": 50000,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
       "mode": "indexed_insert",
-      "scale": 1000000,
-      "repetition": 1,
-      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
-      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59208,
-      "source_documents": 1000000,
+      "peak_rss_pid": 64999,
+      "source_documents": 100000,
       "generated_chunks": 0,
-      "indexed_live_rows": 1000000,
+      "indexed_live_rows": 100000,
       "parents_text_indexed": false,
       "indexed_parent_rows": 0,
       "chunk_batch_size": 0,
       "chunk_batch_count": 0,
-      "postings": 1000000,
-      "terms": 1000008,
-      "blocks": 1187347,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
       "generations": 2,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 26172.87193275848,
+      "source_docs_per_second": 113198.89710812621,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 26172.87193275848,
-      "wall_seconds": 38.207499833,
+      "indexed_rows_per_second": 113198.89710812621,
+      "wall_seconds": 0.883400833,
       "cpu_seconds": {
         "state": "observed",
-        "value": 41.4591
+        "value": 1.165264
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1705,11 +1108,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919724
+        "value": 6314181
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3971710976
+        "value": 494796800
       },
       "stages": {
         "analyzer": {
@@ -1718,7 +1121,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.403624834
+          "value": 0.021781667
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1726,7 +1129,1071 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.173913166
+          "value": 0.085999875
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 37224448,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 37224822,
+        "physical_total_wal_excluded_bytes": 37224822,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65000,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 104681,
+      "generations": 1,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 149029.0107204496,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 149029.0107204496,
+      "wall_seconds": 0.671010292,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.912198
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 5969975
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 380076032
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.017113875
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.080109917
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 35651584,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 35651958,
+        "physical_total_wal_excluded_bytes": 35651958,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 9381629,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 104681,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 9381629,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65001,
+      "source_documents": 100000,
+      "generated_chunks": 300000,
+      "indexed_live_rows": 400000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 100000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 391,
+      "postings": 400000,
+      "terms": 100012,
+      "blocks": 252868,
+      "generations": 392,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 7233.162378471186,
+      "chunks_per_second": 21699.487135413554,
+      "indexed_rows_per_second": 28932.649513884742,
+      "wall_seconds": 13.825211542,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 15.521389000000001
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 39764152
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 453935104
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.016172125
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.291052833
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 292814848,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 292815222,
+        "physical_total_wal_excluded_bytes": 292815222,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 8583490,
+        "docmap_bytes": 7839611,
+        "posting_bytes": 26424765,
+        "norm_bytes": 2842736,
+        "position_bytes": 0,
+        "term_bytes": 1357877,
+        "status_bytes": 168
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 400000,
+        "postings": 400000,
+        "terms": 100012,
+        "blocks": 252868,
+        "generations": 392,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 8583490,
+          "docmap_bytes": 7839611,
+          "posting_bytes": 26424765,
+          "norm_bytes": 2842736,
+          "position_bytes": 0,
+          "term_bytes": 1357877,
+          "status_bytes": 168
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65008,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 50000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 3,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 50000,
+      "source_docs_per_second": 90068.88462892287,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 45034.442314461434,
+      "wall_seconds": 1.110261334,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.4569640000000001
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 8724870
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 491257856
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.014298375
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.089116791
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 49020928,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 49021302,
+        "physical_total_wal_excluded_bytes": 49021302,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 50000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 3,
+        "tombstone_debt": 50000,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65016,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 2,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 113262.50085300821,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 113262.50085300821,
+      "wall_seconds": 0.88290475,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.175395
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 6314160
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 484474880
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.0226575
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.0875295
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 37224448,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 37224822,
+        "physical_total_wal_excluded_bytes": 37224822,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65017,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 104681,
+      "generations": 1,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 150800.98887748455,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 150800.98887748455,
+      "wall_seconds": 0.663125625,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.93378
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 5969982
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 325271552
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.015194958
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.080565208
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 35651584,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 35651958,
+        "physical_total_wal_excluded_bytes": 35651958,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 9381629,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 100000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 104681,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 9381629,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65018,
+      "source_documents": 100000,
+      "generated_chunks": 300000,
+      "indexed_live_rows": 400000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 100000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 391,
+      "postings": 400000,
+      "terms": 100012,
+      "blocks": 252868,
+      "generations": 392,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 7392.757335170399,
+      "chunks_per_second": 22178.272005511193,
+      "indexed_rows_per_second": 29571.029340681594,
+      "wall_seconds": 13.526752667,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 15.33396
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 39776786
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 459964416
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.020625625
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.291004
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 298319872,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 298320246,
+        "physical_total_wal_excluded_bytes": 298320246,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 8583490,
+        "docmap_bytes": 7839611,
+        "posting_bytes": 26424765,
+        "norm_bytes": 2842736,
+        "position_bytes": 0,
+        "term_bytes": 1357877,
+        "status_bytes": 168
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 400000,
+        "postings": 400000,
+        "terms": 100012,
+        "blocks": 252868,
+        "generations": 392,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 8583490,
+          "docmap_bytes": 7839611,
+          "posting_bytes": 26424765,
+          "norm_bytes": 2842736,
+          "position_bytes": 0,
+          "term_bytes": 1357877,
+          "status_bytes": 168
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65022,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 50000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 3,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 50000,
+      "source_docs_per_second": 91565.28453063357,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 45782.64226531678,
+      "wall_seconds": 1.092116958,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.4276929999999999
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 8724846
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 415318016
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.014735542
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.088110833
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 49020928,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 49021302,
+        "physical_total_wal_excluded_bytes": 49021302,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "query": "refund",
+        "results": 10,
+        "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+        "documents_fetched": 0,
+        "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 50000,
+        "postings": 100000,
+        "terms": 100008,
+        "blocks": 118709,
+        "generations": 3,
+        "tombstone_debt": 50000,
+        "text_v2": {
+          "docid_bytes": 1983490,
+          "docmap_bytes": 1797436,
+          "posting_bytes": 11128802,
+          "norm_bytes": 698218,
+          "position_bytes": 0,
+          "term_bytes": 1289540,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 1000000,
+      "repetition": 1,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 65032,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 2,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
+      "tombstone_debt": 0,
+      "source_docs_per_second": 25733.071408277858,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 25733.071408277858,
+      "wall_seconds": 38.860499166,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 42.634208
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 64919775
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3345547264
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.240946375
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.811892583
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1765,9 +2232,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889549,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -1777,7 +2270,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59221,
+      "peak_rss_pid": 65057,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -1789,15 +2282,18 @@
       "terms": 1000008,
       "blocks": 1046775,
       "generations": 1,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 125911.66273298193,
+      "source_docs_per_second": 122722.22312114206,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 125911.66273298193,
-      "wall_seconds": 7.942076042,
+      "indexed_rows_per_second": 122722.22312114206,
+      "wall_seconds": 8.148483417,
       "cpu_seconds": {
         "state": "observed",
-        "value": 11.310756000000001
+        "value": 11.404406999999999
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1809,11 +2305,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581648
+        "value": 60581600
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3662741504
+        "value": 3244195840
       },
       "stages": {
         "analyzer": {
@@ -1822,7 +2318,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.42573575
+          "value": 0.294827959
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1830,7 +2326,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.14938275
+          "value": 0.756210208
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1869,9 +2365,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1046775,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 95296039,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889544,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -1881,7 +2403,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 59224,
+      "peak_rss_pid": 65061,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -1893,15 +2415,18 @@
       "terms": 1000012,
       "blocks": 2530993,
       "generations": 3908,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 997.2389835260575,
-      "chunks_per_second": 2991.7169505781726,
-      "indexed_rows_per_second": 3988.95593410423,
-      "wall_seconds": 1002.768660792,
+      "source_docs_per_second": 1031.2884766318246,
+      "chunks_per_second": 3093.8654298954734,
+      "indexed_rows_per_second": 4125.153906527298,
+      "wall_seconds": 969.660791,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1074.552229
+        "value": 1051.1586770000001
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1913,11 +2438,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 469910094
+        "value": 470882902
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3695935488
+        "value": 3736125440
       },
       "stages": {
         "analyzer": {
@@ -1926,7 +2451,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.034998542
+          "value": 0.104679333
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1934,7 +2459,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 1.842238
+          "value": 3.521097916
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1946,12 +2471,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 7937720320,
+        "physical_index_page_bytes": 8122007552,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 7937720694,
-        "physical_total_wal_excluded_bytes": 7937720694,
+        "physical_total_bytes": 8122007926,
+        "physical_total_wal_excluded_bytes": 8122007926,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -1973,9 +2498,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 4000000,
+        "postings": 4000000,
+        "terms": 1000012,
+        "blocks": 2530993,
+        "generations": 3908,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 87886339,
+          "docmap_bytes": 80463576,
+          "posting_bytes": 269277000,
+          "norm_bytes": 30494826,
+          "position_bytes": 0,
+          "term_bytes": 14857897,
+          "status_bytes": 170
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -1985,7 +2536,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 60206,
+      "peak_rss_pid": 65503,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -1997,15 +2548,18 @@
       "terms": 1000008,
       "blocks": 1187347,
       "generations": 3,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 23487.9303526494,
+      "source_docs_per_second": 24256.741207934883,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 11743.9651763247,
-      "wall_seconds": 42.575058125,
+      "indexed_rows_per_second": 12128.370603967442,
+      "wall_seconds": 41.225653167,
       "cpu_seconds": {
         "state": "observed",
-        "value": 47.461422000000006
+        "value": 45.747846
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2017,11 +2571,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802519
+        "value": 89802461
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 4198481920
+        "value": 4250648576
       },
       "stages": {
         "analyzer": {
@@ -2030,7 +2584,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.136521292
+          "value": 0.07328325
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2038,7 +2592,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.195605
+          "value": 0.834732791
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2077,9 +2631,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 500000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 3,
+        "tombstone_debt": 500000,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889546,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2089,7 +2669,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 60262,
+      "peak_rss_pid": 65527,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -2101,15 +2681,18 @@
       "terms": 1000008,
       "blocks": 1187347,
       "generations": 2,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 25367.885927743126,
+      "source_docs_per_second": 25871.858397659467,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 25367.885927743126,
-      "wall_seconds": 39.419918666,
+      "indexed_rows_per_second": 25871.858397659467,
+      "wall_seconds": 38.652035916,
       "cpu_seconds": {
         "state": "observed",
-        "value": 42.96206
+        "value": 41.8879
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2121,11 +2704,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919795
+        "value": 64919738
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 4114825216
+        "value": 4066590720
       },
       "stages": {
         "analyzer": {
@@ -2134,7 +2717,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.191788792
+          "value": 0.122996041
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2142,7 +2725,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.16432
+          "value": 0.822649084
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2181,9 +2764,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889549,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2193,7 +2802,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 60282,
+      "peak_rss_pid": 65542,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -2205,15 +2814,18 @@
       "terms": 1000008,
       "blocks": 1046775,
       "generations": 1,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 120896.47699656639,
+      "source_docs_per_second": 124812.75551413783,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 120896.47699656639,
-      "wall_seconds": 8.271539625,
+      "indexed_rows_per_second": 124812.75551413783,
+      "wall_seconds": 8.012001625,
       "cpu_seconds": {
         "state": "observed",
-        "value": 11.601310999999999
+        "value": 11.424088000000001
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2225,11 +2837,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581662
+        "value": 60581645
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3143368704
+        "value": 3602513920
       },
       "stages": {
         "analyzer": {
@@ -2238,7 +2850,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.191154709
+          "value": 0.106898
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2246,7 +2858,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.151616833
+          "value": 0.752609209
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2285,9 +2897,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1046775,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 95296039,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889544,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2297,7 +2935,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 60291,
+      "peak_rss_pid": 65549,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -2309,15 +2947,18 @@
       "terms": 1000012,
       "blocks": 2530993,
       "generations": 3908,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 974.2180831497208,
-      "chunks_per_second": 2922.6542494491623,
-      "indexed_rows_per_second": 3896.872332598883,
-      "wall_seconds": 1026.464215042,
+      "source_docs_per_second": 1025.825172921356,
+      "chunks_per_second": 3077.475518764068,
+      "indexed_rows_per_second": 4103.300691685424,
+      "wall_seconds": 974.824976416,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1090.53369
+        "value": 1056.80025
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2329,11 +2970,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 470502014
+        "value": 470882887
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3163537408
+        "value": 3825713152
       },
       "stages": {
         "analyzer": {
@@ -2342,7 +2983,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.045426667
+          "value": 0.061000125
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2350,7 +2991,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 1.8336473340000001
+          "value": 3.582982
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2362,12 +3003,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 8115453952,
+        "physical_index_page_bytes": 8164737024,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 8115454326,
-        "physical_total_wal_excluded_bytes": 8115454326,
+        "physical_total_bytes": 8164737398,
+        "physical_total_wal_excluded_bytes": 8164737398,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2389,9 +3030,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 4000000,
+        "postings": 4000000,
+        "terms": 1000012,
+        "blocks": 2530993,
+        "generations": 3908,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 87886339,
+          "docmap_bytes": 80463576,
+          "posting_bytes": 269277000,
+          "norm_bytes": 30494826,
+          "position_bytes": 0,
+          "term_bytes": 14857897,
+          "status_bytes": 170
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2401,7 +3068,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 61373,
+      "peak_rss_pid": 65976,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -2413,15 +3080,18 @@
       "terms": 1000008,
       "blocks": 1187347,
       "generations": 3,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 23323.49589092772,
+      "source_docs_per_second": 24318.282619535858,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 11661.74794546386,
-      "wall_seconds": 42.87521925,
+      "indexed_rows_per_second": 12159.141309767929,
+      "wall_seconds": 41.121324875,
       "cpu_seconds": {
         "state": "observed",
-        "value": 47.247726
+        "value": 45.662875
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2433,11 +3103,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802444
+        "value": 89802495
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 4130095104
+        "value": 4309270528
       },
       "stages": {
         "analyzer": {
@@ -2446,7 +3116,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.07567825
+          "value": 0.084601083
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2454,7 +3124,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.187941208
+          "value": 0.833101208
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2493,9 +3163,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 500000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 3,
+        "tombstone_debt": 500000,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889546,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2505,7 +3201,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 61430,
+      "peak_rss_pid": 66007,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -2517,15 +3213,18 @@
       "terms": 1000008,
       "blocks": 1187347,
       "generations": 2,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 24265.24548520994,
+      "source_docs_per_second": 25574.371615311837,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 24265.24548520994,
-      "wall_seconds": 41.21120475,
+      "indexed_rows_per_second": 25574.371615311837,
+      "wall_seconds": 39.101645,
       "cpu_seconds": {
         "state": "observed",
-        "value": 45.076197
+        "value": 43.080491
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2537,11 +3236,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919795
+        "value": 64919730
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3883663360
+        "value": 3622551552
       },
       "stages": {
         "analyzer": {
@@ -2550,7 +3249,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.126054333
+          "value": 0.072913125
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2558,7 +3257,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.170496625
+          "value": 0.810171
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2597,9 +3296,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 2,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889549,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2609,7 +3334,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 61452,
+      "peak_rss_pid": 66056,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -2621,15 +3346,18 @@
       "terms": 1000008,
       "blocks": 1046775,
       "generations": 1,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 122935.33750306435,
+      "source_docs_per_second": 123254.37080933645,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 122935.33750306435,
-      "wall_seconds": 8.134357625,
+      "indexed_rows_per_second": 123254.37080933645,
+      "wall_seconds": 8.113302542,
       "cpu_seconds": {
         "state": "observed",
-        "value": 11.260454
+        "value": 11.502032
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2641,11 +3369,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581701
+        "value": 60581703
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3134308352
+        "value": 3090350080
       },
       "stages": {
         "analyzer": {
@@ -2654,7 +3382,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.114838167
+          "value": 0.126725875
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2662,7 +3390,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.154676458
+          "value": 0.757114042
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2701,9 +3429,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 1000000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1046775,
+        "generations": 1,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 95296039,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889544,
+          "status_bytes": 163
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2713,7 +3467,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 61464,
+      "peak_rss_pid": 66068,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -2725,15 +3479,18 @@
       "terms": 1000012,
       "blocks": 2530993,
       "generations": 3908,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 0,
-      "source_docs_per_second": 1000.1839464550753,
-      "chunks_per_second": 3000.551839365226,
-      "indexed_rows_per_second": 4000.7357858203013,
-      "wall_seconds": 999.816087375,
+      "source_docs_per_second": 1018.2803205898871,
+      "chunks_per_second": 3054.840961769661,
+      "indexed_rows_per_second": 4073.1212823595483,
+      "wall_seconds": 982.047850459,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1081.7415369999999
+        "value": 1051.8291159999999
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2745,11 +3502,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 470394226
+        "value": 470474726
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3584770048
+        "value": 3975086080
       },
       "stages": {
         "analyzer": {
@@ -2758,7 +3515,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.065152875
+          "value": 0.052084541
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2766,7 +3523,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 1.9652999580000001
+          "value": 3.717240125
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2778,12 +3535,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 8129609728,
+        "physical_index_page_bytes": 8037335040,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 8129610102,
-        "physical_total_wal_excluded_bytes": 8129610102,
+        "physical_total_bytes": 8037335414,
+        "physical_total_wal_excluded_bytes": 8037335414,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2805,9 +3562,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 4000000,
+        "postings": 4000000,
+        "terms": 1000012,
+        "blocks": 2530993,
+        "generations": 3908,
+        "tombstone_debt": 0,
+        "text_v2": {
+          "docid_bytes": 87886339,
+          "docmap_bytes": 80463576,
+          "posting_bytes": 269277000,
+          "norm_bytes": 30494826,
+          "position_bytes": 0,
+          "term_bytes": 14857897,
+          "status_bytes": 170
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     },
     {
@@ -2817,7 +3600,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 62540,
+      "peak_rss_pid": 66520,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -2829,15 +3612,18 @@
       "terms": 1000008,
       "blocks": 1187347,
       "generations": 3,
-      "stale_debt": 0,
+      "stale_debt": {
+        "state": "unavailable",
+        "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+      },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 23542.723928708063,
+      "source_docs_per_second": 23579.09138454721,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 11771.361964354031,
-      "wall_seconds": 42.4759685,
+      "indexed_rows_per_second": 11789.545692273605,
+      "wall_seconds": 42.41045525,
       "cpu_seconds": {
         "state": "observed",
-        "value": 47.321535
+        "value": 46.942624
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2849,11 +3635,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802507
+        "value": 89802442
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3900932096
+        "value": 3570188288
       },
       "stages": {
         "analyzer": {
@@ -2862,7 +3648,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.070013083
+          "value": 0.187004041
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2870,7 +3656,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.187587292
+          "value": 0.839990334
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2909,9 +3695,35 @@
       "close_ok": true,
       "reopen_ok": true,
       "score_only_probe": {
+        "query": "refund",
         "results": 10,
+        "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
         "documents_fetched": 0,
         "fail_closed": 0
+      },
+      "reopen": {
+        "indexed_live_rows": 500000,
+        "postings": 1000000,
+        "terms": 1000008,
+        "blocks": 1187347,
+        "generations": 3,
+        "tombstone_debt": 500000,
+        "text_v2": {
+          "docid_bytes": 19983490,
+          "docmap_bytes": 18123994,
+          "posting_bytes": 112838777,
+          "norm_bytes": 7131807,
+          "position_bytes": 0,
+          "term_bytes": 13889546,
+          "status_bytes": 165
+        },
+        "score_only_probe": {
+          "query": "refund",
+          "results": 10,
+          "results_sha256": "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a",
+          "documents_fetched": 0,
+          "fail_closed": 0
+        }
       }
     }
   ],
@@ -2919,98 +3731,98 @@
     {
       "mode": "indexed_insert",
       "scale": 10000,
-      "median_wall_seconds": 0.079025125,
-      "p95_wall_seconds": 0.079025125,
-      "median_indexed_rows_per_second": 126542.03330902671,
-      "p95_indexed_rows_per_second": 126542.03330902671
+      "median_wall_seconds": 0.080375417,
+      "p95_wall_seconds": 0.080375417,
+      "median_indexed_rows_per_second": 124416.15077406068,
+      "p95_indexed_rows_per_second": 124416.15077406068
     },
     {
       "mode": "indexed_insert",
       "scale": 100000,
-      "median_wall_seconds": 0.857273792,
-      "p95_wall_seconds": 0.8663945,
-      "median_indexed_rows_per_second": 116648.84769975564,
-      "p95_indexed_rows_per_second": 117429.92274535508
+      "median_wall_seconds": 0.883400833,
+      "p95_wall_seconds": 0.88821425,
+      "median_indexed_rows_per_second": 113198.89710812621,
+      "p95_indexed_rows_per_second": 113262.50085300821
     },
     {
       "mode": "indexed_insert",
       "scale": 1000000,
-      "median_wall_seconds": 39.419918666,
-      "p95_wall_seconds": 41.21120475,
-      "median_indexed_rows_per_second": 25367.885927743126,
-      "p95_indexed_rows_per_second": 26172.87193275848
+      "median_wall_seconds": 38.860499166,
+      "p95_wall_seconds": 39.101645,
+      "median_indexed_rows_per_second": 25733.071408277858,
+      "p95_indexed_rows_per_second": 25871.858397659467
     },
     {
       "mode": "post_load_backfill",
       "scale": 10000,
-      "median_wall_seconds": 0.064724209,
-      "p95_wall_seconds": 0.064724209,
-      "median_indexed_rows_per_second": 154501.69503037108,
-      "p95_indexed_rows_per_second": 154501.69503037108
+      "median_wall_seconds": 0.0622485,
+      "p95_wall_seconds": 0.0622485,
+      "median_indexed_rows_per_second": 160646.44127970954,
+      "p95_indexed_rows_per_second": 160646.44127970954
     },
     {
       "mode": "post_load_backfill",
       "scale": 100000,
-      "median_wall_seconds": 0.642551875,
-      "p95_wall_seconds": 0.656422,
-      "median_indexed_rows_per_second": 155629.45793287118,
-      "p95_indexed_rows_per_second": 155819.70024574714
+      "median_wall_seconds": 0.663125625,
+      "p95_wall_seconds": 0.671010292,
+      "median_indexed_rows_per_second": 150800.98887748455,
+      "p95_indexed_rows_per_second": 152318.564553747
     },
     {
       "mode": "post_load_backfill",
       "scale": 1000000,
-      "median_wall_seconds": 8.134357625,
-      "p95_wall_seconds": 8.271539625,
-      "median_indexed_rows_per_second": 122935.33750306435,
-      "p95_indexed_rows_per_second": 125911.66273298193
+      "median_wall_seconds": 8.113302542,
+      "p95_wall_seconds": 8.148483417,
+      "median_indexed_rows_per_second": 123254.37080933645,
+      "p95_indexed_rows_per_second": 124812.75551413783
     },
     {
       "mode": "source_chunk",
       "scale": 10000,
-      "median_wall_seconds": 0.457288,
-      "p95_wall_seconds": 0.457288,
-      "median_indexed_rows_per_second": 87472.22756774725,
-      "p95_indexed_rows_per_second": 87472.22756774725
+      "median_wall_seconds": 0.452005042,
+      "p95_wall_seconds": 0.452005042,
+      "median_indexed_rows_per_second": 88494.58807585602,
+      "p95_indexed_rows_per_second": 88494.58807585602
     },
     {
       "mode": "source_chunk",
       "scale": 100000,
-      "median_wall_seconds": 14.433498459,
-      "p95_wall_seconds": 14.443288584,
-      "median_indexed_rows_per_second": 27713.30880979727,
-      "p95_indexed_rows_per_second": 28140.567092401496
+      "median_wall_seconds": 13.671425792,
+      "p95_wall_seconds": 13.825211542,
+      "median_indexed_rows_per_second": 29258.10417184613,
+      "p95_indexed_rows_per_second": 29571.029340681594
     },
     {
       "mode": "source_chunk",
       "scale": 1000000,
-      "median_wall_seconds": 1002.768660792,
-      "p95_wall_seconds": 1026.464215042,
-      "median_indexed_rows_per_second": 3988.95593410423,
-      "p95_indexed_rows_per_second": 4000.7357858203013
+      "median_wall_seconds": 974.824976416,
+      "p95_wall_seconds": 982.047850459,
+      "median_indexed_rows_per_second": 4103.300691685424,
+      "p95_indexed_rows_per_second": 4125.153906527298
     },
     {
       "mode": "maintenance",
       "scale": 10000,
-      "median_wall_seconds": 0.095582458,
-      "p95_wall_seconds": 0.095582458,
-      "median_indexed_rows_per_second": 52310.853943513364,
-      "p95_indexed_rows_per_second": 52310.853943513364
+      "median_wall_seconds": 0.098782875,
+      "p95_wall_seconds": 0.098782875,
+      "median_indexed_rows_per_second": 50616.060729149656,
+      "p95_indexed_rows_per_second": 50616.060729149656
     },
     {
       "mode": "maintenance",
       "scale": 100000,
-      "median_wall_seconds": 1.090709625,
-      "p95_wall_seconds": 1.096597417,
-      "median_indexed_rows_per_second": 45841.71520444775,
-      "p95_indexed_rows_per_second": 46174.18763101303
+      "median_wall_seconds": 1.110261334,
+      "p95_wall_seconds": 1.11143025,
+      "median_indexed_rows_per_second": 45034.442314461434,
+      "p95_indexed_rows_per_second": 45782.64226531678
     },
     {
       "mode": "maintenance",
       "scale": 1000000,
-      "median_wall_seconds": 42.575058125,
-      "p95_wall_seconds": 42.87521925,
-      "median_indexed_rows_per_second": 11743.9651763247,
-      "p95_indexed_rows_per_second": 11771.361964354031
+      "median_wall_seconds": 41.225653167,
+      "p95_wall_seconds": 42.41045525,
+      "median_indexed_rows_per_second": 12128.370603967442,
+      "p95_indexed_rows_per_second": 12159.141309767929
     }
   ]
 }

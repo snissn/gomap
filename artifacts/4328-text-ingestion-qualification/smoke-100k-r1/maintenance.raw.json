@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 59158,
+  "peak_rss_pid": 64989,
   "source_documents": 100000,
   "generated_chunks": 0,
   "indexed_live_rows": 50000,
@@ -17,15 +17,18 @@
   "terms": 100008,
   "blocks": 118709,
   "generations": 3,
-  "stale_debt": 0,
+  "stale_debt": {
+    "state": "unavailable",
+    "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
+  },
   "tombstone_debt": 50000,
-  "source_docs_per_second": 91683.4304088955,
+  "source_docs_per_second": 89974.15717270608,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 45841.71520444775,
-  "wall_seconds": 1.090709625,
+  "indexed_rows_per_second": 44987.07858635304,
+  "wall_seconds": 1.11143025,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1.442216
+    "value": 1.469711
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 8724867
+    "value": 8724872
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 438599680
+    "value": 438714368
   },
   "stages": {
     "analyzer": {
@@ -50,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.020244667
+      "value": 0.014635792
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +61,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.023298541
+      "value": 0.087854917
     },
     "root_mutation": {
       "state": "unavailable",
@@ -97,8 +100,34 @@
   "close_ok": true,
   "reopen_ok": true,
   "score_only_probe": {
+    "query": "refund",
     "results": 10,
+    "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
     "documents_fetched": 0,
     "fail_closed": 0
+  },
+  "reopen": {
+    "indexed_live_rows": 50000,
+    "postings": 100000,
+    "terms": 100008,
+    "blocks": 118709,
+    "generations": 3,
+    "tombstone_debt": 50000,
+    "text_v2": {
+      "docid_bytes": 1983490,
+      "docmap_bytes": 1797436,
+      "posting_bytes": 11128802,
+      "norm_bytes": 698218,
+      "position_bytes": 0,
+      "term_bytes": 1289540,
+      "status_bytes": 165
+    },
+    "score_only_probe": {
+      "query": "refund",
+      "results": 10,
+      "results_sha256": "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd",
+      "documents_fetched": 0,
+      "fail_closed": 0
+    }
   }
 }
