@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -519,10 +520,7 @@ func run(cfg config) (report, error) {
 		}
 		rep.Queries = append(rep.Queries, queries...)
 		rep.Guardrails = append(rep.Guardrails, guards...)
-		if err := completePhase(&rep, "queries"); err != nil {
-			return rep, err
-		}
-		if err := failOnGuardrails(rep.Guardrails, cfg.allowGuardrailFails); err != nil {
+		if err := completeGuardedPhase(&rep, "queries", guards, cfg.allowGuardrailFails); err != nil {
 			return rep, err
 		}
 	}
@@ -554,10 +552,7 @@ func run(cfg config) (report, error) {
 		}
 		rep.Concurrent = &concurrent
 		rep.Guardrails = append(rep.Guardrails, guard)
-		if err := completePhase(&rep, "concurrent"); err != nil {
-			return rep, err
-		}
-		if err := failOnGuardrails([]guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
+		if err := completeGuardedPhase(&rep, "concurrent", []guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
 			return rep, err
 		}
 	}
@@ -571,10 +566,7 @@ func run(cfg config) (report, error) {
 		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("maintenance_rewrite_fixture", maxInt(cfg.rows-maintenance.Deletes, 1), maintenance.StorageBytesAfter, maintenance.TextStorageAfter, nil))
 		guard := guardrailResult{Name: "maintenance_rewrite_postconditions", OK: maintenance.PostconditionOK, Failure: maintenance.PostconditionFailure}
 		rep.Guardrails = append(rep.Guardrails, guard)
-		if err := completePhase(&rep, "maintenance"); err != nil {
-			return rep, err
-		}
-		if err := failOnGuardrails([]guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
+		if err := completeGuardedPhase(&rep, "maintenance", []guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
 			return rep, err
 		}
 	}
@@ -600,6 +592,21 @@ func run(cfg config) (report, error) {
 		return rep, err
 	}
 	return rep, nil
+}
+
+func completeGuardedPhase(rep *report, phase string, guards []guardrailResult, allow bool) error {
+	if err := failOnGuardrails(guards, allow); err != nil {
+		// Do not mark a phase complete until its guardrails qualify it. Persist the
+		// observed rows and failed guards as explicitly incomplete evidence first.
+		if rep != nil {
+			rep.Bottlenecks = rankBottlenecks(*rep)
+			if writeErr := writeReports(*rep); writeErr != nil {
+				return writeErr
+			}
+		}
+		return err
+	}
+	return completePhase(rep, phase)
 }
 
 func completePhase(rep *report, phase string) error {
@@ -1730,28 +1737,72 @@ func formatNS(ns int64) string {
 }
 
 func captureContext(cfg config) reportContext {
-	vcsStatus := strings.TrimSpace(runCmd("git", "status", "--porcelain"))
+	executable, err := os.Executable()
+	if err != nil {
+		executable = ""
+	}
+	buildInfo, _ := debug.ReadBuildInfo()
+	binaryState, vcsClean, vcsStatus := invocationProvenance(executable, buildInfo)
 	return reportContext{
-		RepoRoot:    strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
-		Branch:      strings.TrimSpace(runCmd("git", "branch", "--show-current")),
-		Commit:      strings.TrimSpace(runCmd("git", "rev-parse", "HEAD")),
+		// Repository and branch are intentionally left unset: this process may be
+		// a standalone binary invoked outside a checkout. VCS provenance comes
+		// only from the invoked binary's embedded build metadata.
 		BaseRef:     cfg.baseRef,
-		BaseSHA:     firstNonEmpty(cfg.baseSHA, strings.TrimSpace(runCmd("git", "merge-base", "HEAD", cfg.baseRef))),
-		Go:          strings.TrimSpace(runCmd("go", "version")),
+		BaseSHA:     cfg.baseSHA,
+		Go:          runtime.Version(),
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		CPU:         cpuLabel(),
 		NCPU:        runtime.NumCPU(),
 		Uptime:      strings.TrimSpace(runCmd("uptime")),
 		Command:     strings.Join(os.Args, " "),
-		VCSClean:    vcsStatus == "",
+		VCSClean:    vcsClean,
 		VCSStatus:   vcsStatus,
-		BinaryState: "go run (source tree; no standalone binary)",
+		BinaryState: binaryState,
 		Corpus:      "deterministic synthetic customer-support corpus v1",
 		Cache:       "warm in-process retrieval after fixture load/reopen",
 		Durability:  "TreeDB default durability; checkpoint after load",
 		NoisePolicy: "warmup excluded; raw per-query samples summarized in-process; no null rows accepted",
 	}
+}
+
+func invocationProvenance(executable string, info *debug.BuildInfo) (binaryState string, vcsClean bool, vcsStatus string) {
+	if executable == "" {
+		binaryState = "unknown (os.Executable unavailable)"
+	} else {
+		binaryState = "executable=" + executable
+	}
+	if info == nil {
+		return binaryState + "; build metadata unavailable", false, "unknown (build metadata unavailable)"
+	}
+	mainPath := info.Main.Path
+	if mainPath == "" {
+		mainPath = "unknown"
+	}
+	goVersion := info.GoVersion
+	if goVersion == "" {
+		goVersion = "unknown"
+	}
+	revision, modified := buildSetting(info, "vcs.revision"), buildSetting(info, "vcs.modified")
+	if revision == "" || modified == "" {
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs=unknown", binaryState, mainPath, goVersion), false, "unknown (incomplete embedded VCS metadata)"
+	}
+	if modified == "true" {
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=true", binaryState, mainPath, goVersion, revision), false, "dirty (embedded build metadata)"
+	}
+	if modified == "false" {
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=false", binaryState, mainPath, goVersion, revision), true, "clean (embedded build metadata)"
+	}
+	return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=%s", binaryState, mainPath, goVersion, revision, modified), false, "unknown (unrecognized embedded vcs.modified)"
+}
+
+func buildSetting(info *debug.BuildInfo, key string) string {
+	for _, setting := range info.Settings {
+		if setting.Key == key {
+			return setting.Value
+		}
+	}
+	return ""
 }
 
 func runCmd(name string, args ...string) string {

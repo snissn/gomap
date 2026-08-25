@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -155,13 +156,47 @@ func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
 	}
 }
 
-func TestCaptureContextVCSStatusConsistent4327(t *testing.T) {
+func TestCaptureContextUsesInvocationProvenance4327(t *testing.T) {
 	ctx := captureContext(config{baseRef: "origin/main"})
-	if ctx.VCSClean != (ctx.VCSStatus == "") {
-		t.Fatalf("vcs consistency clean=%v status=%q", ctx.VCSClean, ctx.VCSStatus)
-	}
-	if ctx.Command == "" || ctx.BinaryState == "" || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
+	if ctx.VCSStatus == "" || ctx.BinaryState == "" || ctx.Command == "" || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
 		t.Fatalf("missing provenance: %+v", ctx)
+	}
+	if ctx.RepoRoot != "" || ctx.Branch != "" || ctx.Commit != "" {
+		t.Fatalf("context used ambient checkout state: %+v", ctx)
+	}
+}
+
+func TestInvocationProvenanceUsesEmbeddedBuildMetadata4327(t *testing.T) {
+	info := &debug.BuildInfo{Main: debug.Module{Path: "example.com/scale"}, GoVersion: "go1.26.0", Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "false"}}}
+	state, clean, status := invocationProvenance("/tmp/scale", info)
+	if !clean || status != "clean (embedded build metadata)" || !strings.Contains(state, "executable=/tmp/scale") || !strings.Contains(state, "vcs_revision=abc123") {
+		t.Fatalf("embedded provenance state=%q clean=%v status=%q", state, clean, status)
+	}
+	state, clean, status = invocationProvenance("/tmp/scale", &debug.BuildInfo{})
+	if clean || status != "unknown (incomplete embedded VCS metadata)" || !strings.Contains(state, "vcs=unknown") {
+		t.Fatalf("incomplete metadata did not fail closed: state=%q clean=%v status=%q", state, clean, status)
+	}
+}
+
+func TestGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion:  scaleSchemaVersion,
+		Artifacts:      reportArtifacts{OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md")},
+		SelectedPhases: []string{"load", "queries"}, CompletedPhases: []string{"load"},
+		Queries: []queryReport{{Name: "failed_query"}}, Guardrails: []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	err := completeGuardedPhase(&rep, "queries", rep.Guardrails, false)
+	if err == nil || rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
+		t.Fatalf("failed guardrail marked phase complete: report=%+v err=%v", rep, err)
+	}
+	payload, readErr := os.ReadFile(rep.Artifacts.JSONReport)
+	if readErr != nil {
+		t.Fatalf("read partial report: %v", readErr)
+	}
+	var persisted report
+	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load" || len(persisted.Guardrails) != 1 {
+		t.Fatalf("persisted report was not honest partial evidence: report=%+v err=%v", persisted, err)
 	}
 }
 
