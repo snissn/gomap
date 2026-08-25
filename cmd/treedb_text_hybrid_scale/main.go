@@ -1243,16 +1243,18 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	durations, last, guard, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
 	profileErr := stopProfile()
 	if profileErr != nil {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, profileErr)
+		profileErr = fmt.Errorf("write %s profile: %w", name, profileErr)
+		row := failedHybridQueryRow(cfg, name, shape, last, durations, profileErr)
+		guard = hybridFailureGuard(name, last.Stats, profileErr)
+		return row, guard, profileErr
 	}
 	if sampleErr != nil {
+		row := failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr)
+		guard = hybridFailureGuard(name, last.Stats, sampleErr)
 		if cfg.allowGuardrailFails {
-			lat := summarizeLatency(durations)
-			stats := last.Stats
-			guard = hybridFailureGuard(name, last.Stats, sampleErr)
-			return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
+			return row, guard, nil
 		}
-		return queryReport{}, guardrailResult{}, sampleErr
+		return row, guard, sampleErr
 	}
 	lat := summarizeLatency(durations)
 	stats := last.Stats

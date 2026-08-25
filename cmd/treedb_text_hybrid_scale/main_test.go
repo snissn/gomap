@@ -340,14 +340,15 @@ func TestFailedQueryGuardrailsLeavePersistedReportIncomplete4327(t *testing.T) {
 
 func TestHybridFailureRowsPreserveFailClosedStats2731(t *testing.T) {
 	resp := collections.HybridSearchResponse{Stats: collections.HybridSearchStats{FailClosed: 1, FailClosedReason: collections.HybridFailClosedReasonTextIndexUnavailable}}
-	row := failedHybridQueryRow(config{rows: 1_000_000, topK: 10, candidateLimit: 64}, "hybrid_common", "common", resp, nil, errors.New("bounded generation failed"))
+	durations := []int64{11, 17}
+	row := failedHybridQueryRow(config{rows: 1_000_000, topK: 10, candidateLimit: 64}, "hybrid_common", "common", resp, durations, errors.New("bounded generation failed"))
 	if row.GuardrailOK || row.GuardrailFailure == "" {
 		t.Fatalf("row guardrail=%v failure=%q", row.GuardrailOK, row.GuardrailFailure)
 	}
 	if row.HybridStats == nil || row.HybridStats.FailClosed != 1 || row.HybridStats.FailClosedReason != collections.HybridFailClosedReasonTextIndexUnavailable {
 		t.Fatalf("row stats=%+v want fail-closed stats preserved", row.HybridStats)
 	}
-	if row.Samples != 0 || row.Results != 0 || row.Rows != 1_000_000 || row.CandidateBudget != 64 {
+	if row.Samples != len(durations) || len(row.RawLatencyNS) != len(durations) || row.Results != 0 || row.Rows != 1_000_000 || row.CandidateBudget != 64 {
 		t.Fatalf("row metadata=%+v", row)
 	}
 }
