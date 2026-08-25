@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -466,6 +467,78 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantMem)
 			}
 		})
+	}
+}
+
+func TestAllocationProfilesRequireStartupExactRate4327(t *testing.T) {
+	if err := requireExactMemProfileRate(true, 1); err != nil {
+		t.Fatalf("exact startup rate rejected: %v", err)
+	}
+	err := requireExactMemProfileRate(true, 512*1024)
+	if err == nil || !strings.Contains(err.Error(), "GODEBUG=memprofilerate=1") {
+		t.Fatalf("rate precondition error=%v", err)
+	}
+	if err := requireExactMemProfileRate(false, 512*1024); err != nil {
+		t.Fatalf("CPU-only profiling unexpectedly requires allocation rate: %v", err)
+	}
+}
+
+func TestAllocationProfilesWriteBaselineAndAfter4327(t *testing.T) {
+	dir := t.TempDir()
+	after := filepath.Join(dir, "profiles", "allocs.pprof")
+	stop, err := startQueryProfilesAtMemProfileRate(config{allocProfile: after, allocProfileBase: after + ".base"}, 1)
+	if err != nil {
+		t.Fatalf("start allocation profiles: %v", err)
+	}
+	if _, err := os.Stat(after + ".base"); err != nil {
+		t.Fatalf("missing allocation baseline: %v", err)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("stop allocation profiles: %v", err)
+	}
+	if err := stop(); err != nil {
+		t.Fatalf("second stop allocation profiles: %v", err)
+	}
+	for _, path := range []string{after + ".base", after} {
+		info, err := os.Stat(path)
+		if err != nil || info.Size() == 0 {
+			t.Fatalf("profile %q info=%v err=%v", path, info, err)
+		}
+	}
+}
+
+func TestGeneratedAllocationBaselinePathCollisions4327(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	alloc := filepath.Join(root, "profiles", "allocs.pprof")
+	_, err := parseFlags([]string{
+		"-out-dir", outDir,
+		"-query-rows", queryRowHybridTextScalar,
+		"-cpu-profile", alloc + ".base",
+		"-alloc-profile", alloc,
+	})
+	if err == nil || !strings.Contains(err.Error(), "generated -alloc-profile baseline") || !strings.Contains(err.Error(), "must not resolve to the same path") {
+		t.Fatalf("generated baseline collision error=%v", err)
+	}
+}
+
+func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
+	runDir := t.TempDir()
+	cmd := exec.Command("bash", "scripts/bench_text_hybrid_scale.sh")
+	cmd.Dir = filepath.Join("..", "..")
+	cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES=retrieval", "GO_BIN=true")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generate 10M plan: %v\n%s", err, output)
+	}
+	plan, err := os.ReadFile(filepath.Join(runDir, "10m_selected_matrix_commands.md"))
+	if err != nil {
+		t.Fatalf("read generated plan: %v", err)
+	}
+	if got := strings.Count(string(plan), "-phases \"retrieval\""); got != 1 {
+		t.Fatalf("direct command phase selector count=%d plan:\n%s", got, plan)
+	}
+	if got := strings.Count(string(plan), "PHASES=retrieval"); got != 1 {
+		t.Fatalf("wrapper command phase selector count=%d plan:\n%s", got, plan)
 	}
 }
 
