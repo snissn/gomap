@@ -70,7 +70,7 @@ func produceMode(dir, mode string, scale int) (row, error) {
 	runtime.ReadMemStats(&before)
 	cpuStart, _, cpuReason := processUsage()
 	started := time.Now()
-	chunks, parentsIndexed := 0, false
+	chunks, indexedParents, parentsIndexed := 0, 0, false
 	switch mode {
 	case "indexed_insert":
 		if _, _, err = col.CreateTextIndex(def); err == nil {
@@ -91,9 +91,14 @@ func produceMode(dir, mode string, scale int) (row, error) {
 					err = ingestErr
 					break
 				}
+				if string(result.ParentID()) != string(ids[i]) {
+					err = fmt.Errorf("chunked ingest returned unexpected parent ID %q", result.ParentID())
+					break
+				}
+				indexedParents++
 				chunks += len(result.ChildIDs)
 			}
-			parentsIndexed = true
+			parentsIndexed = indexedParents == scale
 		}
 	case "maintenance":
 		if _, _, err = col.CreateTextIndex(def); err == nil {
@@ -174,7 +179,7 @@ func produceMode(dir, mode string, scale int) (row, error) {
 	if endCPUReason == "" {
 		rssMetric = metric{State: "observed", Value: maxRSS}
 	}
-	return row{Mode: mode, Scale: scale, Repetition: 1, SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
+	return row{Mode: mode, Scale: scale, Repetition: 1, SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayload(physical, docs), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
 }
 
 func withLogicalPayload(s storage, docs [][]byte) storage {

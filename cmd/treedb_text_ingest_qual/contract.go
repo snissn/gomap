@@ -50,6 +50,7 @@ type row struct {
 	GeneratedChunks    int               `json:"generated_chunks"`
 	IndexedLiveRows    int               `json:"indexed_live_rows"`
 	ParentsTextIndexed bool              `json:"parents_text_indexed"`
+	IndexedParentRows  int               `json:"indexed_parent_rows"`
 	Postings           uint64            `json:"postings"`
 	Terms              uint64            `json:"terms"`
 	Blocks             uint64            `json:"blocks"`
@@ -196,14 +197,14 @@ func validateRow(r row) error {
 	if !validScale || r.Repetition < 1 {
 		return fmt.Errorf("invalid scale or repetition")
 	}
-	if r.SourceDocuments < 1 || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 {
+	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed) {
-		return fmt.Errorf("source_chunk requires source, generated child, and parent text-index accounting")
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks) {
+		return fmt.Errorf("source_chunk requires returned parent, generated child, and live-row accounting")
 	}
-	if r.Mode != "source_chunk" && r.SourceDocuments != r.Scale {
-		return fmt.Errorf("non-source mode source_documents must equal scale")
+	if r.Mode != "source_chunk" && r.IndexedParentRows != 0 {
+		return fmt.Errorf("non-source modes must not claim chunked parent rows")
 	}
 	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.IndexedRowsPerSec <= 0 || r.WallSeconds <= 0 {
 		return fmt.Errorf("text-v2 counts or timing incomplete")

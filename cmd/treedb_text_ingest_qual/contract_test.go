@@ -33,7 +33,23 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 			r.Rows[0].Mode = "source_chunk"
 			r.Rows[0].GeneratedChunks = 1
 			r.Rows[0].ParentsTextIndexed = false
-		}, "parent text-index accounting"},
+		}, "returned parent"},
+		{"source parent child live count", func(_ *manifest, r *report) {
+			for i := range r.Rows {
+				if r.Rows[i].Mode == "source_chunk" {
+					r.Rows[i].IndexedLiveRows++
+					break
+				}
+			}
+		}, "returned parent"},
+		{"source count drift", func(_ *manifest, r *report) {
+			for i := range r.Rows {
+				if r.Rows[i].Mode == "source_chunk" {
+					r.Rows[i].SourceDocuments--
+					break
+				}
+			}
+		}, "document accounting"},
 		{"maintenance count semantics", func(_ *manifest, r *report) {
 			for i := range r.Rows {
 				if r.Rows[i].Mode == "maintenance" {
@@ -113,12 +129,17 @@ func validRow(mode string, scale, rep int) row {
 	if mode == "source_chunk" {
 		parentsIndexed = true
 		chunks = scale * 2
-		live = chunks
+		live = source + chunks
 	}
 	if mode == "maintenance" {
 		live = scale / 2
 	}
-	return row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, Postings: 1, Terms: 1, Blocks: 1, Generations: 1, SourceDocsPerSec: 1, ChunksPerSec: 1, IndexedRowsPerSec: 1, WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, CumulativeAllocs: metric{State: "observed", Value: 1}, PeakRSSBytes: metric{State: "observed", Value: 1}, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
+	return row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: func() int {
+		if mode == "source_chunk" {
+			return source
+		}
+		return 0
+	}(), Postings: 1, Terms: 1, Blocks: 1, Generations: 1, SourceDocsPerSec: 1, ChunksPerSec: 1, IndexedRowsPerSec: 1, WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, CumulativeAllocs: metric{State: "observed", Value: 1}, PeakRSSBytes: metric{State: "observed", Value: 1}, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	return modeScaleSummary{Mode: mode, Scale: scale, MedianWallSeconds: 1, P95WallSeconds: 1, MedianIndexedRowsPerSec: 1, P95IndexedRowsPerSec: 1}

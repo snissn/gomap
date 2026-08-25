@@ -16,9 +16,10 @@ and 1M. Each 10k group has exactly smoke repetition 1; each retained 100k/1M
 group has exactly repetitions 1, 2, and 3. Summaries occur once per
 mode/scale, never in raw rows, and are recomputed from those raw repetitions.
 
-Every row separately accounts for source documents, generated chunks, total live
-indexed rows, and whether source parents are text-indexed (maintenance may
-intentionally have fewer live rows). `source_chunk` uses the public
+Every row separately accounts for source documents, generated chunks, returned
+indexed parent rows, total live indexed rows, and whether source parents are
+text-indexed (maintenance may intentionally have fewer live rows). For
+`source_chunk`, live rows must equal returned parents plus returned children. `source_chunk` uses the public
 `IngestChunkedDocument` parent-and-child lifecycle with no vector index or
 embedder; its timed wall boundary includes deterministic chunk planning and the
 durable parent/child text writes. Stages
@@ -53,10 +54,10 @@ go run ./cmd/treedb_text_ingest_qual \
 
 The command can create one real raw row for every mode using the public
 collection, text-v2, deterministic chunker, checkpoint, close/reopen, and
-score-only APIs. It writes DBs and raw rows under the supplied directory; the
+score-only APIs. It writes DBs and raw rows under the supplied directory. The
 raw smoke files are deliberately not retained qualification artifacts because
-they do not claim physical disjoint storage accounting or the complete retained
-matrix.
+they lack the complete retained 100k/1M repetition matrix and manifest-bound
+summaries.
 
 ```sh
 go run ./cmd/treedb_text_ingest_qual \
