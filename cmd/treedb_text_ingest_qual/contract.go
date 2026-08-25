@@ -210,7 +210,7 @@ func validateRow(r row) error {
 	if r.SourceDocuments != r.Scale || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 || r.IndexedParentRows < 0 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize < 1 || r.ChunkBatchCount != (r.SourceDocuments+r.ChunkBatchSize-1)/r.ChunkBatchSize) {
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || !r.ParentsTextIndexed || r.IndexedParentRows != r.SourceDocuments || r.IndexedLiveRows != r.IndexedParentRows+r.GeneratedChunks || r.ChunkBatchSize != min(sourceChunkBatchLimit, r.SourceDocuments) || r.ChunkBatchCount != (r.SourceDocuments+sourceChunkBatchLimit-1)/sourceChunkBatchLimit) {
 		return fmt.Errorf("source_chunk requires returned parent, generated child, live-row, and batch accounting")
 	}
 	if r.Mode != "source_chunk" && (r.IndexedParentRows != 0 || r.ChunkBatchSize != 0 || r.ChunkBatchCount != 0) {
@@ -246,6 +246,9 @@ func validateRow(r row) error {
 	for _, v := range []metric{r.CPUSeconds, r.BytesPerOp, r.AllocsPerOp, r.CumulativeAllocs, r.PeakRSSBytes} {
 		if err := validateMetric(v); err != nil {
 			return fmt.Errorf("resource metric: %w", err)
+		}
+		if v.State == "observed" && v.Value <= 0 {
+			return fmt.Errorf("observed resource metric must be positive")
 		}
 	}
 	if err := validateStorage(r.Storage); err != nil {

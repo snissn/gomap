@@ -37,6 +37,7 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
 		{"zero stage placeholder", func(_ *manifest, r *report) { r.Rows[0].Stages["value_log"] = metric{State: "observed"} }, "zero placeholder"},
+		{"zero resource placeholder", func(_ *manifest, r *report) { r.Rows[0].PeakRSSBytes.Value = 0 }, "resource metric must be positive"},
 		{"missing fresh RSS process scope", func(_ *manifest, r *report) { r.Rows[0].PeakRSSScope = "" }, "fresh process"},
 		{"partial indexed live rows", func(_ *manifest, r *report) { r.Rows[0].IndexedLiveRows-- }, "every source document"},
 		{"stale throughput", func(_ *manifest, r *report) { r.Rows[0].IndexedRowsPerSec++ }, "throughput does not recompute"},
@@ -208,12 +209,12 @@ func validRow(mode string, scale, rep int) row {
 		return 0
 	}(), ChunkBatchSize: func() int {
 		if mode == "source_chunk" {
-			return scale
+			return min(sourceChunkBatchLimit, scale)
 		}
 		return 0
 	}(), ChunkBatchCount: func() int {
 		if mode == "source_chunk" {
-			return 1
+			return (scale + sourceChunkBatchLimit - 1) / sourceChunkBatchLimit
 		}
 		return 0
 	}(), Postings: 1, Terms: 1, Blocks: 1, Generations: 1, TombstoneDebt: func() uint64 {
