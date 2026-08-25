@@ -565,13 +565,18 @@ type ColumnPublishCandidateResourceWork struct {
 	RetainedIndexNodeVisits         uint64
 	RetainedIndexNodeCopies         uint64
 	LogicalIndexNodesAdmitted       uint64
-	NewlyAdmittedEntries            uint64
-	NewlyAdmittedObligations        uint64
-	RemovedObligations              uint64
-	AppendOnlyFastPath              uint64
-	AppendOnlyFallbacks             uint64
-	DestructiveFallbacks            uint64
-	FullClosureValidations          uint64
+	// PhysicalEntryLookup* mirrors indexed root-publication work after its
+	// small <=16-entry linear fast path.
+	PhysicalEntryLookupProbes      uint64
+	PhysicalEntryLookupComparisons uint64
+	PhysicalEntryLookupAdmissions  uint64
+	NewlyAdmittedEntries           uint64
+	NewlyAdmittedObligations       uint64
+	RemovedObligations             uint64
+	AppendOnlyFastPath             uint64
+	AppendOnlyFallbacks            uint64
+	DestructiveFallbacks           uint64
+	FullClosureValidations         uint64
 }
 
 func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidateResourceWork) {
@@ -595,6 +600,9 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
 	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
 	work.LogicalIndexNodesAdmitted += other.LogicalIndexNodesAdmitted
+	work.PhysicalEntryLookupProbes += other.PhysicalEntryLookupProbes
+	work.PhysicalEntryLookupComparisons += other.PhysicalEntryLookupComparisons
+	work.PhysicalEntryLookupAdmissions += other.PhysicalEntryLookupAdmissions
 	work.NewlyAdmittedEntries += other.NewlyAdmittedEntries
 	work.NewlyAdmittedObligations += other.NewlyAdmittedObligations
 	work.RemovedObligations += other.RemovedObligations

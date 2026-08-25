@@ -804,6 +804,9 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	if err != nil {
 		return nil, err
 	}
+	if timing != nil {
+		timing.FinalizeCandidateResourceWork.Add(builder.ClosureWorkSnapshot())
+	}
 	if !appendOnlyCertified {
 		validationWork, validationErr := rootpublication.ValidateStableResourceSetLogicalObligationsWithWork(resources, requirements)
 		if timing != nil {

@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"crypto/sha256"
 	"errors"
+	"os"
 	"testing"
 )
 
@@ -142,6 +143,56 @@ func TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations(t
 	})
 	if !errors.Is(err, ErrUnresolvedResource) {
 		t.Fatalf("empty scoped producer entry error=%v want %v", err, ErrUnresolvedResource)
+	}
+}
+
+func TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce(t *testing.T) {
+	dir := t.TempDir()
+	fileA := writeStableResourceFixture(t, dir, "a.bin", "x")
+	fileB := writeStableResourceFixture(t, dir, "b.bin", "x")
+	newToken := func(file *os.File, resourceID, digest string, obligation StableLogicalObligation) *StableResourceToken {
+		token, err := NewStableResourceToken(StableResourceSpec{
+			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: resourceID, Generation: 1,
+			DiagnosticPath: "columns/" + resourceID + ".bin", File: file, Frontier: DurableFrontier{Bytes: 1},
+			Digest: sha256.Sum256([]byte(digest)), Reachability: ReachabilityColumnManifest,
+			LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	parentBuilder := NewStableResourceSetBuilder()
+	if err := parentBuilder.Add(newToken(fileA, "K", "A", appendMutationTestObligation(1))); err != nil {
+		t.Fatal(err)
+	}
+	if err := parentBuilder.Add(newToken(fileB, "other", "B", appendMutationTestObligation(2))); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childBuilder := NewStableResourceSetBuilder()
+	added := appendMutationTestObligation(3)
+	if err := childBuilder.Add(newToken(fileB, "K", "B", added)); err != nil {
+		t.Fatal(err)
+	}
+	child, err := childBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Release()
+	candidate := NewStableResourceSetBuilder()
+	if err := candidate.Merge(parent); err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Abandon()
+	_, err = candidate.MergeAppendOnlyLogicalObligations(child, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+	})
+	if !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("logical identity conflict was masked by later physical coalesce: %v", err)
 	}
 }
 
