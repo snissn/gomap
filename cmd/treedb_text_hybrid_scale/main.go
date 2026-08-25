@@ -440,6 +440,19 @@ func parseFlags(args []string) (config, error) {
 			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one hybrid -query-rows value")
 		}
 	}
+	if cfg.cpuProfile != "" && cfg.allocProfile != "" {
+		cpuProfile, err := filepath.Abs(cfg.cpuProfile)
+		if err != nil {
+			return config{}, fmt.Errorf("resolve -cpu-profile: %w", err)
+		}
+		allocProfile, err := filepath.Abs(cfg.allocProfile)
+		if err != nil {
+			return config{}, fmt.Errorf("resolve -alloc-profile: %w", err)
+		}
+		if cpuProfile == allocProfile {
+			return config{}, errors.New("-cpu-profile and -alloc-profile must not resolve to the same path")
+		}
+	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}

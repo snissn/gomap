@@ -127,6 +127,11 @@ func TestRetrievalQualificationExcludesDisabledProbeFromCompletion2731(t *testin
 	if !rep.Complete || rep.Reopen != nil || len(rep.Queries) == 0 || strings.Join(rep.SelectedPhases, ",") != strings.Join(want, ",") || strings.Join(rep.CompletedPhases, ",") != strings.Join(want, ",") {
 		t.Fatalf("unexpected retrieval-only report: %+v", rep)
 	}
+	for i := range want {
+		if rep.SelectedPhases[i] != want[i] || rep.CompletedPhases[i] != want[i] {
+			t.Fatalf("phases selected=%v completed=%v want %v", rep.SelectedPhases, rep.CompletedPhases, want)
+		}
+	}
 }
 
 func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
@@ -385,6 +390,9 @@ func TestQueryRowFlagContracts4327(t *testing.T) {
 		{name: "vector row with vectors disabled", args: []string{"-query-rows", queryRowHybridTextVector, "-include-vector=false"}, wantErr: "requires -include-vector=true"},
 		{name: "valid scalar hybrid profile row", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "cpu.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "cpu.pprof"},
 		{name: "valid vector hybrid profile row", args: []string{"-query-rows", queryRowHybridTextVector, "-alloc-profile", "allocs.pprof"}, wantQuery: queryRowHybridTextVector, wantAllocs: "allocs.pprof"},
+		{name: "identical profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
+		{name: "equivalent relative profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "./profiles/../profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
+		{name: "distinct profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/allocs.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "profiles/cpu.pprof", wantAllocs: "profiles/allocs.pprof"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -424,5 +432,9 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 	}
 	if cfg.includeVector || cfg.runBackfill || cfg.runRewrite || cfg.runConcurrent || cfg.runReopen {
 		t.Fatalf("bool flags not parsed: %+v", cfg)
+	}
+	wantSelected := []string{"load", "queries"}
+	if got := selectedPhaseNames(cfg.selectedPhases); strings.Join(got, ",") != strings.Join(wantSelected, ",") {
+		t.Fatalf("selected phases=%v want %v", got, wantSelected)
 	}
 }
