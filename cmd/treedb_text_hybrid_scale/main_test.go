@@ -230,6 +230,45 @@ func TestRankBottlenecksNormalizesUnits2731(t *testing.T) {
 	}
 }
 
+func TestQueryRowFlagContracts4327(t *testing.T) {
+	base := []string{"-out-dir", t.TempDir()}
+	tests := []struct {
+		name       string
+		args       []string
+		wantErr    string
+		wantQuery  string
+		wantCPU    string
+		wantAllocs string
+	}{
+		{name: "unknown row", args: []string{"-query-rows", "not_a_query_row"}, wantErr: "unknown -query-rows value"},
+		{name: "profile text row", args: []string{"-query-rows", queryRowTextCommon, "-cpu-profile", "cpu.pprof"}, wantErr: "exactly one hybrid -query-rows value"},
+		{name: "vector row with vectors disabled", args: []string{"-query-rows", queryRowHybridTextVector, "-include-vector=false"}, wantErr: "requires -include-vector=true"},
+		{name: "valid scalar hybrid profile row", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "cpu.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "cpu.pprof"},
+		{name: "valid vector hybrid profile row", args: []string{"-query-rows", queryRowHybridTextVector, "-alloc-profile", "allocs.pprof"}, wantQuery: queryRowHybridTextVector, wantAllocs: "allocs.pprof"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append(append([]string{}, base...), tc.args...)
+			cfg, err := parseFlags(args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseFlags error=%v want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
+			}
+			if !cfg.queryRows[tc.wantQuery] || len(cfg.queryRows) != 1 {
+				t.Fatalf("queryRows=%v want only %q", cfg.queryRows, tc.wantQuery)
+			}
+			if cfg.cpuProfile != tc.wantCPU || cfg.allocProfile != tc.wantAllocs {
+				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantAllocs)
+			}
+		})
+	}
+}
+
 func TestScaleCommandFlagValidation2731(t *testing.T) {
 	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-rows", "0"}); err == nil {
 		t.Fatal("parseFlags accepted zero rows")
