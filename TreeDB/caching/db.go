@@ -8125,6 +8125,10 @@ type backendPublicationReadinessChecker interface {
 	CheckCommandWALPublishReady() error
 }
 
+type logicalOrderedRootObserverRegistrar interface {
+	RegisterLogicalOrderedRootPublicationObserver(func()) func()
+}
+
 func backendPublicationReady(backend BackendDB) error {
 	if checker, ok := backend.(backendPublicationReadinessChecker); ok {
 		return checker.CheckCommandWALPublishReady()
@@ -8862,9 +8866,10 @@ type DB struct {
 	maxValueLogRetainedBytesHard   int64
 
 	// Level 1 (Disk)
-	backend       BackendDB
-	dictStore     DictStore
-	templateStore template.Store
+	backend                              BackendDB
+	unregisterLogicalOrderedRootObserver func()
+	dictStore                            DictStore
+	templateStore                        template.Store
 
 	// Value-log dictionary compression (cached mode).
 	valueLogDictTrain              compression.TrainConfig
@@ -12957,6 +12962,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.startDomainIngressWorkers()
 	db.releasePoolPressureSampler = retainPoolPressureSampler()
 	db.startProcessMemorySampler()
+	if registrar, ok := backend.(logicalOrderedRootObserverRegistrar); ok {
+		db.unregisterLogicalOrderedRootObserver = registrar.RegisterLogicalOrderedRootPublicationObserver(db.noteWrite)
+	}
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -25132,6 +25140,10 @@ func (db *DB) Close() error {
 	}
 	hadMemtables := false
 	db.closing.Store(true)
+	if unregister := db.unregisterLogicalOrderedRootObserver; unregister != nil {
+		db.unregisterLogicalOrderedRootObserver = nil
+		unregister()
+	}
 	db.cancelActiveRetainedValueLogPrune()
 	db.clearBackendValueLogReadBarrier()
 	unregisterTreeDBExpvarStatsDB(db)

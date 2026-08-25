@@ -1871,6 +1871,43 @@ func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics)
 	}
 }
 
+// RegisterLogicalOrderedRootPublicationObserver installs the cached layer's
+// foreground-write observer. The returned function removes this exact
+// registration and waits for an in-flight notification to finish. The
+// observer must not register or unregister an observer from its callback.
+func (db *DB) RegisterLogicalOrderedRootPublicationObserver(observer func()) func() {
+	if db == nil || observer == nil {
+		return func() {}
+	}
+	db.logicalOrderedRootObserverMu.Lock()
+	db.logicalOrderedRootObserverID++
+	id := db.logicalOrderedRootObserverID
+	db.logicalOrderedRootObserver = observer
+	db.logicalOrderedRootObserverMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.logicalOrderedRootObserverMu.Lock()
+			if db.logicalOrderedRootObserverID == id {
+				db.logicalOrderedRootObserver = nil
+			}
+			db.logicalOrderedRootObserverMu.Unlock()
+		})
+	}
+}
+
+func (db *DB) observeLogicalOrderedRootPublication() {
+	if db == nil {
+		return
+	}
+	db.logicalOrderedRootObserverMu.Lock()
+	defer db.logicalOrderedRootObserverMu.Unlock()
+	if observer := db.logicalOrderedRootObserver; observer != nil {
+		observer()
+	}
+}
+
 // PublishOrderedRootIterator builds and commits a non-meta root from an ordered
 // iterator while preserving the current user and system roots in the commit.
 func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error) {
@@ -1945,6 +1982,9 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		},
 		nil,
 	)
+	if post.accepted {
+		db.observeLogicalOrderedRootPublication()
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -2138,6 +2178,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
+	if post.accepted {
+		db.observeLogicalOrderedRootPublication()
+	}
 	if err != nil {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
@@ -2692,9 +2735,13 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
+	accepted, finalizeErr := db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
+	err = finalizeErr
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
+	if accepted && !storageMaintenance {
+		db.observeLogicalOrderedRootPublication()
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3245,6 +3292,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		)
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
+		if post.accepted {
+			db.observeLogicalOrderedRootPublication()
+		}
 		committedRootPages = rootTracker.Pages()
 		committedSystemPages = systemTracker.Pages()
 		if commitLocked {
@@ -3443,9 +3493,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
+	accepted, finalizeErr := db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, baseSeq, commandWALIntent, opts, releaseWrite)
+	err = finalizeErr
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
+	if accepted {
+		db.observeLogicalOrderedRootPublication()
+	}
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3821,6 +3875,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if post.accepted {
 		commandAppended = false
 		commandWALIntent.inner.staged = false
+		db.observeLogicalOrderedRootPublication()
 	}
 	if err != nil {
 		return 0, nil, err
@@ -3853,7 +3908,7 @@ type orderedRootCommandWALPublishOptions struct {
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
 }
 
-func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, baseSeq uint64, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) error {
+func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, baseSeq uint64, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions, releaseRootSerialization func()) (bool, error) {
 	defer opts.durableResources.Release()
 	if intent == nil {
 		finalizeOpts := finalizeCommitOptions{
@@ -3867,23 +3922,23 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 			finalizeOpts, baseSeq, releaseRootSerialization, nil,
 		)
 		if err != nil {
-			return err
+			return post.accepted, err
 		}
 		db.finalizeCommitPostWork(post)
-		return nil
+		return post.accepted, nil
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
 	if !opts.rawPublishLocked && db.commandWALIntentNeedsPublicAppendLock(intent, sync) {
 		unlockCommandWALPublish, err := db.lockCommandWALPublishWithBarriersTeardownPinned()
 		if err != nil {
-			return err
+			return false, err
 		}
 		defer unlockCommandWALPublish()
 	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()
-		return err
+		return false, err
 	}
 	commitLocked := true
 	finalizeOpts := commandWALFinalizeOptionsForPublicIntent(intent)
@@ -3908,13 +3963,13 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, 
 		if commitLocked {
 			db.commitMu.Unlock()
 		}
-		return err
+		return post.accepted, err
 	}
 	if commitLocked {
 		db.commitMu.Unlock()
 	}
 	db.finalizeCommitPostWork(post)
-	return nil
+	return post.accepted, nil
 }
 
 func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []OrderedRootPublishInput, buildSystemIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
@@ -4071,6 +4126,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		},
 		nil,
 	)
+	if post.accepted {
+		db.observeLogicalOrderedRootPublication()
+	}
 	if err != nil {
 		return 0, nil, err
 	}
