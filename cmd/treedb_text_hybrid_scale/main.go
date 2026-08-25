@@ -94,7 +94,6 @@ type config struct {
 	queryRows           map[string]bool
 	cpuProfile          string
 	allocProfile        string
-	allocProfileBase    string
 }
 
 type report struct {
@@ -361,7 +360,7 @@ func parseFlags(args []string) (config, error) {
 	var queryRows string
 	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
 	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
-	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write before/after allocation profiles for the selected single hybrid query row")
+	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write a cumulative allocation profile for the selected single hybrid query row")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -463,16 +462,12 @@ func parseFlags(args []string) (config, error) {
 		}
 		*profile.value = resolved
 	}
-	if cfg.allocProfile != "" {
-		cfg.allocProfileBase = cfg.allocProfile + ".base"
-	}
 	profilePaths := []struct {
 		name  string
 		value string
 	}{
 		{name: "-cpu-profile", value: cfg.cpuProfile},
 		{name: "-alloc-profile", value: cfg.allocProfile},
-		{name: "generated -alloc-profile baseline", value: cfg.allocProfileBase},
 	}
 	seenProfiles := make(map[string]string)
 	for _, profile := range profilePaths {
@@ -1174,32 +1169,20 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	if err != nil {
 		return queryReport{}, guardrailResult{}, err
 	}
-	defer func() { _ = stopProfile() }()
-	durations := make([]int64, 0, cfg.queries)
-	var last collections.HybridSearchResponse
-	for i := 0; i < cfg.queries; i++ {
-		start := time.Now()
-		got, err := col.SearchHybrid(opts)
-		elapsed := time.Since(start).Nanoseconds()
-		if err != nil {
-			if cfg.allowGuardrailFails {
-				lat := summarizeLatency(durations)
-				stats := got.Stats
-				guard = hybridFailureGuard(name, got.Stats, err)
-				return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(got.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
-			}
-			return queryReport{}, guardrailResult{}, fmt.Errorf("%s query %d: %w", name, i, err)
+	durations, last, guard, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
+	profileErr := stopProfile()
+	if sampleErr != nil {
+		if cfg.allowGuardrailFails {
+			lat := summarizeLatency(durations)
+			stats := last.Stats
+			guard = hybridFailureGuard(name, last.Stats, sampleErr)
+			return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
 		}
-		durations = append(durations, elapsed)
-		last = got
-		if g := hybridGuardrail(name, got.Stats); !g.OK {
-			guard = g
-		}
+		return queryReport{}, guardrailResult{}, sampleErr
 	}
-	if err := stopProfile(); err != nil {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, err)
+	if profileErr != nil {
+		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, profileErr)
 	}
-	stopProfile = func() error { return nil }
 	lat := summarizeLatency(durations)
 	stats := last.Stats
 	return queryReport{
@@ -1207,6 +1190,29 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
+}
+
+// runProfiledHybridSamples is the sole timed allocation-profile boundary. Fixture
+// construction and warm-up happen before it; profile/report serialization happens after it.
+//
+//go:noinline
+func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, error) {
+	durations := make([]int64, 0, cfg.queries)
+	var last collections.HybridSearchResponse
+	for i := 0; i < cfg.queries; i++ {
+		start := time.Now()
+		got, err := col.SearchHybrid(opts)
+		elapsed := time.Since(start).Nanoseconds()
+		last = got
+		if err != nil {
+			return durations, last, guard, fmt.Errorf("%s query %d: %w", name, i, err)
+		}
+		durations = append(durations, elapsed)
+		if g := hybridGuardrail(name, got.Stats); !g.OK {
+			guard = g
+		}
+	}
+	return durations, last, guard, nil
 }
 
 func requireExactMemProfileRate(allocProfile bool, memProfileRate int) error {
@@ -1221,9 +1227,6 @@ func startQueryProfiles(cfg config) (func() error, error) {
 }
 
 func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() error, error) {
-	if cfg.allocProfile != "" && cfg.allocProfileBase == "" {
-		cfg.allocProfileBase = cfg.allocProfile + ".base"
-	}
 	if cfg.cpuProfile == "" && cfg.allocProfile == "" {
 		return func() error { return nil }, nil
 	}
@@ -1245,15 +1248,13 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 		}
 		return closeErr
 	}
-	if cfg.allocProfile != "" {
-		if err := writeProfile(cfg.allocProfileBase); err != nil {
-			return nil, fmt.Errorf("write allocation baseline: %w", err)
-		}
-	}
 	writeAllocsAfter := func() error {
 		if cfg.allocProfile == "" {
 			return nil
 		}
+		// Flush the current allocation cycle after the timed helper returns so
+		// allocs includes its recent samples without putting GC in that stack.
+		runtime.GC()
 		return writeProfile(cfg.allocProfile)
 	}
 	if cfg.cpuProfile == "" {
