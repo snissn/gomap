@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -201,6 +202,133 @@ func TestIngestChunkedDocumentCreatesLinkedChildren(t *testing.T) {
 		if string(raw) != string(wantRaw) {
 			t.Fatalf("metadata-free child %q bytes=%s want %s", id, raw, wantRaw)
 		}
+	}
+}
+
+func TestIngestChunkedDocumentsValidatesAndPublishesOneTextGeneration(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, Fields: []TextIndexField{{Field: "body"}}}); err != nil {
+		t.Fatalf("CreateTextIndex: %v", err)
+	}
+	cfg := fixedWindowCfg(12, 0)
+	before, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats before: %v", err)
+	}
+	duplicate := []SourceDocument{
+		{ID: []byte("new"), Fields: map[string]any{"body": "must not be written"}},
+		{ID: []byte("new"), Fields: map[string]any{"body": "also invalid batch"}},
+	}
+	if _, err := col.IngestChunkedDocuments(duplicate, cfg, ChunkedIngestOptions{}); err == nil || !strings.Contains(err.Error(), "duplicate parent ID") {
+		t.Fatalf("duplicate batch error=%v", err)
+	}
+	if got, err := col.Get([]byte("new")); err != nil || got != nil {
+		t.Fatalf("invalid batch mutated collection: document=%s err=%v", got, err)
+	}
+	afterInvalid, err := col.TextIndexStorageStats("lexical")
+	if err != nil || afterInvalid.V2RootGeneration != before.V2RootGeneration {
+		t.Fatalf("invalid batch changed text generation: before=%+v after=%+v err=%v", before, afterInvalid, err)
+	}
+
+	sources := []SourceDocument{
+		{ID: []byte("second"), Fields: map[string]any{"body": strings.Repeat("batchbeta ", 5)}},
+		{ID: []byte("first"), Fields: map[string]any{"body": strings.Repeat("batchalpha ", 10)}},
+	}
+	results, err := col.IngestChunkedDocuments(sources, cfg, ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("IngestChunkedDocuments: %v", err)
+	}
+	if len(results) != len(sources) {
+		t.Fatalf("results=%d want %d", len(results), len(sources))
+	}
+	for i, result := range results {
+		if string(result.ParentID()) != string(sources[i].ID) || len(result.ChildIDs) == 0 {
+			t.Fatalf("result %d=%+v want input parent %q and children", i, result, sources[i].ID)
+		}
+		for ordinal, id := range result.ChildIDs {
+			if want := chunking.ChildDocumentID(string(sources[i].ID), ordinal); string(id) != want {
+				t.Fatalf("result %d child %d=%q want %q", i, ordinal, id, want)
+			}
+		}
+	}
+	after, err := col.TextIndexStorageStats("lexical")
+	if err != nil {
+		t.Fatalf("stats after: %v", err)
+	}
+	if got := after.V2RootGeneration - before.V2RootGeneration; got != 1 {
+		t.Fatalf("batch text generations=%d want one durable batch publication (before=%d after=%d)", got, before.V2RootGeneration, after.V2RootGeneration)
+	}
+
+	// The batch path must produce the same live text IDs as the parent plus its
+	// deterministic children, and score-only execution must not fetch documents.
+	search, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchalpha", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil {
+		t.Fatalf("SearchText: %v", err)
+	}
+	if search.Stats.DocumentsFetched != 0 {
+		t.Fatalf("score-only fetched %d documents", search.Stats.DocumentsFetched)
+	}
+	got := make([]string, 0, len(search.Results))
+	for _, result := range search.Results {
+		got = append(got, string(result.DocumentID))
+	}
+	sort.Strings(got)
+	// The fixed-width fixture puts the complete token only in ordinal zero;
+	// the parent and that child are the exact expected lexical hits.
+	want := []string{"first", string(results[1].ChildIDs[0])}
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("exact batch text IDs=%v want %v", got, want)
+	}
+
+	oldChildren := append([][]byte(nil), results[1].ChildIDs...)
+	replacement, err := col.IngestChunkedDocuments([]SourceDocument{{ID: []byte("first"), Fields: map[string]any{"body": "batchfresh"}}}, cfg, ChunkedIngestOptions{})
+	if err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	if len(replacement) != 1 || replacement[0].Replaced != len(oldChildren) || len(replacement[0].ChildIDs) != 1 {
+		t.Fatalf("replacement=%+v old children=%d", replacement, len(oldChildren))
+	}
+	for _, id := range oldChildren[1:] {
+		if raw, err := col.Get(id); err != nil || raw != nil {
+			t.Fatalf("stale child %q remains after replacement: %s err=%v", id, raw, err)
+		}
+	}
+	oldSearch, err := col.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchalpha", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || len(oldSearch.Results) != 0 || oldSearch.Stats.DocumentsFetched != 0 {
+		t.Fatalf("stale text search results=%+v err=%v", oldSearch, err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	d2, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+	col2, err := NewCollectionManager(d2).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open after reopen: %v", err)
+	}
+	fresh, err := col2.SearchText(TextSearchOptions{IndexName: "lexical", Query: "batchfresh", TopK: 100, ResultMode: TextSearchResultModeScoreOnly})
+	if err != nil || fresh.Stats.DocumentsFetched != 0 || len(fresh.Results) != 2 {
+		t.Fatalf("reopened fresh score-only results=%+v err=%v", fresh, err)
 	}
 }
 

@@ -1,0 +1,3016 @@
+{
+  "schema_version": "treedb_text_ingest_qualification/v2",
+  "manifest_sha256": "a9f548da2eeb14028a9b9d59c8bbe4b54b20e99d2adbc8b694a0e5a75f1b56a0",
+  "rows": [
+    {
+      "mode": "indexed_insert",
+      "scale": 10000,
+      "repetition": 1,
+      "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+      "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18433,
+      "source_documents": 10000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 10000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 10000,
+      "terms": 10008,
+      "blocks": 11822,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 130164.33846487147,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 130164.33846487147,
+      "wall_seconds": 0.076825958,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.108306
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 633950
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 72630272
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.007294083
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.008180542
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 4194304,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 4194678,
+        "physical_total_wal_excluded_bytes": 4194678,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 1184600,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 189873,
+        "docmap_bytes": 171214,
+        "posting_bytes": 1068615,
+        "norm_bytes": 61293,
+        "position_bytes": 0,
+        "term_bytes": 119018,
+        "status_bytes": 161
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 10000,
+      "repetition": 1,
+      "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+      "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18434,
+      "source_documents": 10000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 10000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 10000,
+      "terms": 10008,
+      "blocks": 10395,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 162373.57694782328,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 162373.57694782328,
+      "wall_seconds": 0.061586375,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.085489
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 599111
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 58998784
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.006657583
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.007561709
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 4194304,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 4194678,
+        "physical_total_wal_excluded_bytes": 4194678,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 1184600,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 189873,
+        "docmap_bytes": 171214,
+        "posting_bytes": 896409,
+        "norm_bytes": 61293,
+        "position_bytes": 0,
+        "term_bytes": 119013,
+        "status_bytes": 161
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 10000,
+      "repetition": 1,
+      "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+      "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 26054,
+      "source_documents": 10000,
+      "generated_chunks": 30000,
+      "indexed_live_rows": 40000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 10000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 40,
+      "postings": 40000,
+      "terms": 10012,
+      "blocks": 25059,
+      "generations": 41,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 21242.295448648933,
+      "chunks_per_second": 63726.8863459468,
+      "indexed_rows_per_second": 84969.18179459573,
+      "wall_seconds": 0.470758917,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.590472
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 3617300
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 82411520
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.0156385
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.020612
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 40370176,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 40370550,
+        "physical_total_wal_excluded_bytes": 40370550,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 1184600,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 843490,
+        "docmap_bytes": 768994,
+        "posting_bytes": 2591004,
+        "norm_bytes": 269307,
+        "position_bytes": 0,
+        "term_bytes": 119083,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 10000,
+      "repetition": 1,
+      "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+      "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18456,
+      "source_documents": 10000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 5000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 10000,
+      "terms": 10008,
+      "blocks": 11822,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 5000,
+      "source_docs_per_second": 103066.44206015347,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 51533.22103007673,
+      "wall_seconds": 0.097024791,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.13661800000000002
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 876680
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 72761344
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.006998625
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.009991458
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 5505024,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 5505398,
+        "physical_total_wal_excluded_bytes": 5505398,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 1184600,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 189873,
+        "docmap_bytes": 171214,
+        "posting_bytes": 1068615,
+        "norm_bytes": 61293,
+        "position_bytes": 0,
+        "term_bytes": 119012,
+        "status_bytes": 162
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 100000,
+      "repetition": 1,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18472,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 108725.87193911705,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 108725.87193911705,
+      "wall_seconds": 0.919744291,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.1984679999999999
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 6314201
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 447463424
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.029889625
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.02354475
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 37224448,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 37224822,
+        "physical_total_wal_excluded_bytes": 37224822,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "repetition": 1,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18474,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 104681,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 149248.92330035745,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 149248.92330035745,
+      "wall_seconds": 0.670021584,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.895075
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 5969983
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 350453760
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.016800458
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.020576708
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 35651584,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 35651958,
+        "physical_total_wal_excluded_bytes": 35651958,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 9381629,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "repetition": 1,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 26058,
+      "source_documents": 100000,
+      "generated_chunks": 300000,
+      "indexed_live_rows": 400000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 100000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 391,
+      "postings": 400000,
+      "terms": 100012,
+      "blocks": 252868,
+      "generations": 392,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 7100.13623576686,
+      "chunks_per_second": 21300.40870730058,
+      "indexed_rows_per_second": 28400.54494306744,
+      "wall_seconds": 14.084236792,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 15.896577
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 39772981
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 447332352
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.020580875
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.114574917
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 288620544,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 288620918,
+        "physical_total_wal_excluded_bytes": 288620918,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 8583490,
+        "docmap_bytes": 7839611,
+        "posting_bytes": 26424765,
+        "norm_bytes": 2842736,
+        "position_bytes": 0,
+        "term_bytes": 1357877,
+        "status_bytes": 168
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "repetition": 1,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18492,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 50000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 50000,
+      "source_docs_per_second": 88108.79965693112,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 44054.39982846556,
+      "wall_seconds": 1.134960417,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.488516
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 8724871
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 495042560
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.014786584
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.024199708
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 49020928,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 49021302,
+        "physical_total_wal_excluded_bytes": 49021302,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18508,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 113023.5746029911,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 113023.5746029911,
+      "wall_seconds": 0.884771167,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.1635659999999999
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 6314207
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 410599424
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.048288292
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.024234292
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 37224448,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 37224822,
+        "physical_total_wal_excluded_bytes": 37224822,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18510,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 104681,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 147912.7842858014,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 147912.7842858014,
+      "wall_seconds": 0.676074083,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.899097
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 5969979
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 357171200
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.017085292
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.025133667
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 35651584,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 35651958,
+        "physical_total_wal_excluded_bytes": 35651958,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 9381629,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 26073,
+      "source_documents": 100000,
+      "generated_chunks": 300000,
+      "indexed_live_rows": 400000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 100000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 391,
+      "postings": 400000,
+      "terms": 100012,
+      "blocks": 252868,
+      "generations": 392,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 7027.578234328111,
+      "chunks_per_second": 21082.734702984333,
+      "indexed_rows_per_second": 28110.312937312443,
+      "wall_seconds": 14.229653042,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 15.975105000000001
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 39773820
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 444596224
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.021607458
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.114177333
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 286523392,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 286523766,
+        "physical_total_wal_excluded_bytes": 286523766,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 8583490,
+        "docmap_bytes": 7839611,
+        "posting_bytes": 26424765,
+        "norm_bytes": 2842736,
+        "position_bytes": 0,
+        "term_bytes": 1357877,
+        "status_bytes": 168
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "repetition": 2,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18529,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 50000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 50000,
+      "source_docs_per_second": 88989.66474033706,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 44494.83237016853,
+      "wall_seconds": 1.123726,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.487804
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 8724869
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 496435200
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.01305625
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.02417775
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 49020928,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 49021302,
+        "physical_total_wal_excluded_bytes": 49021302,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18545,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 111605.49767252985,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 111605.49767252985,
+      "wall_seconds": 0.896013208,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.182378
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 6314190
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 391020544
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.0203725
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.023107
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 37224448,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 37224822,
+        "physical_total_wal_excluded_bytes": 37224822,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18548,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 100000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 104681,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 147648.34929876344,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 147648.34929876344,
+      "wall_seconds": 0.677284917,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 0.918826
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 5969978
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 351109120
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.015024291
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.023164166
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 35651584,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 35651958,
+        "physical_total_wal_excluded_bytes": 35651958,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 9381629,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 26091,
+      "source_documents": 100000,
+      "generated_chunks": 300000,
+      "indexed_live_rows": 400000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 100000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 391,
+      "postings": 400000,
+      "terms": 100012,
+      "blocks": 252868,
+      "generations": 392,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 6795.615240415204,
+      "chunks_per_second": 20386.845721245612,
+      "indexed_rows_per_second": 27182.460961660818,
+      "wall_seconds": 14.715371083,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 15.958133000000002
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 39771974
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 443645952
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.03302575
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.117477583
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 287571968,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 287572342,
+        "physical_total_wal_excluded_bytes": 287572342,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 8583490,
+        "docmap_bytes": 7839611,
+        "posting_bytes": 26424765,
+        "norm_bytes": 2842736,
+        "position_bytes": 0,
+        "term_bytes": 1357877,
+        "status_bytes": 168
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "repetition": 3,
+      "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+      "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18569,
+      "source_documents": 100000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 50000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 100000,
+      "terms": 100008,
+      "blocks": 118709,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 50000,
+      "source_docs_per_second": 87584.45467893126,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 43792.22733946563,
+      "wall_seconds": 1.141755125,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1.48941
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 8724863
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 445579264
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.013395792
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.02653025
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 49020928,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 49021302,
+        "physical_total_wal_excluded_bytes": 49021302,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 11946063,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 1983490,
+        "docmap_bytes": 1797436,
+        "posting_bytes": 11128802,
+        "norm_bytes": 698218,
+        "position_bytes": 0,
+        "term_bytes": 1289540,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 1000000,
+      "repetition": 1,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18608,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 25019.70692853543,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 25019.70692853543,
+      "wall_seconds": 39.96849375,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 43.684471
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 64919835
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3955113984
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.11824475
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.175499
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 367788032,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 367788406,
+        "physical_total_wal_excluded_bytes": 367788406,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889549,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 1000000,
+      "repetition": 1,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 18645,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1046775,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 119438.26927856462,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 119438.26927856462,
+      "wall_seconds": 8.372525875000001,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 11.429603
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 60581625
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3265527808
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.105391541
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.153465542
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 355467264,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 355467638,
+        "physical_total_wal_excluded_bytes": 355467638,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 95296039,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889544,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 1000000,
+      "repetition": 1,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 26126,
+      "source_documents": 1000000,
+      "generated_chunks": 3000000,
+      "indexed_live_rows": 4000000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 1000000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 3907,
+      "postings": 4000000,
+      "terms": 1000012,
+      "blocks": 2530993,
+      "generations": 3908,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 990.7995080559339,
+      "chunks_per_second": 2972.3985241678015,
+      "indexed_rows_per_second": 3963.1980322237355,
+      "wall_seconds": 1009.285927041,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1082.424396
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 469464890
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3555622912
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.054065291
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 1.8042858339999999
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 7694188544,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 7694188918,
+        "physical_total_wal_excluded_bytes": 7694188918,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 87886339,
+        "docmap_bytes": 80463576,
+        "posting_bytes": 269277000,
+        "norm_bytes": 30494826,
+        "position_bytes": 0,
+        "term_bytes": 14857897,
+        "status_bytes": 170
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 1000000,
+      "repetition": 1,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 20851,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 500000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 500000,
+      "source_docs_per_second": 24438.34907893619,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 12219.174539468095,
+      "wall_seconds": 40.919294375,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 45.237571
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 89802422
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 4506697728
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.07912975
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.187470167
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 488636416,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 488636790,
+        "physical_total_wal_excluded_bytes": 488636790,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889546,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 1000000,
+      "repetition": 2,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 20910,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 26170.945971001584,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 26170.945971001584,
+      "wall_seconds": 38.210311584,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 42.326709
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 64919842
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3842736128
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.080626791
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.169184542
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 367788032,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 367788406,
+        "physical_total_wal_excluded_bytes": 367788406,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889549,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 1000000,
+      "repetition": 2,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 20935,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1046775,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 125787.5493052476,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 125787.5493052476,
+      "wall_seconds": 7.949912416,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 10.849406
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 60581721
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3257630720
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.095724125
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.147339708
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 355467264,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 355467638,
+        "physical_total_wal_excluded_bytes": 355467638,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 95296039,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889544,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 1000000,
+      "repetition": 2,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 27161,
+      "source_documents": 1000000,
+      "generated_chunks": 3000000,
+      "indexed_live_rows": 4000000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 1000000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 3907,
+      "postings": 4000000,
+      "terms": 1000012,
+      "blocks": 2530993,
+      "generations": 3908,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 994.0715268197404,
+      "chunks_per_second": 2982.214580459221,
+      "indexed_rows_per_second": 3976.2861072789615,
+      "wall_seconds": 1005.963829584,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1077.6390520000002
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 470523605
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3588833280
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.042902416
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 1.9921409589999999
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 8135376896,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 8135377270,
+        "physical_total_wal_excluded_bytes": 8135377270,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 87886339,
+        "docmap_bytes": 80463576,
+        "posting_bytes": 269277000,
+        "norm_bytes": 30494826,
+        "position_bytes": 0,
+        "term_bytes": 14857897,
+        "status_bytes": 170
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 1000000,
+      "repetition": 2,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 22415,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 500000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 500000,
+      "source_docs_per_second": 23730.788513974432,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 11865.394256987216,
+      "wall_seconds": 42.139349875,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 46.935384
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 89802423
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3647520768
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.061665834
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.181468042
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 488636416,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 488636790,
+        "physical_total_wal_excluded_bytes": 488636790,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889546,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 1000000,
+      "repetition": 3,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 22473,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 2,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 25730.904156358676,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 25730.904156358676,
+      "wall_seconds": 38.863772292,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 42.673293
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 64919754
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3294887936
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.054654166
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.162115125
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 367788032,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 367788406,
+        "physical_total_wal_excluded_bytes": 367788406,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889549,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 1000000,
+      "repetition": 3,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 22669,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 1000000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1046775,
+      "generations": 1,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 124940.46130985902,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 124940.46130985902,
+      "wall_seconds": 8.003812292,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 11.237344
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 60581681
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3172450304
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.107988666
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.146283666
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 355467264,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 355467638,
+        "physical_total_wal_excluded_bytes": 355467638,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 95296039,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889544,
+        "status_bytes": 163
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 1000000,
+      "repetition": 3,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 28163,
+      "source_documents": 1000000,
+      "generated_chunks": 3000000,
+      "indexed_live_rows": 4000000,
+      "parents_text_indexed": true,
+      "indexed_parent_rows": 1000000,
+      "chunk_batch_size": 256,
+      "chunk_batch_count": 3907,
+      "postings": 4000000,
+      "terms": 1000012,
+      "blocks": 2530993,
+      "generations": 3908,
+      "stale_debt": 0,
+      "tombstone_debt": 0,
+      "source_docs_per_second": 1004.6304789260462,
+      "chunks_per_second": 3013.8914367781385,
+      "indexed_rows_per_second": 4018.5219157041847,
+      "wall_seconds": 995.390863583,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 1078.174115
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 470302804
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 3454304256
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.049466834
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 1.903218709
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 8006664192,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 8006664566,
+        "physical_total_wal_excluded_bytes": 8006664566,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 87886339,
+        "docmap_bytes": 80463576,
+        "posting_bytes": 269277000,
+        "norm_bytes": 30494826,
+        "position_bytes": 0,
+        "term_bytes": 14857897,
+        "status_bytes": 170
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    },
+    {
+      "mode": "maintenance",
+      "scale": 1000000,
+      "repetition": 3,
+      "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
+      "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+      "peak_rss_scope": "fresh_process_per_mode",
+      "peak_rss_pid": 23648,
+      "source_documents": 1000000,
+      "generated_chunks": 0,
+      "indexed_live_rows": 500000,
+      "parents_text_indexed": false,
+      "indexed_parent_rows": 0,
+      "chunk_batch_size": 0,
+      "chunk_batch_count": 0,
+      "postings": 1000000,
+      "terms": 1000008,
+      "blocks": 1187347,
+      "generations": 3,
+      "stale_debt": 0,
+      "tombstone_debt": 500000,
+      "source_docs_per_second": 22979.59111850523,
+      "chunks_per_second": 0,
+      "indexed_rows_per_second": 11489.795559252614,
+      "wall_seconds": 43.51687525,
+      "cpu_seconds": {
+        "state": "observed",
+        "value": 48.312903
+      },
+      "bytes_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "allocs_per_op": {
+        "state": "unavailable",
+        "reason": "not a Go benchmark; see cumulative_allocations"
+      },
+      "cumulative_allocations": {
+        "state": "observed",
+        "value": 89802455
+      },
+      "peak_rss_bytes": {
+        "state": "observed",
+        "value": 4210098176
+      },
+      "stages": {
+        "analyzer": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose analyzer time"
+        },
+        "checkpoint": {
+          "state": "observed",
+          "value": 0.134899542
+        },
+        "posting_builder": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose posting-builder time"
+        },
+        "reopen": {
+          "state": "observed",
+          "value": 0.183242
+        },
+        "root_mutation": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose root-mutation time"
+        },
+        "value_log": {
+          "state": "unavailable",
+          "reason": "collection API does not separately expose value-log time"
+        }
+      },
+      "storage": {
+        "physical_index_page_bytes": 488636416,
+        "physical_value_log_bytes": 0,
+        "physical_wal_bytes": 0,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 488636790,
+        "physical_total_wal_excluded_bytes": 488636790,
+        "other_paths": [
+          "LOCK",
+          "format.json",
+          "vlog_ref_counts.meta"
+        ],
+        "logical_primary_payload_bytes": 120460857,
+        "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
+      },
+      "text_v2": {
+        "docid_bytes": 19983490,
+        "docmap_bytes": 18123994,
+        "posting_bytes": 112838777,
+        "norm_bytes": 7131807,
+        "position_bytes": 0,
+        "term_bytes": 13889546,
+        "status_bytes": 165
+      },
+      "checkpoint_ok": true,
+      "close_ok": true,
+      "reopen_ok": true,
+      "score_only_probe": {
+        "results": 10,
+        "documents_fetched": 0,
+        "fail_closed": 0
+      }
+    }
+  ],
+  "summaries": [
+    {
+      "mode": "indexed_insert",
+      "scale": 10000,
+      "median_wall_seconds": 0.076825958,
+      "p95_wall_seconds": 0.076825958,
+      "median_indexed_rows_per_second": 130164.33846487147,
+      "p95_indexed_rows_per_second": 130164.33846487147
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 100000,
+      "median_wall_seconds": 0.896013208,
+      "p95_wall_seconds": 0.919744291,
+      "median_indexed_rows_per_second": 111605.49767252985,
+      "p95_indexed_rows_per_second": 113023.5746029911
+    },
+    {
+      "mode": "indexed_insert",
+      "scale": 1000000,
+      "median_wall_seconds": 38.863772292,
+      "p95_wall_seconds": 39.96849375,
+      "median_indexed_rows_per_second": 25730.904156358676,
+      "p95_indexed_rows_per_second": 26170.945971001584
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 10000,
+      "median_wall_seconds": 0.061586375,
+      "p95_wall_seconds": 0.061586375,
+      "median_indexed_rows_per_second": 162373.57694782328,
+      "p95_indexed_rows_per_second": 162373.57694782328
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 100000,
+      "median_wall_seconds": 0.676074083,
+      "p95_wall_seconds": 0.677284917,
+      "median_indexed_rows_per_second": 147912.7842858014,
+      "p95_indexed_rows_per_second": 149248.92330035745
+    },
+    {
+      "mode": "post_load_backfill",
+      "scale": 1000000,
+      "median_wall_seconds": 8.003812292,
+      "p95_wall_seconds": 8.372525875000001,
+      "median_indexed_rows_per_second": 124940.46130985902,
+      "p95_indexed_rows_per_second": 125787.5493052476
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 10000,
+      "median_wall_seconds": 0.470758917,
+      "p95_wall_seconds": 0.470758917,
+      "median_indexed_rows_per_second": 84969.18179459573,
+      "p95_indexed_rows_per_second": 84969.18179459573
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 100000,
+      "median_wall_seconds": 14.229653042,
+      "p95_wall_seconds": 14.715371083,
+      "median_indexed_rows_per_second": 28110.312937312443,
+      "p95_indexed_rows_per_second": 28400.54494306744
+    },
+    {
+      "mode": "source_chunk",
+      "scale": 1000000,
+      "median_wall_seconds": 1005.963829584,
+      "p95_wall_seconds": 1009.285927041,
+      "median_indexed_rows_per_second": 3976.2861072789615,
+      "p95_indexed_rows_per_second": 4018.5219157041847
+    },
+    {
+      "mode": "maintenance",
+      "scale": 10000,
+      "median_wall_seconds": 0.097024791,
+      "p95_wall_seconds": 0.097024791,
+      "median_indexed_rows_per_second": 51533.22103007673,
+      "p95_indexed_rows_per_second": 51533.22103007673
+    },
+    {
+      "mode": "maintenance",
+      "scale": 100000,
+      "median_wall_seconds": 1.134960417,
+      "p95_wall_seconds": 1.141755125,
+      "median_indexed_rows_per_second": 44054.39982846556,
+      "p95_indexed_rows_per_second": 44494.83237016853
+    },
+    {
+      "mode": "maintenance",
+      "scale": 1000000,
+      "median_wall_seconds": 42.139349875,
+      "p95_wall_seconds": 43.51687525,
+      "median_indexed_rows_per_second": 11865.394256987216,
+      "p95_indexed_rows_per_second": 12219.174539468095
+    }
+  ]
+}
