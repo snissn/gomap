@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	scaleSchemaVersion = "treedb_text_hybrid_scale/v1"
+	scaleSchemaVersion = "treedb_text_hybrid_scale/v2"
 
 	collectionName  = "docs"
 	textIndexName   = "lexical"
@@ -61,6 +61,8 @@ type config struct {
 	allowGuardrailFails bool
 	baseRef             string
 	baseSHA             string
+	phases              string
+	selectedPhases      map[string]bool
 }
 
 type report struct {
@@ -79,42 +81,54 @@ type report struct {
 	Guardrails       []guardrailResult  `json:"guardrails,omitempty"`
 	Bottlenecks      []bottleneckRow    `json:"bottlenecks,omitempty"`
 	Caveats          []string           `json:"caveats,omitempty"`
+	SelectedPhases   []string           `json:"selected_phases"`
+	CompletedPhases  []string           `json:"completed_phases"`
+	Complete         bool               `json:"complete"`
 }
 
 type reportContext struct {
-	RepoRoot string `json:"repo_root,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	Commit   string `json:"commit,omitempty"`
-	BaseRef  string `json:"base_ref,omitempty"`
-	BaseSHA  string `json:"base_sha,omitempty"`
-	Go       string `json:"go,omitempty"`
-	OS       string `json:"os,omitempty"`
-	Arch     string `json:"arch,omitempty"`
-	CPU      string `json:"cpu,omitempty"`
-	NCPU     int    `json:"ncpu"`
-	Uptime   string `json:"uptime,omitempty"`
+	RepoRoot    string `json:"repo_root,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Commit      string `json:"commit,omitempty"`
+	BaseRef     string `json:"base_ref,omitempty"`
+	BaseSHA     string `json:"base_sha,omitempty"`
+	Go          string `json:"go,omitempty"`
+	OS          string `json:"os,omitempty"`
+	Arch        string `json:"arch,omitempty"`
+	CPU         string `json:"cpu,omitempty"`
+	NCPU        int    `json:"ncpu"`
+	Uptime      string `json:"uptime,omitempty"`
+	Command     string `json:"command,omitempty"`
+	VCSClean    bool   `json:"vcs_clean"`
+	VCSStatus   string `json:"vcs_status,omitempty"`
+	BinaryState string `json:"binary_state,omitempty"`
+	Corpus      string `json:"corpus,omitempty"`
+	Cache       string `json:"cache,omitempty"`
+	Durability  string `json:"durability,omitempty"`
+	NoisePolicy string `json:"noise_policy,omitempty"`
 }
 
 type reportConfig struct {
-	Rows               int  `json:"rows"`
-	BatchSize          int  `json:"batch_size"`
-	Dims               int  `json:"dims"`
-	M                  int  `json:"m"`
-	EfConstruction     int  `json:"ef_construction"`
-	EfSearch           int  `json:"ef_search"`
-	TopK               int  `json:"top_k"`
-	CandidateLimit     int  `json:"candidate_limit"`
-	Queries            int  `json:"queries"`
-	Readers            int  `json:"readers"`
-	IncludeVector      bool `json:"include_vector"`
-	RunBackfill        bool `json:"run_backfill"`
-	BackfillRows       int  `json:"backfill_rows,omitempty"`
-	RunReopen          bool `json:"run_reopen"`
-	RunConcurrent      bool `json:"run_concurrent"`
-	ConcurrentWrites   int  `json:"concurrent_writes,omitempty"`
-	RunRewrite         bool `json:"run_rewrite"`
-	MaintenanceUpdates int  `json:"maintenance_updates,omitempty"`
-	MaintenanceDeletes int  `json:"maintenance_deletes,omitempty"`
+	Rows               int    `json:"rows"`
+	BatchSize          int    `json:"batch_size"`
+	Dims               int    `json:"dims"`
+	M                  int    `json:"m"`
+	EfConstruction     int    `json:"ef_construction"`
+	EfSearch           int    `json:"ef_search"`
+	TopK               int    `json:"top_k"`
+	CandidateLimit     int    `json:"candidate_limit"`
+	Queries            int    `json:"queries"`
+	Readers            int    `json:"readers"`
+	IncludeVector      bool   `json:"include_vector"`
+	RunBackfill        bool   `json:"run_backfill"`
+	BackfillRows       int    `json:"backfill_rows,omitempty"`
+	RunReopen          bool   `json:"run_reopen"`
+	RunConcurrent      bool   `json:"run_concurrent"`
+	ConcurrentWrites   int    `json:"concurrent_writes,omitempty"`
+	RunRewrite         bool   `json:"run_rewrite"`
+	MaintenanceUpdates int    `json:"maintenance_updates,omitempty"`
+	MaintenanceDeletes int    `json:"maintenance_deletes,omitempty"`
+	PhaseSelector      string `json:"phase_selector"`
 }
 
 type reportArtifacts struct {
@@ -178,6 +192,7 @@ type queryReport struct {
 	Samples          int                            `json:"samples"`
 	Results          int                            `json:"results"`
 	Latency          latencySummary                 `json:"latency"`
+	RawLatencyNS     []int64                        `json:"raw_latency_ns,omitempty"`
 	OpsPerSec        float64                        `json:"ops_per_sec"`
 	TextStats        *collections.TextSearchStats   `json:"text_stats,omitempty"`
 	HybridStats      *collections.HybridSearchStats `json:"hybrid_stats,omitempty"`
@@ -310,6 +325,7 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&cfg.allowGuardrailFails, "allow-guardrail-failures", false, "Write reports even when zero-doc/fail-closed guardrails fail")
 	fs.StringVar(&cfg.baseRef, "base-ref", "origin/main", "Base ref label for report context")
 	fs.StringVar(&cfg.baseSHA, "base-sha", "", "Base SHA for report context")
+	fs.StringVar(&cfg.phases, "phases", "all", "Comma-separated phase selector: all or retrieval (load,queries,reopen)")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -352,6 +368,11 @@ func parseFlags(args []string) (config, error) {
 	if cfg.concurrentWrites < 0 || cfg.maintenanceUpdates < 0 || cfg.maintenanceDeletes < 0 {
 		return config{}, fmt.Errorf("write/update/delete counts cannot be negative")
 	}
+	selected, err := parsePhaseSelector(cfg.phases)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}
@@ -367,7 +388,58 @@ func parseFlags(args []string) (config, error) {
 	return cfg, nil
 }
 
+func parsePhaseSelector(raw string) (map[string]bool, error) {
+	selected := make(map[string]bool)
+	for _, phase := range strings.Split(raw, ",") {
+		switch strings.TrimSpace(phase) {
+		case "all":
+			for _, name := range []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill"} {
+				selected[name] = true
+			}
+		case "retrieval":
+			selected["load"], selected["queries"], selected["reopen"] = true, true, true
+		case "":
+			return nil, errors.New("-phases cannot be empty")
+		default:
+			return nil, fmt.Errorf("unknown -phases value %q (want all or retrieval)", phase)
+		}
+	}
+	return selected, nil
+}
+
+func normalizeSelectedPhases(selected map[string]bool, cfg config) map[string]bool {
+	if !cfg.runReopen {
+		delete(selected, "reopen")
+	}
+	if !cfg.runConcurrent {
+		delete(selected, "concurrent")
+	}
+	if !cfg.runRewrite {
+		delete(selected, "maintenance")
+	}
+	if !cfg.runBackfill {
+		delete(selected, "backfill")
+	}
+	return selected
+}
+
+func selectedPhaseNames(selected map[string]bool) []string {
+	all := []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill"}
+	var names []string
+	for _, phase := range all {
+		if selected[phase] {
+			names = append(names, phase)
+		}
+	}
+	return names
+}
+
 func run(cfg config) (report, error) {
+	if cfg.selectedPhases == nil {
+		selected, _ := parsePhaseSelector("all")
+		cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
+		cfg.phases = "all"
+	}
 	if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
 		return report{}, fmt.Errorf("create out dir: %w", err)
 	}
@@ -400,6 +472,7 @@ func run(cfg config) (report, error) {
 			RunReopen: cfg.runReopen, RunConcurrent: cfg.runConcurrent,
 			ConcurrentWrites: cfg.concurrentWrites, RunRewrite: cfg.runRewrite,
 			MaintenanceUpdates: cfg.maintenanceUpdates, MaintenanceDeletes: cfg.maintenanceDeletes,
+			PhaseSelector: cfg.phases,
 		},
 		Artifacts: reportArtifacts{
 			OutDir:     cfg.outDir,
@@ -412,6 +485,7 @@ func run(cfg config) (report, error) {
 			"Synthetic corpus uses deterministic customer-support text, scalar tenants, and small dense vectors; do not use as relevance-quality evidence.",
 			"Retrieval rows time warm in-process queries after fixture load/reopen; B/op and allocs/op should be captured with the companion Go benchmark commands when making allocation claims.",
 		},
+		SelectedPhases: selectedPhaseNames(cfg.selectedPhases),
 	}
 	if !cfg.includeVector {
 		rep.Caveats = append(rep.Caveats, "Vector/hybrid rows were skipped because -include-vector=false.")
@@ -434,19 +508,26 @@ func run(cfg config) (report, error) {
 	}()
 	rep.Load = load
 	rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_load", cfg.rows, load.StorageBytesAfterLoad, load.TextStorage, load.VectorStatus))
-
-	queries, guards, err := runQueryMatrix(fixture.col, cfg)
-	if err != nil {
-		return report{}, err
-	}
-	rep.Queries = append(rep.Queries, queries...)
-	rep.Guardrails = append(rep.Guardrails, guards...)
-	if err := failOnGuardrails(rep.Guardrails, cfg.allowGuardrailFails); err != nil {
-		_ = writeReports(rep)
+	if err := completePhase(&rep, "load"); err != nil {
 		return rep, err
 	}
 
-	if cfg.runReopen {
+	if cfg.selectedPhases["queries"] {
+		queries, guards, err := runQueryMatrix(fixture.col, cfg)
+		if err != nil {
+			return rep, err
+		}
+		rep.Queries = append(rep.Queries, queries...)
+		rep.Guardrails = append(rep.Guardrails, guards...)
+		if err := completePhase(&rep, "queries"); err != nil {
+			return rep, err
+		}
+		if err := failOnGuardrails(rep.Guardrails, cfg.allowGuardrailFails); err != nil {
+			return rep, err
+		}
+	}
+
+	if cfg.selectedPhases["reopen"] && cfg.runReopen {
 		reopen, reopenedFixture, err := runReopenProbe(fixture, cfg)
 		if err != nil {
 			recordReopenProbeFailure(&rep, err)
@@ -461,22 +542,27 @@ func run(cfg config) (report, error) {
 		fixture = reopenedFixture
 		rep.Reopen = &reopen
 		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("after_reopen", cfg.rows, reopen.StorageBytes, reopen.TextStorage, reopen.VectorStatus))
+		if err := completePhase(&rep, "reopen"); err != nil {
+			return rep, err
+		}
 	}
 
-	if cfg.runConcurrent {
+	if cfg.selectedPhases["concurrent"] && cfg.runConcurrent {
 		concurrent, guard, err := runConcurrentProbe(fixture.col, cfg)
 		if err != nil {
 			return report{}, err
 		}
 		rep.Concurrent = &concurrent
 		rep.Guardrails = append(rep.Guardrails, guard)
+		if err := completePhase(&rep, "concurrent"); err != nil {
+			return rep, err
+		}
 		if err := failOnGuardrails([]guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
-			_ = writeReports(rep)
 			return rep, err
 		}
 	}
 
-	if cfg.runRewrite {
+	if cfg.selectedPhases["maintenance"] && cfg.runRewrite {
 		maintenance, err := runMaintenanceProbe(cfg)
 		if err != nil {
 			return report{}, err
@@ -485,21 +571,27 @@ func run(cfg config) (report, error) {
 		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("maintenance_rewrite_fixture", maxInt(cfg.rows-maintenance.Deletes, 1), maintenance.StorageBytesAfter, maintenance.TextStorageAfter, nil))
 		guard := guardrailResult{Name: "maintenance_rewrite_postconditions", OK: maintenance.PostconditionOK, Failure: maintenance.PostconditionFailure}
 		rep.Guardrails = append(rep.Guardrails, guard)
+		if err := completePhase(&rep, "maintenance"); err != nil {
+			return rep, err
+		}
 		if err := failOnGuardrails([]guardrailResult{guard}, cfg.allowGuardrailFails); err != nil {
-			_ = writeReports(rep)
 			return rep, err
 		}
 	}
 
-	if cfg.runBackfill {
+	if cfg.selectedPhases["backfill"] && cfg.runBackfill {
 		backfill, err := runBackfillProbe(cfg)
 		if err != nil {
 			return report{}, err
 		}
 		rep.Backfill = &backfill
 		rep.StorageSnapshots = append(rep.StorageSnapshots, storageSnapshotFromText("backfill_fixture", cfg.backfillRows, backfill.StorageBytes, backfill.TextStorage, nil))
+		if err := completePhase(&rep, "backfill"); err != nil {
+			return rep, err
+		}
 	}
 
+	rep.Complete = len(rep.CompletedPhases) == len(rep.SelectedPhases)
 	rep.Bottlenecks = rankBottlenecks(rep)
 	if err := writeReports(rep); err != nil {
 		return report{}, err
@@ -508,6 +600,21 @@ func run(cfg config) (report, error) {
 		return rep, err
 	}
 	return rep, nil
+}
+
+func completePhase(rep *report, phase string) error {
+	if rep == nil {
+		return errors.New("nil report")
+	}
+	for _, completed := range rep.CompletedPhases {
+		if completed == phase {
+			return nil
+		}
+	}
+	rep.CompletedPhases = append(rep.CompletedPhases, phase)
+	rep.Complete = len(rep.CompletedPhases) == len(rep.SelectedPhases)
+	rep.Bottlenecks = rankBottlenecks(*rep)
+	return writeReports(*rep)
 }
 
 func recordReopenProbeFailure(rep *report, err error) {
@@ -907,7 +1014,7 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 	stats := last.Stats
 	return queryReport{
 		Name: name, Modality: "text", QueryShape: shape, Boundary: "warm no-document text-v2 score-only search", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: cfg.queries, Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS),
+		TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: cfg.queries, Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		TextStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
 }
@@ -953,7 +1060,7 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	stats := last.Stats
 	return queryReport{
 		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS),
+		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
 }
@@ -1467,13 +1574,31 @@ func writeReports(rep report) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(rep.Artifacts.JSONReport, append(payload, '\n'), 0o644); err != nil {
+	if err := atomicWriteFile(rep.Artifacts.JSONReport, append(payload, '\n')); err != nil {
 		return err
 	}
-	if err := os.WriteFile(rep.Artifacts.Markdown, []byte(renderMarkdown(rep)), 0o644); err != nil {
+	return atomicWriteFile(rep.Artifacts.Markdown, []byte(renderMarkdown(rep)))
+}
+
+func atomicWriteFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
 		return err
 	}
-	return nil
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func renderMarkdown(rep report) string {
@@ -1484,6 +1609,7 @@ func renderMarkdown(rep report) string {
 	fmt.Fprintf(&b, "- branch/commit: `%s` / `%s`\n", rep.Context.Branch, rep.Context.Commit)
 	fmt.Fprintf(&b, "- base: `%s` / `%s`\n", rep.Context.BaseRef, rep.Context.BaseSHA)
 	fmt.Fprintf(&b, "- rows: `%d`, dims: `%d`, batch: `%d`, queries/row: `%d`\n", rep.Config.Rows, rep.Config.Dims, rep.Config.BatchSize, rep.Config.Queries)
+	fmt.Fprintf(&b, "- phases: selected `%s`; completed `%s`; status **%s**\n", strings.Join(rep.SelectedPhases, ","), strings.Join(rep.CompletedPhases, ","), reportStatus(rep.Complete))
 	fmt.Fprintf(&b, "- db dir: `%s` (kept=%v)\n\n", rep.Artifacts.DBDir, rep.Artifacts.DBKept)
 
 	fmt.Fprintf(&b, "## Load/storage\n\n")
@@ -1555,6 +1681,13 @@ func renderMarkdown(rep report) string {
 	return b.String()
 }
 
+func reportStatus(complete bool) string {
+	if complete {
+		return "COMPLETE"
+	}
+	return "INCOMPLETE (partial/resumable evidence; not a completed qualification)"
+}
+
 func queryCounters(row queryReport) string {
 	if row.TextStats != nil {
 		st := row.TextStats
@@ -1597,18 +1730,27 @@ func formatNS(ns int64) string {
 }
 
 func captureContext(cfg config) reportContext {
+	vcsStatus := strings.TrimSpace(runCmd("git", "status", "--porcelain"))
 	return reportContext{
-		RepoRoot: strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
-		Branch:   strings.TrimSpace(runCmd("git", "branch", "--show-current")),
-		Commit:   strings.TrimSpace(runCmd("git", "rev-parse", "HEAD")),
-		BaseRef:  cfg.baseRef,
-		BaseSHA:  firstNonEmpty(cfg.baseSHA, strings.TrimSpace(runCmd("git", "merge-base", "HEAD", cfg.baseRef))),
-		Go:       strings.TrimSpace(runCmd("go", "version")),
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		CPU:      cpuLabel(),
-		NCPU:     runtime.NumCPU(),
-		Uptime:   strings.TrimSpace(runCmd("uptime")),
+		RepoRoot:    strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
+		Branch:      strings.TrimSpace(runCmd("git", "branch", "--show-current")),
+		Commit:      strings.TrimSpace(runCmd("git", "rev-parse", "HEAD")),
+		BaseRef:     cfg.baseRef,
+		BaseSHA:     firstNonEmpty(cfg.baseSHA, strings.TrimSpace(runCmd("git", "merge-base", "HEAD", cfg.baseRef))),
+		Go:          strings.TrimSpace(runCmd("go", "version")),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+		CPU:         cpuLabel(),
+		NCPU:        runtime.NumCPU(),
+		Uptime:      strings.TrimSpace(runCmd("uptime")),
+		Command:     strings.Join(os.Args, " "),
+		VCSClean:    vcsStatus == "",
+		VCSStatus:   vcsStatus,
+		BinaryState: "go run (source tree; no standalone binary)",
+		Corpus:      "deterministic synthetic customer-support corpus v1",
+		Cache:       "warm in-process retrieval after fixture load/reopen",
+		Durability:  "TreeDB default durability; checkpoint after load",
+		NoisePolicy: "warmup excluded; raw per-query samples summarized in-process; no null rows accepted",
 	}
 }
 

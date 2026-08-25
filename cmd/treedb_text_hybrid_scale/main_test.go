@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +58,11 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	if len(rep.Queries) == 0 {
 		t.Fatal("no query rows")
 	}
+	for _, row := range rep.Queries {
+		if len(row.RawLatencyNS) != row.Samples {
+			t.Fatalf("row %q raw samples=%d want %d", row.Name, len(row.RawLatencyNS), row.Samples)
+		}
+	}
 	for _, guard := range rep.Guardrails {
 		if !guard.OK {
 			t.Fatalf("guardrail failed: %+v", guard)
@@ -81,6 +89,79 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", "retrieval"})
+	if err != nil {
+		t.Fatalf("parse retrieval phases: %v", err)
+	}
+	want := []string{"load", "queries", "reopen"}
+	if got := selectedPhaseNames(cfg.selectedPhases); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("selected phases=%v want %v", got, want)
+	}
+	for _, phases := range []string{"queries", "all,typo", "typo,all", ""} {
+		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", phases}); err == nil {
+			t.Fatalf("parseFlags accepted invalid selector %q", phases)
+		}
+	}
+	all, err := parsePhaseSelector("all,retrieval")
+	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill" {
+		t.Fatalf("parsePhaseSelector(all,retrieval) phases=%v err=%v", selectedPhaseNames(all), err)
+	}
+}
+
+func TestRetrievalQualificationExcludesDisabledProbeFromCompletion2731(t *testing.T) {
+	outDir := t.TempDir()
+	cfg, err := parseFlags([]string{"-out-dir", outDir, "-phases", "retrieval", "-run-reopen=false"})
+	if err != nil {
+		t.Fatalf("parse retrieval phases: %v", err)
+	}
+	cfg.rows, cfg.batchSize, cfg.dims, cfg.m, cfg.efConstruction, cfg.efSearch = 96, 48, 4, 4, 32, 32
+	cfg.topK, cfg.candidateLimit, cfg.queries, cfg.readers = 5, 16, 1, 2
+	rep, err := run(cfg)
+	if err != nil {
+		t.Fatalf("run retrieval qualification: %v", err)
+	}
+	want := []string{"load", "queries"}
+	if !rep.Complete || rep.Reopen != nil || len(rep.Queries) == 0 || strings.Join(rep.SelectedPhases, ",") != strings.Join(want, ",") || strings.Join(rep.CompletedPhases, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected retrieval-only report: %+v", rep)
+	}
+}
+
+func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion:  scaleSchemaVersion,
+		Artifacts:      reportArtifacts{OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md")},
+		SelectedPhases: []string{"load", "queries", "reopen"}, CompletedPhases: []string{"load"},
+		Guardrails: []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	if err := writeReports(rep); err != nil {
+		t.Fatalf("write partial report: %v", err)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var decoded report
+	if err := json.Unmarshal(payload, &decoded); err != nil || decoded.Complete || len(decoded.CompletedPhases) != 1 {
+		t.Fatalf("partial report invalid or complete: decoded=%+v err=%v", decoded, err)
+	}
+	markdown, err := os.ReadFile(rep.Artifacts.Markdown)
+	if err != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial/resumable evidence; not a completed qualification)") {
+		t.Fatalf("markdown did not fail closed: err=%v content=%s", err, markdown)
+	}
+}
+
+func TestCaptureContextVCSStatusConsistent4327(t *testing.T) {
+	ctx := captureContext(config{baseRef: "origin/main"})
+	if ctx.VCSClean != (ctx.VCSStatus == "") {
+		t.Fatalf("vcs consistency clean=%v status=%q", ctx.VCSClean, ctx.VCSStatus)
+	}
+	if ctx.Command == "" || ctx.BinaryState == "" || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
+		t.Fatalf("missing provenance: %+v", ctx)
 	}
 }
 
@@ -156,6 +237,63 @@ func TestRankBottlenecksNormalizesUnits2731(t *testing.T) {
 	}
 	if got[1].Name != "fixture_load" || got[2].Name != "text_rewrite" || got[3].Name != "vector_rebuild" {
 		t.Fatalf("unexpected normalized order: %+v", got[:4])
+	}
+}
+
+func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
+	runDir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
+	cmd.Dir = filepath.Join("..", "..")
+	cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES=retrieval", "GO_BIN=true")
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("generate 10M plan timed out: %v\n%s", ctx.Err(), output)
+	}
+	if err != nil {
+		t.Fatalf("generate 10M plan: %v\n%s", err, output)
+	}
+	plan, err := os.ReadFile(filepath.Join(runDir, "10m_selected_matrix_commands.md"))
+	if err != nil {
+		t.Fatalf("read generated plan: %v", err)
+	}
+	if got := strings.Count(string(plan), "-phases \"retrieval\""); got != 1 {
+		t.Fatalf("direct command phase selector count=%d plan:\n%s", got, plan)
+	}
+	if got := strings.Count(string(plan), "PHASES=retrieval"); got != 1 {
+		t.Fatalf("wrapper command phase selector count=%d plan:\n%s", got, plan)
+	}
+}
+
+func TestRetrievalRepetitionsRequireRetrievalPhase4327(t *testing.T) {
+	for _, tc := range []struct {
+		name, phases string
+		wantErr      bool
+	}{
+		{name: "reject all", phases: "all", wantErr: true},
+		{name: "accept retrieval", phases: "retrieval"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
+			cmd.Dir = filepath.Join("..", "..")
+			cmd.Env = append(os.Environ(), "RUN_DIR="+t.TempDir(), "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES="+tc.phases, "RETRIEVAL_REPETITIONS=2", "GO_BIN=true")
+			output, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("repetition contract timed out: %v\n%s", ctx.Err(), output)
+			}
+			if tc.wantErr {
+				if err == nil || !strings.Contains(string(output), "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval") {
+					t.Fatalf("expected repetition rejection, err=%v output=%s", err, output)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected retrieval repetition acceptance: %v\n%s", err, output)
+			}
+		})
 	}
 }
 

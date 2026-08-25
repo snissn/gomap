@@ -40,6 +40,15 @@ RUN_GO_BENCH="${RUN_GO_BENCH:-false}"
 GO_BENCH_ROWS="${GO_BENCH_ROWS:-$SMOKE_ROWS}"
 GO_BENCHTIME="${GO_BENCHTIME:-1x}"
 GO_COUNT="${GO_COUNT:-1}"
+# `retrieval` is the bounded #4327 qualification: load, query matrix, and
+# close/reopen parity only. The default remains the full historical campaign.
+PHASES="${PHASES:-all}"
+RETRIEVAL_REPETITIONS="${RETRIEVAL_REPETITIONS:-1}"
+
+if (( RETRIEVAL_REPETITIONS > 1 )) && [[ "$PHASES" != "retrieval" ]]; then
+  echo "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval; refusing to repeat a non-retrieval campaign" >&2
+  exit 2
+fi
 
 mkdir -p "$RUN_DIR"
 
@@ -72,7 +81,7 @@ not as a passing latency row.
 Primary selected 10M text/hybrid/load/reopen/concurrent row:
 
 \`\`\`sh
-RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true \\
+RUN_DIR=$RUN_DIR RUN_10M=true APPROVE_10M=true PHASES=$PHASES \\
 TEN_M_ROWS=$TEN_M_ROWS TEN_M_QUERIES=$TEN_M_QUERIES TEN_M_BATCH_SIZE=$TEN_M_BATCH_SIZE \\
 TEN_M_CANDIDATE_LIMIT=$TEN_M_CANDIDATE_LIMIT \\
 TEN_M_BACKFILL_ROWS=$TEN_M_BACKFILL_ROWS TEN_M_MAINTENANCE_UPDATES=$TEN_M_MAINTENANCE_UPDATES TEN_M_MAINTENANCE_DELETES=$TEN_M_MAINTENANCE_DELETES \\
@@ -89,7 +98,7 @@ GOWORK=off $GO_BIN run ./cmd/treedb_text_hybrid_scale \\
   -top-k $TOP_K -candidate-limit $TEN_M_CANDIDATE_LIMIT -queries $TEN_M_QUERIES \\
   -readers $READERS -backfill-rows $TEN_M_BACKFILL_ROWS \\
   -maintenance-updates $TEN_M_MAINTENANCE_UPDATES -maintenance-deletes $TEN_M_MAINTENANCE_DELETES \\
-  -keep-db=$KEEP_DB -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
+  -keep-db=$KEEP_DB -phases "$PHASES" -base-ref origin/main -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)"
 \`\`\`
 
 For allocation evidence on selected Go benchmark rows, run with an explicit row
@@ -129,6 +138,7 @@ run_scale() {
     -maintenance-updates "$maintenance_updates"
     -maintenance-deletes "$maintenance_deletes"
     -keep-db="$KEEP_DB"
+    -phases "$PHASES"
     -base-ref origin/main
     -base-sha "$(git merge-base HEAD origin/main 2>/dev/null || true)")
   printf '%q ' "${cmd[@]}" > "$out/command.txt"
@@ -163,7 +173,9 @@ if [[ "$RUN_SMOKE" == "true" || "$RUN_SMOKE" == "1" || "$RUN_SMOKE" == "yes" ]];
 fi
 
 if [[ "$RUN_1M" == "true" || "$RUN_1M" == "1" || "$RUN_1M" == "yes" ]]; then
-  run_scale "scale_1m" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_BACKFILL_ROWS" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES" "$ONE_M_CANDIDATE_LIMIT"
+  for ((rep = 1; rep <= RETRIEVAL_REPETITIONS; rep++)); do
+    run_scale "scale_1m_rep${rep}" "$ONE_M_ROWS" "$ONE_M_QUERIES" "$ONE_M_BATCH_SIZE" "$ONE_M_BACKFILL_ROWS" "$ONE_M_MAINTENANCE_UPDATES" "$ONE_M_MAINTENANCE_DELETES" "$ONE_M_CANDIDATE_LIMIT"
+  done
 fi
 
 if [[ "$RUN_10M" == "true" || "$RUN_10M" == "1" || "$RUN_10M" == "yes" ]]; then
@@ -193,6 +205,7 @@ Primary artifacts:
 
 - smoke/current scale reports under \`$RUN_DIR/scale_*/*scale_report.md\`
 - JSON reports under \`$RUN_DIR/scale_*/*scale_report.json\`
+- selected phase selector: \`$PHASES\` (use \`PHASES=retrieval\` for bounded #4327 retrieval qualification)
 - exact 10M command plan: \`$RUN_DIR/10m_selected_matrix_commands.md\`
 - optional Go benchmark logs under \`$RUN_DIR/go_bench_*\`
 
