@@ -626,6 +626,23 @@ func TestProfiledWarmupFailureCannotBeAllowed4327(t *testing.T) {
 	}
 }
 
+func TestProfiledWarmupFailurePreservesNamedRow4327(t *testing.T) {
+	warmErr := errors.New("warm hybrid_scalar returned no results")
+	row, guard, err := failedHybridWarmup(
+		config{cpuProfile: "cpu.pprof"},
+		queryRowHybridTextScalar,
+		"hybrid scalar",
+		collections.HybridSearchResponse{},
+		warmErr,
+	)
+	if err == nil || row.Name != queryRowHybridTextScalar || guard.Name != queryRowHybridTextScalar {
+		t.Fatalf("row=%+v guard=%+v err=%v", row, guard, err)
+	}
+	if row.GuardrailOK || !strings.Contains(row.GuardrailFailure, warmErr.Error()) {
+		t.Fatalf("failed row guardrail=%t failure=%q", row.GuardrailOK, row.GuardrailFailure)
+	}
+}
+
 func TestAllocationProfilesRequireStartupExactRate4327(t *testing.T) {
 	if err := requireExactMemProfileRate(true, 1); err != nil {
 		t.Fatalf("exact startup rate rejected: %v", err)

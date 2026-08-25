@@ -1327,27 +1327,11 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
 		warmErr := fmt.Errorf("warm %s: %w", name, err)
-		if err := profiledWarmupError(cfg, warmErr); err != nil {
-			return queryReport{}, guardrailResult{}, err
-		}
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
-		guard := hybridFailureGuard(name, warm.Stats, warmErr)
-		if cfg.allowGuardrailFails {
-			return row, guard, nil
-		}
-		return row, guard, warmErr
+		return failedHybridWarmup(cfg, name, shape, warm, warmErr)
 	}
 	if len(warm.Results) == 0 {
 		warmErr := fmt.Errorf("warm %s returned no results", name)
-		if err := profiledWarmupError(cfg, warmErr); err != nil {
-			return queryReport{}, guardrailResult{}, err
-		}
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
-		guard := guardrailResult{Name: name, OK: false, Failure: warmErr.Error()}
-		if cfg.allowGuardrailFails {
-			return row, guard, nil
-		}
-		return row, guard, warmErr
+		return failedHybridWarmup(cfg, name, shape, warm, warmErr)
 	}
 	guard := hybridGuardrail(name, warm.Stats)
 	stopProfile, err := startQueryProfiles(cfg)
@@ -1383,7 +1367,9 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, allocationSummary, error) {
 	durations := make([]int64, 0, cfg.queries)
 	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
+	if cfg.allocProfile != "" {
+		runtime.ReadMemStats(&before)
+	}
 	var last collections.HybridSearchResponse
 	for i := 0; i < cfg.queries; i++ {
 		start := time.Now()
@@ -1391,16 +1377,24 @@ func runProfiledHybridSamples(col *collections.Collection, cfg config, name stri
 		elapsed := time.Since(start).Nanoseconds()
 		last = got
 		if err != nil {
-			runtime.ReadMemStats(&after)
-			return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, fmt.Errorf("%s query %d: %w", name, i, err)
+			allocations := allocationSummary{}
+			if cfg.allocProfile != "" {
+				runtime.ReadMemStats(&after)
+				allocations = allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}
+			}
+			return durations, last, guard, allocations, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
 		durations = append(durations, elapsed)
 		if g := hybridGuardrail(name, got.Stats); !g.OK {
 			guard = g
 		}
 	}
-	runtime.ReadMemStats(&after)
-	return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, nil
+	allocations := allocationSummary{}
+	if cfg.allocProfile != "" {
+		runtime.ReadMemStats(&after)
+		allocations = allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}
+	}
+	return durations, last, guard, allocations, nil
 }
 
 func withAllocationSummary(row queryReport, cfg config, allocations allocationSummary) queryReport {
@@ -1508,6 +1502,18 @@ func profiledWarmupError(cfg config, warmErr error) error {
 		return nil
 	}
 	return fmt.Errorf("%w; cannot produce requested profile without successful warm-up", warmErr)
+}
+
+func failedHybridWarmup(cfg config, name, shape string, response collections.HybridSearchResponse, warmErr error) (queryReport, guardrailResult, error) {
+	row := failedHybridQueryRow(cfg, name, shape, response, nil, warmErr)
+	guard := hybridFailureGuard(name, response.Stats, warmErr)
+	if profileErr := profiledWarmupError(cfg, warmErr); profileErr != nil {
+		return row, guard, profileErr
+	}
+	if cfg.allowGuardrailFails {
+		return row, guard, nil
+	}
+	return row, guard, warmErr
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {
