@@ -412,7 +412,7 @@ func parseFlags(args []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	cfg.selectedPhases = selected
+	cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
 	if queryRows != "" {
 		cfg.queryRows = make(map[string]bool)
 		for _, name := range strings.Split(queryRows, ",") {
@@ -437,6 +437,19 @@ func parseFlags(args []string) (config, error) {
 	if cfg.cpuProfile != "" || cfg.allocProfile != "" {
 		if len(cfg.queryRows) != 1 || !selectedRow.hybrid {
 			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one hybrid -query-rows value")
+		}
+	}
+	if cfg.cpuProfile != "" && cfg.allocProfile != "" {
+		cpuProfile, err := filepath.Abs(cfg.cpuProfile)
+		if err != nil {
+			return config{}, fmt.Errorf("resolve -cpu-profile: %w", err)
+		}
+		allocProfile, err := filepath.Abs(cfg.allocProfile)
+		if err != nil {
+			return config{}, fmt.Errorf("resolve -alloc-profile: %w", err)
+		}
+		if cpuProfile == allocProfile {
+			return config{}, errors.New("-cpu-profile and -alloc-profile must not resolve to the same path")
 		}
 	}
 	if cfg.backfillRows <= 0 {
@@ -469,6 +482,22 @@ func parsePhaseSelector(raw string) (map[string]bool, error) {
 		}
 	}
 	return selected, nil
+}
+
+func normalizeSelectedPhases(selected map[string]bool, cfg config) map[string]bool {
+	if !cfg.runReopen {
+		delete(selected, "reopen")
+	}
+	if !cfg.runConcurrent {
+		delete(selected, "concurrent")
+	}
+	if !cfg.runRewrite {
+		delete(selected, "maintenance")
+	}
+	if !cfg.runBackfill {
+		delete(selected, "backfill")
+	}
+	return selected
 }
 
 func selectedPhaseNames(selected map[string]bool) []string {

@@ -105,18 +105,26 @@ func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
 	}
 }
 
-func TestRetrievalQualificationRunsOnlyRetrievalPhases2731(t *testing.T) {
+func TestRetrievalQualificationExcludesDisabledProbeFromCompletion2731(t *testing.T) {
 	outDir := t.TempDir()
-	selected, err := parsePhaseSelector("retrieval")
+	cfg, err := parseFlags([]string{"-out-dir", outDir, "-phases", "retrieval", "-run-reopen=false"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("parse retrieval phases: %v", err)
 	}
-	rep, err := run(config{outDir: outDir, rows: 96, batchSize: 48, dims: 4, m: 4, efConstruction: 32, efSearch: 32, topK: 5, candidateLimit: 16, queries: 1, readers: 2, includeVector: true, runReopen: true, selectedPhases: selected, phases: "retrieval"})
+	cfg.rows, cfg.batchSize, cfg.dims, cfg.m, cfg.efConstruction, cfg.efSearch = 96, 48, 4, 4, 32, 32
+	cfg.topK, cfg.candidateLimit, cfg.queries, cfg.readers = 5, 16, 1, 2
+	rep, err := run(cfg)
 	if err != nil {
 		t.Fatalf("run retrieval qualification: %v", err)
 	}
-	if !rep.Complete || rep.Backfill != nil || rep.Concurrent != nil || rep.Maintenance != nil || rep.Reopen == nil || len(rep.Queries) == 0 {
+	want := []string{"load", "queries"}
+	if !rep.Complete || rep.Reopen != nil || len(rep.Queries) == 0 || len(rep.SelectedPhases) != len(want) || len(rep.CompletedPhases) != len(want) {
 		t.Fatalf("unexpected retrieval-only report: %+v", rep)
+	}
+	for i := range want {
+		if rep.SelectedPhases[i] != want[i] || rep.CompletedPhases[i] != want[i] {
+			t.Fatalf("phases selected=%v completed=%v want %v", rep.SelectedPhases, rep.CompletedPhases, want)
+		}
 	}
 }
 
@@ -245,6 +253,9 @@ func TestQueryRowFlagContracts4327(t *testing.T) {
 		{name: "vector row with vectors disabled", args: []string{"-query-rows", queryRowHybridTextVector, "-include-vector=false"}, wantErr: "requires -include-vector=true"},
 		{name: "valid scalar hybrid profile row", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "cpu.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "cpu.pprof"},
 		{name: "valid vector hybrid profile row", args: []string{"-query-rows", queryRowHybridTextVector, "-alloc-profile", "allocs.pprof"}, wantQuery: queryRowHybridTextVector, wantAllocs: "allocs.pprof"},
+		{name: "identical profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
+		{name: "equivalent relative profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "./profiles/../profiles/cpu.pprof"}, wantErr: "must not resolve to the same path"},
+		{name: "distinct profile paths", args: []string{"-query-rows", queryRowHybridTextScalar, "-cpu-profile", "profiles/cpu.pprof", "-alloc-profile", "profiles/allocs.pprof"}, wantQuery: queryRowHybridTextScalar, wantCPU: "profiles/cpu.pprof", wantAllocs: "profiles/allocs.pprof"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -284,5 +295,9 @@ func TestScaleCommandFlagValidation2731(t *testing.T) {
 	}
 	if cfg.includeVector || cfg.runBackfill || cfg.runRewrite || cfg.runConcurrent || cfg.runReopen {
 		t.Fatalf("bool flags not parsed: %+v", cfg)
+	}
+	wantSelected := []string{"load", "queries"}
+	if got := selectedPhaseNames(cfg.selectedPhases); strings.Join(got, ",") != strings.Join(wantSelected, ",") {
+		t.Fatalf("selected phases=%v want %v", got, wantSelected)
 	}
 }
