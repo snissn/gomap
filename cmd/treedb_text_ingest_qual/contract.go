@@ -143,7 +143,6 @@ func validate(m manifest, r report, manifestSHA string) error {
 		return fmt.Errorf("manifest_sha256 does not match manifest bytes")
 	}
 	groups := map[string]map[int]row{}
-	peakRSSPIDs := map[int]bool{}
 	for i, x := range r.Rows {
 		if err := validateRow(x); err != nil {
 			return fmt.Errorf("row %d: %w", i, err)
@@ -155,10 +154,6 @@ func validate(m manifest, r report, manifestSHA string) error {
 		if _, ok := groups[key][x.Repetition]; ok {
 			return fmt.Errorf("duplicate repetition %s/%d", key, x.Repetition)
 		}
-		if peakRSSPIDs[x.PeakRSSPID] {
-			return fmt.Errorf("row %d: peak RSS process reused", i)
-		}
-		peakRSSPIDs[x.PeakRSSPID] = true
 		groups[key][x.Repetition] = x
 	}
 	for _, mode := range requiredModes {

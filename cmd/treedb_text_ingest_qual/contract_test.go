@@ -17,6 +17,15 @@ func TestValidateCompleteMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestValidateAllowsReusedNumericPID(t *testing.T) {
+	m := validManifest()
+	r := validReport(t, m)
+	r.Rows[1].PeakRSSPID = r.Rows[0].PeakRSSPID
+	if err := validate(m, r, manifestHash(t, m)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRejectsContractFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -28,7 +37,6 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
 		{"zero stage placeholder", func(_ *manifest, r *report) { r.Rows[0].Stages["value_log"] = metric{State: "observed"} }, "zero placeholder"},
-		{"reused RSS process", func(_ *manifest, r *report) { r.Rows[1].PeakRSSPID = r.Rows[0].PeakRSSPID }, "process reused"},
 		{"missing fresh RSS process scope", func(_ *manifest, r *report) { r.Rows[0].PeakRSSScope = "" }, "fresh process"},
 		{"storage overlap", func(_ *manifest, r *report) { r.Rows[0].Storage.PhysicalTotalBytes++ }, "physical total"},
 		{"source parent text index accounting", func(_ *manifest, r *report) {
