@@ -32,7 +32,7 @@ func observeStorage(dir string) (storage, error) {
 		rel = filepath.ToSlash(rel)
 		bytes := info.Size()
 		switch {
-		case rel == "value_vlog" || strings.HasPrefix(rel, "value_vlog/") || rel == "leaf_vlog" || strings.HasPrefix(rel, "leaf_vlog/") || rel == "maindb/value_vlog" || strings.HasPrefix(rel, "maindb/value_vlog/"):
+		case rel == "value_vlog" || strings.HasPrefix(rel, "value_vlog/") || rel == "leaf_vlog" || strings.HasPrefix(rel, "leaf_vlog/") || rel == "maindb/value_vlog" || strings.HasPrefix(rel, "maindb/value_vlog/") || rel == "maindb/leaf_vlog" || strings.HasPrefix(rel, "maindb/leaf_vlog/"):
 			result.PhysicalValueLogBytes += bytes
 		case rel == "wal" || strings.HasPrefix(rel, "wal/") || rel == "maindb/wal" || strings.HasPrefix(rel, "maindb/wal/"):
 			result.PhysicalWALBytes += bytes

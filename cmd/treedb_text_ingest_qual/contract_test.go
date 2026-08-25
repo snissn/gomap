@@ -128,7 +128,7 @@ func TestProduceModeRecordsRepetitionAndMaintenanceDebt(t *testing.T) {
 func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 	dir := t.TempDir()
 	for path, contents := range map[string]string{
-		"index.db": "i", "value_vlog/0001": "vv", "wal/0001": "www", "metadata": "oooo",
+		"index.db": "i", "value_vlog/0001": "vv", "maindb/leaf_vlog/0001": "lll", "wal/0001": "www", "metadata": "oooo",
 	} {
 		full := filepath.Join(dir, path)
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -142,7 +142,7 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.PhysicalIndexPageBytes != 1 || s.PhysicalValueLogBytes != 2 || s.PhysicalWALBytes != 3 || s.PhysicalOtherBytes != 4 || s.PhysicalTotalBytes != 10 || s.PhysicalTotalWALExcludedBytes != 7 {
+	if s.PhysicalIndexPageBytes != 1 || s.PhysicalValueLogBytes != 5 || s.PhysicalWALBytes != 3 || s.PhysicalOtherBytes != 4 || s.PhysicalTotalBytes != 13 || s.PhysicalTotalWALExcludedBytes != 10 {
 		t.Fatalf("unexpected storage: %+v", s)
 	}
 	if len(s.OtherPaths) != 1 || s.OtherPaths[0] != "metadata" {
