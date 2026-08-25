@@ -114,7 +114,32 @@ input, not as a passing latency row.
 
 ### Optional allocation benchmark rows
 
-The scale command records wall-clock latency and counters. Use companion Go
+The scale command records wall-clock latency and counters. For one selected
+hybrid row allocation profile, start the process with `GODEBUG=memprofilerate=1`,
+select exactly one hybrid row with `-query-rows`, and pass `-alloc-profile`.
+For example, this complete small capture selects the real
+`hybrid_text_scalar_no_docs` row:
+
+```sh
+OUT=/tmp/gomap_text_hybrid_alloc_$(date +%Y%m%d_%H%M%S)
+GODEBUG=memprofilerate=1 GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
+  -out-dir "$OUT" -rows 96 -batch-size 48 -dims 4 -m 4 \
+  -ef-construction 32 -ef-search 32 -top-k 5 -candidate-limit 16 -queries 3 \
+  -include-vector=false -phases=retrieval -run-reopen=false \
+  -query-rows=hybrid_text_scalar_no_docs -alloc-profile "$OUT/allocs.pprof"
+go tool pprof -base "$OUT/allocs.pprof.base" -ignore='runtime/pprof' -focus='SearchHybrid|searchHybridVectorCandidatesWithAllowSetBudget' "$OUT/allocs.pprof"
+```
+
+It writes a cumulative baseline immediately before the timed samples and a
+cumulative post-query profile afterward. Subtraction includes allocations from
+child goroutines, including concurrent vector-candidate workers. Baseline
+serialization occurs between the two captures, so the pprof delta is used only
+for focused stack attribution; do not use its total or percentages. Exact
+interval totals are the row's `allocation_bytes`, `allocation_objects`,
+`bytes_per_op`, and `allocs_per_op`, captured from `runtime.MemStats` immediately
+around the timed helper. Fixture construction and warm-up precede both
+measurements. The baseline and final profile are an inseparable evidence pair;
+old single-file allocation profiles must be regenerated. Use companion Go
 benchmarks when making allocation claims:
 
 ```sh
@@ -157,8 +182,9 @@ rm -rf /tmp/gomap_text_hybrid_scale_1m_YYYYmmdd_HHMMSS
 
 `cmd/treedb_text_hybrid_scale` writes schema
 `treedb_text_hybrid_scale/v2`. Version 2 adds selected/completed phase state,
-atomic partial-report evidence, raw query latency samples, and invocation/VCS
-provenance.
+atomic partial-report evidence, invocation/VCS provenance, and raw per-query
+latency samples with row-boundary/query-shape provenance so each retrieval claim
+can be inspected independently rather than inferred only from percentiles.
 
 Primary artifacts:
 
@@ -181,7 +207,13 @@ The JSON/Markdown report includes:
   postings, norms, positions, term stats, status/format);
 - text-only common, rare, multi-term AND, and multi-term OR score-only query rows;
 - hybrid text-only, text+scalar, and optional text+vector(+scalar) query rows;
-- p50/p95/p99/mean latency and derived ops/sec for each retrieval row;
+- raw per-query latency samples plus p50/p95/p99/mean latency and derived
+  ops/sec for each retrieval row;
+- optional CPU (`-cpu-profile`) or paired baseline/post-query allocation
+  (`-alloc-profile`) capture for one selected hybrid row via `-query-rows`;
+  allocation capture requires process startup with `GODEBUG=memprofilerate=1`,
+  records exact interval allocation totals in the query row, and uses
+  `go tool pprof -base` only for focused stack attribution;
 - reopen close/open/probe timings;
 - concurrent reader/write sanity timing and guardrail state;
 - maintenance update/delete/rewrite/checkpoint timings and stale-posting purge
