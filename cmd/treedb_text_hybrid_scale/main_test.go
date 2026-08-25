@@ -677,7 +677,18 @@ func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("allocation profile %q info=%v err=%v", alloc, info, err)
 	}
-	pprof := exec.Command("go", "tool", "pprof", "-top", "-base", alloc+".base", "-ignore=runtime/pprof", alloc)
+	payload, err := os.ReadFile(filepath.Join(outDir, "scale_report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep report
+	if err := json.Unmarshal(payload, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Queries) != 1 || rep.Queries[0].AllocBytes == 0 || rep.Queries[0].AllocObjects == 0 || rep.Queries[0].BytesPerOp == 0 || rep.Queries[0].AllocsPerOp == 0 {
+		t.Fatalf("missing exact timed allocation counters: %+v", rep.Queries)
+	}
+	pprof := exec.Command("go", "tool", "pprof", "-top", "-base", alloc+".base", "-ignore=runtime/pprof", "-focus=SearchHybrid|searchHybridVectorCandidatesWithAllowSetBudget", alloc)
 	output, err := pprof.CombinedOutput()
 	if err != nil {
 		t.Fatalf("focused allocation profile: %v\n%s", err, output)

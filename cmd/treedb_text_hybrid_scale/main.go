@@ -227,6 +227,10 @@ type queryReport struct {
 	Latency          latencySummary                 `json:"latency"`
 	RawLatencyNS     []int64                        `json:"raw_latency_ns,omitempty"`
 	OpsPerSec        float64                        `json:"ops_per_sec"`
+	AllocBytes       uint64                         `json:"allocation_bytes,omitempty"`
+	AllocObjects     uint64                         `json:"allocation_objects,omitempty"`
+	BytesPerOp       float64                        `json:"bytes_per_op,omitempty"`
+	AllocsPerOp      float64                        `json:"allocs_per_op,omitempty"`
 	TextStats        *collections.TextSearchStats   `json:"text_stats,omitempty"`
 	HybridStats      *collections.HybridSearchStats `json:"hybrid_stats,omitempty"`
 	GuardrailOK      bool                           `json:"guardrail_ok"`
@@ -240,6 +244,11 @@ type latencySummary struct {
 	P99NS  int64   `json:"p99_ns"`
 	MaxNS  int64   `json:"max_ns"`
 	MeanNS float64 `json:"mean_ns"`
+}
+
+type allocationSummary struct {
+	Bytes   uint64
+	Objects uint64
 }
 
 type concurrentReport struct {
@@ -1321,16 +1330,16 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	if err != nil {
 		return queryReport{}, guardrailResult{}, err
 	}
-	durations, last, guard, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
+	durations, last, guard, allocations, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
 	profileErr := stopProfile()
 	if profileErr != nil {
 		profileErr = fmt.Errorf("write %s profile: %w", name, profileErr)
-		row := failedHybridQueryRow(cfg, name, shape, last, durations, profileErr)
+		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, profileErr), cfg, allocations)
 		guard = hybridFailureGuard(name, last.Stats, profileErr)
 		return row, guard, profileErr
 	}
 	if sampleErr != nil {
-		row := failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr)
+		row := withAllocationSummary(failedHybridQueryRow(cfg, name, shape, last, durations, sampleErr), cfg, allocations)
 		guard = hybridFailureGuard(name, last.Stats, sampleErr)
 		if cfg.allowGuardrailFails {
 			return row, guard, nil
@@ -1339,15 +1348,18 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}
 	lat := summarizeLatency(durations)
 	stats := last.Stats
-	return queryReport{
+	row := queryReport{
 		Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows,
 		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
-	}, guard, nil
+	}
+	return withAllocationSummary(row, cfg, allocations), guard, nil
 }
 
-func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, error) {
+func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, allocationSummary, error) {
 	durations := make([]int64, 0, cfg.queries)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
 	var last collections.HybridSearchResponse
 	for i := 0; i < cfg.queries; i++ {
 		start := time.Now()
@@ -1355,14 +1367,29 @@ func runProfiledHybridSamples(col *collections.Collection, cfg config, name stri
 		elapsed := time.Since(start).Nanoseconds()
 		last = got
 		if err != nil {
-			return durations, last, guard, fmt.Errorf("%s query %d: %w", name, i, err)
+			runtime.ReadMemStats(&after)
+			return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
 		durations = append(durations, elapsed)
 		if g := hybridGuardrail(name, got.Stats); !g.OK {
 			guard = g
 		}
 	}
-	return durations, last, guard, nil
+	runtime.ReadMemStats(&after)
+	return durations, last, guard, allocationSummary{Bytes: after.TotalAlloc - before.TotalAlloc, Objects: after.Mallocs - before.Mallocs}, nil
+}
+
+func withAllocationSummary(row queryReport, cfg config, allocations allocationSummary) queryReport {
+	if cfg.allocProfile == "" {
+		return row
+	}
+	row.AllocBytes = allocations.Bytes
+	row.AllocObjects = allocations.Objects
+	if row.Samples > 0 {
+		row.BytesPerOp = float64(allocations.Bytes) / float64(row.Samples)
+		row.AllocsPerOp = float64(allocations.Objects) / float64(row.Samples)
+	}
+	return row
 }
 
 func requireExactMemProfileRate(allocProfile bool, memProfileRate int) error {
