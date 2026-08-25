@@ -387,6 +387,9 @@ func TestIngestChunkedDocumentsSerializesPeerBufferedWritesAcrossReplacement(t *
 		t.Fatalf("open second collection handle: %v", err)
 	}
 	cfg := fixedWindowCfg(8, 1)
+	if _, err := first.DropTextIndex("lexical"); err != nil {
+		t.Fatalf("drop text index: %v", err)
+	}
 	seed, err := first.IngestChunkedDocuments(
 		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": strings.Repeat("seed child ", 8)}}},
 		cfg,
@@ -409,6 +412,12 @@ func TestIngestChunkedDocumentsSerializesPeerBufferedWritesAcrossReplacement(t *
 	}
 	if _, err := second.InsertBatch([][]byte{lateID}, [][]byte{lateDocument}); err != nil {
 		t.Fatalf("stage cross-manager insert: %v", err)
+	}
+	second.writeDomain.mu.Lock()
+	bufferedPeerWrite := second.writeDomain.count > 0 && hasBufferedIndexedRootRuns(second.writeDomain)
+	second.writeDomain.mu.Unlock()
+	if !bufferedPeerWrite {
+		t.Fatal("cross-manager insert did not remain buffered for the replacement preflight")
 	}
 
 	schemaWriteLockedDuringScan := false
@@ -441,6 +450,39 @@ func TestIngestChunkedDocumentsSerializesPeerBufferedWritesAcrossReplacement(t *
 	}
 	if got, err := first.Get(lateID); err != nil || got != nil {
 		t.Fatalf("buffered late stale child survived replacement: %s err=%v", got, err)
+	}
+}
+
+func TestIngestChunkedDocumentsRejectsVectorIndexedCollection(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "vector-docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
+		}},
+	}); err != nil {
+		t.Fatalf("create vector collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("vector-docs")
+	if err != nil {
+		t.Fatalf("open vector collection: %v", err)
+	}
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "text-only") {
+		t.Fatalf("vector-indexed batch error=%v, want text-only rejection", err)
+	}
+	if got, err := col.Get([]byte("vector-source")); err != nil || got != nil {
+		t.Fatalf("vector source mutated before rejection: %s err=%v", got, err)
 	}
 }
 

@@ -335,9 +335,9 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 // call as their atomicity unit.
 //
 // This deliberately has no embedding or vector-index configuration: it is the
-// narrow public seam for pure text chunk ingestion. It uses SourceDocument so
-// callers share the source-document metadata encoding contract with
-// IngestSources.
+// narrow public seam for pure text chunk ingestion and rejects collections
+// with vector indexes before mutation. It uses SourceDocument so callers share
+// the source-document metadata encoding contract with IngestSources.
 func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunking.Config, opts ChunkedIngestOptions) ([]ChunkedIngestResult, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -380,10 +380,23 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, err
 	}
 	defer lifecycleLocks.releaseAll()
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.collectionName())
+	_ = snap.Close()
+	if err != nil {
+		return nil, fmt.Errorf("collections: load chunked ingest catalog: %w", err)
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if len(catalog.meta.VectorIndexes) > 0 {
+		return nil, fmt.Errorf("collections: batch chunk ingest is text-only and does not support vector-indexed collections")
+	}
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}
@@ -409,9 +422,10 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 
 // replaceChunkedDocumentBatchLocked discovers stale children from the same
 // snapshot used to plan each publication attempt. The caller holds the
-// collection schema write lock from the peer-domain flush through publication,
-// so another handle cannot hide a buffered write from the snapshot or publish
-// one between the scan and replacement.
+// collection schema write lock from the authoritative vector-index preflight
+// through peer-domain flush and publication, so another handle cannot hide a
+// buffered write from the snapshot or publish one between the scan and
+// replacement.
 func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
