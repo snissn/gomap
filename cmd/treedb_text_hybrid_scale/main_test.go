@@ -503,10 +503,44 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseFlags: %v", err)
 			}
-			if cfg.cpuProfile != tc.wantCPU || cfg.allocProfile != tc.wantMem {
-				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantMem)
+			wantCPU, wantMem := tc.wantCPU, tc.wantMem
+			if wantCPU != "" {
+				wantCPU, err = resolvePathSymlinks(wantCPU)
+			}
+			if err == nil && wantMem != "" {
+				wantMem, err = resolvePathSymlinks(wantMem)
+			}
+			if err != nil {
+				t.Fatalf("resolve expected profile path: %v", err)
+			}
+			if cfg.cpuProfile != wantCPU || cfg.allocProfile != wantMem {
+				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, wantCPU, wantMem)
 			}
 		})
+	}
+}
+
+func TestProfilePathsResolveSymlinkAliases4327(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	primaryDir := filepath.Join(outDir, "primary_db")
+	if err := os.MkdirAll(primaryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dbAlias := filepath.Join(outDir, "profile-link")
+	if err := os.Symlink(primaryDir, dbAlias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := parseFlags([]string{"-out-dir", outDir, "-query-rows", queryRowHybridTextScalar, "-cpu-profile", filepath.Join(dbAlias, "cpu.pprof")}); err == nil || !strings.Contains(err.Error(), "effective -db-dir") {
+		t.Fatalf("database symlink alias error=%v", err)
+	}
+
+	reportAlias := filepath.Join(root, "report-link.pprof")
+	if err := os.Symlink(filepath.Join(outDir, "scale_report.json"), reportAlias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFlags([]string{"-out-dir", outDir, "-query-rows", queryRowHybridTextScalar, "-cpu-profile", reportAlias}); err == nil || !strings.Contains(err.Error(), "scale report artifact") {
+		t.Fatalf("report symlink alias error=%v", err)
 	}
 }
 

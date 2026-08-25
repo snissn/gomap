@@ -439,11 +439,11 @@ func parseFlags(args []string) (config, error) {
 	if effectiveDBDir == "" {
 		effectiveDBDir = filepath.Join(cfg.outDir, "primary_db")
 	}
-	outDir, err := filepath.Abs(cfg.outDir)
+	outDir, err := resolvePathSymlinks(cfg.outDir)
 	if err != nil {
 		return config{}, fmt.Errorf("resolve -out-dir: %w", err)
 	}
-	dbDir, err := filepath.Abs(effectiveDBDir)
+	dbDir, err := resolvePathSymlinks(effectiveDBDir)
 	if err != nil {
 		return config{}, fmt.Errorf("resolve effective -db-dir: %w", err)
 	}
@@ -457,7 +457,7 @@ func parseFlags(args []string) (config, error) {
 		if *profile.value == "" {
 			continue
 		}
-		resolved, err := filepath.Abs(*profile.value)
+		resolved, err := resolvePathSymlinks(*profile.value)
 		if err != nil {
 			return config{}, fmt.Errorf("resolve %s: %w", profile.name, err)
 		}
@@ -803,11 +803,11 @@ func prepareEmptyDir(dir string) error {
 }
 
 func dbDirContainsOutDir(dbDir, outDir string) (bool, error) {
-	dbAbs, err := filepath.Abs(dbDir)
+	dbAbs, err := resolvePathSymlinks(dbDir)
 	if err != nil {
 		return false, fmt.Errorf("resolve db dir %q: %w", dbDir, err)
 	}
-	outAbs, err := filepath.Abs(outDir)
+	outAbs, err := resolvePathSymlinks(outDir)
 	if err != nil {
 		return false, fmt.Errorf("resolve out dir %q: %w", outDir, err)
 	}
@@ -820,6 +820,50 @@ func pathIsSameOrDescendant(path, dir string) (bool, error) {
 		return false, err
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
+}
+
+func resolvePathSymlinks(path string) (string, error) {
+	resolved, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	for followed := 0; followed < 255; followed++ {
+		volume := filepath.VolumeName(resolved)
+		root := volume + string(os.PathSeparator)
+		parts := strings.Split(strings.TrimPrefix(resolved, root), string(os.PathSeparator))
+		current := root
+		restart := false
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			current = filepath.Join(current, part)
+			info, err := os.Lstat(current)
+			if errors.Is(err, os.ErrNotExist) {
+				return filepath.Join(append([]string{current}, parts[i+1:]...)...), nil
+			}
+			if err != nil {
+				return "", err
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				continue
+			}
+			target, err := os.Readlink(current)
+			if err != nil {
+				return "", err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			resolved = filepath.Join(append([]string{target}, parts[i+1:]...)...)
+			restart = true
+			break
+		}
+		if !restart {
+			return filepath.Clean(current), nil
+		}
+	}
+	return "", fmt.Errorf("too many symbolic links in %q", path)
 }
 
 func loadPrimaryFixture(cfg config) (scaleFixture, loadReport, error) {
