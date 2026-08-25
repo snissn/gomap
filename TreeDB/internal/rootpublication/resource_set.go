@@ -1742,6 +1742,10 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 	for kind, child := range incoming {
 		view := plan.views[kind]
 		current, hadTarget := target[kind]
+		if !hadTarget && len(distinct[kind]) != child.count {
+			plan.abandon()
+			return nil, work, true, ErrUnresolvedResource
+		}
 		switch len(distinct[kind]) {
 		case child.count:
 			if hadTarget {
@@ -1788,13 +1792,16 @@ func cloneStableResourceEntriesToKindView(entries []*stableResourceEntry) (stabl
 		builder.Abandon()
 		return stableResourceKindView{}, err
 	}
-	if len(builder.kindViews) != 1 {
+	if len(entries) == 0 || len(builder.kindViews) != 1 {
 		builder.mu.Unlock()
 		builder.Abandon()
 		return stableResourceKindView{}, ErrUnresolvedResource
 	}
-	var view stableResourceKindView
-	for _, view = range builder.kindViews {
+	view, ok := builder.kindViews[entries[0].token.kind]
+	if !ok {
+		builder.mu.Unlock()
+		builder.Abandon()
+		return stableResourceKindView{}, ErrUnresolvedResource
 	}
 	builder.kindViews = nil
 	builder.closed = true

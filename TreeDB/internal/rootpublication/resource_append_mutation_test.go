@@ -701,7 +701,6 @@ func TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic(t *t
 	}
 	var current, admitted *StableResourceDescriptor
 	for _, descriptor := range merged.Descriptors() {
-		descriptor := descriptor
 		switch descriptor.ResourceID() {
 		case "current":
 			current = &descriptor
@@ -717,6 +716,49 @@ func TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic(t *t
 	}
 	if _, _, err := merged.DependencyManifestV1(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCertifiedAppendOnlyPhysicalCoalesceRejectsMismatchedKindViewKey(t *testing.T) {
+	dir := t.TempDir()
+	scaleFile := writeStableResourceFixture(t, dir, "scale.bin", "x")
+	collisionFile := writeStableResourceFixture(t, dir, "current.bin", "xx")
+	baseObligation, added := appendMutationTestObligation(1), appendMutationTestObligation(2)
+	targetBuilder := NewStableResourceSetBuilder()
+	defer targetBuilder.Abandon()
+	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
+		if err := targetBuilder.Add(distinctPhysicalTokenFixture(t, scaleFile, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := targetBuilder.Add(appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, baseObligation)); err != nil {
+		t.Fatal(err)
+	}
+	targetBuilder.mu.Lock()
+	if err := targetBuilder.promoteEntriesToViewsLocked(); err != nil {
+		targetBuilder.mu.Unlock()
+		t.Fatal(err)
+	}
+	targetBuilder.mu.Unlock()
+	producerBuilder := NewStableResourceSetBuilder()
+	defer producerBuilder.Abandon()
+	if err := producerBuilder.Add(appendMutationResourceToken(t, collisionFile, ResourceColumnAsset, "current", 2, ReachabilityColumnManifest, added)); err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder.mu.Lock()
+	if err := producerBuilder.promoteEntriesToViewsLocked(); err != nil {
+		producerBuilder.mu.Unlock()
+		t.Fatal(err)
+	}
+	producerBuilder.kindViews[ResourceValueLog] = producerBuilder.kindViews[ResourceColumnAsset]
+	delete(producerBuilder.kindViews, ResourceColumnAsset)
+	producerBuilder.mu.Unlock()
+
+	plan, _, certified, err := certifiedAppendOnlyPhysicalCoalesce(targetBuilder.kindViews, producerBuilder.kindViews, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+	})
+	if plan != nil || !certified || !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("mismatched kind view plan=%v certified=%t err=%v", plan, certified, err)
 	}
 }
 
