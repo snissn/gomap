@@ -682,8 +682,13 @@ type StableResourceSetBuilder struct {
 	closed    bool
 	abandoned bool
 	state     ResourceOwnerState
-	lookup    stableResourceEntryLookup
-	work      *StableResourceClosureWork
+	indexed   *stableResourceBuilderIndexedState
+}
+
+type stableResourceBuilderIndexedState struct {
+	// Keep scale-only state out of the common small builder allocation.
+	lookup stableResourceEntryLookup
+	work   StableResourceClosureWork
 }
 
 func NewStableResourceSetBuilder(required ...ReachabilityField) *StableResourceSetBuilder {
@@ -704,10 +709,10 @@ func (builder *StableResourceSetBuilder) ClosureWorkSnapshot() StableResourceClo
 	}
 	builder.mu.Lock()
 	defer builder.mu.Unlock()
-	if builder.work == nil {
+	if builder.indexed == nil {
 		return StableResourceClosureWork{}
 	}
-	return *builder.work
+	return builder.indexed.work
 }
 
 func (builder *StableResourceSetBuilder) State() ResourceOwnerState {
@@ -731,7 +736,7 @@ func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) error {
 	if err := token.claim(ResourceOwnerBuilder); err != nil {
 		return err
 	}
-	if builder.lookup.logical == nil {
+	if builder.indexed == nil {
 		if len(builder.entries) < stableResourceEntryLinearLookupLimit {
 			err := mergeOwnedTokenLinear(&builder.entries, token)
 			if err != nil {
@@ -739,12 +744,11 @@ func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) error {
 			}
 			return err
 		}
-		builder.lookup = newStableResourceEntryLookup(builder.entries)
-		if builder.work == nil {
-			builder.work = &StableResourceClosureWork{}
+		builder.indexed = &stableResourceBuilderIndexedState{
+			lookup: newStableResourceEntryLookup(builder.entries),
 		}
 	}
-	if err := mergeOwnedToken(&builder.entries, &builder.lookup, token, builder.work); err != nil {
+	if err := mergeOwnedToken(&builder.entries, &builder.indexed.lookup, token, &builder.indexed.work); err != nil {
 		token.releaseFrom(ResourceOwnerBuilder)
 		return err
 	}
@@ -1044,8 +1048,8 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	lookup := stableResourceEntryLookup{}
 	if len(merged)+len(child.entries) > stableResourceEntryLinearLookupLimit {
 		lookup = newStableResourceEntryLookup(merged)
-		if builder.work == nil {
-			builder.work = &StableResourceClosureWork{}
+		if builder.indexed == nil {
+			builder.indexed = &stableResourceBuilderIndexedState{}
 		}
 	}
 	for _, entry := range child.entries {
@@ -1053,7 +1057,7 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 		if lookup.logical == nil {
 			err = mergeViewEntryLinear(&merged, entry, false, nil)
 		} else {
-			err = mergeViewEntry(&merged, &lookup, entry, false, builder.work)
+			err = mergeViewEntry(&merged, &lookup, entry, false, &builder.indexed.work)
 		}
 		if err != nil {
 			child.mu.Unlock()
@@ -1071,7 +1075,11 @@ func (builder *StableResourceSetBuilder) Merge(child *StableResourceSet) error {
 	// from the committed merged view are released, and only after the child CAS
 	// makes the ownership transfer irreversible.
 	builder.entries = merged
-	builder.lookup = lookup
+	if lookup.logical == nil {
+		builder.indexed = nil
+	} else {
+		builder.indexed.lookup = lookup
+	}
 	child.entries = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
@@ -1245,7 +1253,10 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	}
 	dropped := droppedStableResourceTokens(merged, builder.entries, child.entries)
 	builder.entries = merged
-	builder.lookup = lookup
+	if builder.indexed == nil {
+		builder.indexed = &stableResourceBuilderIndexedState{}
+	}
+	builder.indexed.lookup = lookup
 	child.entries = nil
 	child.mu.Unlock()
 	builder.mu.Unlock()
