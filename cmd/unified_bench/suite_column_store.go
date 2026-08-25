@@ -348,6 +348,9 @@ type columnStoreCandidateResourceWorkMetric struct {
 	CopiedEntries                   uint64 `json:"copied_entries,omitempty"`
 	CopiedObligations               uint64 `json:"copied_obligations,omitempty"`
 	PhysicalHandleCopies            uint64 `json:"physical_handle_copies,omitempty"`
+	PhysicalEntryLookupProbes       uint64 `json:"physical_entry_lookup_probes,omitempty"`
+	PhysicalEntryLookupComparisons  uint64 `json:"physical_entry_lookup_comparisons,omitempty"`
+	PhysicalEntryLookupAdmissions   uint64 `json:"physical_entry_lookup_admissions,omitempty"`
 	LogicalObligationNormalizations uint64 `json:"logical_obligation_normalizations,omitempty"`
 	RetainedIndexNodeVisits         uint64 `json:"retained_index_node_visits,omitempty"`
 	RetainedIndexNodeCopies         uint64 `json:"retained_index_node_copies,omitempty"`
@@ -1845,6 +1848,9 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 			CopiedEntries:                   stats.ColumnPublishFinalizeCandidateResourceWork.CopiedEntries,
 			CopiedObligations:               stats.ColumnPublishFinalizeCandidateResourceWork.CopiedObligations,
 			PhysicalHandleCopies:            stats.ColumnPublishFinalizeCandidateResourceWork.PhysicalHandleCopies,
+			PhysicalEntryLookupProbes:       stats.ColumnPublishFinalizeCandidateResourceWork.PhysicalEntryLookupProbes,
+			PhysicalEntryLookupComparisons:  stats.ColumnPublishFinalizeCandidateResourceWork.PhysicalEntryLookupComparisons,
+			PhysicalEntryLookupAdmissions:   stats.ColumnPublishFinalizeCandidateResourceWork.PhysicalEntryLookupAdmissions,
 			LogicalObligationNormalizations: stats.ColumnPublishFinalizeCandidateResourceWork.LogicalObligationNormalizations,
 			RetainedIndexNodeVisits:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeVisits,
 			RetainedIndexNodeCopies:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeCopies,
@@ -5072,6 +5078,9 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `copied_entries` | %d |\n", work.CopiedEntries))
 		sb.WriteString(fmt.Sprintf("| `copied_obligations` | %d |\n", work.CopiedObligations))
 		sb.WriteString(fmt.Sprintf("| `physical_handle_copies` | %d |\n", work.PhysicalHandleCopies))
+		sb.WriteString(fmt.Sprintf("| `physical_entry_lookup_probes` | %d |\n", work.PhysicalEntryLookupProbes))
+		sb.WriteString(fmt.Sprintf("| `physical_entry_lookup_comparisons` | %d |\n", work.PhysicalEntryLookupComparisons))
+		sb.WriteString(fmt.Sprintf("| `physical_entry_lookup_admissions` | %d |\n", work.PhysicalEntryLookupAdmissions))
 		sb.WriteString(fmt.Sprintf("| `logical_obligation_normalizations` | %d |\n", work.LogicalObligationNormalizations))
 		sb.WriteString(fmt.Sprintf("| `retained_index_node_visits` | %d |\n", work.RetainedIndexNodeVisits))
 		sb.WriteString(fmt.Sprintf("| `retained_index_node_copies` | %d |\n", work.RetainedIndexNodeCopies))

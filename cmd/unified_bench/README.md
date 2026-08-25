@@ -409,6 +409,10 @@ The suite writes:
 - `insights.md`, `insights.json`, `insights.html`
 - configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes produce non-empty deltas
 
+Column-store JSON and Markdown insert statistics include physical-entry lookup
+probes, comparisons, and admissions so scale runs can verify that indexed
+root-publication lookup is active and bounded.
+
 `column_store_results.json` includes `query_mode` and `metadata_mode` labels on
 query rows and a `jsonbench_cells` matrix for the in-repo synthetic
 JSONBench-shaped fixture. Each cell records the external-facing label
