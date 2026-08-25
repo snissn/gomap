@@ -90,17 +90,23 @@ func stableChildIDForField(child *StableResourceSet, field ReachabilityField) (s
 		return "", ErrResourceOwnership
 	}
 	var id string
-	for _, entry := range child.entries {
+	var bindErr error
+	child.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 		if _, covered := entry.reachability[field]; !covered {
-			continue
+			return true
 		}
 		if id == "" {
 			id = entry.token.resourceID
-			continue
+			return true
 		}
 		if id != entry.token.resourceID {
-			return "", fmt.Errorf("%w: child field %q has multiple resource IDs", ErrResourceConflict, field)
+			bindErr = fmt.Errorf("%w: child field %q has multiple resource IDs", ErrResourceConflict, field)
+			return false
 		}
+		return true
+	})
+	if bindErr != nil {
+		return "", bindErr
 	}
 	if id == "" {
 		return "", fmt.Errorf("%w: child does not cover reachability field %q", ErrUnresolvedResource, field)

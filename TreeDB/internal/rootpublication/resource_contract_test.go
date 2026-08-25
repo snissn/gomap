@@ -408,10 +408,10 @@ func testCloneStableResourceSetUsesExactHandlesAndIndependentPins(t *testing.T) 
 		source.Release()
 		t.Fatal(err)
 	}
-	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 1 {
+	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 0 || work.PhysicalRootShares != 1 {
 		clone.Release()
 		source.Release()
-		t.Fatalf("clone handle work=%+v, want one share and no copy", work)
+		t.Fatalf("clone handle work=%+v, want one immutable-root share and no per-handle work", work)
 	}
 	if err := source.Tokens()[0].WithPinnedFile(func(sourceFile *os.File) error {
 		return clone.Tokens()[0].WithPinnedFile(func(cloneFile *os.File) error {
@@ -489,8 +489,8 @@ func TestCloneStableResourceSetSharesCustomSyncHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer clone.Release()
-	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 1 {
-		t.Fatalf("custom-sync clone work=%+v, want one shared exact handle", work)
+	if work.PhysicalHandleCopies != 0 || work.PhysicalHandleShares != 0 || work.PhysicalRootShares != 1 {
+		t.Fatalf("custom-sync clone work=%+v, want one immutable-root share and no per-handle work", work)
 	}
 	source.Release()
 	if err := clone.Tokens()[0].syncThrough(DurableFrontier{Bytes: 9}); err != nil {
