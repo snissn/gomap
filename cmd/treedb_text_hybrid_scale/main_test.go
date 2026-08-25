@@ -543,6 +543,21 @@ func TestProfilePathsResolveSymlinkAliases4327(t *testing.T) {
 		t.Fatalf("report symlink alias error=%v", err)
 	}
 }
+func TestProfilePathsRejectExistingHardLinks4327(t *testing.T) {
+	root := t.TempDir()
+	cpuPath := filepath.Join(root, "cpu.pprof")
+	allocPath := filepath.Join(root, "allocs.pprof")
+	if err := os.WriteFile(cpuPath, []byte("existing profile"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(cpuPath, allocPath); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	_, err := parseFlags([]string{"-out-dir", filepath.Join(root, "out"), "-query-rows", queryRowHybridTextScalar, "-cpu-profile", cpuPath, "-alloc-profile", allocPath})
+	if err == nil || !strings.Contains(err.Error(), "destination must not already exist") {
+		t.Fatalf("hard-linked profile destinations error=%v", err)
+	}
+}
 
 func TestProfileFinalizationAttemptsBothOutputs4327(t *testing.T) {
 	cpuErr := errors.New("close CPU profile")

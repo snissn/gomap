@@ -461,6 +461,11 @@ func parseFlags(args []string) (config, error) {
 		if err != nil {
 			return config{}, fmt.Errorf("resolve %s: %w", profile.name, err)
 		}
+		if _, err := os.Lstat(resolved); err == nil {
+			return config{}, fmt.Errorf("%s destination must not already exist", profile.name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return config{}, fmt.Errorf("inspect %s destination: %w", profile.name, err)
+		}
 		*profile.value = resolved
 	}
 	profilePaths := []struct {
