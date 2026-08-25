@@ -16,22 +16,28 @@ and 1M. Each 10k group has exactly smoke repetition 1; each retained 100k/1M
 group has exactly repetitions 1, 2, and 3. Summaries occur once per
 mode/scale, never in raw rows, and are recomputed from those raw repetitions.
 
-Every row separately accounts for source documents, generated chunks, and
-indexed live rows (maintenance may intentionally have fewer live rows). Stages
+Every row separately accounts for source documents, generated chunks, total live
+indexed rows, and whether source parents are text-indexed (maintenance may
+intentionally have fewer live rows). `source_chunk` uses the public
+`IngestChunkedDocument` parent-and-child lifecycle with no vector index or
+embedder; its timed wall boundary includes deterministic chunk planning and the
+durable parent/child text writes. Stages
 and resource metrics are either `observed` or `unavailable` with a reason;
 zero is not used as a made-up measurement. The manifest binds clean VCS and
-vectors-disabled/zero-vector-index state as observed product identity. Every
-row records stage timing, primary/text-root/value-log/WAL bytes, text-v2
-component bytes, maintenance debt, and an actual checkpoint/close/reopen
-score-only probe. The validator rejects count drift, zero-document-probe
-violations, failed reopen, dirty/vector product identity, incomplete accounting,
-and ambiguous retained rows.
+vectors-disabled/zero-vector-index state as observed product identity. Every row records stage timing, physical storage, logical text-v2 component
+bytes, maintenance debt, and an actual checkpoint/close/reopen score-only probe.
+The validator rejects count drift, zero-document-probe violations, failed reopen,
+dirty/vector product identity, incomplete accounting, and ambiguous retained rows.
 
-`total_bytes` is exactly the disjoint `primary + text_root + value_log`
-components; it explicitly excludes WAL, which remains separately visible.
-Primary must exclude both text-root and value-log bytes, so value-log bytes are
-never double counted. `bytes_per_op` and `allocs_per_op` are allocation metrics, not a
-memory-footprint label; `peak_rss_bytes` is the process memory metric.
+Physical storage is observed only after checkpoint and close by walking the DB
+directory. `physical_index_page_bytes`, `physical_value_log_bytes`,
+`physical_wal_bytes`, and `physical_other_bytes` are disjoint and sum exactly to
+`physical_total_bytes`; `physical_total_wal_excluded_bytes` is also reported.
+Unknown regular files are retained in `other_paths`, never silently omitted.
+`logical_primary_payload_bytes` (known input documents) and the text-v2
+components are logical measures and explicitly overlap physical storage, so they
+are non-additive. CPU and max RSS use `getrusage` on Darwin/Linux; allocations
+are cumulative `runtime.MemStats` malloc counts, not B/op.
 
 ## Validate
 

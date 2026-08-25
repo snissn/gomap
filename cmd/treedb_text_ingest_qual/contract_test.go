@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,7 +28,12 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
 		{"zero stage placeholder", func(_ *manifest, r *report) { r.Rows[0].Stages["value_log"] = metric{State: "observed"} }, "zero placeholder"},
-		{"storage overlap", func(_ *manifest, r *report) { r.Rows[0].Storage.TotalBytes++ }, "storage total"},
+		{"storage overlap", func(_ *manifest, r *report) { r.Rows[0].Storage.PhysicalTotalBytes++ }, "physical total"},
+		{"source parent text index accounting", func(_ *manifest, r *report) {
+			r.Rows[0].Mode = "source_chunk"
+			r.Rows[0].GeneratedChunks = 1
+			r.Rows[0].ParentsTextIndexed = false
+		}, "parent text-index accounting"},
 		{"maintenance count semantics", func(_ *manifest, r *report) {
 			for i := range r.Rows {
 				if r.Rows[i].Mode == "maintenance" {
@@ -46,6 +53,31 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		})
 	}
 }
+func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
+	dir := t.TempDir()
+	for path, contents := range map[string]string{
+		"index.db": "i", "value_vlog/0001": "vv", "wal/0001": "www", "metadata": "oooo",
+	} {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := observeStorage(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.PhysicalIndexPageBytes != 1 || s.PhysicalValueLogBytes != 2 || s.PhysicalWALBytes != 3 || s.PhysicalOtherBytes != 4 || s.PhysicalTotalBytes != 10 || s.PhysicalTotalWALExcludedBytes != 7 {
+		t.Fatalf("unexpected storage: %+v", s)
+	}
+	if len(s.OtherPaths) != 1 || s.OtherPaths[0] != "metadata" {
+		t.Fatalf("other paths: %v", s.OtherPaths)
+	}
+}
+
 func validManifest() manifest {
 	return manifest{SchemaVersion: contractVersion, FixtureSHA256: "fixture", Analyzer: "simple", FieldWeights: "title=3,body=1", IDsSHA256: "ids", Command: "go run", Commit: "abcdef", Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: "abcdef", Durability: "wal_on", VectorIndexes: 0}}
 }
@@ -77,14 +109,16 @@ func validReport(t *testing.T, m manifest) report {
 }
 func validRow(mode string, scale, rep int) row {
 	source, chunks, live := scale, 0, scale
+	parentsIndexed := false
 	if mode == "source_chunk" {
+		parentsIndexed = true
 		chunks = scale * 2
 		live = chunks
 	}
 	if mode == "maintenance" {
 		live = scale / 2
 	}
-	return row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, Postings: 1, Terms: 1, Blocks: 1, Generations: 1, SourceDocsPerSec: 1, ChunksPerSec: 1, IndexedRowsPerSec: 1, WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, PeakRSSBytes: metric{State: "observed", Value: 1}, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PrimaryBytes: 1, TextRootBytes: 1, ValueLogBytes: 1, TotalBytes: 3, TotalIncludes: "primary,text_root,value_log", WALExcluded: true}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
+	return row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, Postings: 1, Terms: 1, Blocks: 1, Generations: 1, SourceDocsPerSec: 1, ChunksPerSec: 1, IndexedRowsPerSec: 1, WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, CumulativeAllocs: metric{State: "observed", Value: 1}, PeakRSSBytes: metric{State: "observed", Value: 1}, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	return modeScaleSummary{Mode: mode, Scale: scale, MedianWallSeconds: 1, P95WallSeconds: 1, MedianIndexedRowsPerSec: 1, P95IndexedRowsPerSec: 1}

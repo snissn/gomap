@@ -43,33 +43,35 @@ type report struct {
 }
 
 type row struct {
-	Mode              string            `json:"mode"`
-	Scale             int               `json:"scale"`
-	Repetition        int               `json:"repetition"`
-	SourceDocuments   int               `json:"source_documents"`
-	GeneratedChunks   int               `json:"generated_chunks"`
-	IndexedLiveRows   int               `json:"indexed_live_rows"`
-	Postings          uint64            `json:"postings"`
-	Terms             uint64            `json:"terms"`
-	Blocks            uint64            `json:"blocks"`
-	Generations       uint64            `json:"generations"`
-	StaleDebt         uint64            `json:"stale_debt"`
-	TombstoneDebt     uint64            `json:"tombstone_debt"`
-	SourceDocsPerSec  float64           `json:"source_docs_per_second"`
-	ChunksPerSec      float64           `json:"chunks_per_second"`
-	IndexedRowsPerSec float64           `json:"indexed_rows_per_second"`
-	WallSeconds       float64           `json:"wall_seconds"`
-	CPUSeconds        metric            `json:"cpu_seconds"`
-	BytesPerOp        metric            `json:"bytes_per_op"`
-	AllocsPerOp       metric            `json:"allocs_per_op"`
-	PeakRSSBytes      metric            `json:"peak_rss_bytes"`
-	Stages            map[string]metric `json:"stages"`
-	Storage           storage           `json:"storage"`
-	TextV2            textV2            `json:"text_v2"`
-	CheckpointOK      bool              `json:"checkpoint_ok"`
-	CloseOK           bool              `json:"close_ok"`
-	ReopenOK          bool              `json:"reopen_ok"`
-	Probe             scoreOnlyProbe    `json:"score_only_probe"`
+	Mode               string            `json:"mode"`
+	Scale              int               `json:"scale"`
+	Repetition         int               `json:"repetition"`
+	SourceDocuments    int               `json:"source_documents"`
+	GeneratedChunks    int               `json:"generated_chunks"`
+	IndexedLiveRows    int               `json:"indexed_live_rows"`
+	ParentsTextIndexed bool              `json:"parents_text_indexed"`
+	Postings           uint64            `json:"postings"`
+	Terms              uint64            `json:"terms"`
+	Blocks             uint64            `json:"blocks"`
+	Generations        uint64            `json:"generations"`
+	StaleDebt          uint64            `json:"stale_debt"`
+	TombstoneDebt      uint64            `json:"tombstone_debt"`
+	SourceDocsPerSec   float64           `json:"source_docs_per_second"`
+	ChunksPerSec       float64           `json:"chunks_per_second"`
+	IndexedRowsPerSec  float64           `json:"indexed_rows_per_second"`
+	WallSeconds        float64           `json:"wall_seconds"`
+	CPUSeconds         metric            `json:"cpu_seconds"`
+	BytesPerOp         metric            `json:"bytes_per_op"`
+	AllocsPerOp        metric            `json:"allocs_per_op"`
+	CumulativeAllocs   metric            `json:"cumulative_allocations"`
+	PeakRSSBytes       metric            `json:"peak_rss_bytes"`
+	Stages             map[string]metric `json:"stages"`
+	Storage            storage           `json:"storage"`
+	TextV2             textV2            `json:"text_v2"`
+	CheckpointOK       bool              `json:"checkpoint_ok"`
+	CloseOK            bool              `json:"close_ok"`
+	ReopenOK           bool              `json:"reopen_ok"`
+	Probe              scoreOnlyProbe    `json:"score_only_probe"`
 }
 
 type metric struct {
@@ -78,13 +80,18 @@ type metric struct {
 	Reason string  `json:"reason,omitempty"`
 }
 type storage struct {
-	PrimaryBytes  int64  `json:"primary_bytes"`
-	TextRootBytes int64  `json:"text_root_bytes"`
-	ValueLogBytes int64  `json:"value_log_bytes"`
-	WALBytes      int64  `json:"wal_bytes"`
-	TotalBytes    int64  `json:"total_bytes"`
-	TotalIncludes string `json:"total_includes"`
-	WALExcluded   bool   `json:"wal_excluded_from_total"`
+	// Physical categories are disjoint filesystem buckets observed only after
+	// checkpoint and close. Logical payload and text-v2 components are reported
+	// separately and are explicitly non-additive with physical bytes.
+	PhysicalIndexPageBytes        int64    `json:"physical_index_page_bytes"`
+	PhysicalValueLogBytes         int64    `json:"physical_value_log_bytes"`
+	PhysicalWALBytes              int64    `json:"physical_wal_bytes"`
+	PhysicalOtherBytes            int64    `json:"physical_other_bytes"`
+	PhysicalTotalBytes            int64    `json:"physical_total_bytes"`
+	PhysicalTotalWALExcludedBytes int64    `json:"physical_total_wal_excluded_bytes"`
+	OtherPaths                    []string `json:"other_paths,omitempty"`
+	LogicalPrimaryPayloadBytes    int64    `json:"logical_primary_payload_bytes"`
+	LogicalTextV2Overlap          string   `json:"logical_text_v2_overlap"`
 }
 type textV2 struct {
 	DocIDBytes    int64 `json:"docid_bytes"`
@@ -192,8 +199,8 @@ func validateRow(r row) error {
 	if r.SourceDocuments < 1 || r.GeneratedChunks < 0 || r.IndexedLiveRows < 1 {
 		return fmt.Errorf("document accounting is incomplete")
 	}
-	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0) {
-		return fmt.Errorf("source_chunk requires source and generated chunk accounting")
+	if r.Mode == "source_chunk" && (r.GeneratedChunks < 1 || r.SourceDocsPerSec <= 0 || r.ChunksPerSec <= 0 || !r.ParentsTextIndexed) {
+		return fmt.Errorf("source_chunk requires source, generated child, and parent text-index accounting")
 	}
 	if r.Mode != "source_chunk" && r.SourceDocuments != r.Scale {
 		return fmt.Errorf("non-source mode source_documents must equal scale")
@@ -213,7 +220,7 @@ func validateRow(r row) error {
 			return fmt.Errorf("%s stage must not use a zero placeholder", name)
 		}
 	}
-	for _, v := range []metric{r.CPUSeconds, r.BytesPerOp, r.AllocsPerOp, r.PeakRSSBytes} {
+	for _, v := range []metric{r.CPUSeconds, r.BytesPerOp, r.AllocsPerOp, r.CumulativeAllocs, r.PeakRSSBytes} {
 		if err := validateMetric(v); err != nil {
 			return fmt.Errorf("resource metric: %w", err)
 		}
@@ -245,14 +252,17 @@ func validateMetric(v metric) error {
 	return nil
 }
 func validateStorage(s storage) error {
-	if s.PrimaryBytes < 0 || s.TextRootBytes < 0 || s.ValueLogBytes < 0 || s.WALBytes < 0 || s.TotalBytes <= 0 {
+	if s.PhysicalIndexPageBytes < 0 || s.PhysicalValueLogBytes < 0 || s.PhysicalWALBytes < 0 || s.PhysicalOtherBytes < 0 || s.PhysicalTotalBytes <= 0 || s.PhysicalTotalWALExcludedBytes < 0 || s.LogicalPrimaryPayloadBytes <= 0 {
 		return fmt.Errorf("storage accounting incomplete")
 	}
-	if s.TotalIncludes != "primary,text_root,value_log" || !s.WALExcluded {
-		return fmt.Errorf("storage boundaries must be disjoint primary,text_root,value_log with WAL excluded")
+	if s.LogicalTextV2Overlap != "logical_text_v2_components_overlap_physical_storage_non_additive" {
+		return fmt.Errorf("logical text-v2 overlap label is required")
 	}
-	if s.TotalBytes != s.PrimaryBytes+s.TextRootBytes+s.ValueLogBytes {
-		return fmt.Errorf("storage total must equal disjoint components without double-counting value log")
+	if s.PhysicalTotalBytes != s.PhysicalIndexPageBytes+s.PhysicalValueLogBytes+s.PhysicalWALBytes+s.PhysicalOtherBytes {
+		return fmt.Errorf("physical total must equal disjoint physical buckets")
+	}
+	if s.PhysicalTotalWALExcludedBytes != s.PhysicalTotalBytes-s.PhysicalWALBytes {
+		return fmt.Errorf("WAL-excluded physical total is inconsistent")
 	}
 	return nil
 }
