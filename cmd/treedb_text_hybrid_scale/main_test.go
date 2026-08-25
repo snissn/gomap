@@ -485,6 +485,8 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 		{name: "Markdown report collision", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md")}, wantErr: "must not resolve to a scale report artifact"},
 		{name: "default DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "primary_db", "profiles", "cpu.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
 		{name: "custom DB descendant", args: []string{"-db-dir", customDBDir, "-alloc-profile", filepath.Join(customDBDir, "profiles", "allocs.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
+		{name: "maintenance DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "maintenance_db", "cpu.pprof")}, wantErr: "maintenance database directory"},
+		{name: "backfill DB descendant", args: []string{"-alloc-profile", filepath.Join(outDir, "backfill_db", "profiles", "allocs.pprof")}, wantErr: "backfill database directory"},
 		{name: "distinct profiles under output directory", args: []string{"-cpu-profile", filepath.Join(outDir, "profiles", "cpu.pprof"), "-alloc-profile", filepath.Join(outDir, "profiles", "allocs.pprof")}, wantCPU: filepath.Join(outDir, "profiles", "cpu.pprof"), wantMem: filepath.Join(outDir, "profiles", "allocs.pprof")},
 	}
 	for _, tc := range tests {
@@ -505,6 +507,22 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantMem)
 			}
 		})
+	}
+}
+
+func TestProfileFinalizationAttemptsBothOutputs4327(t *testing.T) {
+	cpuErr := errors.New("close CPU profile")
+	allocErr := errors.New("write allocation profile")
+	calls := 0
+	err := finalizeQueryProfiles(func() error {
+		calls++
+		return cpuErr
+	}, func() error {
+		calls++
+		return allocErr
+	})
+	if calls != 2 || !errors.Is(err, cpuErr) || !errors.Is(err, allocErr) {
+		t.Fatalf("finalization calls=%d err=%v", calls, err)
 	}
 }
 

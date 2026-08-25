@@ -485,6 +485,21 @@ func parseFlags(args []string) (config, error) {
 		if inDBDir {
 			return config{}, fmt.Errorf("%s must not resolve to the effective -db-dir or its descendant", profile.name)
 		}
+		for _, reserved := range []struct {
+			name string
+			dir  string
+		}{
+			{name: "maintenance", dir: filepath.Join(outDir, "maintenance_db")},
+			{name: "backfill", dir: filepath.Join(outDir, "backfill_db")},
+		} {
+			inReservedDir, err := pathIsSameOrDescendant(profile.value, reserved.dir)
+			if err != nil {
+				return config{}, fmt.Errorf("compare %s and %s database directory: %w", profile.name, reserved.name, err)
+			}
+			if inReservedDir {
+				return config{}, fmt.Errorf("%s must not resolve to the %s database directory or its descendant", profile.name, reserved.name)
+			}
+		}
 		if prior, exists := seenProfiles[profile.value]; exists {
 			return config{}, fmt.Errorf("%s and %s must not resolve to the same path", prior, profile.name)
 		}
@@ -1351,13 +1366,14 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 	return func() error {
 		once.Do(func() {
 			pprof.StopCPUProfile()
-			stopErr = f.Close()
-			if stopErr == nil {
-				stopErr = writeAllocsAfter()
-			}
+			stopErr = finalizeQueryProfiles(f.Close, writeAllocsAfter)
 		})
 		return stopErr
 	}, nil
+}
+
+func finalizeQueryProfiles(closeCPU, writeAllocs func() error) error {
+	return errors.Join(closeCPU(), writeAllocs())
 }
 
 func profiledWarmupError(cfg config, warmErr error) error {
