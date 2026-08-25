@@ -1092,10 +1092,15 @@ func startQueryProfiles(cfg config) (func() error, error) {
 	if cfg.cpuProfile == "" && cfg.allocProfile == "" {
 		return func() error { return nil }, nil
 	}
+	oldMemProfileRate := runtime.MemProfileRate
+	if cfg.allocProfile != "" {
+		runtime.MemProfileRate = 1
+	}
 	writeAllocs := func() error {
 		if cfg.allocProfile == "" {
 			return nil
 		}
+		defer func() { runtime.MemProfileRate = oldMemProfileRate }()
 		if err := os.MkdirAll(filepath.Dir(cfg.allocProfile), 0o755); err != nil {
 			return err
 		}
