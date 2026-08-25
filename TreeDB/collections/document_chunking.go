@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -25,7 +26,8 @@ type ChunkedIngestOptions struct {
 }
 
 type chunkedIngestHooks struct {
-	afterDelete func()
+	afterDelete    func()
+	afterBatchScan func()
 }
 
 func (o ChunkedIngestOptions) textField() string {
@@ -87,6 +89,12 @@ func chunkPlanDocs(children []chunkChild) [][]byte {
 
 // chunkedIngestPlan is the validated, mutation-free output of buildChunkPlan.
 type chunkedIngestPlan struct {
+	children []chunkChild
+}
+
+type chunkedDocumentBatchPlan struct {
+	parentID []byte
+	parent   []byte
 	children []chunkChild
 }
 
@@ -311,6 +319,174 @@ func (c *Collection) IngestChunkedDocument(parentID []byte, parentDocument []byt
 	}
 	result.Replaced = len(oldChildren)
 	return result, nil
+}
+
+// IngestChunkedDocuments stores a batch of text-only source documents through
+// one durable collection-root publication. It is the batch counterpart to
+// IngestChunkedDocument: child IDs remain deterministic (<parentID>#<ordinal>)
+// and results retain source input order.
+//
+// The complete batch — IDs (including duplicates), source document encoding,
+// text-field and metadata validation, and every child plan — validates before
+// the collection mutates. A successful call atomically replaces every supplied
+// parent and its children as one normal durable storage publication. If that
+// publication reports an ambiguous commit, callers must retry the complete
+// batch; it converges to the same parent/child IDs. Bounded callers may use one
+// call as their atomicity unit.
+//
+// This deliberately has no embedding or vector-index configuration: it is the
+// narrow public seam for pure text chunk ingestion. It uses SourceDocument so
+// callers share the source-document metadata encoding contract with
+// IngestSources.
+func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunking.Config, opts ChunkedIngestOptions) ([]ChunkedIngestResult, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if len(sources) == 0 {
+		return nil, nil
+	}
+
+	plans := make([]chunkedDocumentBatchPlan, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for i, source := range sources {
+		if err := chunking.ValidateParentID(string(source.ID)); err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		key := string(source.ID)
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("collections: chunked ingest batch has duplicate parent ID %q at source %d", source.ID, i)
+		}
+		seen[key] = struct{}{}
+		parent, err := buildIngestParentDocument(source)
+		if err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		plan, err := c.buildChunkPlan(source.ID, parent, cfg, opts)
+		if err != nil {
+			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
+		}
+		plans[i] = chunkedDocumentBatchPlan{parentID: bytes.Clone(source.ID), parent: parent, children: plan.children}
+	}
+
+	parentIDs := make([][]byte, len(plans))
+	for i := range plans {
+		parentIDs[i] = plans[i].parentID
+	}
+	lifecycleLocks, err := c.lockChunkParentLifecycles(context.Background(), parentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer lifecycleLocks.releaseAll()
+	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
+	}
+	replaced, err := c.replaceChunkedDocumentBatch(plans, opts.hooks)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]ChunkedIngestResult, len(plans))
+	for i, plan := range plans {
+		childIDs := make([][]byte, len(plan.children))
+		for j, child := range plan.children {
+			childIDs[j] = bytes.Clone(child.id)
+		}
+		results[i] = ChunkedIngestResult{
+			parentID: bytes.Clone(plan.parentID),
+			ChildIDs: childIDs,
+			Replaced: replaced[i],
+		}
+	}
+	return results, nil
+}
+
+// replaceChunkedDocumentBatch holds the ordinary collection mutation lock from
+// stale-child discovery through durable publication. InsertBatch cannot publish
+// a child after the prefix scan but before the replacement plan commits.
+func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
+	}
+
+	deleteIDs := make([][]byte, 0, len(plans)*2)
+	insertIDs := make([][]byte, 0, len(plans)*2)
+	insertDocs := make([][]byte, 0, len(plans)*2)
+	replaced := make([]int, len(plans))
+	for i, plan := range plans {
+		oldChildren, _, err := c.chunkChildrenUnlocked(plan.parentID)
+		if err != nil {
+			return nil, err
+		}
+		replaced[i] = len(oldChildren)
+		deleteIDs = append(deleteIDs, oldChildren...)
+		deleteIDs = append(deleteIDs, plan.parentID)
+		for _, child := range plan.children {
+			insertIDs = append(insertIDs, child.id)
+			insertDocs = append(insertDocs, child.document)
+		}
+		insertIDs = append(insertIDs, plan.parentID)
+		insertDocs = append(insertDocs, plan.parent)
+	}
+	if hooks != nil && hooks.afterBatchScan != nil {
+		hooks.afterBatchScan()
+	}
+
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, nil)
+		if err != nil {
+			if isRetriableCollectionMutationError(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
+		}
+		publishErr := c.publishSourceReplacementPlan(plan, nil)
+		plan.close()
+		if isRetriableCollectionMutationError(publishErr) {
+			lastErr = publishErr
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		published := publishErr == nil || backenddb.CommitPublicationAccepted(publishErr) || errors.Is(publishErr, ErrCommitAmbiguous)
+		if !published {
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", publishErr)
+		}
+		reconcileIDs := make([][]byte, 0, len(deleteIDs)+len(insertIDs))
+		seen := make(map[string]struct{}, len(deleteIDs)+len(insertIDs))
+		for _, ids := range [][][]byte{deleteIDs, insertIDs} {
+			for _, id := range ids {
+				if _, ok := seen[string(id)]; ok {
+					continue
+				}
+				seen[string(id)] = struct{}{}
+				reconcileIDs = append(reconcileIDs, id)
+			}
+		}
+		notifyErr := c.reconcileVectorIndexes(reconcileIDs)
+		if notifyErr != nil {
+			c.invalidateRegisteredVectorIndexDocumentCoverage()
+			notifyErr = commitAmbiguousError("atomic source replacement vector maintenance", notifyErr)
+		}
+		if publishErr != nil || notifyErr != nil {
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", errors.Join(publishErr, notifyErr))
+		}
+		return replaced, nil
+	}
+	return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", collectionMutationRetryExhausted(lastErr))
 }
 
 func (c *Collection) upsertParentDocument(parentID []byte, parentDocument []byte) error {
