@@ -1,0 +1,12 @@
+timestamp=2026-08-25T03:01:13Z
+repo=/Users/michaelseiler/orca/workspaces/gomap/4327-highdf-requalification
+branch=codex/4327-highdf-requalification
+commit=48db2eb621c5824b20b7ca2ecbfbde4651873ae6
+base_ref=origin/main
+base_sha=6b07740e25bf663b2df3594ed74532601c23ac96
+go=go version go1.26.0 darwin/arm64
+uname=Darwin Michaels-Laptop.local 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:03:25 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8122 arm64
+cpu=Apple M3
+ncpu=8
+uptime=17:01  up 42 days,  6:28, 10 users, load averages: 3.40 3.25 3.05
+disk_free=/dev/disk3s5   460Gi   369Gi    49Gi    89%    6.8M  511M    1%   /System/Volumes/Data

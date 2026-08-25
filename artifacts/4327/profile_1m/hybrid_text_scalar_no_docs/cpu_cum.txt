@@ -1,0 +1,33 @@
+File: treedb_text_hybrid_scale
+Type: cpu
+Time: 2026-08-24 17:25:24 HST
+Duration: 3.96s, Total samples = 4.11s (103.75%)
+Showing nodes accounting for 0.71s, 17.27% of 4.11s total
+Dropped 112 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 156
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      2.39s 58.15%  github.com/snissn/gomap/TreeDB/collections.(*Collection).SearchHybrid
+         0     0%     0%      2.39s 58.15%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybrid (inline)
+         0     0%     0%      2.39s 58.15%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridWithCandidateBudgetPolicy
+         0     0%     0%      2.39s 58.15%  main.main
+         0     0%     0%      2.39s 58.15%  main.run
+         0     0%     0%      2.39s 58.15%  main.runHybridQueryRow
+         0     0%     0%      2.39s 58.15%  main.runQueryMatrix
+         0     0%     0%      2.39s 58.15%  runtime.main
+         0     0%     0%      2.17s 52.80%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidates
+         0     0%     0%      2.17s 52.80%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesFixedBudget
+         0     0%     0%      2.17s 52.80%  github.com/snissn/gomap/TreeDB/collections.(*Collection).hybridSearchCandidatesWithBudgetPolicy
+         0     0%     0%      2.17s 52.80%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchHybridTextCandidatesWithScanBudget
+         0     0%     0%      2.15s 52.31%  github.com/snissn/gomap/TreeDB/collections.(*Collection).searchText
+         0     0%     0%      2.15s 52.31%  github.com/snissn/gomap/TreeDB/collections.executeTextV2SearchAtSnapshot
+         0     0%     0%      1.66s 40.39%  github.com/snissn/gomap/TreeDB/collections.executeTextV2ORBlockMaxSearchAtSnapshot
+     0.03s  0.73%  0.73%      1.58s 38.44%  github.com/snissn/gomap/TreeDB/collections.visitTextV2ORBlockMaxCandidate
+         0     0%  0.73%      1.35s 32.85%  runtime.systemstack
+         0     0%  0.73%      0.69s 16.79%  runtime.(*mheap).alloc.func1
+         0     0%  0.73%      0.69s 16.79%  runtime.(*mheap).allocSpan
+     0.67s 16.30% 17.03%      0.67s 16.30%  runtime.madvise
+         0     0% 17.03%      0.65s 15.82%  runtime.sysUsed (inline)
+         0     0% 17.03%      0.65s 15.82%  runtime.sysUsedOS (inline)
+         0     0% 17.03%      0.55s 13.38%  runtime.gcBgMarkWorker.func2
+     0.01s  0.24% 17.27%      0.55s 13.38%  runtime.gcDrain
+         0     0% 17.27%      0.49s 11.92%  github.com/snissn/gomap/TreeDB/collections.newTextV2SearchOrdinalAllowSet

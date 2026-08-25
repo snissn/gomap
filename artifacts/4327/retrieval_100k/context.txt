@@ -1,0 +1,11 @@
+timestamp=2026-08-25T03:14:08Z
+repo=/Users/michaelseiler/orca/workspaces/gomap/4327-highdf-requalification
+branch=codex/4327-highdf-requalification
+commit=afa5290556ec9a89f2aaed256fb631b36d4fd635
+base_ref=origin/main
+base_sha=6b07740e25bf663b2df3594ed74532601c23ac96
+go=go version go1.26.0 darwin/arm64
+go_binary=/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64/bin/go
+uname=Darwin Michaels-Laptop.local 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:03:25 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T8122 arm64
+cpu=Apple M3
+ncpu=8
