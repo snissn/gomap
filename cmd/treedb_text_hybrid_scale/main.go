@@ -1212,22 +1212,28 @@ func textFailureGuard(name string, stats collections.TextSearchStats, err error)
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
-		queryErr := fmt.Errorf("warm %s: %w", name, err)
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
-		guard := hybridFailureGuard(name, warm.Stats, queryErr)
+		warmErr := fmt.Errorf("warm %s: %w", name, err)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
+		}
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
+		guard := hybridFailureGuard(name, warm.Stats, warmErr)
 		if cfg.allowGuardrailFails {
 			return row, guard, nil
 		}
-		return row, guard, queryErr
+		return row, guard, warmErr
 	}
 	if len(warm.Results) == 0 {
-		queryErr := fmt.Errorf("warm %s returned no results", name)
-		row := failedHybridQueryRow(cfg, name, shape, warm, nil, queryErr)
-		guard := guardrailResult{Name: name, OK: false, Failure: queryErr.Error()}
+		warmErr := fmt.Errorf("warm %s returned no results", name)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
+		}
+		row := failedHybridQueryRow(cfg, name, shape, warm, nil, warmErr)
+		guard := guardrailResult{Name: name, OK: false, Failure: warmErr.Error()}
 		if cfg.allowGuardrailFails {
 			return row, guard, nil
 		}
-		return row, guard, queryErr
+		return row, guard, warmErr
 	}
 	guard := hybridGuardrail(name, warm.Stats)
 	stopProfile, err := startQueryProfiles(cfg)
@@ -1350,6 +1356,13 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 		})
 		return stopErr
 	}, nil
+}
+
+func profiledWarmupError(cfg config, warmErr error) error {
+	if warmErr == nil || (cfg.cpuProfile == "" && cfg.allocProfile == "") {
+		return nil
+	}
+	return fmt.Errorf("%w; cannot produce requested profile without successful warm-up", warmErr)
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {
