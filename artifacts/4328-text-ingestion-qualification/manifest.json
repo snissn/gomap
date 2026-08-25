@@ -4,23 +4,23 @@
   "analyzer": "simple",
   "field_weights": "title=3,body=1",
   "ids_sha256": "0928e721472e4e5ba2303d617604df949dfcf76caa49a8c8fc630c62a6a53cae",
-  "command": "GODEBUG= GOROOT=/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64 GOTOOLCHAIN=local /tmp/treedb_text_ingest_qual-587ea3d0d -produce-smoke /tmp/gomap-4328-accepted-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
-  "commit": "587ea3d0dae17280969cc9e477383e26127d5c4a",
+  "command": "GODEBUG= GOROOT=/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64 GOTOOLCHAIN=local /tmp/treedb_text_ingest_qual-77035337e -produce-smoke /tmp/gomap-4328-review-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
+  "commit": "77035337e37d3ffcf4977ea5674a325077ed5deb",
   "host": "Darwin 25.2.0 arm64",
   "cache_state": "node-local GOCACHE=/tmp/gomap-4328-gocache; runs sequentially share compiled package cache",
   "durability": "TreeDB default WAL-on durability",
   "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen, and score-only probe are separately observed after timed wall",
   "observed": {
     "vcs_clean": true,
-    "commit": "587ea3d0dae17280969cc9e477383e26127d5c4a",
+    "commit": "77035337e37d3ffcf4977ea5674a325077ed5deb",
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false
   },
-  "commit_url": "https://github.com/snissn/gomap/commit/587ea3d0dae17280969cc9e477383e26127d5c4a",
-  "tree_oid": "07a87f4055b136732626d409196bb0a54f65d02d",
+  "commit_url": "https://github.com/snissn/gomap/commit/77035337e37d3ffcf4977ea5674a325077ed5deb",
+  "tree_oid": "003a51c392a1b2c124fc1712d29aa809c2a50d90",
   "implementation_path": "TreeDB/collections/document_chunking.go",
-  "implementation_blob_oid": "6a99e7e7636069dc200a775e17e9bb5588ee2ff6",
+  "implementation_blob_oid": "3d3a7a381ff67d0241c494292fdf93d22c5c1432",
   "acceptance": {
     "source_chunk_10000": {
       "frozen_baseline_row_sha256": "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc",
@@ -33,6 +33,6 @@
       "maximum_physical_total_wal_excluded_bytes": 1073741824
     }
   },
-  "treedb_subtree_oid": "2b3139d29122a09afe2167602f755946ba058ace",
-  "qualification_harness_subtree_oid": "04f989ce6744ca152eebb259d4cf1e6a5bc8180e"
+  "treedb_subtree_oid": "9569cf7f68f2af47922bf66078f48af2fc5dc6c4",
+  "qualification_harness_subtree_oid": "9a295a49b6c3342fb5058fd75b77f09030b59c35"
 }

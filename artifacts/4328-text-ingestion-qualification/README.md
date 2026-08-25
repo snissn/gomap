@@ -6,8 +6,8 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 
 The current public `IngestChunkedDocuments` 10k fixture is
 `smoke-10k-r1/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
-batches of at most 256 sources, 41 text generations, 0.488 s source/chunk wall,
-87,097,344-byte peak RSS, 3,609,926 cumulative allocations, and 42,729,846
+batches of at most 256 sources, 41 text generations, 0.491 s source/chunk wall,
+84,574,208-byte peak RSS, 3,621,964 cumulative allocations, and 39,846,262
 WAL-excluded physical bytes. Against the frozen baseline (20,001 generations,
 155.567 s, 4,180,574,208-byte RSS, 82,293,880 cumulative allocations, and
 5,621,678,453-byte WAL-excluded physical), it meets the generation, sub-1-GiB
@@ -29,12 +29,12 @@ transient DBs are retained.
 ## Measured revision
 
 The measurements were produced at the clean, immutable commit
-[`587ea3d0dae17280969cc9e477383e26127d5c4a`](https://github.com/snissn/gomap/commit/587ea3d0dae17280969cc9e477383e26127d5c4a),
-root tree `07a87f4055b136732626d409196bb0a54f65d02d`, TreeDB subtree
-`2b3139d29122a09afe2167602f755946ba058ace`, and qualification-harness
-subtree `04f989ce6744ca152eebb259d4cf1e6a5bc8180e`. Its
+[`77035337e37d3ffcf4977ea5674a325077ed5deb`](https://github.com/snissn/gomap/commit/77035337e37d3ffcf4977ea5674a325077ed5deb),
+root tree `003a51c392a1b2c124fc1712d29aa809c2a50d90`, TreeDB subtree
+`9569cf7f68f2af47922bf66078f48af2fc5dc6c4`, and qualification-harness
+subtree `9a295a49b6c3342fb5058fd75b77f09030b59c35`. Its
 `TreeDB/collections/document_chunking.go` blob is
-`6a99e7e7636069dc200a775e17e9bb5588ee2ff6`. `SHA256SUMS` binds the final
+`3d3a7a381ff67d0241c494292fdf93d22c5c1432`. `SHA256SUMS` binds the final
 retained manifest, report, and every raw row.
 
 JSON shape validation alone does not prove those Git relationships. The CLI
