@@ -1,6 +1,6 @@
 {
   "schema_version": "treedb_text_ingest_qualification/v3",
-  "manifest_sha256": "14809538d1e664c754e2cae8b0c7f005c408266757a98884f69a858a98b294ea",
+  "manifest_sha256": "4e8ff2cb8787c6ac78cb258d46ccad9bcb1077137ffee08e339b1955fb03866d",
   "rows": [
     {
       "mode": "indexed_insert",
@@ -9,7 +9,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91910,
+      "peak_rss_pid": 33743,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 10000,
@@ -26,13 +26,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 107693.39075645444,
+      "source_docs_per_second": 125939.42943141497,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 107693.39075645444,
-      "wall_seconds": 0.092856209,
+      "indexed_rows_per_second": 125939.42943141497,
+      "wall_seconds": 0.07940325,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.115248
+        "value": 0.102845
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -44,11 +44,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 633726
+        "value": 633727
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 71483392
+        "value": 71925760
       },
       "stages": {
         "analyzer": {
@@ -57,7 +57,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.011977583
+          "value": 0.008433084
         },
         "posting_builder": {
           "state": "unavailable",
@@ -65,7 +65,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.018270667
+          "value": 0.015378917
         },
         "root_mutation": {
           "state": "unavailable",
@@ -142,7 +142,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91921,
+      "peak_rss_pid": 33768,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -159,13 +159,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 91953.99829832872,
+      "source_docs_per_second": 101623.92057662974,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 91953.99829832872,
-      "wall_seconds": 1.087500292,
+      "indexed_rows_per_second": 101623.92057662974,
+      "wall_seconds": 0.984020292,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.395935
+        "value": 1.250233
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -177,11 +177,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 6314181
+        "value": 6314194
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 477184000
+        "value": 443711488
       },
       "stages": {
         "analyzer": {
@@ -190,7 +190,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.027304667
+          "value": 0.04268875
         },
         "posting_builder": {
           "state": "unavailable",
@@ -198,7 +198,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.097548834
+          "value": 0.090930708
         },
         "root_mutation": {
           "state": "unavailable",
@@ -275,7 +275,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91941,
+      "peak_rss_pid": 33924,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -292,13 +292,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 91811.09670743943,
+      "source_docs_per_second": 81435.0124796958,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 91811.09670743943,
-      "wall_seconds": 1.089192958,
+      "indexed_rows_per_second": 81435.0124796958,
+      "wall_seconds": 1.227973042,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.372405
+        "value": 1.355315
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -310,11 +310,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 6314191
+        "value": 6314158
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 417693696
+        "value": 401899520
       },
       "stages": {
         "analyzer": {
@@ -323,7 +323,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.024603167
+          "value": 0.058881042
         },
         "posting_builder": {
           "state": "unavailable",
@@ -331,7 +331,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.103787041
+          "value": 0.092253625
         },
         "root_mutation": {
           "state": "unavailable",
@@ -408,7 +408,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91963,
+      "peak_rss_pid": 34073,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -425,13 +425,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 90150.68458847732,
+      "source_docs_per_second": 106222.9568899345,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 90150.68458847732,
-      "wall_seconds": 1.109253917,
+      "indexed_rows_per_second": 106222.9568899345,
+      "wall_seconds": 0.941416083,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.377188
+        "value": 1.2298660000000001
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -443,11 +443,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 6314172
+        "value": 6314195
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 404258816
+        "value": 475004928
       },
       "stages": {
         "analyzer": {
@@ -456,7 +456,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.026117125
+          "value": 0.025278875
         },
         "posting_builder": {
           "state": "unavailable",
@@ -464,7 +464,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.10236225
+          "value": 0.094683791
         },
         "root_mutation": {
           "state": "unavailable",
@@ -541,7 +541,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91987,
+      "peak_rss_pid": 34127,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -558,13 +558,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 18230.904768606033,
+      "source_docs_per_second": 19695.385764085688,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 18230.904768606033,
-      "wall_seconds": 54.851912875,
+      "indexed_rows_per_second": 19695.385764085688,
+      "wall_seconds": 50.773313708,
       "cpu_seconds": {
         "state": "observed",
-        "value": 57.929259
+        "value": 56.039569
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -576,11 +576,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919804
+        "value": 64919768
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2596814848
+        "value": 2526871552
       },
       "stages": {
         "analyzer": {
@@ -589,7 +589,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.238792625
+          "value": 0.24771
         },
         "posting_builder": {
           "state": "unavailable",
@@ -597,7 +597,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 1.260275791
+          "value": 0.897171625
         },
         "root_mutation": {
           "state": "unavailable",
@@ -674,7 +674,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 93806,
+      "peak_rss_pid": 38774,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -691,13 +691,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 22292.40449123804,
+      "source_docs_per_second": 19230.637544170986,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 22292.40449123804,
-      "wall_seconds": 44.858328333,
+      "indexed_rows_per_second": 19230.637544170986,
+      "wall_seconds": 52.000356083,
       "cpu_seconds": {
         "state": "observed",
-        "value": 48.320595
+        "value": 52.095173
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -709,11 +709,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919800
+        "value": 64919786
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3019603968
+        "value": 3921756160
       },
       "stages": {
         "analyzer": {
@@ -722,7 +722,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.136463416
+          "value": 0.756106125
         },
         "posting_builder": {
           "state": "unavailable",
@@ -730,7 +730,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.8442245
+          "value": 1.044600083
         },
         "root_mutation": {
           "state": "unavailable",
@@ -807,7 +807,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 98518,
+      "peak_rss_pid": 42634,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -824,13 +824,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 21710.730498425208,
+      "source_docs_per_second": 22677.219422707174,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 21710.730498425208,
-      "wall_seconds": 46.060172875,
+      "indexed_rows_per_second": 22677.219422707174,
+      "wall_seconds": 44.097117083,
       "cpu_seconds": {
         "state": "observed",
-        "value": 48.355124999999994
+        "value": 47.579438
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -842,11 +842,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 64919805
+        "value": 64919802
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3344433152
+        "value": 2699984896
       },
       "stages": {
         "analyzer": {
@@ -855,7 +855,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.23370325
+          "value": 0.329591791
         },
         "posting_builder": {
           "state": "unavailable",
@@ -863,7 +863,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.980354959
+          "value": 0.859203417
         },
         "root_mutation": {
           "state": "unavailable",
@@ -940,7 +940,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91911,
+      "peak_rss_pid": 33744,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 10000,
@@ -957,13 +957,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 123579.09834045259,
+      "source_docs_per_second": 153247.8976304044,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 123579.09834045259,
-      "wall_seconds": 0.080919833,
+      "indexed_rows_per_second": 153247.8976304044,
+      "wall_seconds": 0.06525375,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.098972
+        "value": 0.090669
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -975,11 +975,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 598900
+        "value": 598908
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 58130432
+        "value": 67272704
       },
       "stages": {
         "analyzer": {
@@ -988,7 +988,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.007468042
+          "value": 0.012912458
         },
         "posting_builder": {
           "state": "unavailable",
@@ -996,7 +996,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.016940667
+          "value": 0.018881083
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1073,7 +1073,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91922,
+      "peak_rss_pid": 33770,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -1090,13 +1090,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 125877.86039736179,
+      "source_docs_per_second": 141885.32969539348,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 125877.86039736179,
-      "wall_seconds": 0.794420875,
+      "indexed_rows_per_second": 141885.32969539348,
+      "wall_seconds": 0.7047945,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.1005920000000002
+        "value": 0.933675
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1108,11 +1108,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 5969983
+        "value": 5969978
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 385417216
+        "value": 339296256
       },
       "stages": {
         "analyzer": {
@@ -1121,7 +1121,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.016442958
+          "value": 0.032002583
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1129,7 +1129,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.102506209
+          "value": 0.085223917
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1206,7 +1206,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91942,
+      "peak_rss_pid": 33926,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -1223,13 +1223,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 110667.57502169574,
+      "source_docs_per_second": 126455.00312106754,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 110667.57502169574,
-      "wall_seconds": 0.903607041,
+      "indexed_rows_per_second": 126455.00312106754,
+      "wall_seconds": 0.790795125,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.135665
+        "value": 1.024532
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1241,11 +1241,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 5969989
+        "value": 5969977
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 391888896
+        "value": 327942144
       },
       "stages": {
         "analyzer": {
@@ -1254,7 +1254,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.040587042
+          "value": 0.022478833
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1262,7 +1262,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.098752834
+          "value": 0.090121792
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1339,7 +1339,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91964,
+      "peak_rss_pid": 34074,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 100000,
@@ -1356,13 +1356,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 117222.76990458663,
+      "source_docs_per_second": 133310.04851152666,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 117222.76990458663,
-      "wall_seconds": 0.853076583,
+      "indexed_rows_per_second": 133310.04851152666,
+      "wall_seconds": 0.750131,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.1174870000000001
+        "value": 1.0312350000000001
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1374,11 +1374,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 5969983
+        "value": 5969985
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 326828032
+        "value": 350224384
       },
       "stages": {
         "analyzer": {
@@ -1387,7 +1387,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.017101
+          "value": 0.025402167
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1395,7 +1395,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.098621167
+          "value": 0.089014584
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1472,7 +1472,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 92023,
+      "peak_rss_pid": 34207,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -1489,13 +1489,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 83283.5410537627,
+      "source_docs_per_second": 93188.55677936439,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 83283.5410537627,
-      "wall_seconds": 12.007174375,
+      "indexed_rows_per_second": 93188.55677936439,
+      "wall_seconds": 10.730931292,
       "cpu_seconds": {
         "state": "observed",
-        "value": 15.737560999999998
+        "value": 13.976206999999999
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1507,11 +1507,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581622
+        "value": 60581651
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2611396608
+        "value": 2266759168
       },
       "stages": {
         "analyzer": {
@@ -1520,7 +1520,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.326231584
+          "value": 0.51993925
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1528,7 +1528,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.995989291
+          "value": 0.811313
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1605,7 +1605,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 93854,
+      "peak_rss_pid": 39865,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -1622,13 +1622,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 113804.26749112263,
+      "source_docs_per_second": 98855.72806311114,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 113804.26749112263,
-      "wall_seconds": 8.787016709,
+      "indexed_rows_per_second": 98855.72806311114,
+      "wall_seconds": 10.115751708,
       "cpu_seconds": {
         "state": "observed",
-        "value": 11.96994
+        "value": 13.617046
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1640,11 +1640,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581660
+        "value": 60581637
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2845179904
+        "value": 2892808192
       },
       "stages": {
         "analyzer": {
@@ -1653,7 +1653,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.259020333
+          "value": 0.878413666
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1661,7 +1661,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.886549833
+          "value": 0.910461083
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1738,7 +1738,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 98670,
+      "peak_rss_pid": 42726,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 1000000,
@@ -1755,13 +1755,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 108177.42888283795,
+      "source_docs_per_second": 107559.2714139274,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 108177.42888283795,
-      "wall_seconds": 9.244072542,
+      "indexed_rows_per_second": 107559.2714139274,
+      "wall_seconds": 9.297199459,
       "cpu_seconds": {
         "state": "observed",
-        "value": 12.628151
+        "value": 12.556801
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1773,11 +1773,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 60581670
+        "value": 60581679
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3140321280
+        "value": 2547138560
       },
       "stages": {
         "analyzer": {
@@ -1786,7 +1786,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.575617417
+          "value": 0.4578315
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1794,7 +1794,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.873043458
+          "value": 0.802071041
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1871,7 +1871,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91912,
+      "peak_rss_pid": 33745,
       "source_documents": 10000,
       "generated_chunks": 30000,
       "indexed_live_rows": 40000,
@@ -1888,13 +1888,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 17089.137429582028,
-      "chunks_per_second": 51267.41228874609,
-      "indexed_rows_per_second": 68356.54971832811,
-      "wall_seconds": 0.585167042,
+      "source_docs_per_second": 19436.12716414279,
+      "chunks_per_second": 58308.381492428365,
+      "indexed_rows_per_second": 77744.50865657115,
+      "wall_seconds": 0.514505792,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.690532
+        "value": 0.5914079999999999
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -1906,11 +1906,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 3613134
+        "value": 3605502
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 81166336
+        "value": 84639744
       },
       "stages": {
         "analyzer": {
@@ -1919,7 +1919,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.018688625
+          "value": 0.009679792
         },
         "posting_builder": {
           "state": "unavailable",
@@ -1927,7 +1927,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.042983875
+          "value": 0.037970709
         },
         "root_mutation": {
           "state": "unavailable",
@@ -1939,12 +1939,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 37224448,
+        "physical_index_page_bytes": 39845888,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 37224822,
-        "physical_total_wal_excluded_bytes": 37224822,
+        "physical_total_bytes": 39846262,
+        "physical_total_wal_excluded_bytes": 39846262,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2004,7 +2004,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91923,
+      "peak_rss_pid": 33771,
       "source_documents": 100000,
       "generated_chunks": 300000,
       "indexed_live_rows": 400000,
@@ -2021,13 +2021,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 5584.484205077971,
-      "chunks_per_second": 16753.452615233913,
-      "indexed_rows_per_second": 22337.936820311883,
-      "wall_seconds": 17.906756708,
+      "source_docs_per_second": 6179.397439385924,
+      "chunks_per_second": 18538.192318157773,
+      "indexed_rows_per_second": 24717.589757543697,
+      "wall_seconds": 16.182807625,
       "cpu_seconds": {
         "state": "observed",
-        "value": 19.842584000000002
+        "value": 17.142898
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2039,11 +2039,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 39597495
+        "value": 39604402
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 450691072
+        "value": 442368000
       },
       "stages": {
         "analyzer": {
@@ -2052,7 +2052,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.016717416
+          "value": 0.019205542
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2060,7 +2060,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.350619792
+          "value": 0.322418708
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2072,12 +2072,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 288620544,
+        "physical_index_page_bytes": 282329088,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 288620918,
-        "physical_total_wal_excluded_bytes": 288620918,
+        "physical_total_bytes": 282329462,
+        "physical_total_wal_excluded_bytes": 282329462,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2137,7 +2137,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91943,
+      "peak_rss_pid": 33928,
       "source_documents": 100000,
       "generated_chunks": 300000,
       "indexed_live_rows": 400000,
@@ -2154,13 +2154,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 5672.917221593202,
-      "chunks_per_second": 17018.751664779607,
-      "indexed_rows_per_second": 22691.66888637281,
-      "wall_seconds": 17.627614875,
+      "source_docs_per_second": 6131.534412115461,
+      "chunks_per_second": 18394.603236346382,
+      "indexed_rows_per_second": 24526.137648461845,
+      "wall_seconds": 16.309131333,
       "cpu_seconds": {
         "state": "observed",
-        "value": 19.614192
+        "value": 17.461889
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2172,11 +2172,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 39614486
+        "value": 39617475
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 449855488
+        "value": 449953792
       },
       "stages": {
         "analyzer": {
@@ -2185,7 +2185,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.017743833
+          "value": 0.026629333
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2193,7 +2193,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.3547
+          "value": 0.3092185
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2205,12 +2205,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 287834112,
+        "physical_index_page_bytes": 288882688,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 287834486,
-        "physical_total_wal_excluded_bytes": 287834486,
+        "physical_total_bytes": 288883062,
+        "physical_total_wal_excluded_bytes": 288883062,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2270,7 +2270,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91965,
+      "peak_rss_pid": 34084,
       "source_documents": 100000,
       "generated_chunks": 300000,
       "indexed_live_rows": 400000,
@@ -2287,13 +2287,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 5187.7805246828375,
-      "chunks_per_second": 15563.34157404851,
-      "indexed_rows_per_second": 20751.12209873135,
-      "wall_seconds": 19.276066041,
+      "source_docs_per_second": 6685.14703141074,
+      "chunks_per_second": 20055.44109423222,
+      "indexed_rows_per_second": 26740.58812564296,
+      "wall_seconds": 14.958534125,
       "cpu_seconds": {
         "state": "observed",
-        "value": 20.612171999999997
+        "value": 16.770987
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2305,11 +2305,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 39614879
+        "value": 39620531
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 452575232
+        "value": 456916992
       },
       "stages": {
         "analyzer": {
@@ -2318,7 +2318,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.020800833
+          "value": 0.033344875
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2326,7 +2326,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.349898792
+          "value": 0.315482875
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2338,12 +2338,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 289406976,
+        "physical_index_page_bytes": 289144832,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 289407350,
-        "physical_total_wal_excluded_bytes": 289407350,
+        "physical_total_bytes": 289145206,
+        "physical_total_wal_excluded_bytes": 289145206,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2403,7 +2403,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 92038,
+      "peak_rss_pid": 34244,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -2420,13 +2420,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 779.8740399000427,
-      "chunks_per_second": 2339.622119700128,
-      "indexed_rows_per_second": 3119.496159600171,
-      "wall_seconds": 1282.2583505,
+      "source_docs_per_second": 761.3974771855201,
+      "chunks_per_second": 2284.19243155656,
+      "indexed_rows_per_second": 3045.5899087420803,
+      "wall_seconds": 1313.374459417,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1323.270959
+        "value": 1256.506462
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2438,11 +2438,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 468413736
+        "value": 468079684
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2673491968
+        "value": 3088531456
       },
       "stages": {
         "analyzer": {
@@ -2451,7 +2451,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.069413208
+          "value": 0.046863958
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2459,7 +2459,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 3.909249458
+          "value": 6.045345625
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2471,12 +2471,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 7958429696,
+        "physical_index_page_bytes": 7642546176,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 7958430070,
-        "physical_total_wal_excluded_bytes": 7958430070,
+        "physical_total_bytes": 7642546550,
+        "physical_total_wal_excluded_bytes": 7642546550,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2536,7 +2536,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 93866,
+      "peak_rss_pid": 39894,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -2553,13 +2553,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 685.2008737836787,
-      "chunks_per_second": 2055.6026213510363,
-      "indexed_rows_per_second": 2740.803495134715,
-      "wall_seconds": 1459.426043166,
+      "source_docs_per_second": 876.9731548717496,
+      "chunks_per_second": 2630.9194646152487,
+      "indexed_rows_per_second": 3507.8926194869982,
+      "wall_seconds": 1140.285759541,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1445.459147
+        "value": 1164.445263
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2571,11 +2571,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 468278175
+        "value": 468381067
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3097772032
+        "value": 3374153728
       },
       "stages": {
         "analyzer": {
@@ -2584,7 +2584,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.037745333
+          "value": 0.031133833
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2592,7 +2592,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 4.36219175
+          "value": 4.025117333
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2604,12 +2604,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 7935885312,
+        "physical_index_page_bytes": 7861436416,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 7935885686,
-        "physical_total_wal_excluded_bytes": 7935885686,
+        "physical_total_bytes": 7861436790,
+        "physical_total_wal_excluded_bytes": 7861436790,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2669,7 +2669,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 98687,
+      "peak_rss_pid": 42749,
       "source_documents": 1000000,
       "generated_chunks": 3000000,
       "indexed_live_rows": 4000000,
@@ -2686,13 +2686,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 0,
-      "source_docs_per_second": 707.0147216935452,
-      "chunks_per_second": 2121.0441650806356,
-      "indexed_rows_per_second": 2828.058886774181,
-      "wall_seconds": 1414.397705333,
+      "source_docs_per_second": 773.5978290477639,
+      "chunks_per_second": 2320.7934871432917,
+      "indexed_rows_per_second": 3094.3913161910555,
+      "wall_seconds": 1292.661331833,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1420.841693
+        "value": 1225.327425
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2704,11 +2704,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 467638885
+        "value": 468353766
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2748203008
+        "value": 2712993792
       },
       "stages": {
         "analyzer": {
@@ -2717,7 +2717,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.023926125
+          "value": 0.048563541
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2725,7 +2725,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 4.894024334
+          "value": 9.428591292
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2737,12 +2737,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 7710179328,
+        "physical_index_page_bytes": 7866417152,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 7710179702,
-        "physical_total_wal_excluded_bytes": 7710179702,
+        "physical_total_bytes": 7866417526,
+        "physical_total_wal_excluded_bytes": 7866417526,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2802,7 +2802,7 @@
       "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
       "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91913,
+      "peak_rss_pid": 33748,
       "source_documents": 10000,
       "generated_chunks": 0,
       "indexed_live_rows": 5000,
@@ -2819,13 +2819,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 5000,
-      "source_docs_per_second": 86473.67903348368,
+      "source_docs_per_second": 95542.00982171862,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 43236.83951674184,
-      "wall_seconds": 0.115642125,
+      "indexed_rows_per_second": 47771.00491085931,
+      "wall_seconds": 0.104666,
       "cpu_seconds": {
         "state": "observed",
-        "value": 0.155904
+        "value": 0.133225
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2837,11 +2837,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 876806
+        "value": 876451
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 77103104
+        "value": 75808768
       },
       "stages": {
         "analyzer": {
@@ -2850,7 +2850,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.006956875
+          "value": 0.012942333
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2858,7 +2858,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.0159685
+          "value": 0.015426083
         },
         "root_mutation": {
           "state": "unavailable",
@@ -2870,12 +2870,12 @@
         }
       },
       "storage": {
-        "physical_index_page_bytes": 5767168,
+        "physical_index_page_bytes": 5505024,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
         "physical_other_bytes": 374,
-        "physical_total_bytes": 5767542,
-        "physical_total_wal_excluded_bytes": 5767542,
+        "physical_total_bytes": 5505398,
+        "physical_total_wal_excluded_bytes": 5505398,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -2935,7 +2935,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91934,
+      "peak_rss_pid": 33909,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 50000,
@@ -2952,13 +2952,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 50000,
-      "source_docs_per_second": 73494.66618854171,
+      "source_docs_per_second": 77018.44898694738,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 36747.333094270856,
-      "wall_seconds": 1.3606429580000001,
+      "indexed_rows_per_second": 38509.22449347369,
+      "wall_seconds": 1.298390208,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.718953
+        "value": 1.6420209999999997
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -2970,11 +2970,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 8724863
+        "value": 8724880
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 429195264
+        "value": 492371968
       },
       "stages": {
         "analyzer": {
@@ -2983,7 +2983,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.016428
+          "value": 0.018259208
         },
         "posting_builder": {
           "state": "unavailable",
@@ -2991,7 +2991,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.104410625
+          "value": 0.103342333
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3068,7 +3068,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91956,
+      "peak_rss_pid": 34057,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 50000,
@@ -3085,13 +3085,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 50000,
-      "source_docs_per_second": 64117.76811052958,
+      "source_docs_per_second": 77350.03674993067,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 32058.88405526479,
-      "wall_seconds": 1.559630083,
+      "indexed_rows_per_second": 38675.01837496534,
+      "wall_seconds": 1.2928242079999999,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.916442
+        "value": 1.573375
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -3103,11 +3103,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 8724873
+        "value": 8724869
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 502726656
+        "value": 460980224
       },
       "stages": {
         "analyzer": {
@@ -3116,7 +3116,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.015512875
+          "value": 0.015636375
         },
         "posting_builder": {
           "state": "unavailable",
@@ -3124,7 +3124,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.106841209
+          "value": 0.092455125
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3201,7 +3201,7 @@
       "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
       "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 91979,
+      "peak_rss_pid": 34114,
       "source_documents": 100000,
       "generated_chunks": 0,
       "indexed_live_rows": 50000,
@@ -3218,13 +3218,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 50000,
-      "source_docs_per_second": 71488.11295872187,
+      "source_docs_per_second": 81317.42629054471,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 35744.05647936094,
-      "wall_seconds": 1.398833958,
+      "indexed_rows_per_second": 40658.713145272355,
+      "wall_seconds": 1.2297487089999999,
       "cpu_seconds": {
         "state": "observed",
-        "value": 1.74345
+        "value": 1.609531
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -3236,11 +3236,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 8724852
+        "value": 8724873
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 444874752
+        "value": 493387776
       },
       "stages": {
         "analyzer": {
@@ -3249,7 +3249,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.01432175
+          "value": 0.017495334
         },
         "posting_builder": {
           "state": "unavailable",
@@ -3257,7 +3257,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.106354959
+          "value": 0.093464333
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3334,7 +3334,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 93735,
+      "peak_rss_pid": 38303,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -3351,13 +3351,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 20168.606016794347,
+      "source_docs_per_second": 15133.794519612908,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 10084.303008397173,
-      "wall_seconds": 49.58200875,
+      "indexed_rows_per_second": 7566.897259806454,
+      "wall_seconds": 66.077281458,
       "cpu_seconds": {
         "state": "observed",
-        "value": 54.050377
+        "value": 63.309895999999995
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -3369,11 +3369,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802481
+        "value": 89802450
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2979282944
+        "value": 3075833856
       },
       "stages": {
         "analyzer": {
@@ -3382,7 +3382,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.07498525
+          "value": 0.443797791
         },
         "posting_builder": {
           "state": "unavailable",
@@ -3390,7 +3390,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.894804375
+          "value": 0.932126875
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3467,7 +3467,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 98323,
+      "peak_rss_pid": 42501,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -3484,13 +3484,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 19768.17150342246,
+      "source_docs_per_second": 20870.162902415712,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 9884.08575171123,
-      "wall_seconds": 50.586368082999996,
+      "indexed_rows_per_second": 10435.081451207856,
+      "wall_seconds": 47.915294417,
       "cpu_seconds": {
         "state": "observed",
-        "value": 54.729985000000006
+        "value": 51.870352
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -3502,11 +3502,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802529
+        "value": 89802464
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 3079716864
+        "value": 2818260992
       },
       "stages": {
         "analyzer": {
@@ -3515,7 +3515,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.135568834
+          "value": 0.344505917
         },
         "posting_builder": {
           "state": "unavailable",
@@ -3523,7 +3523,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 0.887103
+          "value": 0.879761458
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3600,7 +3600,7 @@
       "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
       "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
       "peak_rss_scope": "fresh_process_per_mode",
-      "peak_rss_pid": 2333,
+      "peak_rss_pid": 47182,
       "source_documents": 1000000,
       "generated_chunks": 0,
       "indexed_live_rows": 500000,
@@ -3617,13 +3617,13 @@
         "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
       },
       "tombstone_debt": 500000,
-      "source_docs_per_second": 14123.342147136018,
+      "source_docs_per_second": 20964.052169316357,
       "chunks_per_second": 0,
-      "indexed_rows_per_second": 7061.671073568009,
-      "wall_seconds": 70.804770541,
+      "indexed_rows_per_second": 10482.026084658179,
+      "wall_seconds": 47.70070175,
       "cpu_seconds": {
         "state": "observed",
-        "value": 71.020779
+        "value": 51.696735000000004
       },
       "bytes_per_op": {
         "state": "unavailable",
@@ -3635,11 +3635,11 @@
       },
       "cumulative_allocations": {
         "state": "observed",
-        "value": 89802460
+        "value": 89802439
       },
       "peak_rss_bytes": {
         "state": "observed",
-        "value": 2927362048
+        "value": 3037233152
       },
       "stages": {
         "analyzer": {
@@ -3648,7 +3648,7 @@
         },
         "checkpoint": {
           "state": "observed",
-          "value": 0.362647291
+          "value": 0.318354917
         },
         "posting_builder": {
           "state": "unavailable",
@@ -3656,7 +3656,7 @@
         },
         "reopen": {
           "state": "observed",
-          "value": 1.545623
+          "value": 0.915248542
         },
         "root_mutation": {
           "state": "unavailable",
@@ -3671,9 +3671,9 @@
         "physical_index_page_bytes": 488636416,
         "physical_value_log_bytes": 0,
         "physical_wal_bytes": 0,
-        "physical_other_bytes": 373,
-        "physical_total_bytes": 488636789,
-        "physical_total_wal_excluded_bytes": 488636789,
+        "physical_other_bytes": 374,
+        "physical_total_bytes": 488636790,
+        "physical_total_wal_excluded_bytes": 488636790,
         "other_paths": [
           "LOCK",
           "format.json",
@@ -3731,98 +3731,98 @@
     {
       "mode": "indexed_insert",
       "scale": 10000,
-      "median_wall_seconds": 0.092856209,
-      "p95_wall_seconds": 0.092856209,
-      "median_indexed_rows_per_second": 107693.39075645444,
-      "p95_indexed_rows_per_second": 107693.39075645444
+      "median_wall_seconds": 0.07940325,
+      "p95_wall_seconds": 0.07940325,
+      "median_indexed_rows_per_second": 125939.42943141497,
+      "p95_indexed_rows_per_second": 125939.42943141497
     },
     {
       "mode": "indexed_insert",
       "scale": 100000,
-      "median_wall_seconds": 1.089192958,
-      "p95_wall_seconds": 1.109253917,
-      "median_indexed_rows_per_second": 91811.09670743943,
-      "p95_indexed_rows_per_second": 91953.99829832872
+      "median_wall_seconds": 0.984020292,
+      "p95_wall_seconds": 1.227973042,
+      "median_indexed_rows_per_second": 101623.92057662974,
+      "p95_indexed_rows_per_second": 106222.9568899345
     },
     {
       "mode": "indexed_insert",
       "scale": 1000000,
-      "median_wall_seconds": 46.060172875,
-      "p95_wall_seconds": 54.851912875,
-      "median_indexed_rows_per_second": 21710.730498425208,
-      "p95_indexed_rows_per_second": 22292.40449123804
+      "median_wall_seconds": 50.773313708,
+      "p95_wall_seconds": 52.000356083,
+      "median_indexed_rows_per_second": 19695.385764085688,
+      "p95_indexed_rows_per_second": 22677.219422707174
     },
     {
       "mode": "post_load_backfill",
       "scale": 10000,
-      "median_wall_seconds": 0.080919833,
-      "p95_wall_seconds": 0.080919833,
-      "median_indexed_rows_per_second": 123579.09834045259,
-      "p95_indexed_rows_per_second": 123579.09834045259
+      "median_wall_seconds": 0.06525375,
+      "p95_wall_seconds": 0.06525375,
+      "median_indexed_rows_per_second": 153247.8976304044,
+      "p95_indexed_rows_per_second": 153247.8976304044
     },
     {
       "mode": "post_load_backfill",
       "scale": 100000,
-      "median_wall_seconds": 0.853076583,
-      "p95_wall_seconds": 0.903607041,
-      "median_indexed_rows_per_second": 117222.76990458663,
-      "p95_indexed_rows_per_second": 125877.86039736179
+      "median_wall_seconds": 0.750131,
+      "p95_wall_seconds": 0.790795125,
+      "median_indexed_rows_per_second": 133310.04851152666,
+      "p95_indexed_rows_per_second": 141885.32969539348
     },
     {
       "mode": "post_load_backfill",
       "scale": 1000000,
-      "median_wall_seconds": 9.244072542,
-      "p95_wall_seconds": 12.007174375,
-      "median_indexed_rows_per_second": 108177.42888283795,
-      "p95_indexed_rows_per_second": 113804.26749112263
+      "median_wall_seconds": 10.115751708,
+      "p95_wall_seconds": 10.730931292,
+      "median_indexed_rows_per_second": 98855.72806311114,
+      "p95_indexed_rows_per_second": 107559.2714139274
     },
     {
       "mode": "source_chunk",
       "scale": 10000,
-      "median_wall_seconds": 0.585167042,
-      "p95_wall_seconds": 0.585167042,
-      "median_indexed_rows_per_second": 68356.54971832811,
-      "p95_indexed_rows_per_second": 68356.54971832811
+      "median_wall_seconds": 0.514505792,
+      "p95_wall_seconds": 0.514505792,
+      "median_indexed_rows_per_second": 77744.50865657115,
+      "p95_indexed_rows_per_second": 77744.50865657115
     },
     {
       "mode": "source_chunk",
       "scale": 100000,
-      "median_wall_seconds": 17.906756708,
-      "p95_wall_seconds": 19.276066041,
-      "median_indexed_rows_per_second": 22337.936820311883,
-      "p95_indexed_rows_per_second": 22691.66888637281
+      "median_wall_seconds": 16.182807625,
+      "p95_wall_seconds": 16.309131333,
+      "median_indexed_rows_per_second": 24717.589757543697,
+      "p95_indexed_rows_per_second": 26740.58812564296
     },
     {
       "mode": "source_chunk",
       "scale": 1000000,
-      "median_wall_seconds": 1414.397705333,
-      "p95_wall_seconds": 1459.426043166,
-      "median_indexed_rows_per_second": 2828.058886774181,
-      "p95_indexed_rows_per_second": 3119.496159600171
+      "median_wall_seconds": 1292.661331833,
+      "p95_wall_seconds": 1313.374459417,
+      "median_indexed_rows_per_second": 3094.3913161910555,
+      "p95_indexed_rows_per_second": 3507.8926194869982
     },
     {
       "mode": "maintenance",
       "scale": 10000,
-      "median_wall_seconds": 0.115642125,
-      "p95_wall_seconds": 0.115642125,
-      "median_indexed_rows_per_second": 43236.83951674184,
-      "p95_indexed_rows_per_second": 43236.83951674184
+      "median_wall_seconds": 0.104666,
+      "p95_wall_seconds": 0.104666,
+      "median_indexed_rows_per_second": 47771.00491085931,
+      "p95_indexed_rows_per_second": 47771.00491085931
     },
     {
       "mode": "maintenance",
       "scale": 100000,
-      "median_wall_seconds": 1.398833958,
-      "p95_wall_seconds": 1.559630083,
-      "median_indexed_rows_per_second": 35744.05647936094,
-      "p95_indexed_rows_per_second": 36747.333094270856
+      "median_wall_seconds": 1.2928242079999999,
+      "p95_wall_seconds": 1.298390208,
+      "median_indexed_rows_per_second": 38675.01837496534,
+      "p95_indexed_rows_per_second": 40658.713145272355
     },
     {
       "mode": "maintenance",
       "scale": 1000000,
-      "median_wall_seconds": 50.586368082999996,
-      "p95_wall_seconds": 70.804770541,
-      "median_indexed_rows_per_second": 9884.08575171123,
-      "p95_indexed_rows_per_second": 10084.303008397173
+      "median_wall_seconds": 47.915294417,
+      "p95_wall_seconds": 66.077281458,
+      "median_indexed_rows_per_second": 10435.081451207856,
+      "p95_indexed_rows_per_second": 10482.026084658179
     }
   ]
 }

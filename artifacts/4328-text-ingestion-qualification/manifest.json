@@ -4,23 +4,23 @@
   "analyzer": "simple",
   "field_weights": "title=3,body=1",
   "ids_sha256": "0928e721472e4e5ba2303d617604df949dfcf76caa49a8c8fc630c62a6a53cae",
-  "command": "/tmp/treedb_text_ingest_qual-05bbff0e7 -produce-smoke /tmp/gomap-4328-updated-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
-  "commit": "05bbff0e7d4360fac59e3ee4914e068bc6585909",
+  "command": "/tmp/treedb_text_ingest_qual-a94d5a63f -produce-smoke /tmp/gomap-4328-reviewed-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
+  "commit": "a94d5a63f80083b35184930dda6719802e4eb741",
   "host": "Darwin 25.2.0 arm64",
   "cache_state": "producer compiled once with persistent GOCACHE=/Users/michaelseiler/orca/workspaces/gomap/.gocache-go126; serialized runs reuse the immutable binary",
   "durability": "TreeDB default WAL-on durability",
   "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen, and score-only probe are separately observed after timed wall",
   "observed": {
     "vcs_clean": true,
-    "commit": "05bbff0e7d4360fac59e3ee4914e068bc6585909",
+    "commit": "a94d5a63f80083b35184930dda6719802e4eb741",
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false
   },
-  "commit_url": "https://github.com/snissn/gomap/commit/05bbff0e7d4360fac59e3ee4914e068bc6585909",
-  "tree_oid": "910db71390d47a59719946cd78728755fbee7dc5",
+  "commit_url": "https://github.com/snissn/gomap/commit/a94d5a63f80083b35184930dda6719802e4eb741",
+  "tree_oid": "4f9594d8ca56f575999e6b95e12cff3a249f93ac",
   "implementation_path": "TreeDB/collections/document_chunking.go",
-  "implementation_blob_oid": "978dd8ebc304ebc2461587ff7e7b5a98e9e41e55",
+  "implementation_blob_oid": "047728ba0df7715e783fb35653c8ca129c507be6",
   "acceptance": {
     "source_chunk_10000": {
       "frozen_baseline_row_sha256": "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc",
@@ -33,6 +33,6 @@
       "maximum_physical_total_wal_excluded_bytes": 1073741824
     }
   },
-  "treedb_subtree_oid": "f0d4eb303016a14f478a530d3ee5a216218f0fdc",
+  "treedb_subtree_oid": "c4af0dea407e6c1ac3fcda5e2c6e16f9316e2bca",
   "qualification_harness_subtree_oid": "9a295a49b6c3342fb5058fd75b77f09030b59c35"
 }
