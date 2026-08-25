@@ -45,6 +45,95 @@ func TestDecodeStrictJSONRejectsUnknownAndTrailingValues(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictJSONRejectsOmittedZeroValuedEvidence(t *testing.T) {
+	for _, field := range []string{"vectors_enabled", "vector_indexes"} {
+		t.Run("observed."+field, func(t *testing.T) {
+			raw, err := json.Marshal(validManifest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			delete(document["observed"].(map[string]any), field)
+			raw, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded manifest
+			if err := decodeStrictJSON(raw, &decoded); err == nil || !strings.Contains(err.Error(), field) {
+				t.Fatalf("decode error=%v want omitted %s rejection", err, field)
+			}
+		})
+	}
+
+	m := validManifest()
+	for _, field := range []string{"documents_fetched", "fail_closed"} {
+		t.Run("probe."+field, func(t *testing.T) {
+			raw, err := json.Marshal(validReport(t, m))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			firstRow := document["rows"].([]any)[0].(map[string]any)
+			delete(firstRow["score_only_probe"].(map[string]any), field)
+			raw, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded report
+			if err := decodeStrictJSON(raw, &decoded); err == nil || !strings.Contains(err.Error(), field) {
+				t.Fatalf("decode error=%v want omitted %s rejection", err, field)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsMissingMetricAndReopenEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, want string
+		value             any
+	}{
+		{name: "omitted stale debt", field: "stale_debt", want: "stale_debt"},
+		{name: "legacy scalar stale debt", field: "stale_debt", value: float64(0), want: "cannot unmarshal"},
+		{name: "omitted reopen evidence", field: "reopen", want: "reopen score-only probe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := validManifest()
+			raw, err := json.Marshal(validReport(t, m))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			firstRow := document["rows"].([]any)[0].(map[string]any)
+			if tc.value == nil {
+				delete(firstRow, tc.field)
+			} else {
+				firstRow[tc.field] = tc.value
+			}
+			raw, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded report
+			err = decodeStrictJSON(raw, &decoded)
+			if err == nil {
+				err = validate(m, decoded, manifestHash(t, m))
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateAllowsReusedNumericPID(t *testing.T) {
 	m := validManifest()
 	r := validReport(t, m)
@@ -141,6 +230,33 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 			}
 			if err := verifyGitProvenance(m, resolve); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyGitProvenanceRejectsRuntimeSubtreeChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, status string
+	}{
+		{name: "unstaged TreeDB", path: qualificationTreeDBPath, status: " M TreeDB/collections/api.go"},
+		{name: "staged TreeDB", path: qualificationTreeDBPath, status: "M  TreeDB/collections/api.go"},
+		{name: "unstaged harness", path: qualificationHarnessPath, status: " M cmd/treedb_text_ingest_qual/contract.go"},
+		{name: "staged harness", path: qualificationHarnessPath, status: "M  cmd/treedb_text_ingest_qual/contract.go"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := validManifest()
+			outputs := validGitOutputs(m)
+			outputs[gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", tc.path)] = tc.status
+			resolve := func(args ...string) (string, error) {
+				value, ok := outputs[gitKey(args...)]
+				if !ok {
+					return "", errors.New("unexpected Git invocation")
+				}
+				return value, nil
+			}
+			if err := verifyGitProvenance(m, resolve); err == nil || !strings.Contains(err.Error(), tc.path) {
+				t.Fatalf("error=%v want dirty %s rejection", err, tc.path)
 			}
 		})
 	}
@@ -244,6 +360,27 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		})
 	}
 }
+func TestValidateRejectsReopenParityFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*reopenEvidence)
+	}{
+		{name: "live rows", edit: func(e *reopenEvidence) { e.IndexedLiveRows++ }},
+		{name: "generation", edit: func(e *reopenEvidence) { e.Generations++ }},
+		{name: "text storage", edit: func(e *reopenEvidence) { e.TextV2.PostingBytes++ }},
+		{name: "probe results", edit: func(e *reopenEvidence) { e.Probe.ResultsSHA256 = strings.Repeat("e", 64) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := validManifest()
+			r := validReport(t, m)
+			tc.edit(&r.Rows[0].Reopen)
+			if err := validate(m, r, manifestHash(t, m)); err == nil || !strings.Contains(err.Error(), "reopen evidence") {
+				t.Fatalf("error=%v want reopen parity rejection", err)
+			}
+		})
+	}
+}
+
 func TestProduceSmokeUsesFreshChildPerModeAndPreservesRepetition(t *testing.T) {
 	var calls []struct {
 		dir, mode         string
@@ -276,6 +413,12 @@ func TestProduceModeRecordsRepetitionAndMaintenanceDebt(t *testing.T) {
 	}
 	if r.Repetition != 3 || r.TombstoneDebt != 1 {
 		t.Fatalf("repetition=%d tombstone_debt=%d", r.Repetition, r.TombstoneDebt)
+	}
+	if r.StaleDebt.State != "unavailable" || !strings.Contains(r.StaleDebt.Reason, "no stale-debt counter") {
+		t.Fatalf("stale debt evidence=%+v", r.StaleDebt)
+	}
+	if !r.ReopenOK || !reopenEvidenceMatches(r) {
+		t.Fatalf("reopen evidence did not preserve pre-close state: %+v", r.Reopen)
 	}
 	if r.PeakRSSScope != "fresh_process_per_mode" || r.PeakRSSPID < 1 {
 		t.Fatalf("RSS provenance = %q/%d", r.PeakRSSScope, r.PeakRSSPID)
@@ -310,7 +453,7 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
 	commit := strings.Repeat("a", 40)
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}, Acceptance: expectedQualificationAcceptance()}
+	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0, vectorIndexesPresent: true, vectorsEnabledPresent: true}, Acceptance: expectedQualificationAcceptance()}
 }
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()
@@ -350,32 +493,64 @@ func validRow(mode string, scale, rep int) row {
 	if mode == "maintenance" {
 		live = scale / 2
 	}
-	r := row{Mode: mode, Scale: scale, Repetition: rep, SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: func() int {
-		if mode == "source_chunk" {
-			return source
-		}
-		return 0
-	}(), ChunkBatchSize: func() int {
-		if mode == "source_chunk" {
-			return min(sourceChunkBatchLimit, scale)
-		}
-		return 0
-	}(), ChunkBatchCount: func() int {
-		if mode == "source_chunk" {
-			return (scale + sourceChunkBatchLimit - 1) / sourceChunkBatchLimit
-		}
-		return 0
-	}(), Postings: 1, Terms: 1, Blocks: 1, Generations: 1, TombstoneDebt: func() uint64 {
-		if mode == "maintenance" {
-			return uint64(source - live)
-		}
-		return 0
-	}(), SourceDocsPerSec: float64(source), ChunksPerSec: float64(chunks), IndexedRowsPerSec: float64(live), WallSeconds: 1, CPUSeconds: metric{State: "unavailable", Reason: "platform"}, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark"}, CumulativeAllocs: metric{State: "observed", Value: 1}, PeakRSSBytes: metric{State: "observed", Value: 1}, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: scale*100 + rep*10 + modeOffset, Stages: map[string]metric{"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1}, "root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"}, "checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1}}, Storage: storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"}, TextV2: textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: 1}}
+	r := row{
+		Mode: mode, Scale: scale, Repetition: rep,
+		SourceDocuments: source, GeneratedChunks: chunks, IndexedLiveRows: live,
+		ParentsTextIndexed: parentsIndexed,
+		IndexedParentRows: func() int {
+			if mode == "source_chunk" {
+				return source
+			}
+			return 0
+		}(),
+		ChunkBatchSize: func() int {
+			if mode == "source_chunk" {
+				return min(sourceChunkBatchLimit, scale)
+			}
+			return 0
+		}(),
+		ChunkBatchCount: func() int {
+			if mode == "source_chunk" {
+				return (scale + sourceChunkBatchLimit - 1) / sourceChunkBatchLimit
+			}
+			return 0
+		}(),
+		Postings: 1, Terms: 1, Blocks: 1, Generations: 1,
+		StaleDebt: metric{State: "unavailable", Reason: "no stale-debt counter"},
+		TombstoneDebt: func() uint64 {
+			if mode == "maintenance" {
+				return uint64(source - live)
+			}
+			return 0
+		}(),
+		SourceDocsPerSec: float64(source), ChunksPerSec: float64(chunks),
+		IndexedRowsPerSec: float64(live), WallSeconds: 1,
+		CPUSeconds:       metric{State: "unavailable", Reason: "platform"},
+		BytesPerOp:       metric{State: "unavailable", Reason: "not a Go benchmark"},
+		AllocsPerOp:      metric{State: "unavailable", Reason: "not a Go benchmark"},
+		CumulativeAllocs: metric{State: "observed", Value: 1},
+		PeakRSSBytes:     metric{State: "observed", Value: 1},
+		PeakRSSScope:     "fresh_process_per_mode", PeakRSSPID: scale*100 + rep*10 + modeOffset,
+		Stages: map[string]metric{
+			"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1},
+			"root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"},
+			"checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1},
+		},
+		Storage:      storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"},
+		TextV2:       textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1},
+		CheckpointOK: true, CloseOK: true, ReopenOK: true,
+		Probe: validProbe(),
+	}
 	if mode == "source_chunk" {
 		r.Generations = uint64(r.ChunkBatchCount + 1)
 	}
+	r.Reopen = reopenEvidence{IndexedLiveRows: r.IndexedLiveRows, Postings: r.Postings, Terms: r.Terms, Blocks: r.Blocks, Generations: r.Generations, TombstoneDebt: r.TombstoneDebt, TextV2: r.TextV2, Probe: validProbe()}
 	r.FixtureSHA256, r.IDsSHA256 = qualificationIdentity(scale)
 	return r
+}
+
+func validProbe() scoreOnlyProbe {
+	return scoreOnlyProbe{Query: qualificationProbeQuery, Results: 1, ResultsSHA256: strings.Repeat("f", 64), documentsFetchedPresent: true, failClosedPresent: true}
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	rate := validRow(mode, scale, 1).IndexedRowsPerSec
@@ -408,14 +583,16 @@ func gitKey(args ...string) string {
 
 func validGitOutputs(m manifest) map[string]string {
 	return map[string]string{
-		gitKey("cat-file", "-t", m.Commit):                                      "commit",
-		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                     m.TreeOID,
-		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationTreeDBPath):  m.TreeDBSubtreeOID,
-		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationHarnessPath): m.QualificationHarnessSubtreeOID,
-		gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath):     m.ImplementationBlobOID,
-		gitKey("cat-file", "-t", m.ImplementationBlobOID):                       "blob",
-		gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath):        m.TreeDBSubtreeOID,
-		gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath):       m.QualificationHarnessSubtreeOID,
-		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):           m.ImplementationBlobOID,
+		gitKey("cat-file", "-t", m.Commit):                                                          "commit",
+		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                                         m.TreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationTreeDBPath):                      m.TreeDBSubtreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationHarnessPath):                     m.QualificationHarnessSubtreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath):                         m.ImplementationBlobOID,
+		gitKey("cat-file", "-t", m.ImplementationBlobOID):                                           "blob",
+		gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath):                            m.TreeDBSubtreeOID,
+		gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath):                           m.QualificationHarnessSubtreeOID,
+		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):                               m.ImplementationBlobOID,
+		gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", qualificationTreeDBPath):  "",
+		gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", qualificationHarnessPath): "",
 	}
 }

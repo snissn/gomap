@@ -169,5 +169,14 @@ func verifyGitProvenance(m manifest, resolve gitResolver) error {
 	if candidateBlob != m.ImplementationBlobOID {
 		return fmt.Errorf("candidate HEAD implementation blob is %s, want measured blob %s", candidateBlob, m.ImplementationBlobOID)
 	}
+	for _, path := range []string{qualificationTreeDBPath, qualificationHarnessPath} {
+		status, err := resolve("status", "--porcelain=v1", "--untracked-files=all", "--", path)
+		if err != nil {
+			return fmt.Errorf("inspect candidate working tree under %s: %w", path, err)
+		}
+		if status != "" {
+			return fmt.Errorf("candidate working tree has staged or unstaged changes under %s", path)
+		}
+	}
 	return nil
 }

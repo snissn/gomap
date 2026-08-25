@@ -332,6 +332,54 @@ func TestIngestChunkedDocumentsValidatesAndPublishesOneTextGeneration(t *testing
 	}
 }
 
+func TestIngestChunkedDocumentsScansUnderCollectionMutationLock(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	cfg := fixedWindowCfg(8, 1)
+	seed, err := col.IngestChunkedDocuments(
+		[]SourceDocument{
+			{ID: []byte("locked-scan-a"), Fields: map[string]any{"body": strings.Repeat("stale child a ", 8)}},
+			{ID: []byte("locked-scan-b"), Fields: map[string]any{"body": strings.Repeat("stale child b ", 8)}},
+		},
+		cfg,
+		ChunkedIngestOptions{},
+	)
+	if err != nil {
+		t.Fatalf("seed batch: %v", err)
+	}
+	if len(seed) != 2 || len(seed[0].ChildIDs) < 2 || len(seed[1].ChildIDs) < 2 {
+		t.Fatalf("seed result=%+v, want multiple stale children for both parents", seed)
+	}
+
+	mutationLockedDuringScan := false
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		unlock, locked := col.tryLockMutation()
+		if locked {
+			unlock.Unlock()
+			return
+		}
+		mutationLockedDuringScan = true
+	}}
+	replacement, err := col.IngestChunkedDocuments(
+		[]SourceDocument{
+			{ID: []byte("locked-scan-a"), Fields: map[string]any{"body": "fresh a"}},
+			{ID: []byte("locked-scan-b"), Fields: map[string]any{"body": "fresh b"}},
+		},
+		cfg,
+		ChunkedIngestOptions{hooks: hooks},
+	)
+	if err != nil {
+		t.Fatalf("replacement batch: %v", err)
+	}
+	if !mutationLockedDuringScan {
+		t.Fatal("stale-child scan ran outside the ordinary collection mutation lock")
+	}
+	if len(replacement) != 2 ||
+		replacement[0].Replaced != len(seed[0].ChildIDs) ||
+		replacement[1].Replaced != len(seed[1].ChildIDs) {
+		t.Fatalf("replacement=%+v want replaced=[%d %d]", replacement, len(seed[0].ChildIDs), len(seed[1].ChildIDs))
+	}
+}
+
 func TestIngestChunkedDocumentCopiesMetadataWithoutLinkageOverride(t *testing.T) {
 	_, _, col := openChunkingTestCollection(t)
 	meta := map[string]any{

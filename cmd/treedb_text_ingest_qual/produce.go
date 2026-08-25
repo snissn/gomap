@@ -5,6 +5,8 @@ package main
 // authority for retained artifacts.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -217,6 +219,11 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		_ = closeDB()
 		return row{}, err
 	}
+	preCloseProbe, err := qualificationScoreOnlyProbe(col, scale)
+	if err != nil {
+		_ = closeDB()
+		return row{}, fmt.Errorf("pre-close probe: %w", err)
+	}
 	// Physical bytes are deliberately observed after this close, never from an
 	// open DB where buffered state could make the filesystem ambiguous.
 	if err = closeDB(); err != nil {
@@ -236,11 +243,19 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		}
 		return row{}, err
 	}
-	probe, err := col2.SearchText(collections.TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, CandidateLimit: scale * 3, MaxPostingsScanned: scale * 24, ResultMode: collections.TextSearchResultModeScoreOnly})
+	reopenStats, err := col2.TextIndexStorageStats("lexical")
 	if err != nil {
 		closeErr := d2.Close()
 		if closeErr != nil {
-			return row{}, fmt.Errorf("probe: %v (cleanup: %w)", err, closeErr)
+			return row{}, fmt.Errorf("reopen text stats: %v (cleanup: %w)", err, closeErr)
+		}
+		return row{}, err
+	}
+	reopenProbe, err := qualificationScoreOnlyProbe(col2, scale)
+	if err != nil {
+		closeErr := d2.Close()
+		if closeErr != nil {
+			return row{}, fmt.Errorf("reopen probe: %v (cleanup: %w)", err, closeErr)
 		}
 		return row{}, err
 	}
@@ -266,7 +281,84 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 	if endRSSReason == "" {
 		rssMetric = metric{State: "observed", Value: maxRSS}
 	}
-	return row{Mode: mode, Scale: scale, Repetition: repetition, FixtureSHA256: fixtureSHA, IDsSHA256: idsSHA, PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: os.Getpid(), SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live, ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents, ChunkBatchSize: batchSize, ChunkBatchCount: batchCount, Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats, Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration, TombstoneDebt: stats.V2DeletedDocs, SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall, IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall, CPUSeconds: cpuMetric, BytesPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, AllocsPerOp: metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"}, CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)}, PeakRSSBytes: rssMetric, Stages: map[string]metric{"analyzer": {State: "unavailable", Reason: "collection API does not separately expose analyzer time"}, "posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"}, "root_mutation": {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"}, "value_log": {State: "unavailable", Reason: "collection API does not separately expose value-log time"}, "checkpoint": {State: "observed", Value: checkpoint}, "reopen": {State: "observed", Value: reopen}}, Storage: withLogicalPayloadBytes(physical, logicalPayloadBytes), TextV2: textV2{DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes), PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes), PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes), StatusBytes: int64(stats.V2StatusFormatBytes)}, CheckpointOK: true, CloseOK: true, ReopenOK: true, Probe: scoreOnlyProbe{Results: len(probe.Results), DocumentsFetched: probe.Stats.DocumentsFetched, FailClosed: probe.Stats.FailClosed}}, nil
+	result := row{
+		Mode: mode, Scale: scale, Repetition: repetition,
+		FixtureSHA256: fixtureSHA, IDsSHA256: idsSHA,
+		PeakRSSScope: "fresh_process_per_mode", PeakRSSPID: os.Getpid(),
+		SourceDocuments: scale, GeneratedChunks: chunks, IndexedLiveRows: live,
+		ParentsTextIndexed: parentsIndexed, IndexedParentRows: indexedParents,
+		ChunkBatchSize: batchSize, ChunkBatchCount: batchCount,
+		Postings: stats.V2DocIDEntries, Terms: stats.V2TermStats,
+		Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration,
+		StaleDebt:        metric{State: "unavailable", Reason: "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"},
+		TombstoneDebt:    stats.V2DeletedDocs,
+		SourceDocsPerSec: float64(scale) / wall, ChunksPerSec: float64(chunks) / wall,
+		IndexedRowsPerSec: float64(live) / wall, WallSeconds: wall,
+		CPUSeconds:       cpuMetric,
+		BytesPerOp:       metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"},
+		AllocsPerOp:      metric{State: "unavailable", Reason: "not a Go benchmark; see cumulative_allocations"},
+		CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)},
+		PeakRSSBytes:     rssMetric,
+		Stages: map[string]metric{
+			"analyzer":        {State: "unavailable", Reason: "collection API does not separately expose analyzer time"},
+			"posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"},
+			"root_mutation":   {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"},
+			"value_log":       {State: "unavailable", Reason: "collection API does not separately expose value-log time"},
+			"checkpoint":      {State: "observed", Value: checkpoint},
+			"reopen":          {State: "observed", Value: reopen},
+		},
+		Storage:      withLogicalPayloadBytes(physical, logicalPayloadBytes),
+		TextV2:       textV2Evidence(stats),
+		CheckpointOK: true, CloseOK: true,
+		Probe:  preCloseProbe,
+		Reopen: reopenEvidenceFromStats(reopenStats, reopenProbe),
+	}
+	result.ReopenOK = reopenEvidenceMatches(result) && validateProbe(result.Probe) == nil && validateProbe(result.Reopen.Probe) == nil
+	return result, nil
+}
+
+func qualificationScoreOnlyProbe(col *collections.Collection, scale int) (scoreOnlyProbe, error) {
+	response, err := col.SearchText(collections.TextSearchOptions{
+		IndexName: "lexical", Query: qualificationProbeQuery, TopK: 10,
+		CandidateLimit: scale * 3, MaxPostingsScanned: scale * 24,
+		ResultMode: collections.TextSearchResultModeScoreOnly,
+	})
+	if err != nil {
+		return scoreOnlyProbe{}, err
+	}
+	h := sha256.New()
+	writeIdentityValue(h, qualificationProbeQuery)
+	for _, result := range response.Results {
+		writeIdentityValue(h, string(result.DocumentID))
+		writeIdentityValue(h, result.IndexName)
+		writeIdentityValue(h, strconv.Itoa(result.Rank))
+		writeIdentityValue(h, strconv.FormatFloat(result.Score, 'g', -1, 64))
+	}
+	return scoreOnlyProbe{
+		Query: qualificationProbeQuery, Results: len(response.Results),
+		ResultsSHA256:    hex.EncodeToString(h.Sum(nil)),
+		DocumentsFetched: response.Stats.DocumentsFetched, FailClosed: response.Stats.FailClosed,
+		documentsFetchedPresent: true, failClosedPresent: true,
+	}, nil
+}
+
+func textV2Evidence(stats collections.TextIndexStorageStats) textV2 {
+	return textV2{
+		DocIDBytes: int64(stats.V2DocIDBytes), DocMapBytes: int64(stats.V2DocMapBytes),
+		PostingBytes: int64(stats.V2PostingBlockBytes), NormBytes: int64(stats.V2NormBlockBytes),
+		PositionBytes: int64(stats.V2PositionBytes), TermBytes: int64(stats.V2TermStatsBytes),
+		StatusBytes: int64(stats.V2StatusFormatBytes),
+	}
+}
+
+func reopenEvidenceFromStats(stats collections.TextIndexStorageStats, probe scoreOnlyProbe) reopenEvidence {
+	return reopenEvidence{
+		IndexedLiveRows: int(stats.V2LiveDocuments),
+		Postings:        stats.V2DocIDEntries, Terms: stats.V2TermStats,
+		Blocks: stats.V2PostingBlocks, Generations: stats.V2RootGeneration,
+		TombstoneDebt: stats.V2DeletedDocs,
+		TextV2:        textV2Evidence(stats), Probe: probe,
+	}
 }
 
 func withLogicalPayloadBytes(s storage, bytes int64) storage {

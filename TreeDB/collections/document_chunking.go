@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -25,7 +26,8 @@ type ChunkedIngestOptions struct {
 }
 
 type chunkedIngestHooks struct {
-	afterDelete func()
+	afterDelete    func()
+	afterBatchScan func()
 }
 
 func (o ChunkedIngestOptions) textField() string {
@@ -87,6 +89,12 @@ func chunkPlanDocs(children []chunkChild) [][]byte {
 
 // chunkedIngestPlan is the validated, mutation-free output of buildChunkPlan.
 type chunkedIngestPlan struct {
+	children []chunkChild
+}
+
+type chunkedDocumentBatchPlan struct {
+	parentID []byte
+	parent   []byte
 	children []chunkChild
 }
 
@@ -341,12 +349,7 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, nil
 	}
 
-	type batchPlan struct {
-		parentID []byte
-		parent   []byte
-		children []chunkChild
-	}
-	plans := make([]batchPlan, len(sources))
+	plans := make([]chunkedDocumentBatchPlan, len(sources))
 	seen := make(map[string]struct{}, len(sources))
 	for i, source := range sources {
 		if err := chunking.ValidateParentID(string(source.ID)); err != nil {
@@ -365,7 +368,7 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		if err != nil {
 			return nil, fmt.Errorf("collections: chunked ingest batch source %d (%q): %w", i, source.ID, err)
 		}
-		plans[i] = batchPlan{parentID: bytes.Clone(source.ID), parent: parent, children: plan.children}
+		plans[i] = chunkedDocumentBatchPlan{parentID: bytes.Clone(source.ID), parent: parent, children: plan.children}
 	}
 
 	parentIDs := make([][]byte, len(plans))
@@ -377,17 +380,46 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, err
 	}
 	defer lifecycleLocks.releaseAll()
-	unlockMutation, err := c.lockChunkMutation(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	defer unlockMutation()
-
-	// This is the same write-domain boundary used by the single-source API.
-	// It runs once per public batch, never once per source.
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}
+	replaced, err := c.replaceChunkedDocumentBatch(plans, opts.hooks)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]ChunkedIngestResult, len(plans))
+	for i, plan := range plans {
+		childIDs := make([][]byte, len(plan.children))
+		for j, child := range plan.children {
+			childIDs[j] = bytes.Clone(child.id)
+		}
+		results[i] = ChunkedIngestResult{
+			parentID: bytes.Clone(plan.parentID),
+			ChildIDs: childIDs,
+			Replaced: replaced[i],
+		}
+	}
+	return results, nil
+}
+
+// replaceChunkedDocumentBatch holds the ordinary collection mutation lock from
+// stale-child discovery through durable publication. InsertBatch cannot publish
+// a child after the prefix scan but before the replacement plan commits.
+func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
+		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
+	}
+
 	deleteIDs := make([][]byte, 0, len(plans)*2)
 	insertIDs := make([][]byte, 0, len(plans)*2)
 	insertDocs := make([][]byte, 0, len(plans)*2)
@@ -407,23 +439,54 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		insertIDs = append(insertIDs, plan.parentID)
 		insertDocs = append(insertDocs, plan.parent)
 	}
-	if _, err := c.replaceSourceDocumentsWithCommandWALIntent(deleteIDs, insertIDs, insertDocs, nil, nil); err != nil {
-		return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
+	if hooks != nil && hooks.afterBatchScan != nil {
+		hooks.afterBatchScan()
 	}
 
-	results := make([]ChunkedIngestResult, len(plans))
-	for i, plan := range plans {
-		childIDs := make([][]byte, len(plan.children))
-		for j, child := range plan.children {
-			childIDs[j] = bytes.Clone(child.id)
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		plan, err := c.buildSourceReplacementPlan(deleteIDs, insertIDs, insertDocs, nil, nil)
+		if err != nil {
+			if isRetriableCollectionMutationError(err) {
+				lastErr = err
+				waitBeforeCollectionMutationRetry(attempt)
+				continue
+			}
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", err)
 		}
-		results[i] = ChunkedIngestResult{
-			parentID: bytes.Clone(plan.parentID),
-			ChildIDs: childIDs,
-			Replaced: replaced[i],
+		publishErr := c.publishSourceReplacementPlan(plan, nil)
+		plan.close()
+		if isRetriableCollectionMutationError(publishErr) {
+			lastErr = publishErr
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
 		}
+		published := publishErr == nil || backenddb.CommitPublicationAccepted(publishErr) || errors.Is(publishErr, ErrCommitAmbiguous)
+		if !published {
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", publishErr)
+		}
+		reconcileIDs := make([][]byte, 0, len(deleteIDs)+len(insertIDs))
+		seen := make(map[string]struct{}, len(deleteIDs)+len(insertIDs))
+		for _, ids := range [][][]byte{deleteIDs, insertIDs} {
+			for _, id := range ids {
+				if _, ok := seen[string(id)]; ok {
+					continue
+				}
+				seen[string(id)] = struct{}{}
+				reconcileIDs = append(reconcileIDs, id)
+			}
+		}
+		notifyErr := c.reconcileVectorIndexes(reconcileIDs)
+		if notifyErr != nil {
+			c.invalidateRegisteredVectorIndexDocumentCoverage()
+			notifyErr = commitAmbiguousError("atomic source replacement vector maintenance", notifyErr)
+		}
+		if publishErr != nil || notifyErr != nil {
+			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", errors.Join(publishErr, notifyErr))
+		}
+		return replaced, nil
 	}
-	return results, nil
+	return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", collectionMutationRetryExhausted(lastErr))
 }
 
 func (c *Collection) upsertParentDocument(parentID []byte, parentDocument []byte) error {

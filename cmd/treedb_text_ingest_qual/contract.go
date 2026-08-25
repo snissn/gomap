@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	contractVersion                            = "treedb_text_ingest_qualification/v2"
+	contractVersion                            = "treedb_text_ingest_qualification/v3"
 	qualificationAnalyzer                      = "simple"
 	qualificationFieldWeights                  = "title=3,body=1"
+	qualificationProbeQuery                    = "refund"
 	qualificationTitleWeight                   = 3.0
 	qualificationBodyWeight                    = 1.0
 	qualificationTreeDBPath                    = "TreeDB"
@@ -76,6 +77,36 @@ type observedIdentity struct {
 	Durability     string `json:"durability"`
 	VectorIndexes  int    `json:"vector_indexes"`
 	VectorsEnabled bool   `json:"vectors_enabled"`
+
+	vectorIndexesPresent  bool
+	vectorsEnabledPresent bool
+}
+
+func (o *observedIdentity) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		VCSClean       bool   `json:"vcs_clean"`
+		Commit         string `json:"commit"`
+		Durability     string `json:"durability"`
+		VectorIndexes  *int   `json:"vector_indexes"`
+		VectorsEnabled *bool  `json:"vectors_enabled"`
+	}
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.VectorIndexes == nil {
+		return fmt.Errorf("observed.vector_indexes is required")
+	}
+	if decoded.VectorsEnabled == nil {
+		return fmt.Errorf("observed.vectors_enabled is required")
+	}
+	o.VCSClean = decoded.VCSClean
+	o.Commit = decoded.Commit
+	o.Durability = decoded.Durability
+	o.VectorIndexes = *decoded.VectorIndexes
+	o.VectorsEnabled = *decoded.VectorsEnabled
+	o.vectorIndexesPresent = true
+	o.vectorsEnabledPresent = true
+	return nil
 }
 
 type report struct {
@@ -107,7 +138,7 @@ type row struct {
 	Terms             uint64            `json:"terms"`
 	Blocks            uint64            `json:"blocks"`
 	Generations       uint64            `json:"generations"`
-	StaleDebt         uint64            `json:"stale_debt"`
+	StaleDebt         metric            `json:"stale_debt"`
 	TombstoneDebt     uint64            `json:"tombstone_debt"`
 	SourceDocsPerSec  float64           `json:"source_docs_per_second"`
 	ChunksPerSec      float64           `json:"chunks_per_second"`
@@ -125,6 +156,7 @@ type row struct {
 	CloseOK           bool              `json:"close_ok"`
 	ReopenOK          bool              `json:"reopen_ok"`
 	Probe             scoreOnlyProbe    `json:"score_only_probe"`
+	Reopen            reopenEvidence    `json:"reopen"`
 }
 
 type metric struct {
@@ -156,9 +188,52 @@ type textV2 struct {
 	StatusBytes   int64 `json:"status_bytes"`
 }
 type scoreOnlyProbe struct {
+	Query            string `json:"query"`
 	Results          int    `json:"results"`
+	ResultsSHA256    string `json:"results_sha256"`
 	DocumentsFetched uint64 `json:"documents_fetched"`
 	FailClosed       uint64 `json:"fail_closed"`
+
+	documentsFetchedPresent bool
+	failClosedPresent       bool
+}
+
+func (p *scoreOnlyProbe) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Query            string  `json:"query"`
+		Results          int     `json:"results"`
+		ResultsSHA256    string  `json:"results_sha256"`
+		DocumentsFetched *uint64 `json:"documents_fetched"`
+		FailClosed       *uint64 `json:"fail_closed"`
+	}
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.DocumentsFetched == nil {
+		return fmt.Errorf("probe.documents_fetched is required")
+	}
+	if decoded.FailClosed == nil {
+		return fmt.Errorf("probe.fail_closed is required")
+	}
+	p.Query = decoded.Query
+	p.Results = decoded.Results
+	p.ResultsSHA256 = decoded.ResultsSHA256
+	p.DocumentsFetched = *decoded.DocumentsFetched
+	p.FailClosed = *decoded.FailClosed
+	p.documentsFetchedPresent = true
+	p.failClosedPresent = true
+	return nil
+}
+
+type reopenEvidence struct {
+	IndexedLiveRows int            `json:"indexed_live_rows"`
+	Postings        uint64         `json:"postings"`
+	Terms           uint64         `json:"terms"`
+	Blocks          uint64         `json:"blocks"`
+	Generations     uint64         `json:"generations"`
+	TombstoneDebt   uint64         `json:"tombstone_debt"`
+	TextV2          textV2         `json:"text_v2"`
+	Probe           scoreOnlyProbe `json:"score_only_probe"`
 }
 type modeScaleSummary struct {
 	Mode                    string  `json:"mode"`
@@ -177,6 +252,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("manifest %s is required", name)
 		}
+	}
+	if !m.Observed.vectorIndexesPresent || !m.Observed.vectorsEnabledPresent {
+		return fmt.Errorf("observed.vectors_enabled and observed.vector_indexes must be present")
 	}
 	if m.Analyzer != qualificationAnalyzer || m.FieldWeights != qualificationFieldWeights {
 		return fmt.Errorf("manifest analyzer and field_weights must match the producer")
@@ -270,7 +348,11 @@ func validate(m manifest, r report, manifestSHA string) error {
 }
 
 func isGitOID(value string) bool {
-	if len(value) != 40 {
+	return isLowerHex(value, 40)
+}
+
+func isLowerHex(value string, length int) bool {
+	if len(value) != length {
 		return false
 	}
 	for _, c := range value {
@@ -388,6 +470,9 @@ func validateRow(r row) error {
 	if r.Mode != "maintenance" && r.TombstoneDebt != 0 {
 		return fmt.Errorf("non-maintenance modes must not claim tombstone debt")
 	}
+	if err := validateMetric(r.StaleDebt); err != nil {
+		return fmt.Errorf("stale_debt: %w", err)
+	}
 	if r.Postings == 0 || r.Terms == 0 || r.Blocks == 0 || r.Generations == 0 || r.WallSeconds <= 0 {
 		return fmt.Errorf("text-v2 counts or timing incomplete")
 	}
@@ -420,8 +505,17 @@ func validateRow(r row) error {
 	if r.TextV2.DocIDBytes <= 0 || r.TextV2.DocMapBytes <= 0 || r.TextV2.PostingBytes <= 0 || r.TextV2.NormBytes <= 0 || r.TextV2.TermBytes <= 0 || r.TextV2.StatusBytes <= 0 || r.TextV2.PositionBytes < 0 {
 		return fmt.Errorf("text-v2 component evidence incomplete")
 	}
-	if !r.CheckpointOK || !r.CloseOK || !r.ReopenOK || r.Probe.Results == 0 || r.Probe.DocumentsFetched != 0 || r.Probe.FailClosed != 0 {
-		return fmt.Errorf("checkpoint/close/reopen or score-only probe failed")
+	if !r.CheckpointOK || !r.CloseOK || !r.ReopenOK {
+		return fmt.Errorf("checkpoint/close/reopen failed")
+	}
+	if err := validateProbe(r.Probe); err != nil {
+		return fmt.Errorf("pre-close score-only probe: %w", err)
+	}
+	if err := validateProbe(r.Reopen.Probe); err != nil {
+		return fmt.Errorf("reopen score-only probe: %w", err)
+	}
+	if !reopenEvidenceMatches(r) {
+		return fmt.Errorf("reopen evidence does not match pre-close text state and probe results")
 	}
 	return nil
 }
@@ -439,6 +533,32 @@ func validateMetric(v metric) error {
 		return fmt.Errorf("state must be observed or unavailable")
 	}
 	return nil
+}
+
+func validateProbe(p scoreOnlyProbe) error {
+	if !p.documentsFetchedPresent || !p.failClosedPresent {
+		return fmt.Errorf("documents_fetched and fail_closed must be present")
+	}
+	if p.Query != qualificationProbeQuery || p.Results < 1 || !isLowerHex(p.ResultsSHA256, 64) {
+		return fmt.Errorf("deterministic query and result identity are required")
+	}
+	if p.DocumentsFetched != 0 || p.FailClosed != 0 {
+		return fmt.Errorf("score-only probe fetched documents or failed closed")
+	}
+	return nil
+}
+
+func reopenEvidenceMatches(r row) bool {
+	return r.Reopen.IndexedLiveRows == r.IndexedLiveRows &&
+		r.Reopen.Postings == r.Postings &&
+		r.Reopen.Terms == r.Terms &&
+		r.Reopen.Blocks == r.Blocks &&
+		r.Reopen.Generations == r.Generations &&
+		r.Reopen.TombstoneDebt == r.TombstoneDebt &&
+		r.Reopen.TextV2 == r.TextV2 &&
+		r.Reopen.Probe.Query == r.Probe.Query &&
+		r.Reopen.Probe.Results == r.Probe.Results &&
+		r.Reopen.Probe.ResultsSHA256 == r.Probe.ResultsSHA256
 }
 func validateStorage(s storage) error {
 	if s.PhysicalIndexPageBytes < 0 || s.PhysicalValueLogBytes < 0 || s.PhysicalWALBytes < 0 || s.PhysicalOtherBytes < 0 || s.PhysicalTotalBytes <= 0 || s.PhysicalTotalWALExcludedBytes < 0 || s.LogicalPrimaryPayloadBytes <= 0 {
