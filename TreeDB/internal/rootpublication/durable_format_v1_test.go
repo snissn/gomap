@@ -72,6 +72,31 @@ func TestDependencyManifestV1DeterministicMultiPageRoundTrip(t *testing.T) {
 	}
 }
 
+func BenchmarkDependencyManifestV1EncodeEntries(b *testing.B) {
+	for _, count := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", count), func(b *testing.B) {
+			entries := make([]DependencyManifestEntryV1, count)
+			for i := range entries {
+				generation := uint64(i + 1)
+				entries[i] = DependencyManifestEntryV1{
+					Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: fmt.Sprintf("part-%08d", i),
+					DiagnosticPath: fmt.Sprintf("columns/part-%08d.bin", i),
+					Identity:       StableIdentity{Platform: "benchmark", ObjectID: [16]byte{byte(i), byte(i >> 8), byte(i >> 16), 1}, Generation: generation},
+					Generation:     generation, Frontier: DurableFrontier{Bytes: 4096},
+					Reachability: []ReachabilityField{ReachabilityColumnManifest},
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := NewDependencyManifestV1(entries); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestDurableRootRecordV1RoundTripBindsMetaFreelistAndManifest(t *testing.T) {
 	manifest := DependencyManifestRefV1{FirstPageID: 30, ByteLength: 777, EntryCount: 4, PageCount: 2, Digest: [32]byte{7}}
 	freelistRef := freelist.GenerationRefV1{HeaderPageID: 28, GenerationID: 12, CommitSeq: 12, HighWater: 33, Digest: [32]byte{8}}

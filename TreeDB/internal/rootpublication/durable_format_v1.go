@@ -70,42 +70,68 @@ type DependencyManifestV1 struct {
 	digest  [32]byte
 }
 
+// DependencyManifestBuildWorkV1 reports canonical entry encoding work. Payload
+// assembly remains a full V1 stream because the on-disk format is unchanged.
+type DependencyManifestBuildWorkV1 struct {
+	EntriesVisited uint64
+	EntriesEncoded uint64
+	BytesEncoded   uint64
+}
+
 func NewDependencyManifestV1(entries []DependencyManifestEntryV1) (*DependencyManifestV1, error) {
-	normalized := make([]DependencyManifestEntryV1, len(entries))
-	encoded := make([][]byte, len(entries))
+	manifest, _, err := NewDependencyManifestV1WithWork(entries)
+	return manifest, err
+}
+
+// NewDependencyManifestV1WithWork is NewDependencyManifestV1 with entry-encoding counters.
+func NewDependencyManifestV1WithWork(entries []DependencyManifestEntryV1) (*DependencyManifestV1, DependencyManifestBuildWorkV1, error) {
+	work := DependencyManifestBuildWorkV1{EntriesVisited: uint64(len(entries))}
+	encoded := make([]dependencyManifestEncodedEntryV1, len(entries))
 	for i := range entries {
 		entry, err := normalizeDependencyManifestEntryV1(entries[i])
 		if err != nil {
-			return nil, err
+			return nil, work, err
 		}
-		normalized[i] = entry
-		encoded[i] = encodeDependencyManifestEntryV1(entry)
+		raw := encodeDependencyManifestEntryV1(entry)
+		encoded[i] = dependencyManifestEncodedEntryV1{entry: entry, encoded: raw}
+		work.EntriesEncoded++
+		work.BytesEncoded += uint64(len(raw))
 	}
-	sort.Slice(normalized, func(i, j int) bool {
-		return bytes.Compare(encodeDependencyManifestEntryV1(normalized[i]), encodeDependencyManifestEntryV1(normalized[j])) < 0
+	manifest, err := newDependencyManifestV1FromEncoded(encoded)
+	return manifest, work, err
+}
+
+type dependencyManifestEncodedEntryV1 struct {
+	entry   DependencyManifestEntryV1
+	encoded []byte
+}
+
+func newDependencyManifestV1FromEncoded(encoded []dependencyManifestEncodedEntryV1) (*DependencyManifestV1, error) {
+	sort.Slice(encoded, func(i, j int) bool {
+		return bytes.Compare(encoded[i].encoded, encoded[j].encoded) < 0
 	})
-	for i := range normalized {
-		encoded[i] = encodeDependencyManifestEntryV1(normalized[i])
-		if i > 0 && bytes.Equal(encoded[i-1], encoded[i]) {
+	payloadBytes := 16
+	for i := range encoded {
+		if len(encoded[i].encoded) > int(^uint32(0)) || payloadBytes > maxDependencyManifestBytesV1-4-len(encoded[i].encoded) {
+			return nil, fmt.Errorf("%w: payload exceeds %d bytes", ErrDependencyManifestFormat, maxDependencyManifestBytesV1)
+		}
+		if i > 0 && bytes.Equal(encoded[i-1].encoded, encoded[i].encoded) {
 			return nil, fmt.Errorf("%w: duplicate resource entry", ErrDependencyManifestFormat)
 		}
+		payloadBytes += 4 + len(encoded[i].encoded)
 	}
-	payload := make([]byte, 16)
+	entries := make([]DependencyManifestEntryV1, len(encoded))
+	payload := make([]byte, 16, payloadBytes)
 	copy(payload[0:8], dependencyManifestBodyMagicV1[:])
 	binary.LittleEndian.PutUint16(payload[8:10], 1)
 	binary.LittleEndian.PutUint16(payload[10:12], 16)
-	binary.LittleEndian.PutUint32(payload[12:16], uint32(len(normalized)))
-	for _, entry := range encoded {
-		if len(entry) > int(^uint32(0)) {
-			return nil, ErrDependencyManifestFormat
-		}
-		payload = appendU32V1(payload, uint32(len(entry)))
-		payload = append(payload, entry...)
-		if len(payload) > maxDependencyManifestBytesV1 {
-			return nil, fmt.Errorf("%w: payload exceeds %d bytes", ErrDependencyManifestFormat, maxDependencyManifestBytesV1)
-		}
+	binary.LittleEndian.PutUint32(payload[12:16], uint32(len(encoded)))
+	for i := range encoded {
+		entries[i] = encoded[i].entry
+		payload = appendU32V1(payload, uint32(len(encoded[i].encoded)))
+		payload = append(payload, encoded[i].encoded...)
 	}
-	return &DependencyManifestV1{entries: normalized, payload: payload, digest: sha256.Sum256(payload)}, nil
+	return &DependencyManifestV1{entries: entries, payload: payload, digest: sha256.Sum256(payload)}, nil
 }
 
 func normalizeDependencyManifestEntryV1(entry DependencyManifestEntryV1) (DependencyManifestEntryV1, error) {

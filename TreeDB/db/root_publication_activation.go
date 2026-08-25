@@ -929,7 +929,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			resources.Release()
 		}
 	}()
-	manifest, err := durableManifestFromResourcesV1(resources)
+	manifest, err := db.durableManifestFromResourcesV1WithStats(resources)
 	if err != nil {
 		return err
 	}

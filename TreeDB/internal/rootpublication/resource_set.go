@@ -15,15 +15,21 @@ import (
 )
 
 type stableResourceEntry struct {
-	token              *StableResourceToken
-	pins               []*StableResourceToken
-	pinIndex           map[*StableResourceToken]struct{}
-	logicalLane        string
-	resourceID         string
-	diagnosticPath     string
-	frontier           DurableFrontier
-	reachability       map[ReachabilityField]struct{}
-	logicalObligations stableLogicalObligationView
+	token                *StableResourceToken
+	pins                 []*StableResourceToken
+	pinIndex             map[*StableResourceToken]struct{}
+	logicalLane          string
+	resourceID           string
+	diagnosticPath       string
+	frontier             DurableFrontier
+	reachability         map[ReachabilityField]struct{}
+	logicalObligations   stableLogicalObligationView
+	dependencyManifestV1 *dependencyManifestEntryCacheV1
+}
+
+type dependencyManifestEntryCacheV1 struct {
+	mu    sync.Mutex
+	value *dependencyManifestEncodedEntryV1
 }
 
 // stableLogicalObligationView is an immutable persistent sequence. Appending a
@@ -581,6 +587,10 @@ func cloneStableResourceEntry(entry stableResourceEntry) stableResourceEntry {
 		// The persistent obligation view is immutable and may be shared across
 		// independently pinned visible/durable resource-set generations.
 		reachability: reachability, logicalObligations: entry.logicalObligations,
+		dependencyManifestV1: entry.dependencyManifestV1,
+	}
+	if clone.dependencyManifestV1 == nil {
+		clone.dependencyManifestV1 = &dependencyManifestEntryCacheV1{}
 	}
 	if len(entry.pins) != 0 {
 		clone.pins = append([]*StableResourceToken(nil), entry.pins...)
@@ -802,8 +812,9 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 	*entries = append(*entries, stableResourceEntry{
 		token: token, logicalLane: token.logicalLane, resourceID: token.resourceID,
 		diagnosticPath: token.diagnosticPath, frontier: cloneDurableFrontier(token.frontier),
-		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
-		logicalObligations: newStableLogicalObligationView(token.logicalObligations),
+		reachability:         map[ReachabilityField]struct{}{token.reachability: {}},
+		logicalObligations:   newStableLogicalObligationView(token.logicalObligations),
+		dependencyManifestV1: &dependencyManifestEntryCacheV1{},
 	})
 	return nil
 }
@@ -861,8 +872,9 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 	*entries = append(*entries, stableResourceEntry{
 		token: token, logicalLane: token.logicalLane, resourceID: token.resourceID,
 		diagnosticPath: token.diagnosticPath, frontier: cloneDurableFrontier(token.frontier),
-		reachability:       map[ReachabilityField]struct{}{token.reachability: {}},
-		logicalObligations: newStableLogicalObligationView(token.logicalObligations),
+		reachability:         map[ReachabilityField]struct{}{token.reachability: {}},
+		logicalObligations:   newStableLogicalObligationView(token.logicalObligations),
+		dependencyManifestV1: &dependencyManifestEntryCacheV1{},
 	})
 	lookup.add(*entries, len(*entries)-1)
 	work.PhysicalEntryLookupAdmissions++
@@ -873,6 +885,7 @@ func mergeStableResourceDescriptorIdentity(entry *stableResourceEntry, lane, res
 	if entry == nil {
 		return
 	}
+	entry.dependencyManifestV1 = &dependencyManifestEntryCacheV1{}
 	if entry.logicalLane == "" || lane < entry.logicalLane ||
 		(lane == entry.logicalLane && (resourceID < entry.resourceID ||
 			(resourceID == entry.resourceID && diagnosticPath < entry.diagnosticPath))) {
@@ -1916,6 +1929,65 @@ func (set *StableResourceSet) Descriptors() []StableResourceDescriptor {
 	return descriptors
 }
 
+// DependencyManifestV1 builds the unchanged durable V1 stream while reusing
+// canonical encodings for immutable retained entries. A coalesced entry clears
+// only its own cache before a later Freeze.
+func (set *StableResourceSet) DependencyManifestV1() (*DependencyManifestV1, DependencyManifestBuildWorkV1, error) {
+	if set == nil {
+		return NewDependencyManifestV1WithWork(nil)
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	work := DependencyManifestBuildWorkV1{EntriesVisited: uint64(len(set.entries))}
+	encoded := make([]dependencyManifestEncodedEntryV1, len(set.entries))
+	for i := range set.entries {
+		entry := &set.entries[i]
+		cache := entry.dependencyManifestV1
+		if cache == nil {
+			cache = &dependencyManifestEntryCacheV1{}
+			entry.dependencyManifestV1 = cache
+		}
+		cache.mu.Lock()
+		if cache.value == nil {
+			manifestEntry := dependencyManifestEntryV1FromStableResourceEntry(*entry)
+			normalized, err := normalizeDependencyManifestEntryV1(manifestEntry)
+			if err != nil {
+				cache.mu.Unlock()
+				return nil, work, err
+			}
+			raw := encodeDependencyManifestEntryV1(normalized)
+			cache.value = &dependencyManifestEncodedEntryV1{entry: normalized, encoded: raw}
+			work.EntriesEncoded++
+			work.BytesEncoded += uint64(len(raw))
+		}
+		encoded[i] = *cache.value
+		cache.mu.Unlock()
+	}
+	manifest, err := newDependencyManifestV1FromEncoded(encoded)
+	return manifest, work, err
+}
+
+func dependencyManifestEntryV1FromStableResourceEntry(entry stableResourceEntry) DependencyManifestEntryV1 {
+	fields := make([]ReachabilityField, 0, len(entry.reachability))
+	for field := range entry.reachability {
+		fields = append(fields, field)
+	}
+	logicalObligations := entry.logicalObligations.slice()
+	result := DependencyManifestEntryV1{
+		Kind: entry.token.kind, LogicalLane: entry.logicalLane, ResourceID: entry.resourceID,
+		DiagnosticPath: entry.diagnosticPath, Identity: entry.token.identity, Generation: entry.token.generation,
+		Digest: entry.token.digest, Frontier: cloneDurableFrontier(entry.frontier), Reachability: fields,
+		LogicalObligations: logicalObligations,
+	}
+	if namespace := entry.token.namespace; namespace != nil {
+		result.Namespace = &DependencyManifestNamespaceV1{
+			ParentIdentity: namespace.parentIdentity, Operation: namespace.operation,
+			OldName: namespace.oldName, NewName: namespace.newName, DiagnosticPath: namespace.diagnosticPath,
+		}
+	}
+	return result
+}
+
 // CloneStableResourceSetExcludingKinds creates a new independently-owned
 // closure from the exact handles retained by source. Diagnostic paths are
 // never reopened. This is used when a later durable root still references an
@@ -2056,6 +2128,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 					File: file, Frontier: cloneDurableFrontier(entry.frontier), Digest: token.digest,
 					Reachability: field, Namespace: namespace, LogicalObligations: obligations,
 					ContentSynced: true, PinRegistry: registry,
+					StableIdentityOverride: token.identity,
 					OnRelease: func() {
 						if registry != nil {
 							_ = registry.Unobserve(token.identity)
@@ -2083,6 +2156,7 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 				// token used to duplicate the exact physical handle.
 				destination := &builder.entries[len(builder.entries)-1]
 				destination.logicalObligations = sharedObligations
+				destination.dependencyManifestV1 = entry.dependencyManifestV1
 				destination.reachability = make(map[ReachabilityField]struct{}, len(entry.reachability))
 				for retainedField := range entry.reachability {
 					destination.reachability[retainedField] = struct{}{}
