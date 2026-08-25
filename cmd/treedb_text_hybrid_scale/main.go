@@ -1173,6 +1173,9 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}
 	durations, last, guard, sampleErr := runProfiledHybridSamples(col, cfg, name, opts, guard)
 	profileErr := stopProfile()
+	if profileErr != nil {
+		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, profileErr)
+	}
 	if sampleErr != nil {
 		if cfg.allowGuardrailFails {
 			lat := summarizeLatency(durations)
@@ -1181,9 +1184,6 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 			return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
 		}
 		return queryReport{}, guardrailResult{}, sampleErr
-	}
-	if profileErr != nil {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, profileErr)
 	}
 	lat := summarizeLatency(durations)
 	stats := last.Stats
