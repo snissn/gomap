@@ -1,4 +1,4 @@
-# kind	shard	item	max seconds from successful main medians and PR runs 32407394988, 32410661113, 32412648919, 32416637299
+# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32410661113, 32412648919, 32416637299, 32828779665
 package	0	github.com/snissn/gomap/TreeDB/mvcc	166.88
 root	0	TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords	11.24
 root	1	TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay	16.22
@@ -34,6 +34,7 @@ root	4	TestPowerLossCertificationGroupedDependencyFailurePublicReopen	15.40
 root	4	TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages	36.38
 root	4	TestReopenVerify_IndexColumnarLeaves	10.25
 db	5	TestFuzzModel	11.94
+package	5	github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark	275.82	preserve-fallback
 root	5	TestPowerLossCertificationGroupedAmbiguousFailurePublicReopen	16.49
 root	5	TestProductionProfileLifecycleFrontiersMatchFrozenContract	15.76
 root	5	TestProductionProfilesForcedPointersDeleteReuseRotationReopen	20.64
