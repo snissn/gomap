@@ -652,6 +652,10 @@ func TestAllocationProfileWritesCumulativeOutputAndStopsIdempotently4327(t *test
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("profile %q info=%v err=%v", alloc, info, err)
 	}
+	baseInfo, err := os.Stat(alloc + ".base")
+	if err != nil || baseInfo.Size() == 0 {
+		t.Fatalf("baseline profile %q info=%v err=%v", alloc+".base", baseInfo, err)
+	}
 }
 
 func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
@@ -662,8 +666,8 @@ func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 		"-out-dir", outDir,
 		"-rows", "96", "-batch-size", "48", "-dims", "4", "-m", "4",
 		"-ef-construction", "32", "-ef-search", "32", "-top-k", "5", "-candidate-limit", "16", "-queries", "3", "-readers", "2",
-		"-include-vector=false", "-phases=retrieval", "-run-reopen=false",
-		"-query-rows", queryRowHybridTextScalar, "-alloc-profile", alloc,
+		"-include-vector=true", "-phases=retrieval", "-run-reopen=false",
+		"-query-rows", queryRowHybridTextVector, "-alloc-profile", alloc,
 	)
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GODEBUG=memprofilerate=1")
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -673,17 +677,17 @@ func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 	if err != nil || info.Size() == 0 {
 		t.Fatalf("allocation profile %q info=%v err=%v", alloc, info, err)
 	}
-	pprof := exec.Command("go", "tool", "pprof", "-top", "-focus=main.runProfiledHybridSamples", alloc)
+	pprof := exec.Command("go", "tool", "pprof", "-top", "-base", alloc+".base", "-ignore=runtime/pprof", alloc)
 	output, err := pprof.CombinedOutput()
 	if err != nil {
 		t.Fatalf("focused allocation profile: %v\n%s", err, output)
 	}
 	top := string(output)
-	if !strings.Contains(top, "SearchHybrid") {
-		t.Fatalf("focused profile lacks timed hybrid query path:\n%s", top)
+	if !strings.Contains(top, "SearchHybrid") || !strings.Contains(top, "searchHybridVectorCandidatesWithAllowSetBudget") {
+		t.Fatalf("differential profile lacks timed hybrid caller or vector worker path:\n%s", top)
 	}
 	if strings.Contains(top, "loadPrimaryFixture") || strings.Contains(top, "makeScaleBatch") {
-		t.Fatalf("focused profile retained fixture construction:\n%s", top)
+		t.Fatalf("differential profile retained fixture construction:\n%s", top)
 	}
 }
 

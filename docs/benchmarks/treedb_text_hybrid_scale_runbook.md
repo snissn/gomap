@@ -127,18 +127,18 @@ GODEBUG=memprofilerate=1 GOWORK=off go run ./cmd/treedb_text_hybrid_scale \
   -ef-construction 32 -ef-search 32 -top-k 5 -candidate-limit 16 -queries 3 \
   -include-vector=false -phases=retrieval -run-reopen=false \
   -query-rows=hybrid_text_scalar_no_docs -alloc-profile "$OUT/allocs.pprof"
-go tool pprof -focus='main.runProfiledHybridSamples' "$OUT/allocs.pprof"
+go tool pprof -base "$OUT/allocs.pprof.base" -ignore='runtime/pprof' "$OUT/allocs.pprof"
 ```
 
-It writes one cumulative post-query allocation profile. Attribute it only with
-the timed stack boundary shown above:
-
-`runProfiledHybridSamples` is a non-inlined helper containing only timed hybrid
-samples. Fixture construction and warm-up occur before it; profile serialization
-and report writing occur after it. Those activities have no helper frame and are
-excluded by construction when focused. The profile is cumulative rather than a
-delta; old allocation profiles must be regenerated. Use companion Go benchmarks
-when making allocation claims:
+It writes a cumulative baseline immediately before the timed samples and a
+cumulative post-query profile afterward. Interpret the allocation delta with
+the `-base` command above. Subtraction includes allocations from child
+goroutines, including concurrent vector-candidate workers; the `runtime/pprof`
+ignore removes profile-serialization work performed after the baseline.
+Fixture construction and warm-up precede both captures. The baseline and final
+profile are an inseparable evidence pair; old single-file allocation profiles
+must be regenerated. Use companion Go benchmarks when making allocation
+claims:
 
 ```sh
 RUN_DIR=/tmp/gomap_text_hybrid_scale_bench_$(date +%Y%m%d_%H%M%S) \
@@ -207,10 +207,11 @@ The JSON/Markdown report includes:
 - hybrid text-only, text+scalar, and optional text+vector(+scalar) query rows;
 - raw per-query latency samples plus p50/p95/p99/mean latency and derived
   ops/sec for each retrieval row;
-- optional CPU (`-cpu-profile`) or one cumulative allocation (`-alloc-profile`)
-  profile capture for one selected hybrid retrieval row via `-query-rows`;
+- optional CPU (`-cpu-profile`) or paired baseline/post-query allocation
+  (`-alloc-profile`) capture for one selected hybrid row via `-query-rows`;
   allocation capture requires process startup with `GODEBUG=memprofilerate=1`
-  and is interpreted by focusing `main.runProfiledHybridSamples`;
+  and is interpreted by subtracting the generated `.base` profile with
+  `go tool pprof -base`;
 - reopen close/open/probe timings;
 - concurrent reader/write sanity timing and guardrail state;
 - maintenance update/delete/rewrite/checkpoint timings and stale-posting purge

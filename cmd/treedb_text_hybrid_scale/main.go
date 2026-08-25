@@ -95,6 +95,7 @@ type config struct {
 	queryRows           map[string]bool
 	cpuProfile          string
 	allocProfile        string
+	allocBaseProfile    string
 }
 
 type report struct {
@@ -361,7 +362,7 @@ func parseFlags(args []string) (config, error) {
 	var queryRows string
 	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
 	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
-	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write a cumulative allocation profile for the selected single hybrid query row")
+	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write post-query and .base allocation profiles for one selected hybrid row")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -468,12 +469,24 @@ func parseFlags(args []string) (config, error) {
 		}
 		*profile.value = resolved
 	}
+	if cfg.allocProfile != "" {
+		cfg.allocBaseProfile, err = resolvePathSymlinks(cfg.allocProfile + ".base")
+		if err != nil {
+			return config{}, fmt.Errorf("resolve allocation baseline profile: %w", err)
+		}
+		if _, err := os.Lstat(cfg.allocBaseProfile); err == nil {
+			return config{}, errors.New("allocation baseline profile destination must not already exist")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return config{}, fmt.Errorf("inspect allocation baseline profile destination: %w", err)
+		}
+	}
 	profilePaths := []struct {
 		name  string
 		value string
 	}{
 		{name: "-cpu-profile", value: cfg.cpuProfile},
 		{name: "-alloc-profile", value: cfg.allocProfile},
+		{name: "allocation baseline profile", value: cfg.allocBaseProfile},
 	}
 	seenProfiles := make(map[string]string)
 	for _, profile := range profilePaths {
@@ -1333,10 +1346,6 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 	}, guard, nil
 }
 
-// runProfiledHybridSamples is the sole timed allocation-profile boundary. Fixture
-// construction and warm-up happen before it; profile/report serialization happens after it.
-//
-//go:noinline
 func runProfiledHybridSamples(col *collections.Collection, cfg config, name string, opts collections.HybridSearchOptions, guard guardrailResult) ([]int64, collections.HybridSearchResponse, guardrailResult, error) {
 	durations := make([]int64, 0, cfg.queries)
 	var last collections.HybridSearchResponse
@@ -1392,6 +1401,16 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 			return writeErr
 		}
 		return closeErr
+	}
+	baseProfile := cfg.allocBaseProfile
+	if baseProfile == "" && cfg.allocProfile != "" {
+		baseProfile = cfg.allocProfile + ".base"
+	}
+	if baseProfile != "" {
+		runtime.GC()
+		if err := writeProfile(baseProfile); err != nil {
+			return nil, fmt.Errorf("write allocation baseline profile: %w", err)
+		}
 	}
 	writeAllocsAfter := func() error {
 		if cfg.allocProfile == "" {
