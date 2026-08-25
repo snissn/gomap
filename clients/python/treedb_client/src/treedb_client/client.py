@@ -279,13 +279,14 @@ class TreeDBClient:
     ) -> DenseVectorSearchResponse:
         """Score a query embedding through the TreeDB dense search route.
 
-        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses the
-        column_graph vector index traversal (the service default when that
-        index exists and no filter is supplied); ``"exact"`` keeps the bounded
-        filtered scan. Filters require the exact route — the service rejects
-        filtered ANN requests with a typed error instead of downgrading.
-        Unsupported route values raise :class:`InvalidRequestError` locally;
-        the client never falls back between routes on its own.
+        ``route`` selects the execution path (v1alpha2): ``"ann"`` uses a
+        compatible native_runtime or column_graph vector index (the service
+        default when one exists and no filter is supplied); ``"exact"`` keeps
+        the bounded filtered scan. Filters require the exact route — the
+        service rejects filtered ANN requests with a typed error instead of
+        downgrading. Unsupported route values raise
+        :class:`InvalidRequestError` locally; the client never falls back
+        between routes on its own.
         """
 
         if route is not None and route not in ("ann", "exact"):

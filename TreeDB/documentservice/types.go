@@ -207,9 +207,9 @@ type FilterDocumentsResponse struct {
 }
 
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route
-// selects ann (column_graph graph traversal; the default when a column_graph
-// vector index exists) or exact (bounded filtered scan). Filter requires the
-// exact route; ann with a filter fails closed.
+// selects ann (compatible native_runtime or column_graph traversal; the default
+// when one exists) or exact (bounded filtered scan). Filter requires the exact
+// route; ann with a filter fails closed.
 type DenseVectorSearchRequest struct {
 	ExpectedGeneration uint64    `json:"expected_generation,omitempty"`
 	QueryEmbedding     []float32 `json:"query_embedding"`

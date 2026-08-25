@@ -26,11 +26,12 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu    sync.RWMutex
-	benchmarkSearchCache      map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool sync.Pool
-	vectorPartitionOperations *vectorpartition.OperationsV1
-	closed                    bool
+	benchmarkSearchCacheMu       sync.RWMutex
+	benchmarkSearchCache         map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool    sync.Pool
+	denseVectorNativeAfterSearch func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations    *vectorpartition.OperationsV1
+	closed                       bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -505,11 +506,11 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	return FilterDocumentsResponse{Index: info, Documents: docs, MatchedCount: matched, Truncated: truncated}, nil
 }
 
-// SearchDenseVector scores QueryEmbedding over the index. Route=ann uses the
-// column_graph vector index traversal (default when that index exists and no
-// filter is supplied); route=exact keeps the bounded filtered document scan.
-// Route selection is deterministic and echoed in the response; there is no
-// silent downgrade.
+// SearchDenseVector scores QueryEmbedding over the index. Route=ann uses a
+// compatible native_runtime or column_graph vector index (the default when one
+// exists and no filter is supplied); route=exact keeps the bounded filtered
+// document scan. Route selection is deterministic and echoed in the response;
+// there is no silent downgrade.
 func (s *Service) SearchDenseVector(ctx context.Context, index string, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
@@ -580,15 +581,15 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 
 // resolveDenseSearchRoute applies the deterministic route defaulting rules:
 // explicit route values are validated; an omitted route selects ann when the
-// index declares a column_graph vector index and no filter is present, and
-// exact otherwise (filtered retrieval and non-column_graph indexes).
+// index declares a compatible no-document vector route and no filter is
+// present, and exact otherwise.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
 		if req.Filter != nil {
 			return RouteExact, nil
 		}
-		if info.Capabilities.ColumnGraphVectorSearch {
+		if info.Capabilities.NoDocumentVectorSearch {
 			return RouteAnn, nil
 		}
 		return RouteExact, nil
@@ -2021,6 +2022,9 @@ func mapVectorIndexSearchError(operation string, err error) error {
 	var serviceErr *Error
 	if errors.As(err, &serviceErr) {
 		return err
+	}
+	if errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
+		return wrapServiceError(CodeSnapshotMismatch, operation+" could not establish matching search and document visibility", err)
 	}
 	if errors.Is(err, collections.ErrVectorIndexSearchUnavailable) || errors.Is(err, collections.ErrIndexNotFound) {
 		return wrapServiceError(CodeIndexUnavailable, operation+" failed closed", err)

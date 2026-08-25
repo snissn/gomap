@@ -76,6 +76,10 @@ class IndexStaleError(TreeDBServiceError):
     code = "index_stale"
 
 
+class SnapshotMismatchError(TreeDBServiceError):
+    code = "snapshot_mismatch"
+
+
 class ConflictError(TreeDBServiceError):
     code = "conflict"
 
@@ -94,6 +98,7 @@ ERROR_CLASS_BY_CODE: Dict[str, Type[TreeDBServiceError]] = {
     IndexNotFoundError.code: IndexNotFoundError,
     IndexUnavailableError.code: IndexUnavailableError,
     IndexStaleError.code: IndexStaleError,
+    SnapshotMismatchError.code: SnapshotMismatchError,
     ConflictError.code: ConflictError,
     UnsupportedError.code: UnsupportedError,
     InternalServiceError.code: InternalServiceError,
