@@ -1,31 +1,31 @@
 {
   "mode": "source_chunk",
-  "scale": 1000000,
-  "repetition": 2,
-  "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
-  "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
+  "scale": 10000,
+  "repetition": 1,
+  "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+  "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 60291,
-  "source_documents": 1000000,
-  "generated_chunks": 3000000,
-  "indexed_live_rows": 4000000,
+  "peak_rss_pid": 59136,
+  "source_documents": 10000,
+  "generated_chunks": 30000,
+  "indexed_live_rows": 40000,
   "parents_text_indexed": true,
-  "indexed_parent_rows": 1000000,
+  "indexed_parent_rows": 10000,
   "chunk_batch_size": 256,
-  "chunk_batch_count": 3907,
-  "postings": 4000000,
-  "terms": 1000012,
-  "blocks": 2530993,
-  "generations": 3908,
+  "chunk_batch_count": 40,
+  "postings": 40000,
+  "terms": 10012,
+  "blocks": 25059,
+  "generations": 41,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 974.2180831497208,
-  "chunks_per_second": 2922.6542494491623,
-  "indexed_rows_per_second": 3896.872332598883,
-  "wall_seconds": 1026.464215042,
+  "source_docs_per_second": 21868.056891936812,
+  "chunks_per_second": 65604.17067581044,
+  "indexed_rows_per_second": 87472.22756774725,
+  "wall_seconds": 0.457288,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1090.53369
+    "value": 0.544405
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +37,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 470502014
+    "value": 3621432
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 3163537408
+    "value": 83001344
   },
   "stages": {
     "analyzer": {
@@ -50,7 +50,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.045426667
+      "value": 0.021613958
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +58,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 1.8336473340000001
+      "value": 0.017834583
     },
     "root_mutation": {
       "state": "unavailable",
@@ -70,28 +70,28 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 8115453952,
+    "physical_index_page_bytes": 39321600,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
     "physical_other_bytes": 374,
-    "physical_total_bytes": 8115454326,
-    "physical_total_wal_excluded_bytes": 8115454326,
+    "physical_total_bytes": 39321974,
+    "physical_total_wal_excluded_bytes": 39321974,
     "other_paths": [
       "LOCK",
       "format.json",
       "vlog_ref_counts.meta"
     ],
-    "logical_primary_payload_bytes": 120460857,
+    "logical_primary_payload_bytes": 1184600,
     "logical_text_v2_overlap": "logical_text_v2_components_overlap_physical_storage_non_additive"
   },
   "text_v2": {
-    "docid_bytes": 87886339,
-    "docmap_bytes": 80463576,
-    "posting_bytes": 269277000,
-    "norm_bytes": 30494826,
+    "docid_bytes": 843490,
+    "docmap_bytes": 768994,
+    "posting_bytes": 2591004,
+    "norm_bytes": 269307,
     "position_bytes": 0,
-    "term_bytes": 14857897,
-    "status_bytes": 170
+    "term_bytes": 119083,
+    "status_bytes": 163
   },
   "checkpoint_ok": true,
   "close_ok": true,

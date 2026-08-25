@@ -4,10 +4,10 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 `report.json`; the validator accepts it. The pre-fix public
 `IngestChunkedDocument` baseline remains under `smoke-10k-r3/`.
 
-The post-fix public `IngestChunkedDocuments` 10k fixture is
-`smoke-10k-r5/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
-batches of at most 256 sources, 41 text generations, 0.471 s source/chunk wall,
-82,411,520-byte peak RSS, 3,617,300 cumulative allocations, and 40,370,550
+The current public `IngestChunkedDocuments` 10k fixture is
+`smoke-10k-r1/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
+batches of at most 256 sources, 41 text generations, 0.457 s source/chunk wall,
+83,001,344-byte peak RSS, 3,621,432 cumulative allocations, and 39,321,974
 WAL-excluded physical bytes. Against the frozen baseline (20,001 generations,
 155.567 s, 4,180,574,208-byte RSS, 82,293,880 cumulative allocations, and
 5,621,678,453-byte WAL-excluded physical), it meets the generation, sub-1-GiB
@@ -29,22 +29,22 @@ transient DBs are retained.
 ## Measured revision
 
 The measurements were produced at the clean, immutable commit
-[`0679eb28135a731d9699311b36364d1c9b27db71`](https://github.com/snissn/gomap/commit/0679eb28135a731d9699311b36364d1c9b27db71),
-tree `876ea6c3f9e213cf178448cd242212e208d5c7e2`. Its production
+[`308b1f30a5ce2b27b7504308824bc2870b2e4133`](https://github.com/snissn/gomap/commit/308b1f30a5ce2b27b7504308824bc2870b2e4133),
+root tree `8ed2134ffb7438bd17101f276049cc55bc958a79`, TreeDB subtree
+`6b5eca788a6feb91a3bed4e1d5877d2f38d6aa29`, and qualification-harness
+subtree `4a73a2ce57dca50786aee9bd3ba7925dd2e53daf`. Its
 `TreeDB/collections/document_chunking.go` blob is
-`76697734b60a5086d7d186088c0321a510b4909c`, identical to the reviewed
-candidate. Later commits only strengthened the evidence validator and added
-derived fixture identities to the retained JSON; they did not alter measured
-values or relabel the generating commit. `SHA256SUMS` binds the final retained
-manifest, report, and raw rows.
+`76697734b60a5086d7d186088c0321a510b4909c`. `SHA256SUMS` binds the final
+retained manifest, report, and every raw row.
 
 JSON shape validation alone does not prove those Git relationships. The CLI
 must run inside the candidate repository checkout with the measured objects
-available locally. It resolves the measured commit to the manifest tree, the
-tree/path to the manifest blob, and independently requires the current
-`HEAD:TreeDB/collections/document_chunking.go` blob to equal the measured blob.
-Missing Git objects, an unavailable Git object database, or any mismatch fails
-closed.
+available locally. It resolves the measured commit to the manifest root tree,
+TreeDB subtree, qualification-harness subtree, and implementation blob. It
+independently requires the candidate `HEAD` TreeDB and qualification-harness
+subtrees to equal the measured subtrees. Artifact-only descendants may differ;
+any runtime or harness drift, missing Git object, or unavailable Git object
+database fails closed.
 
 From the candidate repository root, validate the retained artifact with:
 

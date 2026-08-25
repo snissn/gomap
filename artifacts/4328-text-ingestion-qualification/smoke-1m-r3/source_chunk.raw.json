@@ -5,7 +5,7 @@
   "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
   "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 28163,
+  "peak_rss_pid": 61464,
   "source_documents": 1000000,
   "generated_chunks": 3000000,
   "indexed_live_rows": 4000000,
@@ -19,13 +19,13 @@
   "generations": 3908,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 1004.6304789260462,
-  "chunks_per_second": 3013.8914367781385,
-  "indexed_rows_per_second": 4018.5219157041847,
-  "wall_seconds": 995.390863583,
+  "source_docs_per_second": 1000.1839464550753,
+  "chunks_per_second": 3000.551839365226,
+  "indexed_rows_per_second": 4000.7357858203013,
+  "wall_seconds": 999.816087375,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1078.174115
+    "value": 1081.7415369999999
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +37,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 470302804
+    "value": 470394226
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 3454304256
+    "value": 3584770048
   },
   "stages": {
     "analyzer": {
@@ -50,7 +50,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.049466834
+      "value": 0.065152875
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +58,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 1.903218709
+      "value": 1.9652999580000001
     },
     "root_mutation": {
       "state": "unavailable",
@@ -70,12 +70,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 8006664192,
+    "physical_index_page_bytes": 8129609728,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
     "physical_other_bytes": 374,
-    "physical_total_bytes": 8006664566,
-    "physical_total_wal_excluded_bytes": 8006664566,
+    "physical_total_bytes": 8129610102,
+    "physical_total_wal_excluded_bytes": 8129610102,
     "other_paths": [
       "LOCK",
       "format.json",

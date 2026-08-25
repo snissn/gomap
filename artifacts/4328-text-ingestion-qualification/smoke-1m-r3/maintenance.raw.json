@@ -5,7 +5,7 @@
   "fixture_sha256": "c2bd94d983e0a7ec281d61e576f25fccef50ab49a9d8e415b8cb3050b84c8c67",
   "ids_sha256": "1c21a66ed70e10e3274537b480528da3ffdf129c40e925fe54b00588d62d4e9c",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 23648,
+  "peak_rss_pid": 62540,
   "source_documents": 1000000,
   "generated_chunks": 0,
   "indexed_live_rows": 500000,
@@ -19,13 +19,13 @@
   "generations": 3,
   "stale_debt": 0,
   "tombstone_debt": 500000,
-  "source_docs_per_second": 22979.59111850523,
+  "source_docs_per_second": 23542.723928708063,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 11489.795559252614,
-  "wall_seconds": 43.51687525,
+  "indexed_rows_per_second": 11771.361964354031,
+  "wall_seconds": 42.4759685,
   "cpu_seconds": {
     "state": "observed",
-    "value": 48.312903
+    "value": 47.321535
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +37,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 89802455
+    "value": 89802507
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 4210098176
+    "value": 3900932096
   },
   "stages": {
     "analyzer": {
@@ -50,7 +50,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.134899542
+      "value": 0.070013083
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +58,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.183242
+      "value": 0.187587292
     },
     "root_mutation": {
       "state": "unavailable",

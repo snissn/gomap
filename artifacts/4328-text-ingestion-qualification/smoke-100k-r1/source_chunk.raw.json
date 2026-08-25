@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 26058,
+  "peak_rss_pid": 59149,
   "source_documents": 100000,
   "generated_chunks": 300000,
   "indexed_live_rows": 400000,
@@ -19,13 +19,13 @@
   "generations": 392,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 7100.13623576686,
-  "chunks_per_second": 21300.40870730058,
-  "indexed_rows_per_second": 28400.54494306744,
-  "wall_seconds": 14.084236792,
+  "source_docs_per_second": 6928.327202449317,
+  "chunks_per_second": 20784.98160734795,
+  "indexed_rows_per_second": 27713.30880979727,
+  "wall_seconds": 14.433498459,
   "cpu_seconds": {
     "state": "observed",
-    "value": 15.896577
+    "value": 15.18727
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +37,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 39772981
+    "value": 39806104
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 447332352
+    "value": 463765504
   },
   "stages": {
     "analyzer": {
@@ -50,7 +50,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.020580875
+      "value": 0.035550625
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +58,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.114574917
+      "value": 0.130098583
     },
     "root_mutation": {
       "state": "unavailable",
@@ -70,12 +70,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 288620544,
+    "physical_index_page_bytes": 301989888,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
     "physical_other_bytes": 374,
-    "physical_total_bytes": 288620918,
-    "physical_total_wal_excluded_bytes": 288620918,
+    "physical_total_bytes": 301990262,
+    "physical_total_wal_excluded_bytes": 301990262,
     "other_paths": [
       "LOCK",
       "format.json",

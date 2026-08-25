@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 26073,
+  "peak_rss_pid": 59167,
   "source_documents": 100000,
   "generated_chunks": 300000,
   "indexed_live_rows": 400000,
@@ -19,13 +19,13 @@
   "generations": 392,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 7027.578234328111,
-  "chunks_per_second": 21082.734702984333,
-  "indexed_rows_per_second": 28110.312937312443,
-  "wall_seconds": 14.229653042,
+  "source_docs_per_second": 7035.141773100374,
+  "chunks_per_second": 21105.42531930112,
+  "indexed_rows_per_second": 28140.567092401496,
+  "wall_seconds": 14.214354625,
   "cpu_seconds": {
     "state": "observed",
-    "value": 15.975105000000001
+    "value": 15.266594999999999
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -37,11 +37,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 39773820
+    "value": 39778824
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 444596224
+    "value": 457097216
   },
   "stages": {
     "analyzer": {
@@ -50,7 +50,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.021607458
+      "value": 0.020682583
     },
     "posting_builder": {
       "state": "unavailable",
@@ -58,7 +58,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.114177333
+      "value": 0.11045575
     },
     "root_mutation": {
       "state": "unavailable",
@@ -70,12 +70,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 286523392,
+    "physical_index_page_bytes": 294125568,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
     "physical_other_bytes": 374,
-    "physical_total_bytes": 286523766,
-    "physical_total_wal_excluded_bytes": 286523766,
+    "physical_total_bytes": 294125942,
+    "physical_total_wal_excluded_bytes": 294125942,
     "other_paths": [
       "LOCK",
       "format.json",
