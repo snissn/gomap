@@ -129,6 +129,26 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
                     self.assertEqual(len(flattened), len(domain))
                     self.assertEqual(set(flattened), set(domain))
 
+    def test_recent_slow_packages_stay_on_rebalanced_shards(self) -> None:
+        windows = read_weights(
+            "treedb_windows_core_weighted_shards.tsv",
+            7,
+            {"package", "root", "db", "collections"},
+        )
+        race = read_weights(
+            "treedb_race_weighted_shards.tsv",
+            3,
+            {"package", "root", "caching", "db"},
+        )
+        self.assertEqual(
+            windows[("package", "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark")],
+            5,
+        )
+        self.assertEqual(
+            race[("package", "github.com/snissn/gomap/TreeDB/internal/raftcluster")],
+            1,
+        )
+
     def test_workflow_uses_one_complete_weighted_selector_per_test_job(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(workflow.count("weighted_shard_file() {"), 2)
