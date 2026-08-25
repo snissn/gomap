@@ -950,11 +950,11 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 	}
 	for _, tc := range textCases {
 		report, guard, err := runTextQueryRow(col, cfg, tc.name, tc.query, tc.operator, tc.shape)
+		rows = append(rows, report)
+		guards = append(guards, guard)
 		if err != nil {
 			return rows, guards, err
 		}
-		rows = append(rows, report)
-		guards = append(guards, guard)
 	}
 
 	hybridCases := []struct {
@@ -1010,21 +1010,40 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 	opts := collections.TextSearchOptions{IndexName: textIndexName, Query: query, Operator: operator, TopK: cfg.topK, ResultMode: collections.TextSearchResultModeScoreOnly, CandidateLimit: cfg.rows, MaxPostingsScanned: maxInt(cfg.rows*4, cfg.topK)}
 	warm, err := col.SearchText(opts)
 	if err != nil {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s: %w", name, err)
+		queryErr := fmt.Errorf("warm %s: %w", name, err)
+		row := failedTextQueryRow(cfg, name, shape, warm, nil, queryErr)
+		guard := textFailureGuard(name, warm.Stats, queryErr)
+		if cfg.allowGuardrailFails {
+			return row, guard, nil
+		}
+		return row, guard, queryErr
 	}
 	if len(warm.Results) == 0 {
-		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s returned no results", name)
+		queryErr := fmt.Errorf("warm %s returned no results", name)
+		row := failedTextQueryRow(cfg, name, shape, warm, nil, queryErr)
+		guard := textFailureGuard(name, warm.Stats, queryErr)
+		if cfg.allowGuardrailFails {
+			return row, guard, nil
+		}
+		return row, guard, queryErr
 	}
 	guard := textGuardrail(name, warm.Stats)
-	durations := make([]int64, cfg.queries)
+	durations := make([]int64, 0, cfg.queries)
 	var last collections.TextSearchResponse
 	for i := 0; i < cfg.queries; i++ {
 		start := time.Now()
 		got, err := col.SearchText(opts)
-		durations[i] = time.Since(start).Nanoseconds()
+		elapsed := time.Since(start).Nanoseconds()
 		if err != nil {
-			return queryReport{}, guardrailResult{}, fmt.Errorf("%s query %d: %w", name, i, err)
+			queryErr := fmt.Errorf("%s query %d: %w", name, i, err)
+			row := failedTextQueryRow(cfg, name, shape, got, durations, queryErr)
+			guard := textFailureGuard(name, got.Stats, queryErr)
+			if cfg.allowGuardrailFails {
+				return row, guard, nil
+			}
+			return row, guard, queryErr
 		}
+		durations = append(durations, elapsed)
 		last = got
 		if g := textGuardrail(name, got.Stats); !g.OK {
 			guard = g
@@ -1034,9 +1053,27 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 	stats := last.Stats
 	return queryReport{
 		Name: name, Modality: "text", QueryShape: shape, Boundary: "warm no-document text-v2 score-only search", Rows: cfg.rows,
-		TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: cfg.queries, Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
+		TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		TextStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
+}
+
+func failedTextQueryRow(cfg config, name, shape string, response collections.TextSearchResponse, durations []int64, err error) queryReport {
+	stats := response.Stats
+	guard := textFailureGuard(name, response.Stats, err)
+	lat := summarizeLatency(durations)
+	return queryReport{Name: name, Modality: "text", QueryShape: shape, Boundary: "warm no-document text-v2 score-only search", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.rows, Samples: len(durations), Results: len(response.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), TextStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}
+}
+
+func textFailureGuard(name string, stats collections.TextSearchStats, err error) guardrailResult {
+	guard := textGuardrail(name, stats)
+	if guard.OK {
+		return guardrailResult{Name: name, OK: false, Failure: err.Error()}
+	}
+	if err != nil && !strings.Contains(guard.Failure, err.Error()) {
+		guard.Failure += "; error=" + err.Error()
+	}
+	return guard
 }
 
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
@@ -1761,11 +1798,12 @@ func captureContext(cfg config) reportContext {
 		executable = ""
 	}
 	buildInfo, _ := debug.ReadBuildInfo()
-	binaryState, vcsClean, vcsStatus := invocationProvenance(executable, buildInfo)
+	binaryState, revision, vcsClean, vcsStatus := invocationProvenance(executable, buildInfo)
 	return reportContext{
 		// Repository and branch are intentionally left unset: this process may be
 		// a standalone binary invoked outside a checkout. VCS provenance comes
 		// only from the invoked binary's embedded build metadata.
+		Commit:      revision,
 		BaseRef:     cfg.baseRef,
 		BaseSHA:     cfg.baseSHA,
 		Go:          runtime.Version(),
@@ -1785,14 +1823,14 @@ func captureContext(cfg config) reportContext {
 	}
 }
 
-func invocationProvenance(executable string, info *debug.BuildInfo) (binaryState string, vcsClean bool, vcsStatus string) {
+func invocationProvenance(executable string, info *debug.BuildInfo) (binaryState, revision string, vcsClean bool, vcsStatus string) {
 	if executable == "" {
 		binaryState = "unknown (os.Executable unavailable)"
 	} else {
 		binaryState = "executable=" + executable
 	}
 	if info == nil {
-		return binaryState + "; build metadata unavailable", false, "unknown (build metadata unavailable)"
+		return binaryState + "; build metadata unavailable", "", false, "unknown (build metadata unavailable)"
 	}
 	mainPath := info.Main.Path
 	if mainPath == "" {
@@ -1804,15 +1842,15 @@ func invocationProvenance(executable string, info *debug.BuildInfo) (binaryState
 	}
 	revision, modified := buildSetting(info, "vcs.revision"), buildSetting(info, "vcs.modified")
 	if revision == "" || modified == "" {
-		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs=unknown", binaryState, mainPath, goVersion), false, "unknown (incomplete embedded VCS metadata)"
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs=unknown", binaryState, mainPath, goVersion), "", false, "unknown (incomplete embedded VCS metadata)"
 	}
 	if modified == "true" {
-		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=true", binaryState, mainPath, goVersion, revision), false, "dirty (embedded build metadata)"
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=true", binaryState, mainPath, goVersion, revision), revision, false, "dirty (embedded build metadata)"
 	}
 	if modified == "false" {
-		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=false", binaryState, mainPath, goVersion, revision), true, "clean (embedded build metadata)"
+		return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=false", binaryState, mainPath, goVersion, revision), revision, true, "clean (embedded build metadata)"
 	}
-	return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=%s", binaryState, mainPath, goVersion, revision, modified), false, "unknown (unrecognized embedded vcs.modified)"
+	return fmt.Sprintf("%s; build_main=%s; build_go=%s; vcs_revision=%s; vcs_modified=%s", binaryState, mainPath, goVersion, revision, modified), revision, false, "unknown (unrecognized embedded vcs.modified)"
 }
 
 func buildSetting(info *debug.BuildInfo, key string) string {

@@ -166,13 +166,13 @@ func TestCaptureContextUsesInvocationProvenance4327(t *testing.T) {
 
 func TestInvocationProvenanceUsesEmbeddedBuildMetadata4327(t *testing.T) {
 	info := &debug.BuildInfo{Main: debug.Module{Path: "example.com/scale"}, GoVersion: "go1.26.0", Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "false"}}}
-	state, clean, status := invocationProvenance("/tmp/scale", info)
-	if !clean || status != "clean (embedded build metadata)" || !strings.Contains(state, "executable=/tmp/scale") || !strings.Contains(state, "vcs_revision=abc123") {
-		t.Fatalf("embedded provenance state=%q clean=%v status=%q", state, clean, status)
+	state, revision, clean, status := invocationProvenance("/tmp/scale", info)
+	if revision != "abc123" || !clean || status != "clean (embedded build metadata)" || !strings.Contains(state, "executable=/tmp/scale") || !strings.Contains(state, "vcs_revision=abc123") {
+		t.Fatalf("embedded provenance state=%q revision=%q clean=%v status=%q", state, revision, clean, status)
 	}
-	state, clean, status = invocationProvenance("/tmp/scale", &debug.BuildInfo{})
-	if clean || status != "unknown (incomplete embedded VCS metadata)" || !strings.Contains(state, "vcs=unknown") {
-		t.Fatalf("incomplete metadata did not fail closed: state=%q clean=%v status=%q", state, clean, status)
+	state, revision, clean, status = invocationProvenance("/tmp/scale", &debug.BuildInfo{})
+	if revision != "" || clean || status != "unknown (incomplete embedded VCS metadata)" || !strings.Contains(state, "vcs=unknown") {
+		t.Fatalf("incomplete metadata did not fail closed: state=%q revision=%q clean=%v status=%q", state, revision, clean, status)
 	}
 }
 
@@ -277,6 +277,21 @@ func TestAllowedGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
 	var persisted report
 	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load,reopen" || len(persisted.Guardrails) != 1 || persisted.Guardrails[0].OK {
 		t.Fatalf("persisted allowed diagnostic report was qualified: report=%+v err=%v", persisted, err)
+	}
+}
+
+func TestTextFailureRowsPreserveEvidence4327(t *testing.T) {
+	resp := collections.TextSearchResponse{Stats: collections.TextSearchStats{FailClosed: 1, FailClosedReason: "text_index_unavailable"}}
+	durations := []int64{11, 17}
+	row := failedTextQueryRow(config{rows: 1_000_000, topK: 10}, "text_common", "common", resp, durations, errors.New("bounded generation failed"))
+	if row.GuardrailOK || row.GuardrailFailure == "" {
+		t.Fatalf("row guardrail=%v failure=%q", row.GuardrailOK, row.GuardrailFailure)
+	}
+	if row.TextStats == nil || row.TextStats.FailClosed != 1 || row.TextStats.FailClosedReason != "text_index_unavailable" {
+		t.Fatalf("row stats=%+v want fail-closed stats preserved", row.TextStats)
+	}
+	if row.Samples != len(durations) || len(row.RawLatencyNS) != len(durations) || row.Results != 0 || row.Rows != 1_000_000 || row.CandidateBudget != 1_000_000 {
+		t.Fatalf("row metadata=%+v", row)
 	}
 }
 
