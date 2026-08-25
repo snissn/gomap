@@ -11,10 +11,21 @@ import (
 )
 
 func main() {
-	var manifestPath, reportPath string
+	var manifestPath, reportPath, produceDir string
+	var produceScale int
 	flag.StringVar(&manifestPath, "manifest", "", "path to manifest.json")
 	flag.StringVar(&reportPath, "report", "", "path to report.json")
+	flag.StringVar(&produceDir, "produce-smoke", "", "directory for real raw rows for all modes")
+	flag.IntVar(&produceScale, "scale", 10_000, "source documents for -produce-smoke")
 	flag.Parse()
+	if produceDir != "" {
+		if err := produceSmoke(produceDir, produceScale); err != nil {
+			fmt.Fprintf(os.Stderr, "produce smoke: %v\\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("wrote raw smoke rows to %s (not a retained report)\\n", produceDir)
+		return
+	}
 	if manifestPath == "" || reportPath == "" {
 		fmt.Fprintln(os.Stderr, "usage: treedb_text_ingest_qual -manifest manifest.json -report report.json")
 		os.Exit(2)
