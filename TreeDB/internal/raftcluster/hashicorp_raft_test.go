@@ -680,16 +680,39 @@ func testHashicorpRaftProviderLeaderCrashRestartCatchUp(t *testing.T, waitForBac
 		t.Fatalf("second catalog version=%d has=%t want 9/true", second.CatalogVersion, second.HasCatalogVersion)
 	}
 	restarted := cluster.restartDBNode(t, crashedID)
-	if waitForBackoff {
-		cluster.waitRestartBackoff(t, newLeader.id, crashedID, second.CommittedEntry.EntryID())
-	}
 	cluster.connectAllTransports(t)
 	cluster.waitRestartCatchUp(t, crashedID, second.CommittedEntry.EntryID())
+	finalEntry := second.CommittedEntry.EntryID()
+	if waitForBackoff {
+		// First catch-up resets HashiCorp Raft's private replication-failure
+		// generation. Start the controlled backoff phase from that known state
+		// instead of racing failures accumulated while the old leader was down.
+		target := hraft.ServerAddress(peerAddress(t, restarted.cfg, crashedID))
+		newLeader.raftTransport.resetAppendFailures(target)
+		cluster.disconnectNode(t, crashedID)
+
+		thirdCtx, thirdCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer thirdCancel()
+		third, err := newLeader.submitter.SubmitCommandEntryV1(thirdCtx, testClusterCreateCollectionEntryNamed(t, "invoices", "raftcluster/create/invoices/failover", 9), raftentry.RequestMetadataV1{
+			RequestID: 723,
+			AckPolicy: iwire.AckRaftCommitted,
+		})
+		if err != nil {
+			t.Fatalf("new leader SubmitCommandEntryV1 during controlled restart backoff: %v", err)
+		}
+		cluster.waitRestartBackoff(t, newLeader.id, crashedID, third.CommittedEntry.EntryID())
+		cluster.connectAllTransports(t)
+		cluster.waitRestartCatchUp(t, crashedID, third.CommittedEntry.EntryID())
+		finalEntry = third.CommittedEntry.EntryID()
+	}
 	assertHashicorpRaftStoreFiles(t, restarted, "after leader restart")
 	for _, node := range cluster.nodes {
-		assertClusterLastApplied(t, node, second.CommittedEntry.EntryID())
+		assertClusterLastApplied(t, node, finalEntry)
 		assertClusterCollectionExists(t, node, "users")
 		assertClusterCollectionExists(t, node, "orders")
+		if waitForBackoff {
+			assertClusterCollectionExists(t, node, "invoices")
+		}
 	}
 
 	replayed, err := restarted.fsm.ApplyCommittedCommandEntryV1(context.Background(), first.CommittedEntry.Clone())
@@ -950,8 +973,8 @@ const (
 	// succeeding AppendEntries round trip, but only for restart catch-up.
 	hashicorpRaftTestRestartCatchUpTimeout = 10_240*time.Millisecond + hashicorpRaftTestCoordinationTimeout
 
-	// Reaching the controlled generation is scheduling-sensitive on Windows,
-	// but remains a bounded, disconnected setup phase. Give it two catch-up
+	// The controlled generation starts after a successful replication resets
+	// upstream failure state. Give that disconnected setup phase two catch-up
 	// windows; the post-reconnect correctness bound stays unchanged.
 	hashicorpRaftTestRestartBackoffSetupTimeout = 2 * hashicorpRaftTestRestartCatchUpTimeout
 
@@ -993,6 +1016,12 @@ func (t *countingAppendEntriesTransport) appendFailures(target hraft.ServerAddre
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.failures[target]
+}
+
+func (t *countingAppendEntriesTransport) resetAppendFailures(target hraft.ServerAddress) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failures[target] = 0
 }
 
 func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
