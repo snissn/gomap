@@ -1,9 +1,9 @@
 {
   "schema_version": "treedb_text_ingest_qualification/v2",
-  "fixture_sha256": "312e5faaba9f35eb1bf6e78fa801029f27e3ad41d8e5bdbaea8fb1101f9211b6",
+  "fixture_sha256": "4a428d15dbbd6bc9d99580a620b51753012ba31a3a3461c26369ff846e7288fc",
   "analyzer": "simple",
   "field_weights": "title=3,body=1",
-  "ids_sha256": "fcdcdec6c7f7d072405f27d0c713dcac60df80c398bf77cdd155d595a959edeb",
+  "ids_sha256": "0928e721472e4e5ba2303d617604df949dfcf76caa49a8c8fc630c62a6a53cae",
   "command": "GOROOT=/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64 PATH=$GOROOT/bin:$PATH GOTOOLCHAIN=local GOCACHE=/tmp/gomap-4328-gocache go run ./cmd/treedb_text_ingest_qual -produce-smoke /tmp/gomap-4328-batch-smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
   "commit": "0679eb28135a731d9699311b36364d1c9b27db71",
   "host": "Darwin 25.2.0 arm64",

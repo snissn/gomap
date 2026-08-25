@@ -2,6 +2,8 @@
   "mode": "post_load_backfill",
   "scale": 100000,
   "repetition": 3,
+  "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
+  "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
   "peak_rss_pid": 18548,
   "source_documents": 100000,

@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"hash"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const contractVersion = "treedb_text_ingest_qualification/v2"
@@ -46,6 +51,8 @@ type row struct {
 	Mode               string `json:"mode"`
 	Scale              int    `json:"scale"`
 	Repetition         int    `json:"repetition"`
+	FixtureSHA256      string `json:"fixture_sha256"`
+	IDsSHA256          string `json:"ids_sha256"`
 	PeakRSSScope       string `json:"peak_rss_scope"`
 	PeakRSSPID         int    `json:"peak_rss_pid"`
 	SourceDocuments    int    `json:"source_documents"`
@@ -139,11 +146,25 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.Observed.Commit != m.Commit || m.Observed.Durability != m.Durability {
 		return fmt.Errorf("observed product identity disagrees with manifest")
 	}
+	wantFixtureSHA, wantIDsSHA := qualificationManifestIdentity()
+	if m.FixtureSHA256 != wantFixtureSHA || m.IDsSHA256 != wantIDsSHA {
+		return fmt.Errorf("manifest fixture identity does not match qualification generator")
+	}
 	if r.ManifestSHA256 != manifestSHA {
 		return fmt.Errorf("manifest_sha256 does not match manifest bytes")
 	}
 	groups := map[string]map[int]row{}
+	identities := make(map[int][2]string, len(requiredScales))
 	for i, x := range r.Rows {
+		identity, ok := identities[x.Scale]
+		if !ok {
+			fixtureSHA, idsSHA := qualificationIdentity(x.Scale)
+			identity = [2]string{fixtureSHA, idsSHA}
+			identities[x.Scale] = identity
+		}
+		if x.FixtureSHA256 != identity[0] || x.IDsSHA256 != identity[1] {
+			return fmt.Errorf("row %d: fixture identity does not match mode/scale workload", i)
+		}
 		if err := validateRow(x); err != nil {
 			return fmt.Errorf("row %d: %w", i, err)
 		}
@@ -188,6 +209,44 @@ func validate(m manifest, r report, manifestSHA string) error {
 		}
 	}
 	return nil
+}
+
+func qualificationManifestIdentity() (string, string) {
+	fixtureHash, idsHash := sha256.New(), sha256.New()
+	for _, scale := range requiredScales {
+		fixtureSHA, idsSHA := qualificationIdentity(scale)
+		writeIdentityValue(fixtureHash, fmt.Sprintf("%d", scale))
+		writeIdentityValue(fixtureHash, fixtureSHA)
+		writeIdentityValue(idsHash, fmt.Sprintf("%d", scale))
+		writeIdentityValue(idsHash, idsSHA)
+	}
+	return hex.EncodeToString(fixtureHash.Sum(nil)), hex.EncodeToString(idsHash.Sum(nil))
+}
+
+var qualificationIdentityCache sync.Map
+
+func qualificationIdentity(n int) (string, string) {
+	if cached, ok := qualificationIdentityCache.Load(n); ok {
+		identity := cached.([2]string)
+		return identity[0], identity[1]
+	}
+	fixtureHash, idsHash := sha256.New(), sha256.New()
+	for i := range n {
+		id, title, body := qualificationRecord(i)
+		writeIdentityValue(idsHash, id)
+		writeIdentityValue(fixtureHash, id)
+		writeIdentityValue(fixtureHash, title)
+		writeIdentityValue(fixtureHash, body)
+	}
+	identity := [2]string{hex.EncodeToString(fixtureHash.Sum(nil)), hex.EncodeToString(idsHash.Sum(nil))}
+	qualificationIdentityCache.Store(n, identity)
+	return identity[0], identity[1]
+}
+func writeIdentityValue(h hash.Hash, value string) {
+	var size [8]byte
+	binary.LittleEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = h.Write(size[:])
+	_, _ = h.Write([]byte(value))
 }
 func validateRow(r row) error {
 	validMode := false

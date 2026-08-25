@@ -2,6 +2,8 @@
   "mode": "indexed_insert",
   "scale": 10000,
   "repetition": 1,
+  "fixture_sha256": "97ce4ac018a895dd104e46515e262fddc1e5122304c5457cfc0004d7e8a5fd5b",
+  "ids_sha256": "db7c5648ac2f57fb58f0899bc96fede009dd5df2c706faecca621b90b8296c2f",
   "source_documents": 10000,
   "generated_chunks": 0,
   "indexed_live_rows": 10000,

@@ -33,6 +33,8 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		want string
 	}{
 		{"vectors", func(m *manifest, _ *report) { m.Observed.VectorsEnabled = true }, "vectors disabled"},
+		{"stale fixture manifest", func(m *manifest, _ *report) { m.FixtureSHA256 = "stale" }, "qualification generator"},
+		{"row fixture drift", func(_ *manifest, r *report) { r.Rows[0].IDsSHA256 = "stale" }, "fixture identity"},
 		{"missing matrix", func(_ *manifest, r *report) { r.Rows = r.Rows[1:] }, "missing required mode/scale"},
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
@@ -170,7 +172,8 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 }
 
 func validManifest() manifest {
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: "fixture", Analyzer: "simple", FieldWeights: "title=3,body=1", IDsSHA256: "ids", Command: "go run", Commit: "abcdef", Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: "abcdef", Durability: "wal_on", VectorIndexes: 0}}
+	fixtureSHA, idsSHA := qualificationManifestIdentity()
+	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: "simple", FieldWeights: "title=3,body=1", IDsSHA256: idsSHA, Command: "go run", Commit: "abcdef", Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: "abcdef", Durability: "wal_on", VectorIndexes: 0}}
 }
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()
@@ -234,6 +237,7 @@ func validRow(mode string, scale, rep int) row {
 	if mode == "source_chunk" {
 		r.Generations = uint64(r.ChunkBatchCount + 1)
 	}
+	r.FixtureSHA256, r.IDsSHA256 = qualificationIdentity(scale)
 	return r
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {

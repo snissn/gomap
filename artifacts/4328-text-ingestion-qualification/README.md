@@ -14,10 +14,11 @@ the frozen baseline (20,001 generations, 155.567 s, 4,180,574,208-byte RSS,
 
 `smoke-100k-r{1,2,3}/` and `smoke-1m-r{1,2,3}/` retain all four raw modes for
 the required repetitions. Each mode/repetition was measured in a fresh child
-process; rows bind the actual repetition and process-scoped peak RSS, while
-maintenance rows bind observed deletion tombstone debt. Source fixture
-construction is outside the timed/allocation boundary and no duplicate encoded
-document corpus is retained through chunk ingestion. Every source row records
+process; rows bind the actual repetition, deterministic per-scale fixture and
+ID hashes, and process-scoped peak RSS, while maintenance rows bind observed
+deletion tombstone debt. Source fixture construction is outside the
+timed/allocation boundary and no duplicate encoded document corpus is retained
+through chunk ingestion. Every source row records
 actual batch size/count and checkpoint/close/reopen score-only zero-fetch
 evidence. Generated DB directories were deleted after copying only raw rows; no
 transient DBs are retained.
