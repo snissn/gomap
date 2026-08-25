@@ -497,7 +497,11 @@ func parseFlags(args []string) (config, error) {
 			{name: "maintenance", dir: filepath.Join(outDir, "maintenance_db")},
 			{name: "backfill", dir: filepath.Join(outDir, "backfill_db")},
 		} {
-			inReservedDir, err := pathIsSameOrDescendant(profile.value, reserved.dir)
+			reservedDir, err := resolvePathSymlinks(reserved.dir)
+			if err != nil {
+				return config{}, fmt.Errorf("resolve %s database directory: %w", reserved.name, err)
+			}
+			inReservedDir, err := pathIsSameOrDescendant(profile.value, reservedDir)
 			if err != nil {
 				return config{}, fmt.Errorf("compare %s and %s database directory: %w", profile.name, reserved.name, err)
 			}
@@ -1359,6 +1363,10 @@ func requireExactMemProfileRate(allocProfile bool, memProfileRate int) error {
 	return nil
 }
 
+func createProfileFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+}
+
 func startQueryProfiles(cfg config) (func() error, error) {
 	return startQueryProfilesAtMemProfileRate(cfg, runtime.MemProfileRate)
 }
@@ -1374,7 +1382,7 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		f, err := os.Create(path)
+		f, err := createProfileFile(path)
 		if err != nil {
 			return err
 		}
@@ -1402,7 +1410,7 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 	if err := os.MkdirAll(filepath.Dir(cfg.cpuProfile), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.Create(cfg.cpuProfile)
+	f, err := createProfileFile(cfg.cpuProfile)
 	if err != nil {
 		return nil, err
 	}

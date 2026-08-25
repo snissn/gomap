@@ -534,6 +534,16 @@ func TestProfilePathsResolveSymlinkAliases4327(t *testing.T) {
 	if _, err := parseFlags([]string{"-out-dir", outDir, "-query-rows", queryRowHybridTextScalar, "-cpu-profile", filepath.Join(dbAlias, "cpu.pprof")}); err == nil || !strings.Contains(err.Error(), "effective -db-dir") {
 		t.Fatalf("database symlink alias error=%v", err)
 	}
+	maintenanceTarget := filepath.Join(root, "maintenance-target")
+	if err := os.MkdirAll(maintenanceTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(maintenanceTarget, filepath.Join(outDir, "maintenance_db")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseFlags([]string{"-out-dir", outDir, "-query-rows", queryRowHybridTextScalar, "-cpu-profile", filepath.Join(maintenanceTarget, "cpu.pprof")}); err == nil || !strings.Contains(err.Error(), "maintenance database directory") {
+		t.Fatalf("reserved database symlink alias error=%v", err)
+	}
 
 	reportAlias := filepath.Join(root, "report-link.pprof")
 	if err := os.Symlink(filepath.Join(outDir, "scale_report.json"), reportAlias); err != nil {
@@ -556,6 +566,27 @@ func TestProfilePathsRejectExistingHardLinks4327(t *testing.T) {
 	_, err := parseFlags([]string{"-out-dir", filepath.Join(root, "out"), "-query-rows", queryRowHybridTextScalar, "-cpu-profile", cpuPath, "-alloc-profile", allocPath})
 	if err == nil || !strings.Contains(err.Error(), "destination must not already exist") {
 		t.Fatalf("hard-linked profile destinations error=%v", err)
+	}
+}
+
+func TestProfileFilesUseExclusiveCreation4327(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cpu.pprof")
+	f, err := createProfileFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("first run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createProfileFile(path); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("second profile create error=%v want os.ErrExist", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "first run" {
+		t.Fatalf("exclusive create changed existing profile: content=%q err=%v", got, err)
 	}
 }
 
