@@ -120,6 +120,20 @@ func verifyGitProvenance(m manifest, resolve gitResolver) error {
 	if measuredTree != m.TreeOID {
 		return fmt.Errorf("measured commit tree is %s, want %s", measuredTree, m.TreeOID)
 	}
+	measuredTreeDB, err := resolve("rev-parse", "--verify", m.TreeOID+":"+qualificationTreeDBPath)
+	if err != nil {
+		return fmt.Errorf("resolve measured TreeDB subtree: %w", err)
+	}
+	if measuredTreeDB != m.TreeDBSubtreeOID {
+		return fmt.Errorf("measured TreeDB subtree is %s, want %s", measuredTreeDB, m.TreeDBSubtreeOID)
+	}
+	measuredHarness, err := resolve("rev-parse", "--verify", m.TreeOID+":"+qualificationHarnessPath)
+	if err != nil {
+		return fmt.Errorf("resolve measured qualification harness subtree: %w", err)
+	}
+	if measuredHarness != m.QualificationHarnessSubtreeOID {
+		return fmt.Errorf("measured qualification harness subtree is %s, want %s", measuredHarness, m.QualificationHarnessSubtreeOID)
+	}
 	measuredBlob, err := resolve("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath)
 	if err != nil {
 		return fmt.Errorf("resolve measured implementation path: %w", err)
@@ -133,6 +147,20 @@ func verifyGitProvenance(m manifest, resolve gitResolver) error {
 	}
 	if objectType != "blob" {
 		return fmt.Errorf("measured implementation object has type %q, want blob", objectType)
+	}
+	candidateTreeDB, err := resolve("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath)
+	if err != nil {
+		return fmt.Errorf("resolve candidate HEAD TreeDB subtree: %w", err)
+	}
+	if candidateTreeDB != m.TreeDBSubtreeOID {
+		return fmt.Errorf("candidate HEAD TreeDB subtree is %s, want measured subtree %s", candidateTreeDB, m.TreeDBSubtreeOID)
+	}
+	candidateHarness, err := resolve("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath)
+	if err != nil {
+		return fmt.Errorf("resolve candidate HEAD qualification harness subtree: %w", err)
+	}
+	if candidateHarness != m.QualificationHarnessSubtreeOID {
+		return fmt.Errorf("candidate HEAD qualification harness subtree is %s, want measured subtree %s", candidateHarness, m.QualificationHarnessSubtreeOID)
 	}
 	candidateBlob, err := resolve("rev-parse", "--verify", "HEAD:"+m.ImplementationPath)
 	if err != nil {

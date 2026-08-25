@@ -95,8 +95,12 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 	m := validManifest()
 	commitType := gitKey("cat-file", "-t", m.Commit)
 	tree := gitKey("rev-parse", "--verify", m.Commit+"^{tree}")
+	measuredTreeDB := gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationTreeDBPath)
+	measuredHarness := gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationHarnessPath)
 	measuredPath := gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath)
 	blobType := gitKey("cat-file", "-t", m.ImplementationBlobOID)
+	candidateTreeDB := gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath)
+	candidateHarness := gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath)
 	candidatePath := gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath)
 	for _, tc := range []struct {
 		name, key, value, fail, want string
@@ -104,9 +108,18 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 		{name: "Git unavailable", key: commitType, fail: "git unavailable", want: "resolve measured commit"},
 		{name: "commit type", key: commitType, value: "blob", want: "want commit"},
 		{name: "commit tree", key: tree, value: strings.Repeat("d", 40), want: "measured commit tree"},
+		{name: "commit tree unavailable", key: tree, fail: "missing tree", want: "resolve measured commit tree"},
+		{name: "measured TreeDB unavailable", key: measuredTreeDB, fail: "missing subtree", want: "resolve measured TreeDB subtree"},
+		{name: "measured TreeDB mismatch", key: measuredTreeDB, value: strings.Repeat("f", 40), want: "measured TreeDB subtree"},
+		{name: "measured harness unavailable", key: measuredHarness, fail: "missing subtree", want: "resolve measured qualification harness subtree"},
+		{name: "measured harness mismatch", key: measuredHarness, value: strings.Repeat("f", 40), want: "measured qualification harness subtree"},
 		{name: "measured path unavailable", key: measuredPath, fail: "missing path", want: "resolve measured implementation path"},
 		{name: "measured path blob", key: measuredPath, value: strings.Repeat("d", 40), want: "measured implementation blob"},
 		{name: "blob type", key: blobType, value: "tree", want: "want blob"},
+		{name: "candidate TreeDB unavailable", key: candidateTreeDB, fail: "missing HEAD subtree", want: "resolve candidate HEAD TreeDB subtree"},
+		{name: "candidate TreeDB mismatch", key: candidateTreeDB, value: strings.Repeat("f", 40), want: "candidate HEAD TreeDB subtree"},
+		{name: "candidate harness unavailable", key: candidateHarness, fail: "missing HEAD subtree", want: "resolve candidate HEAD qualification harness subtree"},
+		{name: "candidate harness mismatch", key: candidateHarness, value: strings.Repeat("f", 40), want: "candidate HEAD qualification harness subtree"},
 		{name: "candidate path unavailable", key: candidatePath, fail: "missing HEAD path", want: "resolve candidate HEAD implementation path"},
 		{name: "candidate blob", key: candidatePath, value: strings.Repeat("d", 40), want: "candidate HEAD implementation blob"},
 	} {
@@ -142,7 +155,19 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"vectors", func(m *manifest, _ *report) { m.Observed.VectorsEnabled = true }, "vectors disabled"},
 		{"stale fixture manifest", func(m *manifest, _ *report) { m.FixtureSHA256 = "stale" }, "qualification generator"},
 		{"row fixture drift", func(_ *manifest, r *report) { r.Rows[0].IDsSHA256 = "stale" }, "fixture identity"},
-		{"unverifiable measured revision", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "pinned commit"},
+		{"non-immutable commit URL", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "immutable URL"},
+		{"missing TreeDB subtree", func(m *manifest, _ *report) { m.TreeDBSubtreeOID = "" }, "treedb_subtree_oid is required"},
+		{"missing harness subtree", func(m *manifest, _ *report) { m.QualificationHarnessSubtreeOID = "" }, "qualification_harness_subtree_oid is required"},
+		{"invalid commit syntax", func(m *manifest, _ *report) {
+			m.Commit = strings.Repeat("A", 40)
+			m.Observed.Commit = m.Commit
+			m.CommitURL = "https://github.com/snissn/gomap/commit/" + m.Commit
+		}, "Git object ID"},
+		{"invalid root tree syntax", func(m *manifest, _ *report) { m.TreeOID = "short" }, "Git object ID"},
+		{"invalid TreeDB subtree syntax", func(m *manifest, _ *report) { m.TreeDBSubtreeOID = "short" }, "Git object ID"},
+		{"invalid harness subtree syntax", func(m *manifest, _ *report) { m.QualificationHarnessSubtreeOID = "short" }, "Git object ID"},
+		{"invalid implementation blob syntax", func(m *manifest, _ *report) { m.ImplementationBlobOID = "short" }, "Git object ID"},
+		{"unexpected implementation path", func(m *manifest, _ *report) { m.ImplementationPath = "TreeDB/other.go" }, "implementation_path"},
 		{"weakened acceptance", func(m *manifest, _ *report) { m.Acceptance.SourceChunk10K.MinimumSourceDocsPerSecondMultiple = 1 }, "pinned frozen"},
 		{"wrong analyzer", func(m *manifest, _ *report) { m.Analyzer = "keyword" }, "match the producer"},
 		{"wrong field weights", func(m *manifest, _ *report) { m.FieldWeights = "title=1,body=1" }, "match the producer"},
@@ -284,8 +309,8 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
-	commit := qualificationMeasuredCommit
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: qualificationMeasuredTreeOID, ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: qualificationImplementationBlob, Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}, Acceptance: expectedQualificationAcceptance()}
+	commit := strings.Repeat("a", 40)
+	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}, Acceptance: expectedQualificationAcceptance()}
 }
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()
@@ -383,10 +408,14 @@ func gitKey(args ...string) string {
 
 func validGitOutputs(m manifest) map[string]string {
 	return map[string]string{
-		gitKey("cat-file", "-t", m.Commit):                                  "commit",
-		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                 m.TreeOID,
-		gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath): m.ImplementationBlobOID,
-		gitKey("cat-file", "-t", m.ImplementationBlobOID):                   "blob",
-		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):       m.ImplementationBlobOID,
+		gitKey("cat-file", "-t", m.Commit):                                      "commit",
+		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                     m.TreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationTreeDBPath):  m.TreeDBSubtreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+qualificationHarnessPath): m.QualificationHarnessSubtreeOID,
+		gitKey("rev-parse", "--verify", m.TreeOID+":"+m.ImplementationPath):     m.ImplementationBlobOID,
+		gitKey("cat-file", "-t", m.ImplementationBlobOID):                       "blob",
+		gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath):        m.TreeDBSubtreeOID,
+		gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath):       m.QualificationHarnessSubtreeOID,
+		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):           m.ImplementationBlobOID,
 	}
 }

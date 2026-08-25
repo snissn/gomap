@@ -18,10 +18,9 @@ const (
 	qualificationFieldWeights                  = "title=3,body=1"
 	qualificationTitleWeight                   = 3.0
 	qualificationBodyWeight                    = 1.0
+	qualificationTreeDBPath                    = "TreeDB"
+	qualificationHarnessPath                   = "cmd/treedb_text_ingest_qual"
 	qualificationImplementationPath            = "TreeDB/collections/document_chunking.go"
-	qualificationMeasuredCommit                = "0679eb28135a731d9699311b36364d1c9b27db71"
-	qualificationMeasuredTreeOID               = "876ea6c3f9e213cf178448cd242212e208d5c7e2"
-	qualificationImplementationBlob            = "76697734b60a5086d7d186088c0321a510b4909c"
 	sourceChunkBaselineRowSHA256               = "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc"
 	sourceChunkBaselineWallSeconds             = 155.566929083
 	sourceChunkBaselineRSSBytes                = 4_180_574_208
@@ -35,23 +34,25 @@ var requiredModes = []string{"indexed_insert", "post_load_backfill", "source_chu
 var requiredScales = []int{10_000, 100_000, 1_000_000}
 
 type manifest struct {
-	SchemaVersion         string                  `json:"schema_version"`
-	FixtureSHA256         string                  `json:"fixture_sha256"`
-	Analyzer              string                  `json:"analyzer"`
-	FieldWeights          string                  `json:"field_weights"`
-	IDsSHA256             string                  `json:"ids_sha256"`
-	Command               string                  `json:"command"`
-	Commit                string                  `json:"commit"`
-	CommitURL             string                  `json:"commit_url"`
-	TreeOID               string                  `json:"tree_oid"`
-	ImplementationPath    string                  `json:"implementation_path"`
-	ImplementationBlobOID string                  `json:"implementation_blob_oid"`
-	Host                  string                  `json:"host"`
-	CacheState            string                  `json:"cache_state"`
-	Durability            string                  `json:"durability"`
-	TimedBoundary         string                  `json:"timed_boundary"`
-	Observed              observedIdentity        `json:"observed"`
-	Acceptance            qualificationAcceptance `json:"acceptance"`
+	SchemaVersion                  string                  `json:"schema_version"`
+	FixtureSHA256                  string                  `json:"fixture_sha256"`
+	Analyzer                       string                  `json:"analyzer"`
+	FieldWeights                   string                  `json:"field_weights"`
+	IDsSHA256                      string                  `json:"ids_sha256"`
+	Command                        string                  `json:"command"`
+	Commit                         string                  `json:"commit"`
+	CommitURL                      string                  `json:"commit_url"`
+	TreeOID                        string                  `json:"tree_oid"`
+	TreeDBSubtreeOID               string                  `json:"treedb_subtree_oid"`
+	QualificationHarnessSubtreeOID string                  `json:"qualification_harness_subtree_oid"`
+	ImplementationPath             string                  `json:"implementation_path"`
+	ImplementationBlobOID          string                  `json:"implementation_blob_oid"`
+	Host                           string                  `json:"host"`
+	CacheState                     string                  `json:"cache_state"`
+	Durability                     string                  `json:"durability"`
+	TimedBoundary                  string                  `json:"timed_boundary"`
+	Observed                       observedIdentity        `json:"observed"`
+	Acceptance                     qualificationAcceptance `json:"acceptance"`
 }
 
 type qualificationAcceptance struct {
@@ -172,7 +173,7 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.SchemaVersion != contractVersion || r.SchemaVersion != contractVersion {
 		return fmt.Errorf("schema_version must be %q", contractVersion)
 	}
-	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "commit_url": m.CommitURL, "tree_oid": m.TreeOID, "implementation_path": m.ImplementationPath, "implementation_blob_oid": m.ImplementationBlobOID, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
+	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "commit_url": m.CommitURL, "tree_oid": m.TreeOID, "treedb_subtree_oid": m.TreeDBSubtreeOID, "qualification_harness_subtree_oid": m.QualificationHarnessSubtreeOID, "implementation_path": m.ImplementationPath, "implementation_blob_oid": m.ImplementationBlobOID, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("manifest %s is required", name)
 		}
@@ -186,8 +187,16 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.Observed.Commit != m.Commit || m.Observed.Durability != m.Durability {
 		return fmt.Errorf("observed product identity disagrees with manifest")
 	}
-	if m.Commit != qualificationMeasuredCommit || m.CommitURL != "https://github.com/snissn/gomap/commit/"+qualificationMeasuredCommit || m.TreeOID != qualificationMeasuredTreeOID || m.ImplementationPath != qualificationImplementationPath || m.ImplementationBlobOID != qualificationImplementationBlob {
-		return fmt.Errorf("measured revision must match the pinned commit, tree, path, and implementation blob")
+	for name, value := range map[string]string{"commit": m.Commit, "tree_oid": m.TreeOID, "treedb_subtree_oid": m.TreeDBSubtreeOID, "qualification_harness_subtree_oid": m.QualificationHarnessSubtreeOID, "implementation_blob_oid": m.ImplementationBlobOID} {
+		if !isGitOID(value) {
+			return fmt.Errorf("manifest %s must be a 40-character lowercase hexadecimal Git object ID", name)
+		}
+	}
+	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit {
+		return fmt.Errorf("commit_url must be the immutable URL for the manifest commit")
+	}
+	if m.ImplementationPath != qualificationImplementationPath {
+		return fmt.Errorf("implementation_path must be %q", qualificationImplementationPath)
 	}
 	if m.Acceptance != expectedQualificationAcceptance() {
 		return fmt.Errorf("manifest acceptance must match the pinned frozen source_chunk/10000 baseline and thresholds")
@@ -258,6 +267,18 @@ func validate(m manifest, r report, manifestSHA string) error {
 		}
 	}
 	return nil
+}
+
+func isGitOID(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func expectedQualificationAcceptance() qualificationAcceptance {

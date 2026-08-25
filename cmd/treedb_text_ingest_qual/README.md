@@ -6,8 +6,14 @@ It accepts no vector/embedding work: `manifest.vectors` must be `false`.
 ## Artifact contract
 
 Write immutable `manifest.json` before a run. It binds the deterministic
-fixture and IDs by SHA-256, analyzer and field weights, exact command/commit,
-host/cache/durability state, and the timed boundary. `dirty` must be `false`.
+fixture and IDs by SHA-256, analyzer and field weights, exact command and
+measured commit/root tree, complete `TreeDB` and qualification-harness subtree
+OIDs, the expected implementation path/blob, host/cache/durability state, and
+the timed boundary. `dirty` must be `false`. Validation resolves every measured
+OID from the manifest commit and requires candidate `HEAD` to have byte-identical
+`TreeDB` and `cmd/treedb_text_ingest_qual` subtrees. The implementation blob is
+an additional narrow check, not the candidate-equivalence boundary; later
+artifact-only commits outside those subtrees may differ.
 
 Write `report.json` using schema `treedb_text_ingest_qualification/v2` and set
 `manifest_sha256` to the SHA-256 of the exact manifest bytes. Rows must cover the complete mode × scale matrix: `indexed_insert`,
