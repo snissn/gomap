@@ -440,18 +440,46 @@ func parseFlags(args []string) (config, error) {
 			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one hybrid -query-rows value")
 		}
 	}
-	if cfg.cpuProfile != "" && cfg.allocProfile != "" {
-		cpuProfile, err := filepath.Abs(cfg.cpuProfile)
+	effectiveDBDir := cfg.dbDir
+	if effectiveDBDir == "" {
+		effectiveDBDir = filepath.Join(cfg.outDir, "primary_db")
+	}
+	outDir, err := filepath.Abs(cfg.outDir)
+	if err != nil {
+		return config{}, fmt.Errorf("resolve -out-dir: %w", err)
+	}
+	dbDir, err := filepath.Abs(effectiveDBDir)
+	if err != nil {
+		return config{}, fmt.Errorf("resolve effective -db-dir: %w", err)
+	}
+	for _, profile := range []struct {
+		name  string
+		value *string
+	}{
+		{name: "-cpu-profile", value: &cfg.cpuProfile},
+		{name: "-alloc-profile", value: &cfg.allocProfile},
+	} {
+		if *profile.value == "" {
+			continue
+		}
+		resolved, err := filepath.Abs(*profile.value)
 		if err != nil {
-			return config{}, fmt.Errorf("resolve -cpu-profile: %w", err)
+			return config{}, fmt.Errorf("resolve %s: %w", profile.name, err)
 		}
-		allocProfile, err := filepath.Abs(cfg.allocProfile)
+		*profile.value = resolved
+		if resolved == filepath.Join(outDir, "scale_report.json") || resolved == filepath.Join(outDir, "scale_report.md") {
+			return config{}, fmt.Errorf("%s must not resolve to a scale report artifact", profile.name)
+		}
+		inDBDir, err := pathIsSameOrDescendant(resolved, dbDir)
 		if err != nil {
-			return config{}, fmt.Errorf("resolve -alloc-profile: %w", err)
+			return config{}, fmt.Errorf("compare %s and effective -db-dir: %w", profile.name, err)
 		}
-		if cpuProfile == allocProfile {
-			return config{}, errors.New("-cpu-profile and -alloc-profile must not resolve to the same path")
+		if inDBDir {
+			return config{}, fmt.Errorf("%s must not resolve to the effective -db-dir or its descendant", profile.name)
 		}
+	}
+	if cfg.cpuProfile != "" && cfg.allocProfile != "" && cfg.cpuProfile == cfg.allocProfile {
+		return config{}, errors.New("-cpu-profile and -alloc-profile must not resolve to the same path")
 	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
@@ -756,9 +784,13 @@ func dbDirContainsOutDir(dbDir, outDir string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("resolve out dir %q: %w", outDir, err)
 	}
-	rel, err := filepath.Rel(filepath.Clean(dbAbs), filepath.Clean(outAbs))
+	return pathIsSameOrDescendant(outAbs, dbAbs)
+}
+
+func pathIsSameOrDescendant(path, dir string) (bool, error) {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
 	if err != nil {
-		return false, fmt.Errorf("compare db dir %q and out dir %q: %w", dbDir, outDir, err)
+		return false, err
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
 }
