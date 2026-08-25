@@ -666,6 +666,7 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 		DroppedEntries: work.DroppedEntries, DroppedObligations: work.DroppedObligations,
 		CopiedEntries: work.CopiedEntries, CopiedObligations: work.CopiedObligations,
 		PhysicalHandleCopies: work.PhysicalHandleCopies, PhysicalHandleShares: work.PhysicalHandleShares,
+		PhysicalRootShares:              work.PhysicalRootShares,
 		LogicalObligationNormalizations: work.LogicalObligationNormalizations,
 		RetainedIndexNodeVisits:         work.RetainedIndexNodeVisits, RetainedIndexNodeCopies: work.RetainedIndexNodeCopies,
 		LogicalIndexNodesAdmitted: work.LogicalIndexNodesAdmitted,

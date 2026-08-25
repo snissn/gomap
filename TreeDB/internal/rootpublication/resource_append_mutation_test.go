@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func appendMutationTestObligation(partID uint64) StableLogicalObligation {
@@ -120,6 +122,262 @@ func TestStableLogicalObligationAppendPreservesImmutableCommitments(t *testing.T
 		if next.commitments[field] != commitment {
 			t.Fatalf("next commitment[%q]=%+v want %+v", field, next.commitments[field], commitment)
 		}
+	}
+}
+
+func TestAppendOnlyPhysicalClosureCloneIsMutationLocal(t *testing.T) {
+	// The certified append-only path must retain the immutable physical closure
+	// itself. Re-cloning every retained entry makes repeated root publication
+	// quadratic even when the logical-obligation view path-copies only its delta.
+	const retained = 1024
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "retained.pack", "x")
+	builder := NewStableResourceSetBuilder()
+	for i := 0; i < retained; i++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, file, uint64(i+1))); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+
+	clone, work, err := CloneStableResourceSetApplyingLogicalObligationMutation(source, StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Added:        []StableLogicalObligation{appendMutationTestObligation(retained + 1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Release()
+	if clone.Len() != retained {
+		t.Fatalf("append-only retained closure length=%d want %d", clone.Len(), retained)
+	}
+	if work.SourceEntriesInspected != 0 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 || work.PhysicalHandleCopies != 0 {
+		t.Fatalf("append-only retained physical work=%+v want mutation-local retained closure", work)
+	}
+}
+
+func TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots(t *testing.T) {
+	const excludedEntries = 1024
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "excluded.pack", "x")
+	builder := NewStableResourceSetBuilder()
+	for i := 0; i < excludedEntries; i++ {
+		if err := builder.Add(distinctPhysicalTokenFixture(t, file, uint64(i+1))); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+	}
+	if err := builder.Add(stableTokenFixture(t, dir, "retained.vlog", 1, 8, ReachabilityValueLogPointer, "retained")); err != nil {
+		builder.Abandon()
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+
+	clone, work, err := CloneStableResourceSetForLogicalObligationsWithWork(
+		source, StableLogicalObligationRequirements{}, ResourceColumnAsset,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Release()
+	if clone.Len() != 1 || clone.Descriptors()[0].Kind() != ResourceValueLog {
+		t.Fatalf("excluded clone descriptors=%+v want retained value-log root", clone.Descriptors())
+	}
+	if work.PhysicalRootShares != 1 || work.SourceEntriesInspected != 0 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 || work.PhysicalHandleCopies != 0 {
+		t.Fatalf("excluded clone work=%+v want one root share and no retained-entry work", work)
+	}
+}
+
+func TestCompositeRegistrarAcceptsSharedRootChild(t *testing.T) {
+	dir := t.TempDir()
+	builder := NewStableResourceSetBuilder(ReachabilityDictionaryGeneration)
+	if err := builder.Add(stableTokenFixture(
+		t, dir, "dictionary-7", 7, 4, ReachabilityDictionaryGeneration, "dictionary-7",
+		func(spec *StableResourceSpec) {
+			spec.Kind = ResourceDictionary
+			spec.ResourceID = "dictionary-7"
+		},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	source, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, _, err := CloneStableResourceSetForLogicalObligationsWithWork(source, StableLogicalObligationRequirements{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Release()
+
+	registrar := NewStableCompositeRegistrar(ReachabilityDictionaryGeneration)
+	if err := registrar.RegisterChild(ReachabilityDictionaryGeneration, "dictionary-7", child); err != nil {
+		registrar.Abandon()
+		t.Fatal(err)
+	}
+	set, ids, err := registrar.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Release()
+	if len(ids) != 1 || ids[0].Value() != "dictionary-7" {
+		t.Fatalf("shared-root registered IDs=%v", ids)
+	}
+}
+
+func TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "composite.pack", "x")
+	var releases atomic.Uint64
+	makeToken := func(id uint64) *StableResourceToken {
+		token := distinctPhysicalTokenFixture(t, file, id)
+		token.onRelease = func() { releases.Add(1) }
+		return token
+	}
+	baseBuilder := NewStableResourceSetBuilder()
+	for id := uint64(1); id <= 32; id++ {
+		if err := baseBuilder.Add(makeToken(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base, err := baseBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(makeToken(33)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateBuilder := NewStableResourceSetBuilder()
+	if err := candidateBuilder.Merge(inherited); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{}); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := candidateBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Len() != 33 || len(candidate.Descriptors()) != 33 || len(candidate.PhysicalDescriptors()) != 33 || len(candidate.Tokens()) != 33 {
+		t.Fatalf("composite set views disagree: len=%d descriptors=%d physical=%d tokens=%d", candidate.Len(), len(candidate.Descriptors()), len(candidate.PhysicalDescriptors()), len(candidate.Tokens()))
+	}
+	if !candidate.covers(ReachabilityColumnManifest) || candidate.FrontierFor(candidate.Tokens()[32].identity, 1).Bytes != 1 {
+		t.Fatal("composite set lost reachability or frontier")
+	}
+	stats := candidate.Stats(time.Now())
+	if len(stats) != 1 || stats[0].PendingCount != 33 || stats[0].ActivePins != 33 {
+		t.Fatalf("composite stats=%+v", stats)
+	}
+	if err := candidate.validateResolved(); err != nil {
+		t.Fatal(err)
+	}
+	if err := candidate.DeletionGuard().Check(candidate.Tokens()[32].identity, 1); !errors.Is(err, ErrResourcePinned) {
+		t.Fatalf("composite deletion guard=%v want %v", err, ErrResourcePinned)
+	}
+	union, err := UnionStableResourceSets(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if union.Len() != 33 {
+		t.Fatalf("composite union length=%d want 33", union.Len())
+	}
+	union.Release()
+	base.Release()
+	if releases.Load() != 0 {
+		t.Fatalf("base release closed shared resources early: %d", releases.Load())
+	}
+	candidate.Release()
+	if releases.Load() != 33 {
+		t.Fatalf("final composite release count=%d want 33", releases.Load())
+	}
+}
+
+func TestAppendOnlyPhysicalClosureCandidateMayReleaseBeforeSource(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "reverse-release.pack", "x")
+	var releases atomic.Uint64
+	makeToken := func(id uint64) *StableResourceToken {
+		token := distinctPhysicalTokenFixture(t, file, id)
+		token.onRelease = func() { releases.Add(1) }
+		return token
+	}
+	baseBuilder := NewStableResourceSetBuilder()
+	if err := baseBuilder.Add(makeToken(1)); err != nil {
+		t.Fatal(err)
+	}
+	base, err := baseBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producerBuilder := NewStableResourceSetBuilder()
+	if err := producerBuilder.Add(makeToken(2)); err != nil {
+		t.Fatal(err)
+	}
+	producer, err := producerBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateBuilder := NewStableResourceSetBuilder()
+	if err := candidateBuilder.Merge(inherited); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{}); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := candidateBuilder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	candidate.Release()
+	if releases.Load() != 1 || base.Len() != 1 {
+		t.Fatalf("candidate-first release count=%d base len=%d want one delta release and live source", releases.Load(), base.Len())
+	}
+	base.Release()
+	if releases.Load() != 2 {
+		t.Fatalf("final source release count=%d want 2", releases.Load())
+	}
+}
+
+func TestStableResourceEntryRopeDeepAppendTraversalAndReleaseAreIterative(t *testing.T) {
+	const depth = 100_000
+	root := &stableResourceEntryNode{}
+	root.refs.Store(1)
+	first := root
+	for i := 1; i < depth; i++ {
+		next := &stableResourceEntryNode{}
+		next.refs.Store(1)
+		root = concatOwnedStableResourceEntryNodes(root, next)
+	}
+	if !root.rangeEntries(func(*stableResourceEntry) bool { return true }) {
+		t.Fatal("deep rope traversal stopped early")
+	}
+	root.release()
+	root.release()
+	if first.refs.Load() != 0 || root.refs.Load() != 0 {
+		t.Fatalf("deep rope repeated release left refs first=%d root=%d", first.refs.Load(), root.refs.Load())
 	}
 }
 

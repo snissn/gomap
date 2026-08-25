@@ -136,13 +136,74 @@ func BenchmarkStableResourceSetCloneDistinctPhysical(b *testing.B) {
 					b.Fatal(err)
 				}
 				b.StopTimer()
-				if work.SourceEntriesInspected != uint64(entries) || work.PhysicalHandleShares != uint64(entries) || work.PhysicalHandleCopies != 0 {
+				if work.SourceEntriesInspected != 0 || work.PhysicalHandleShares != 0 || work.PhysicalHandleCopies != 0 || work.PhysicalRootShares != 1 {
 					b.Fatalf("clone work=%+v", work)
 				}
 				b.ReportMetric(float64(work.SourceEntriesInspected)/float64(entries), "source-entry-visits/entry")
 				b.ReportMetric(float64(work.PhysicalHandleShares)/float64(entries), "physical-handle-shares/entry")
 				cloned.Release()
 				source.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
+func BenchmarkStableResourceSetAppendDistinctPhysical(b *testing.B) {
+	for _, entries := range []int{8, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "append-scale.bin", "x")
+			baseBuilder := NewStableResourceSetBuilder()
+			for index := 0; index < entries; index++ {
+				if err := baseBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(index+1))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			if _, _, err := base.DependencyManifestV1(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				producerBuilder := NewStableResourceSetBuilder()
+				if err := producerBuilder.Add(distinctPhysicalTokenFixture(b, file, uint64(entries+1))); err != nil {
+					b.Fatal(err)
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				inherited, cloneWork, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidateBuilder := NewStableResourceSetBuilder()
+				if err := candidateBuilder.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				appendWork, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate, err := candidateBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				_, manifestWork, err := candidate.DependencyManifestV1()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if cloneWork.SourceEntriesInspected != 0 || cloneWork.PhysicalRootShares != 1 || appendWork.SourceEntriesInspected != 1 || appendWork.CopiedEntries != 0 || manifestWork.EntriesEncoded != 1 {
+					b.Fatalf("clone=%+v append=%+v manifest=%+v", cloneWork, appendWork, manifestWork)
+				}
+				candidate.Release()
 				b.StartTimer()
 			}
 		})

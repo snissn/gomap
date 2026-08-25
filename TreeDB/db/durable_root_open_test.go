@@ -397,8 +397,8 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 		}
 	}
 	registry := database.valueLogIdentityPins
-	if got := registry.ActivePins(); got != 3 {
-		t.Fatalf("published slot plus visible-root pins=%d, want exactly 3", got)
+	if got := registry.ActivePins(); got != 2 {
+		t.Fatalf("published shared slot/visible-root identity pins=%d, want exactly 2", got)
 	}
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
@@ -417,14 +417,14 @@ func TestDurableRootRecoveryRetainsAndReplacesBothSlotDependencyClosures(t *test
 			t.Fatalf("recovered slot %d closure=%v len=%d, want one dependency", slot, resources, resources.Len())
 		}
 	}
-	if got := reopenedRegistry.ActivePins(); got != 3 {
-		t.Fatalf("recovered slot plus visible-root pins=%d, want exactly 3", got)
+	if got := reopenedRegistry.ActivePins(); got != 2 {
+		t.Fatalf("recovered shared slot/visible-root identity pins=%d, want exactly 2", got)
 	}
 	if err := reopened.SetSync([]byte("inline-2"), []byte{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := reopenedRegistry.ActivePins(); got != 3 {
-		t.Fatalf("slot plus visible-root pins after target replacement=%d, want exactly 3", got)
+	if got := reopenedRegistry.ActivePins(); got != 2 {
+		t.Fatalf("shared slot/visible-root identity pins after target replacement=%d, want exactly 2", got)
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
