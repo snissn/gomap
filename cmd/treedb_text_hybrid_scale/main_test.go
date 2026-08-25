@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,76 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", "retrieval"})
+	if err != nil {
+		t.Fatalf("parse retrieval phases: %v", err)
+	}
+	got := selectedPhaseNames(cfg.selectedPhases)
+	want := []string{"load", "queries", "reopen"}
+	if len(got) != len(want) {
+		t.Fatalf("selected phases=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selected phases=%v want %v", got, want)
+		}
+	}
+	if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", "queries"}); err == nil {
+		t.Fatal("parseFlags accepted an unknown/incomplete phase selector")
+	}
+}
+
+func TestRetrievalQualificationRunsOnlyRetrievalPhases2731(t *testing.T) {
+	outDir := t.TempDir()
+	selected, err := parsePhaseSelector("retrieval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := run(config{outDir: outDir, rows: 96, batchSize: 48, dims: 4, m: 4, efConstruction: 32, efSearch: 32, topK: 5, candidateLimit: 16, queries: 1, readers: 2, includeVector: true, runReopen: true, selectedPhases: selected, phases: "retrieval"})
+	if err != nil {
+		t.Fatalf("run retrieval qualification: %v", err)
+	}
+	if !rep.Complete || rep.Backfill != nil || rep.Concurrent != nil || rep.Maintenance != nil || rep.Reopen == nil || len(rep.Queries) == 0 {
+		t.Fatalf("unexpected retrieval-only report: %+v", rep)
+	}
+}
+
+func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion: scaleSchemaVersion,
+		Artifacts: reportArtifacts{
+			OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md"),
+		},
+		SelectedPhases:  []string{"load", "queries", "reopen"},
+		CompletedPhases: []string{"load"},
+		Complete:        false,
+		Guardrails:      []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	if err := writeReports(rep); err != nil {
+		t.Fatalf("write partial report: %v", err)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var decoded report
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("partial report is invalid JSON: %v", err)
+	}
+	if decoded.Complete || len(decoded.CompletedPhases) != 1 {
+		t.Fatalf("partial report incorrectly complete: %+v", decoded)
+	}
+	markdown, err := os.ReadFile(rep.Artifacts.Markdown)
+	if err != nil {
+		t.Fatalf("read markdown: %v", err)
+	}
+	if !strings.Contains(string(markdown), "INCOMPLETE (partial/resumable evidence; not a completed qualification)") {
+		t.Fatalf("markdown did not fail closed: %s", markdown)
 	}
 }
 
