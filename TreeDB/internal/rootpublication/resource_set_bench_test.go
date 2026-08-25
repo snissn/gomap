@@ -210,6 +210,75 @@ func BenchmarkStableResourceSetAppendDistinctPhysical(b *testing.B) {
 	}
 }
 
+func BenchmarkStableResourceSetAppendPhysicalCollision(b *testing.B) {
+	for _, entries := range []int{8, 32, 4096} {
+		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {
+			b.StopTimer()
+			dir := b.TempDir()
+			scaleFile := writeStableResourceFixture(b, dir, "collision-scale.bin", "x")
+			collisionFile := writeStableResourceFixture(b, dir, "current.bin", "xx")
+			baseBuilder := NewStableResourceSetBuilder()
+			for id := 1; id < entries; id++ {
+				if err := baseBuilder.Add(distinctPhysicalTokenFixture(b, scaleFile, uint64(id))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if err := baseBuilder.Add(appendMutationResourceToken(b, collisionFile, ResourceColumnAsset, "current", 1, ReachabilityColumnManifest, appendMutationTestObligation(1))); err != nil {
+				b.Fatal(err)
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			added := appendMutationTestObligation(2)
+			mutation := StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added}}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				producerBuilder := NewStableResourceSetBuilder()
+				if err := producerBuilder.Add(appendMutationResourceToken(b, collisionFile, ResourceColumnAsset, "current", 2, ReachabilityColumnManifest, added)); err != nil {
+					b.Fatal(err)
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidateBuilder := NewStableResourceSetBuilder()
+				if err := candidateBuilder.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				work, err := candidateBuilder.MergeAppendOnlyLogicalObligations(producer, mutation)
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate, err := candidateBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if entries > stableResourceEntryLinearLookupLimit {
+					if work.AppendOnlyCollisionFastPath != 1 || work.CopiedEntries != 0 || work.PhysicalHandleShares != 0 {
+						b.Fatalf("large collision work=%+v", work)
+					}
+				} else if work.AppendOnlyCollisionFallbacks != 1 {
+					b.Fatalf("small collision work=%+v", work)
+				}
+				b.ReportMetric(float64(work.CopiedEntries), "copied-entries/op")
+				b.ReportMetric(float64(work.PhysicalHandleShares), "physical-handle-shares/op")
+				b.ReportMetric(float64(work.SourceEntriesInspected), "source-entries/op")
+				candidate.Release()
+				b.StartTimer()
+			}
+		})
+	}
+}
+
 func BenchmarkStableResourceSetDependencyManifestCached(b *testing.B) {
 	for _, entries := range []int{8, 4096} {
 		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {

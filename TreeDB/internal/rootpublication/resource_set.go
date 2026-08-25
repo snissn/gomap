@@ -450,6 +450,8 @@ type StableResourceClosureWork struct {
 	NewlyAdmittedObligations        uint64
 	RemovedObligations              uint64
 	AppendOnlyFastPath              uint64
+	AppendOnlyCollisionFastPath     uint64
+	AppendOnlyCollisionFallbacks    uint64
 	AppendOnlyFallbacks             uint64
 	DestructiveFallbacks            uint64
 	FullClosureValidations          uint64
@@ -487,6 +489,8 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 	work.NewlyAdmittedObligations += other.NewlyAdmittedObligations
 	work.RemovedObligations += other.RemovedObligations
 	work.AppendOnlyFastPath += other.AppendOnlyFastPath
+	work.AppendOnlyCollisionFastPath += other.AppendOnlyCollisionFastPath
+	work.AppendOnlyCollisionFallbacks += other.AppendOnlyCollisionFallbacks
 	work.AppendOnlyFallbacks += other.AppendOnlyFallbacks
 	work.DestructiveFallbacks += other.DestructiveFallbacks
 	work.FullClosureValidations += other.FullClosureValidations
@@ -1522,6 +1526,29 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		work.AppendOnlyFastPath = 1
 		return work, nil
 	}
+	if plan, work, certified, err := certifiedAppendOnlyPhysicalCoalesce(builder.kindViews, child.kindViews, mutation); certified || err != nil {
+		if err != nil {
+			plan.abandon()
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return work, err
+		}
+		if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
+			plan.abandon()
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			return work, ErrResourceOwnership
+		}
+		builder.kindViews = plan.views
+		child.kindViews = nil
+		child.entries = nil
+		child.mu.Unlock()
+		builder.mu.Unlock()
+		releaseStableResourceKindViews(plan.releaseIncoming)
+		work.AppendOnlyFastPath = 1
+		work.AppendOnlyCollisionFastPath = 1
+		return work, nil
+	}
 
 	// Identity collisions are rare in the production append path. Materialize
 	// an independently pinned exact candidate so every established coalescing
@@ -1549,6 +1576,7 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	temporaryChildBuilder.mu.Unlock()
 
 	work, err := temporary.mergeAppendOnlyLogicalObligationsFlat(temporaryChild, mutation)
+	work.AppendOnlyCollisionFallbacks = 1
 	if err != nil {
 		child.mu.Unlock()
 		builder.mu.Unlock()
@@ -1580,6 +1608,216 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 	releaseStableResourceKindViews(oldBuilderViews)
 	releaseStableResourceKindViews(oldChildViews)
 	return work, nil
+}
+
+type certifiedAppendOnlyPhysicalCoalescePlan struct {
+	views           map[ResourceKind]stableResourceKindView
+	releaseIncoming map[ResourceKind]stableResourceKindView
+	staged          map[ResourceKind]stableResourceKindView
+}
+
+// abandon releases only independently pinned staged roots. Provisional concat
+// nodes never retain their inputs and must simply be discarded before adoption.
+func (plan *certifiedAppendOnlyPhysicalCoalescePlan) abandon() {
+	if plan != nil {
+		releaseStableResourceKindViews(plan.staged)
+		plan.staged = nil
+	}
+}
+
+// certifiedAppendOnlyPhysicalCoalesce preflights a small producer containing
+// distinct entries and unambiguous same-logical/same-physical appends. The
+// persistent indexes are canonical. Collision-only producer roots are dropped;
+// all-distinct roots transfer directly; mixed roots pin only their distinct
+// delta so repeated collisions cannot accumulate hidden tokens or descriptors.
+func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stableResourceKindView, mutation StableLogicalObligationMutation) (*certifiedAppendOnlyPhysicalCoalescePlan, StableResourceClosureWork, bool, error) {
+	if stableResourceKindViewCount(target)+stableResourceKindViewCount(incoming) <= stableResourceEntryLinearLookupLimit {
+		return nil, StableResourceClosureWork{}, false, nil
+	}
+	if stableResourceKindViewCount(incoming) > stableResourceEntryLinearLookupLimit {
+		return nil, StableResourceClosureWork{}, false, nil
+	}
+	_, work, err := validateAppendOnlyProducerViews(incoming, mutation)
+	if err != nil {
+		return nil, work, true, err
+	}
+	nextViews := make(map[ResourceKind]stableResourceKindView, len(target))
+	for kind, current := range target {
+		nextViews[kind] = current
+	}
+	distinct := make(map[ResourceKind][]*stableResourceEntry)
+	collisions := 0
+	var preflightErr error
+	certified := true
+	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
+		view, hadKind := nextViews[child.token.kind]
+		if !hadKind {
+			view.reachability = make(map[ReachabilityField]struct{})
+		}
+		existing := findStableResourceLogical(view.logical, child.token.logicalKey())
+		if existing != nil && !existing.token.samePhysicalIdentity(child.token) {
+			preflightErr = fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, child.token.logicalKey())
+			return false
+		}
+
+		physicalKey := child.token.physicalIdentityKey()
+		var candidates []*stableResourceEntry
+		for kind, other := range nextViews {
+			matches := findStableResourcePhysical(other.physical, physicalKey)
+			if len(matches) == 0 {
+				continue
+			}
+			if kind != child.token.kind || candidates != nil {
+				certified = false
+				return false
+			}
+			candidates = matches
+		}
+		work.PhysicalEntryLookupProbes++
+		switch len(candidates) {
+		case 0:
+			if existing != nil {
+				preflightErr = fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, child.token.logicalKey())
+				return false
+			}
+			view.logical = insertStableResourceLogical(view.logical, child)
+			view.physical = insertStableResourcePhysical(view.physical, child)
+			view.count++
+			distinct[child.token.kind] = append(distinct[child.token.kind], child)
+			work.PhysicalEntryLookupAdmissions++
+		case 1:
+			work.PhysicalEntryLookupComparisons++
+			if existing == nil || candidates[0] != existing {
+				certified = false
+				return false
+			}
+			coalesce, coalesceErr := stableResourcesCoalesce(existing.token, child.token)
+			if coalesceErr != nil {
+				preflightErr = coalesceErr
+				return false
+			}
+			if !coalesce || !existing.token.namespaceCompatible(child.token) || !frontierCompatible(existing.frontier, child.frontier) {
+				preflightErr = fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.token.identityKey())
+				return false
+			}
+			// Representative replacement remains on the exact path because the
+			// canonical token would otherwise move between ownership ropes.
+			if existing.token.namespace == nil && child.token.namespace != nil {
+				certified = false
+				return false
+			}
+			nextEntry := cloneStableResourceEntry(*existing)
+			nextEntry.logicalObligations, preflightErr = nextEntry.logicalObligations.appendCertified(child.logicalObligations.slice(), &work)
+			if preflightErr != nil {
+				return false
+			}
+			nextEntry.frontier = maxFrontier(nextEntry.frontier, child.frontier)
+			mergeStableResourceDescriptorIdentity(&nextEntry, child.logicalLane, child.resourceID, child.diagnosticPath)
+			for field := range child.reachability {
+				nextEntry.reachability[field] = struct{}{}
+			}
+			view.logical = insertStableResourceLogical(view.logical, &nextEntry)
+			view.physical = replaceStableResourcePhysical(view.physical, existing, &nextEntry)
+			collisions++
+		default:
+			certified = false
+			return false
+		}
+		view.reachability = cloneReachabilityUnion(view.reachability, child.reachability)
+		nextViews[child.token.kind] = view
+		return true
+	})
+	if preflightErr != nil {
+		return nil, work, true, preflightErr
+	}
+	if !certified || collisions == 0 {
+		return nil, work, false, nil
+	}
+	plan := &certifiedAppendOnlyPhysicalCoalescePlan{
+		views: nextViews, releaseIncoming: make(map[ResourceKind]stableResourceKindView),
+		staged: make(map[ResourceKind]stableResourceKindView),
+	}
+	// Root concatenation allocates lineage but does not retain or mutate either
+	// input. Mixed roots clone only their distinct delta before the ownership CAS.
+	for kind, child := range incoming {
+		view := plan.views[kind]
+		current, hadTarget := target[kind]
+		if !hadTarget && len(distinct[kind]) != child.count {
+			plan.abandon()
+			return nil, work, true, ErrUnresolvedResource
+		}
+		switch len(distinct[kind]) {
+		case child.count:
+			if hadTarget {
+				view.root = concatOwnedStableResourceEntryNodes(current.root, child.root)
+			} else {
+				view.root = child.root
+			}
+		case 0:
+			view.root = current.root
+			plan.releaseIncoming[kind] = child
+		default:
+			staged, cloneErr := cloneStableResourceEntriesToKindView(distinct[kind])
+			if cloneErr != nil {
+				plan.abandon()
+				return nil, work, true, cloneErr
+			}
+			plan.staged[kind] = staged
+			plan.releaseIncoming[kind] = child
+			for _, original := range distinct[kind] {
+				replacement := findStableResourceLogical(staged.logical, original.token.logicalKey())
+				view.logical = insertStableResourceLogical(view.logical, replacement)
+				view.physical = replaceStableResourcePhysical(view.physical, original, replacement)
+			}
+			view.root = concatOwnedStableResourceEntryNodes(current.root, staged.root)
+			work.CopiedEntries += uint64(len(distinct[kind]))
+			work.PhysicalHandleShares += uint64(len(distinct[kind]))
+		}
+		plan.views[kind] = view
+	}
+	return plan, work, true, nil
+}
+
+func cloneStableResourceEntriesToKindView(entries []*stableResourceEntry) (stableResourceKindView, error) {
+	builder := NewStableResourceSetBuilder()
+	for _, entry := range entries {
+		if err := cloneStableResourceEntryIntoBuilder(builder, entry); err != nil {
+			builder.Abandon()
+			return stableResourceKindView{}, err
+		}
+	}
+	builder.mu.Lock()
+	if err := builder.promoteEntriesToViewsLocked(); err != nil {
+		builder.mu.Unlock()
+		builder.Abandon()
+		return stableResourceKindView{}, err
+	}
+	if len(entries) == 0 || len(builder.kindViews) != 1 {
+		builder.mu.Unlock()
+		builder.Abandon()
+		return stableResourceKindView{}, ErrUnresolvedResource
+	}
+	view, ok := builder.kindViews[entries[0].token.kind]
+	if !ok {
+		builder.mu.Unlock()
+		builder.Abandon()
+		return stableResourceKindView{}, ErrUnresolvedResource
+	}
+	builder.kindViews = nil
+	builder.closed = true
+	builder.mu.Unlock()
+	return view, nil
+}
+
+func cloneReachabilityUnion(left, right map[ReachabilityField]struct{}) map[ReachabilityField]struct{} {
+	result := make(map[ReachabilityField]struct{}, len(left)+len(right))
+	for field := range left {
+		result[field] = struct{}{}
+	}
+	for field := range right {
+		result[field] = struct{}{}
+	}
+	return result
 }
 
 func validateAppendOnlyProducerViews(views map[ResourceKind]stableResourceKindView, mutation StableLogicalObligationMutation) (StableLogicalObligationMutation, StableResourceClosureWork, error) {

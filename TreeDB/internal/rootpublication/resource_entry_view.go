@@ -327,6 +327,34 @@ func insertStableResourcePhysical(root *stableResourcePhysicalIndexNode, entry *
 	return result
 }
 
+// replaceStableResourcePhysical path-copies the one physical-index branch that
+// names old. Certified append-only coalescing keeps the retained rope as the
+// token-owner lineage, so its current entry view must move with the logical
+// index without rebuilding that lineage.
+func replaceStableResourcePhysical(root *stableResourcePhysicalIndexNode, old, replacement *stableResourceEntry) *stableResourcePhysicalIndexNode {
+	if root == nil {
+		return nil
+	}
+	key := old.token.physicalIdentityKey()
+	next := *root
+	if key == root.key {
+		next.entries = append([]*stableResourceEntry(nil), root.entries...)
+		for i, entry := range next.entries {
+			if entry == old {
+				next.entries[i] = replacement
+				return &next
+			}
+		}
+		return root
+	}
+	if stablePhysicalIdentityKeyLess(key, root.key) {
+		next.left = replaceStableResourcePhysical(root.left, old, replacement)
+	} else {
+		next.right = replaceStableResourcePhysical(root.right, old, replacement)
+	}
+	return &next
+}
+
 func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKind]stableResourceKindView, error) {
 	if len(entries) == 0 {
 		return nil, nil
@@ -401,9 +429,30 @@ func stableResourceKindViewCount(views map[ResourceKind]stableResourceKindView) 
 
 func rangeStableResourceKindViews(views map[ResourceKind]stableResourceKindView, visit func(*stableResourceEntry) bool) bool {
 	for _, kind := range stableResourceKindsSorted(views) {
-		if !views[kind].root.rangeEntries(visit) {
+		if !rangeStableResourceLogicalIndex(views[kind].logical, visit) {
 			return false
 		}
+	}
+	return true
+}
+
+// rangeStableResourceLogicalIndex is the authoritative frozen-entry view.
+// Roots retain token ownership; path-copied logical entries may therefore
+// differ from the immutable rope entry after certified append-only coalescing.
+func rangeStableResourceLogicalIndex(root *stableResourceLogicalIndexNode, visit func(*stableResourceEntry) bool) bool {
+	stack := make([]*stableResourceLogicalIndexNode, 0, 8)
+	for root != nil || len(stack) != 0 {
+		for root != nil {
+			stack = append(stack, root)
+			root = root.left
+		}
+		last := len(stack) - 1
+		root = stack[last]
+		stack = stack[:last]
+		if !visit(root.entry) {
+			return false
+		}
+		root = root.right
 	}
 	return true
 }
@@ -463,7 +512,7 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			continue
 		}
 		logical, physical := current.logical, current.physical
-		child.root.rangeEntries(func(entry *stableResourceEntry) bool {
+		rangeStableResourceLogicalIndex(child.logical, func(entry *stableResourceEntry) bool {
 			logical = insertStableResourceLogical(logical, entry)
 			physical = insertStableResourcePhysical(physical, entry)
 			return true
