@@ -138,6 +138,12 @@ func TestValidateAllowsReusedNumericPID(t *testing.T) {
 	m := validManifest()
 	r := validReport(t, m)
 	r.Rows[1].PeakRSSPID = r.Rows[0].PeakRSSPID
+	payloadSHA, err := qualificationReportPayloadSHA256(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReportPayloadSHA256 = payloadSHA
+	r.ManifestSHA256 = manifestHash(t, m)
 	if err := validate(m, r, manifestHash(t, m)); err != nil {
 		t.Fatal(err)
 	}
@@ -262,6 +268,15 @@ func TestVerifyGitProvenanceRejectsRuntimeSubtreeChanges(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnauthenticatedReportPayload(t *testing.T) {
+	m := validManifest()
+	r := validReport(t, m)
+	r.Rows[0].PeakRSSBytes.Value++
+	if err := validate(m, r, manifestHash(t, m)); err == nil || !strings.Contains(err.Error(), "report payload digest") {
+		t.Fatalf("error=%v want report payload digest rejection", err)
+	}
+}
+
 func TestValidateRejectsContractFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -274,6 +289,7 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"non-immutable commit URL", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "immutable URL"},
 		{"missing TreeDB subtree", func(m *manifest, _ *report) { m.TreeDBSubtreeOID = "" }, "treedb_subtree_oid is required"},
 		{"missing harness subtree", func(m *manifest, _ *report) { m.QualificationHarnessSubtreeOID = "" }, "qualification_harness_subtree_oid is required"},
+		{"missing report payload digest", func(m *manifest, _ *report) { m.ReportPayloadSHA256 = "" }, "report_payload_sha256 is required"},
 		{"invalid commit syntax", func(m *manifest, _ *report) {
 			m.Commit = strings.Repeat("A", 40)
 			m.Observed.Commit = m.Commit
@@ -457,8 +473,15 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
 	commit := strings.Repeat("a", 40)
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0, vectorIndexesPresent: true, vectorsEnabledPresent: true}, Acceptance: expectedQualificationAcceptance()}
+	m := manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0, vectorIndexesPresent: true, vectorsEnabledPresent: true}, Acceptance: expectedQualificationAcceptance()}
+	payloadSHA, err := qualificationReportPayloadSHA256(validReportPayload())
+	if err != nil {
+		panic(err)
+	}
+	m.ReportPayloadSHA256 = payloadSHA
+	return m
 }
+
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()
 	b, e := json.Marshal(m)
@@ -468,9 +491,16 @@ func manifestHash(t *testing.T, m manifest) string {
 	x := sha256.Sum256(b)
 	return hex.EncodeToString(x[:])
 }
+
 func validReport(t *testing.T, m manifest) report {
 	t.Helper()
-	r := report{SchemaVersion: contractVersion, ManifestSHA256: manifestHash(t, m)}
+	r := validReportPayload()
+	r.ManifestSHA256 = manifestHash(t, m)
+	return r
+}
+
+func validReportPayload() report {
+	r := report{SchemaVersion: contractVersion}
 	for _, mode := range requiredModes {
 		for _, scale := range requiredScales {
 			n := 1

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"hash"
 	"math"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	contractVersion                            = "treedb_text_ingest_qualification/v3"
+	contractVersion                            = "treedb_text_ingest_qualification/v4"
 	qualificationAnalyzer                      = "simple"
 	qualificationFieldWeights                  = "title=3,body=1"
 	qualificationProbeQuery                    = "refund"
@@ -48,6 +49,7 @@ type manifest struct {
 	QualificationHarnessSubtreeOID string                  `json:"qualification_harness_subtree_oid"`
 	ImplementationPath             string                  `json:"implementation_path"`
 	ImplementationBlobOID          string                  `json:"implementation_blob_oid"`
+	ReportPayloadSHA256            string                  `json:"report_payload_sha256"`
 	Host                           string                  `json:"host"`
 	CacheState                     string                  `json:"cache_state"`
 	Durability                     string                  `json:"durability"`
@@ -248,7 +250,7 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.SchemaVersion != contractVersion || r.SchemaVersion != contractVersion {
 		return fmt.Errorf("schema_version must be %q", contractVersion)
 	}
-	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "commit_url": m.CommitURL, "tree_oid": m.TreeOID, "treedb_subtree_oid": m.TreeDBSubtreeOID, "qualification_harness_subtree_oid": m.QualificationHarnessSubtreeOID, "implementation_path": m.ImplementationPath, "implementation_blob_oid": m.ImplementationBlobOID, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
+	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "commit_url": m.CommitURL, "tree_oid": m.TreeOID, "treedb_subtree_oid": m.TreeDBSubtreeOID, "qualification_harness_subtree_oid": m.QualificationHarnessSubtreeOID, "implementation_path": m.ImplementationPath, "implementation_blob_oid": m.ImplementationBlobOID, "report_payload_sha256": m.ReportPayloadSHA256, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("manifest %s is required", name)
 		}
@@ -269,6 +271,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 		if !isGitOID(value) {
 			return fmt.Errorf("manifest %s must be a 40-character lowercase hexadecimal Git object ID", name)
 		}
+	}
+	if !isLowerHex(m.ReportPayloadSHA256, sha256.Size*2) {
+		return fmt.Errorf("manifest report_payload_sha256 must be a lowercase SHA-256 digest")
 	}
 	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit {
 		return fmt.Errorf("commit_url must be the immutable URL for the manifest commit")
@@ -344,7 +349,24 @@ func validate(m manifest, r report, manifestSHA string) error {
 			return err
 		}
 	}
+	reportPayloadSHA, err := qualificationReportPayloadSHA256(r)
+	if err != nil {
+		return fmt.Errorf("hash report payload: %w", err)
+	}
+	if reportPayloadSHA != m.ReportPayloadSHA256 {
+		return fmt.Errorf("report payload digest does not match manifest")
+	}
 	return nil
+}
+
+func qualificationReportPayloadSHA256(r report) (string, error) {
+	r.ManifestSHA256 = ""
+	payload, err := json.Marshal(r)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func isGitOID(value string) bool {

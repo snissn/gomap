@@ -6,11 +6,12 @@ It accepts no vector/embedding work: `manifest.observed.vectors_enabled` must be
 
 ## Artifact contract
 
-Write immutable `manifest.json` before a run. It binds the deterministic
-fixture and IDs by SHA-256, analyzer and field weights, exact command and
-measured commit/root tree, complete `TreeDB` and qualification-harness subtree
-OIDs, the expected implementation path/blob, host/cache/durability state, and
-the timed boundary. `manifest.observed.vcs_clean` must be `true`. Validation
+Freeze the deterministic fixture and IDs, analyzer and field weights, exact
+command and measured commit/root tree, complete `TreeDB` and qualification
+harness subtree OIDs, expected implementation path/blob, host/cache/durability
+state, and timed boundary before a run. After assembling the exact report, set
+its payload digest in the manifest and then treat both files as immutable.
+`manifest.observed.vcs_clean` must be `true`. Validation
 also rejects staged, unstaged, or untracked changes anywhere under either
 measured runtime subtree. It resolves every measured OID from the manifest
 commit and requires candidate `HEAD` to have byte-identical
@@ -18,10 +19,12 @@ commit and requires candidate `HEAD` to have byte-identical
 an additional narrow check, not the candidate-equivalence boundary; later
 artifact-only commits outside those subtrees may differ.
 
-Use schema `treedb_text_ingest_qualification/v3` for both `manifest.json` and
-`report.json`, and set `manifest_sha256` to the SHA-256 of the exact manifest
-bytes. Rows must cover the complete mode × scale matrix: `indexed_insert`,
-`post_load_backfill`, `source_chunk`, and `maintenance` at each of 10k, 100k,
+Use schema `treedb_text_ingest_qualification/v4` for both `manifest.json` and
+`report.json`. The manifest authenticates the canonical report payload (with
+`manifest_sha256` blank) through `report_payload_sha256`; the report separately
+binds the SHA-256 of the exact manifest bytes. Rows must cover the complete mode
+× scale matrix: `indexed_insert`, `post_load_backfill`, `source_chunk`, and
+`maintenance` at each of 10k, 100k,
 and 1M. Each 10k group has exactly smoke repetition 1; each retained 100k/1M
 group has exactly repetitions 1, 2, and 3. Summaries occur once per
 mode/scale, never in raw rows, and are recomputed from those raw repetitions.

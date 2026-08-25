@@ -486,6 +486,47 @@ func TestIngestChunkedDocumentsRejectsVectorIndexedCollection(t *testing.T) {
 	}
 }
 
+func TestIngestChunkedDocumentsRejectsVectorIndexAddedAfterScan(t *testing.T) {
+	_, d, first := openChunkingTestCollection(t)
+	second, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	cfg := fixedWindowCfg(8, 1)
+	seed, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("vector-race"), Fields: map[string]any{"body": strings.Repeat("original child ", 8)}}},
+		cfg,
+		ChunkedIngestOptions{},
+	)
+	if err != nil || len(seed) != 1 || len(seed[0].ChildIDs) == 0 {
+		t.Fatalf("seed batch=%+v err=%v", seed, err)
+	}
+
+	var once sync.Once
+	var vectorErr error
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		once.Do(func() {
+			_, vectorErr = second.CreateVectorIndex(VectorIndexDefinition{
+				Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
+			})
+		})
+	}}
+	_, err = first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("vector-race"), Fields: map[string]any{"body": "replacement"}}},
+		cfg,
+		ChunkedIngestOptions{hooks: hooks},
+	)
+	if vectorErr != nil {
+		t.Fatalf("create concurrent vector index: %v", vectorErr)
+	}
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("replacement error=%v, want text-only vector rejection", err)
+	}
+	if got, err := first.Get(seed[0].ChildIDs[0]); err != nil || got == nil {
+		t.Fatalf("original child changed before vector rejection: %s err=%v", got, err)
+	}
+}
+
 func TestIngestChunkedDocumentCopiesMetadataWithoutLinkageOverride(t *testing.T) {
 	_, _, col := openChunkingTestCollection(t)
 	meta := map[string]any{

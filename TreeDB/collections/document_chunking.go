@@ -17,6 +17,8 @@ import (
 // chunkingScanMaxDocuments is the fail-closed cap for one parent# prefix.
 const chunkingScanMaxDocuments = math.MaxInt32
 
+var errBatchChunkIngestVectorIndexed = errors.New("collections: batch chunk ingest is text-only and does not support vector-indexed collections")
+
 // ChunkedIngestOptions tunes IngestChunkedDocument.
 type ChunkedIngestOptions struct {
 	// TextField names the parent document field holding the text to chunk.
@@ -395,7 +397,7 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, errCollectionNotFound
 	}
 	if len(catalog.meta.VectorIndexes) > 0 {
-		return nil, fmt.Errorf("collections: batch chunk ingest is text-only and does not support vector-indexed collections")
+		return nil, errBatchChunkIngestVectorIndexed
 	}
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
@@ -455,6 +457,9 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 	for attempt := range maxCollectionMutationRetries {
 		attemptReplaced := make([]int, len(plans))
 		deletePlanner := func(snap *backenddb.Snapshot, catalog *collectionCatalog) ([][]byte, error) {
+			if len(catalog.meta.VectorIndexes) > 0 {
+				return nil, errBatchChunkIngestVectorIndexed
+			}
 			attemptDeleteIDs := make([][]byte, 0, len(plans)*2)
 			for i, plan := range plans {
 				oldChildren, _, err := c.chunkChildrenAtSnapshot(plan.parentID, snap, catalog)
