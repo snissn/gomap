@@ -483,42 +483,55 @@ func TestAllocationProfilesRequireStartupExactRate4327(t *testing.T) {
 	}
 }
 
-func TestAllocationProfilesWriteBaselineAndAfter4327(t *testing.T) {
+func TestAllocationProfileWritesCumulativeOutputAndStopsIdempotently4327(t *testing.T) {
 	dir := t.TempDir()
-	after := filepath.Join(dir, "profiles", "allocs.pprof")
-	stop, err := startQueryProfilesAtMemProfileRate(config{allocProfile: after, allocProfileBase: after + ".base"}, 1)
+	alloc := filepath.Join(dir, "profiles", "allocs.pprof")
+	stop, err := startQueryProfilesAtMemProfileRate(config{allocProfile: alloc}, 1)
 	if err != nil {
-		t.Fatalf("start allocation profiles: %v", err)
-	}
-	if _, err := os.Stat(after + ".base"); err != nil {
-		t.Fatalf("missing allocation baseline: %v", err)
+		t.Fatalf("start allocation profile: %v", err)
 	}
 	if err := stop(); err != nil {
-		t.Fatalf("stop allocation profiles: %v", err)
+		t.Fatalf("stop allocation profile: %v", err)
 	}
 	if err := stop(); err != nil {
-		t.Fatalf("second stop allocation profiles: %v", err)
+		t.Fatalf("second stop allocation profile: %v", err)
 	}
-	for _, path := range []string{after + ".base", after} {
-		info, err := os.Stat(path)
-		if err != nil || info.Size() == 0 {
-			t.Fatalf("profile %q info=%v err=%v", path, info, err)
-		}
+	info, err := os.Stat(alloc)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("profile %q info=%v err=%v", alloc, info, err)
 	}
 }
 
-func TestGeneratedAllocationBaselinePathCollisions4327(t *testing.T) {
+func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 	root := t.TempDir()
 	outDir := filepath.Join(root, "out")
-	alloc := filepath.Join(root, "profiles", "allocs.pprof")
-	_, err := parseFlags([]string{
+	alloc := filepath.Join(root, "allocs.pprof")
+	cmd := exec.Command("go", "run", ".",
 		"-out-dir", outDir,
-		"-query-rows", queryRowHybridTextScalar,
-		"-cpu-profile", alloc + ".base",
-		"-alloc-profile", alloc,
-	})
-	if err == nil || !strings.Contains(err.Error(), "generated -alloc-profile baseline") || !strings.Contains(err.Error(), "must not resolve to the same path") {
-		t.Fatalf("generated baseline collision error=%v", err)
+		"-rows", "96", "-batch-size", "48", "-dims", "4", "-m", "4",
+		"-ef-construction", "32", "-ef-search", "32", "-top-k", "5", "-candidate-limit", "16", "-queries", "3", "-readers", "2",
+		"-include-vector=false", "-phases=retrieval", "-run-reopen=false",
+		"-query-rows", queryRowHybridTextScalar, "-alloc-profile", alloc,
+	)
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GODEBUG=memprofilerate=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("small allocation-profile CLI smoke: %v\n%s", err, output)
+	}
+	info, err := os.Stat(alloc)
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("allocation profile %q info=%v err=%v", alloc, info, err)
+	}
+	pprof := exec.Command("go", "tool", "pprof", "-top", "-focus=main.runProfiledHybridSamples", alloc)
+	output, err := pprof.CombinedOutput()
+	if err != nil {
+		t.Fatalf("focused allocation profile: %v\n%s", err, output)
+	}
+	top := string(output)
+	if !strings.Contains(top, "SearchHybrid") {
+		t.Fatalf("focused profile lacks timed hybrid query path:\n%s", top)
+	}
+	if strings.Contains(top, "loadPrimaryFixture") || strings.Contains(top, "makeScaleBatch") {
+		t.Fatalf("focused profile retained fixture construction:\n%s", top)
 	}
 }
 
