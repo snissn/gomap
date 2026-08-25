@@ -2,11 +2,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -50,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 	var manifest manifest
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+	if err := decodeStrictJSON(manifestBytes, &manifest); err != nil {
 		fmt.Fprintf(os.Stderr, "decode manifest: %v\n", err)
 		os.Exit(1)
 	}
@@ -60,7 +62,7 @@ func main() {
 		os.Exit(1)
 	}
 	var report report
-	if err := json.Unmarshal(reportBytes, &report); err != nil {
+	if err := decodeStrictJSON(reportBytes, &report); err != nil {
 		fmt.Fprintf(os.Stderr, "decode report: %v\n", err)
 		os.Exit(1)
 	}
@@ -70,4 +72,19 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("valid pure-text qualification artifact")
+}
+
+func decodeStrictJSON(data []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return fmt.Errorf("trailing JSON: %w", err)
+	}
+	return nil
 }

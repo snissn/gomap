@@ -17,6 +17,24 @@ func TestValidateCompleteMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestDecodeStrictJSONRejectsUnknownAndTrailingValues(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "unknown field", raw: `{"vectors":true}`, want: "unknown field"},
+		{name: "second value", raw: `{} {}`, want: "multiple JSON values"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var m manifest
+			if err := decodeStrictJSON([]byte(tc.raw), &m); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("decodeStrictJSON error=%v want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateAllowsReusedNumericPID(t *testing.T) {
 	m := validManifest()
 	r := validReport(t, m)
