@@ -126,7 +126,9 @@ rm -rf /tmp/gomap_text_hybrid_scale_1m_YYYYmmdd_HHMMSS
 ## Artifacts and schema
 
 `cmd/treedb_text_hybrid_scale` writes schema
-`treedb_text_hybrid_scale/v1`.
+`treedb_text_hybrid_scale/v2`. Version 2 adds selected/completed phase state,
+atomic partial-report evidence, raw query latency samples, and invocation/VCS
+provenance.
 
 Primary artifacts:
 
@@ -138,6 +140,9 @@ Primary artifacts:
 - `$RUN_DIR/scale_*/scale_report.md` — human-readable report.
 - `$RUN_DIR/10m_selected_matrix_commands.md` — reproducible gated 10M commands.
 - `$RUN_DIR/go_bench_*/*.txt` — optional `go test -benchmem` output.
+- `context.command` — labeled `process_argv`; under `go run` its first element
+  is Go's temporary executable, so use the wrapper's `command.txt` as the
+  reproducible caller command.
 
 The JSON/Markdown report includes:
 
