@@ -132,7 +132,7 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		}
 	}
 	fixtureSHA, idsSHA := qualificationIdentity(scale)
-	def := collections.TextIndexDefinition{Name: "lexical", Version: collections.TextIndexVersionV2, Fields: []collections.TextIndexField{{Field: "title", Weight: 3}, {Field: "body"}}}
+	def := collections.TextIndexDefinition{Name: "lexical", Version: collections.TextIndexVersionV2, Analyzer: collections.TextAnalyzer(qualificationAnalyzer), Fields: []collections.TextIndexField{{Field: "title", Weight: qualificationTitleWeight}, {Field: "body", Weight: qualificationBodyWeight}}}
 
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)

@@ -28,8 +28,8 @@ transient DBs are retained.
 The measurements were produced at the clean, immutable commit
 [`0679eb28135a731d9699311b36364d1c9b27db71`](https://github.com/snissn/gomap/commit/0679eb28135a731d9699311b36364d1c9b27db71),
 tree `876ea6c3f9e213cf178448cd242212e208d5c7e2`. Its production
-`TreeDB/collections/document_ingestion.go` blob is
-`fd1479260b78a6c80c39f890be8197a24aa1f34a`, identical to the reviewed
+`TreeDB/collections/document_chunking.go` blob is
+`76697734b60a5086d7d186088c0321a510b4909c`, identical to the reviewed
 candidate. Later commits only strengthened the evidence validator and added
 derived fixture identities to the retained JSON; they did not alter measured
 values or relabel the generating commit. `SHA256SUMS` binds the final retained

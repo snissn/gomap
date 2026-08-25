@@ -12,7 +12,14 @@ import (
 	"sync"
 )
 
-const contractVersion = "treedb_text_ingest_qualification/v2"
+const (
+	contractVersion                 = "treedb_text_ingest_qualification/v2"
+	qualificationAnalyzer           = "simple"
+	qualificationFieldWeights       = "title=3,body=1"
+	qualificationTitleWeight        = 3.0
+	qualificationBodyWeight         = 1.0
+	qualificationImplementationPath = "TreeDB/collections/document_chunking.go"
+)
 
 var requiredModes = []string{"indexed_insert", "post_load_backfill", "source_chunk", "maintenance"}
 var requiredScales = []int{10_000, 100_000, 1_000_000}
@@ -144,13 +151,16 @@ func validate(m manifest, r report, manifestSHA string) error {
 			return fmt.Errorf("manifest %s is required", name)
 		}
 	}
+	if m.Analyzer != qualificationAnalyzer || m.FieldWeights != qualificationFieldWeights {
+		return fmt.Errorf("manifest analyzer and field_weights must match the producer")
+	}
 	if !m.Observed.VCSClean || m.Observed.VectorsEnabled || m.Observed.VectorIndexes != 0 {
 		return fmt.Errorf("observed product identity requires clean VCS and vectors disabled with zero vector indexes")
 	}
 	if m.Observed.Commit != m.Commit || m.Observed.Durability != m.Durability {
 		return fmt.Errorf("observed product identity disagrees with manifest")
 	}
-	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit || !validHexOID(m.Commit, 20) || !validHexOID(m.TreeOID, 20) || !validHexOID(m.ImplementationBlobOID, 20) {
+	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit || !validHexOID(m.Commit, 20) || !validHexOID(m.TreeOID, 20) || m.ImplementationPath != qualificationImplementationPath || !validHexOID(m.ImplementationBlobOID, 20) {
 		return fmt.Errorf("measured revision requires a verifiable commit URL and Git object identities")
 	}
 	wantFixtureSHA, wantIDsSHA := qualificationManifestIdentity()
