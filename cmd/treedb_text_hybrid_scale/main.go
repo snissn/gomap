@@ -1058,7 +1058,7 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 				lat := summarizeLatency(durations)
 				stats := got.Stats
 				guard = hybridFailureGuard(name, got.Stats, err)
-				return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(got.Results), Latency: lat, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
+				return queryReport{Name: name, Modality: "hybrid", QueryShape: shape, Boundary: "warm no-document hybrid candidate generation/fusion", Rows: cfg.rows, TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(got.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS), HybridStats: &stats, GuardrailOK: false, GuardrailFailure: guard.Failure}, guard, nil
 			}
 			return queryReport{}, guardrailResult{}, fmt.Errorf("%s query %d: %w", name, i, err)
 		}
