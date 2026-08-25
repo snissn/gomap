@@ -5184,6 +5184,32 @@ func TestNativeRuntimeSearchVisibilityTokenValidatesBoundedDocumentReadView(t *t
 		updated.visibility.sourceDocumentGeneration == inserted.visibility.sourceDocumentGeneration {
 		t.Fatalf("update visibility token did not change: inserted=%+v updated=%+v", inserted.visibility, updated.visibility)
 	}
+	runtime := updated.visibility.runtime
+	runtime.mu.Lock()
+	runtime.markGraphChangedLocked()
+	runtime.publishSearchViewLocked(false)
+	runtime.mu.Unlock()
+	if stale, err := col.OpenCollectionReadViewForVectorIndexSearch(updated); stale != nil || !errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+		if stale != nil {
+			_ = stale.Close()
+		}
+		t.Fatalf("stale graph publication read view=%v err=%v want snapshot mismatch", stale, err)
+	}
+	republished, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		t.Fatalf("republished SearchVectorIndexWithBuffer: %v", err)
+	}
+	if republished.visibility.mutationSeq == updated.visibility.mutationSeq ||
+		republished.visibility.sourceDocumentGeneration != updated.visibility.sourceDocumentGeneration {
+		t.Fatalf("graph-only publication identity did not isolate mutation sequence: updated=%+v republished=%+v", updated.visibility, republished.visibility)
+	}
+	view, err = col.OpenCollectionReadViewForVectorIndexSearch(republished)
+	if err != nil {
+		t.Fatalf("republished OpenCollectionReadViewForVectorIndexSearch: %v", err)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("close republished read view: %v", err)
+	}
 	if deleted, err := col.DeleteBatch([][]byte{[]byte("b")}); err != nil || deleted != 1 {
 		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
 	}
@@ -5191,9 +5217,9 @@ func TestNativeRuntimeSearchVisibilityTokenValidatesBoundedDocumentReadView(t *t
 	if err != nil {
 		t.Fatalf("deleted SearchVectorIndexWithBuffer: %v", err)
 	}
-	if afterDelete.visibility.mutationSeq == updated.visibility.mutationSeq ||
-		afterDelete.visibility.sourceDocumentGeneration == updated.visibility.sourceDocumentGeneration {
-		t.Fatalf("delete visibility token did not change: updated=%+v deleted=%+v", updated.visibility, afterDelete.visibility)
+	if afterDelete.visibility.mutationSeq == republished.visibility.mutationSeq ||
+		afterDelete.visibility.sourceDocumentGeneration == republished.visibility.sourceDocumentGeneration {
+		t.Fatalf("delete visibility token did not change: republished=%+v deleted=%+v", republished.visibility, afterDelete.visibility)
 	}
 }
 
