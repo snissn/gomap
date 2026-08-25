@@ -764,6 +764,14 @@ func (token *StableResourceToken) physicalIdentityKey() stablePhysicalIdentityKe
 	}
 }
 
+func (token *StableResourceToken) physicalCoalescingKey() stablePhysicalResourceKey {
+	key := token.mutablePhysicalKey()
+	if token.stability == ResourceImmutable {
+		key.kind = ""
+	}
+	return key
+}
+
 func (token *StableResourceToken) mutablePhysicalKey() stablePhysicalResourceKey {
 	return stablePhysicalResourceKey{
 		kind: token.kind, platform: token.identity.Platform, volumeID: token.identity.VolumeID,

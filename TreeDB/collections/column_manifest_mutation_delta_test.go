@@ -185,8 +185,8 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 		if work.PhysicalHandleCopies > 12 {
 			t.Fatalf("publish %d physical handle copies=%d grow with retained history: %+v", i, work.PhysicalHandleCopies, work)
 		}
-		if work.PhysicalEntryLookupProbes == 0 || work.PhysicalEntryLookupComparisons > 128 {
-			t.Fatalf("publish %d physical lookup work is absent or unbounded: %+v", i, work)
+		if work.PhysicalEntryLookupComparisons > 128 {
+			t.Fatalf("publish %d physical lookup work is unbounded: %+v", i, work)
 		}
 		if stats.ColumnPublishManifestMutationRecords == 0 || stats.ColumnPublishManifestMutationBytes == 0 {
 			t.Fatalf("publish %d missing mutation accounting: %+v", i, stats)

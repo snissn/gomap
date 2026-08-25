@@ -489,17 +489,25 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 // an ordered slice so deterministic publication and ownership behavior stay
 // unchanged.
 type stableResourceEntryLookup struct {
-	logical            map[stableLogicalResourceKey]int
-	physical           map[stablePhysicalIdentityKey]int
-	physicalCollisions map[stablePhysicalIdentityKey][]int
+	logical map[stableLogicalResourceKey]int
+	// physical selects the sole coalescing candidate; physicalIdentity retains
+	// cross-generation stability and immutable-digest conflict metadata.
+	physical         map[stablePhysicalResourceKey]int
+	physicalIdentity map[stablePhysicalIdentityKey]stablePhysicalIdentityMetadata
+}
+
+type stablePhysicalIdentityMetadata struct {
+	stability ResourceStability
+	digest    [32]byte
 }
 
 const stableResourceEntryLinearLookupLimit = 16
 
 func newStableResourceEntryLookup(entries []stableResourceEntry) stableResourceEntryLookup {
 	lookup := stableResourceEntryLookup{
-		logical:  make(map[stableLogicalResourceKey]int, len(entries)),
-		physical: make(map[stablePhysicalIdentityKey]int, len(entries)),
+		logical:          make(map[stableLogicalResourceKey]int, len(entries)),
+		physical:         make(map[stablePhysicalResourceKey]int, len(entries)),
+		physicalIdentity: make(map[stablePhysicalIdentityKey]stablePhysicalIdentityMetadata, len(entries)),
 	}
 	for i := range entries {
 		lookup.add(entries[i], i)
@@ -509,34 +517,30 @@ func newStableResourceEntryLookup(entries []stableResourceEntry) stableResourceE
 
 func (lookup *stableResourceEntryLookup) add(entry stableResourceEntry, index int) {
 	lookup.logical[entry.token.logicalKey()] = index
-	key := entry.token.physicalIdentityKey()
-	position := index + 1
-	if existing := lookup.physical[key]; existing == 0 {
-		lookup.physical[key] = position
-		return
-	} else if existing > 0 {
-		if lookup.physicalCollisions == nil {
-			lookup.physicalCollisions = make(map[stablePhysicalIdentityKey][]int)
+	identityKey := entry.token.physicalIdentityKey()
+	if _, ok := lookup.physicalIdentity[identityKey]; !ok {
+		lookup.physicalIdentity[identityKey] = stablePhysicalIdentityMetadata{
+			stability: entry.token.stability,
+			digest:    entry.token.digest,
 		}
-		lookup.physicalCollisions[key] = []int{existing, position}
-		lookup.physical[key] = -1
-		return
 	}
-	lookup.physicalCollisions[key] = append(lookup.physicalCollisions[key], position)
+	lookup.physical[entry.token.physicalCoalescingKey()] = index + 1
 }
 
 type stableResourceEntryLookupIterator struct {
-	single     int
-	collisions []int
-	next       int
+	single int
 }
 
-func (lookup *stableResourceEntryLookup) physicalIterator(token *StableResourceToken) stableResourceEntryLookupIterator {
-	position := lookup.physical[token.physicalIdentityKey()]
-	if position > 0 {
-		return stableResourceEntryLookupIterator{single: position}
+func (lookup *stableResourceEntryLookup) physicalIterator(token *StableResourceToken) (stableResourceEntryLookupIterator, error) {
+	if metadata, ok := lookup.physicalIdentity[token.physicalIdentityKey()]; ok {
+		if metadata.stability != token.stability {
+			return stableResourceEntryLookupIterator{}, fmt.Errorf("%w: physical identity has conflicting stability policy", ErrResourceConflict)
+		}
+		if token.stability == ResourceImmutable && metadata.digest != token.digest {
+			return stableResourceEntryLookupIterator{}, fmt.Errorf("%w: immutable physical identity has conflicting content digest", ErrResourceConflict)
+		}
 	}
-	return stableResourceEntryLookupIterator{collisions: lookup.physicalCollisions[token.physicalIdentityKey()]}
+	return stableResourceEntryLookupIterator{single: lookup.physical[token.physicalCoalescingKey()]}, nil
 }
 
 func (iterator *stableResourceEntryLookupIterator) Next() (int, bool) {
@@ -545,12 +549,7 @@ func (iterator *stableResourceEntryLookupIterator) Next() (int, bool) {
 		iterator.single = 0
 		return position - 1, true
 	}
-	if iterator.next == len(iterator.collisions) {
-		return 0, false
-	}
-	position := iterator.collisions[iterator.next]
-	iterator.next++
-	return position - 1, true
+	return 0, false
 }
 
 func (lookup *stableResourceEntryLookup) replaceRepresentative(index int, old, replacement *StableResourceToken) {
@@ -807,7 +806,11 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
 		}
 	}
-	for iterator := lookup.physicalIterator(token); ; {
+	iterator, err := lookup.physicalIterator(token)
+	if err != nil {
+		return err
+	}
+	for {
 		i, ok := iterator.Next()
 		if !ok {
 			break
@@ -912,7 +915,11 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 			return fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, logicalKey)
 		}
 	}
-	for iterator := lookup.physicalIterator(incoming.token); ; {
+	iterator, err := lookup.physicalIterator(incoming.token)
+	if err != nil {
+		return err
+	}
+	for {
 		i, ok := iterator.Next()
 		if !ok {
 			break
@@ -1242,7 +1249,12 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		if err != nil {
 			break
 		}
-		for iterator := lookup.physicalIterator(incoming.token); ; {
+		iterator, iteratorErr := lookup.physicalIterator(incoming.token)
+		if iteratorErr != nil {
+			err = iteratorErr
+			break
+		}
+		for {
 			i, ok := iterator.Next()
 			if !ok {
 				break
