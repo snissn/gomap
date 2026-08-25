@@ -209,6 +209,9 @@ func validateRow(r row) error {
 		if err := validateMetric(v); err != nil {
 			return fmt.Errorf("%s stage: %w", name, err)
 		}
+		if v.State == "observed" && v.Value <= 0 {
+			return fmt.Errorf("%s stage must not use a zero placeholder", name)
+		}
 	}
 	for _, v := range []metric{r.CPUSeconds, r.BytesPerOp, r.AllocsPerOp, r.PeakRSSBytes} {
 		if err := validateMetric(v); err != nil {

@@ -25,6 +25,7 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"missing matrix", func(_ *manifest, r *report) { r.Rows = r.Rows[1:] }, "missing required mode/scale"},
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
+		{"zero stage placeholder", func(_ *manifest, r *report) { r.Rows[0].Stages["value_log"] = metric{State: "observed"} }, "zero placeholder"},
 		{"storage overlap", func(_ *manifest, r *report) { r.Rows[0].Storage.TotalBytes++ }, "storage total"},
 		{"maintenance count semantics", func(_ *manifest, r *report) {
 			for i := range r.Rows {
