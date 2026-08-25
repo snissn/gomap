@@ -1,6 +1,6 @@
 # #4327 current-main 100k retrieval qualification
 
-Three serialized, complete bounded retrieval-only repetitions. Each has 100,000 rows, 25 warm samples per row, candidate limit 65,536, exact harness commit `34df61e5d4a67ac570061c6c8059a78e03090efd`, base `6b07740e25bf663b2df3594ed74532601c23ac96`, and Go 1.26.0. `SHA256SUMS` covers raw JSON, reports, commands, logs, and context.
+Three serialized, complete bounded retrieval-only repetitions. Each has 100,000 rows, 25 warm samples per row, candidate limit 65,536, exact harness commit `afa5290556ec9a89f2aaed256fb631b36d4fd635`, base `6b07740e25bf663b2df3594ed74532601c23ac96`, and Go 1.26.0. `SHA256SUMS` covers raw JSON, reports, commands, logs, and context.
 
 | row | median p50 (ms) | median p95 (ms) | median p99 (ms) |
 | --- | ---: | ---: | ---: |

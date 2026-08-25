@@ -273,8 +273,60 @@ func TestQueryRowFlagContracts4327(t *testing.T) {
 			if !cfg.queryRows[tc.wantQuery] || len(cfg.queryRows) != 1 {
 				t.Fatalf("queryRows=%v want only %q", cfg.queryRows, tc.wantQuery)
 			}
-			if cfg.cpuProfile != tc.wantCPU || cfg.allocProfile != tc.wantAllocs {
-				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantAllocs)
+			wantCPU, err := filepath.Abs(tc.wantCPU)
+			if err != nil {
+				t.Fatalf("resolve expected CPU profile: %v", err)
+			}
+			wantAllocs, err := filepath.Abs(tc.wantAllocs)
+			if err != nil {
+				t.Fatalf("resolve expected allocation profile: %v", err)
+			}
+			if tc.wantCPU == "" {
+				wantCPU = ""
+			}
+			if tc.wantAllocs == "" {
+				wantAllocs = ""
+			}
+			if cfg.cpuProfile != wantCPU || cfg.allocProfile != wantAllocs {
+				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, wantCPU, wantAllocs)
+			}
+		})
+	}
+}
+
+func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
+	root := t.TempDir()
+	outDir := filepath.Join(root, "out")
+	customDBDir := filepath.Join(root, "custom_db")
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+		wantCPU string
+		wantMem string
+	}{
+		{name: "JSON report collision", args: []string{"-cpu-profile", filepath.Join(outDir, "scale_report.json")}, wantErr: "must not resolve to a scale report artifact"},
+		{name: "Markdown report collision", args: []string{"-alloc-profile", filepath.Join(outDir, "scale_report.md")}, wantErr: "must not resolve to a scale report artifact"},
+		{name: "default DB descendant", args: []string{"-cpu-profile", filepath.Join(outDir, "primary_db", "profiles", "cpu.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
+		{name: "custom DB descendant", args: []string{"-db-dir", customDBDir, "-alloc-profile", filepath.Join(customDBDir, "profiles", "allocs.pprof")}, wantErr: "must not resolve to the effective -db-dir or its descendant"},
+		{name: "distinct profiles under output directory", args: []string{"-cpu-profile", filepath.Join(outDir, "profiles", "cpu.pprof"), "-alloc-profile", filepath.Join(outDir, "profiles", "allocs.pprof")}, wantCPU: filepath.Join(outDir, "profiles", "cpu.pprof"), wantMem: filepath.Join(outDir, "profiles", "allocs.pprof")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"-out-dir", outDir, "-query-rows", queryRowHybridTextScalar}
+			args = append(args, tc.args...)
+			cfg, err := parseFlags(args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseFlags error=%v want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
+			}
+			if cfg.cpuProfile != tc.wantCPU || cfg.allocProfile != tc.wantMem {
+				t.Fatalf("profiles cpu=%q allocs=%q want cpu=%q allocs=%q", cfg.cpuProfile, cfg.allocProfile, tc.wantCPU, tc.wantMem)
 			}
 		})
 	}
