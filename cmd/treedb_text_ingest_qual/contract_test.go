@@ -35,6 +35,7 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"vectors", func(m *manifest, _ *report) { m.Observed.VectorsEnabled = true }, "vectors disabled"},
 		{"stale fixture manifest", func(m *manifest, _ *report) { m.FixtureSHA256 = "stale" }, "qualification generator"},
 		{"row fixture drift", func(_ *manifest, r *report) { r.Rows[0].IDsSHA256 = "stale" }, "fixture identity"},
+		{"unverifiable measured revision", func(m *manifest, _ *report) { m.CommitURL = "https://example.invalid" }, "verifiable commit URL"},
 		{"missing matrix", func(_ *manifest, r *report) { r.Rows = r.Rows[1:] }, "missing required mode/scale"},
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
@@ -173,7 +174,8 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
-	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: "simple", FieldWeights: "title=3,body=1", IDsSHA256: idsSHA, Command: "go run", Commit: "abcdef", Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: "abcdef", Durability: "wal_on", VectorIndexes: 0}}
+	commit := strings.Repeat("a", 40)
+	return manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: "simple", FieldWeights: "title=3,body=1", IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), ImplementationPath: "TreeDB/collections/document_ingestion.go", ImplementationBlobOID: strings.Repeat("c", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0}}
 }
 func manifestHash(t *testing.T, m manifest) string {
 	t.Helper()

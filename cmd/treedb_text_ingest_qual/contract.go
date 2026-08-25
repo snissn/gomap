@@ -18,18 +18,22 @@ var requiredModes = []string{"indexed_insert", "post_load_backfill", "source_chu
 var requiredScales = []int{10_000, 100_000, 1_000_000}
 
 type manifest struct {
-	SchemaVersion string           `json:"schema_version"`
-	FixtureSHA256 string           `json:"fixture_sha256"`
-	Analyzer      string           `json:"analyzer"`
-	FieldWeights  string           `json:"field_weights"`
-	IDsSHA256     string           `json:"ids_sha256"`
-	Command       string           `json:"command"`
-	Commit        string           `json:"commit"`
-	Host          string           `json:"host"`
-	CacheState    string           `json:"cache_state"`
-	Durability    string           `json:"durability"`
-	TimedBoundary string           `json:"timed_boundary"`
-	Observed      observedIdentity `json:"observed"`
+	SchemaVersion         string           `json:"schema_version"`
+	FixtureSHA256         string           `json:"fixture_sha256"`
+	Analyzer              string           `json:"analyzer"`
+	FieldWeights          string           `json:"field_weights"`
+	IDsSHA256             string           `json:"ids_sha256"`
+	Command               string           `json:"command"`
+	Commit                string           `json:"commit"`
+	CommitURL             string           `json:"commit_url"`
+	TreeOID               string           `json:"tree_oid"`
+	ImplementationPath    string           `json:"implementation_path"`
+	ImplementationBlobOID string           `json:"implementation_blob_oid"`
+	Host                  string           `json:"host"`
+	CacheState            string           `json:"cache_state"`
+	Durability            string           `json:"durability"`
+	TimedBoundary         string           `json:"timed_boundary"`
+	Observed              observedIdentity `json:"observed"`
 }
 
 type observedIdentity struct {
@@ -135,7 +139,7 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.SchemaVersion != contractVersion || r.SchemaVersion != contractVersion {
 		return fmt.Errorf("schema_version must be %q", contractVersion)
 	}
-	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
+	for name, value := range map[string]string{"fixture_sha256": m.FixtureSHA256, "analyzer": m.Analyzer, "field_weights": m.FieldWeights, "ids_sha256": m.IDsSHA256, "command": m.Command, "commit": m.Commit, "commit_url": m.CommitURL, "tree_oid": m.TreeOID, "implementation_path": m.ImplementationPath, "implementation_blob_oid": m.ImplementationBlobOID, "host": m.Host, "cache_state": m.CacheState, "durability": m.Durability, "timed_boundary": m.TimedBoundary, "observed.commit": m.Observed.Commit, "observed.durability": m.Observed.Durability} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("manifest %s is required", name)
 		}
@@ -145,6 +149,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 	}
 	if m.Observed.Commit != m.Commit || m.Observed.Durability != m.Durability {
 		return fmt.Errorf("observed product identity disagrees with manifest")
+	}
+	if m.CommitURL != "https://github.com/snissn/gomap/commit/"+m.Commit || !validHexOID(m.Commit, 20) || !validHexOID(m.TreeOID, 20) || !validHexOID(m.ImplementationBlobOID, 20) {
+		return fmt.Errorf("measured revision requires a verifiable commit URL and Git object identities")
 	}
 	wantFixtureSHA, wantIDsSHA := qualificationManifestIdentity()
 	if m.FixtureSHA256 != wantFixtureSHA || m.IDsSHA256 != wantIDsSHA {
@@ -209,6 +216,11 @@ func validate(m manifest, r report, manifestSHA string) error {
 		}
 	}
 	return nil
+}
+
+func validHexOID(value string, bytes int) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == bytes
 }
 
 func qualificationManifestIdentity() (string, string) {

@@ -16,5 +16,9 @@
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false
-  }
+  },
+  "commit_url": "https://github.com/snissn/gomap/commit/0679eb28135a731d9699311b36364d1c9b27db71",
+  "tree_oid": "876ea6c3f9e213cf178448cd242212e208d5c7e2",
+  "implementation_path": "TreeDB/collections/document_ingestion.go",
+  "implementation_blob_oid": "fd1479260b78a6c80c39f890be8197a24aa1f34a"
 }

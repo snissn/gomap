@@ -1,6 +1,6 @@
 {
   "schema_version": "treedb_text_ingest_qualification/v2",
-  "manifest_sha256": "684b7d53b660490dd039383a01b8be003c064512bd9fefc03b1c735deb1e2223",
+  "manifest_sha256": "a9f548da2eeb14028a9b9d59c8bbe4b54b20e99d2adbc8b694a0e5a75f1b56a0",
   "rows": [
     {
       "mode": "indexed_insert",
