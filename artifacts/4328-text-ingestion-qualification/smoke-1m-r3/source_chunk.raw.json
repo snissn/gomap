@@ -1,7 +1,9 @@
 {
   "mode": "source_chunk",
   "scale": 1000000,
-  "repetition": 1,
+  "repetition": 3,
+  "peak_rss_scope": "fresh_process_per_mode",
+  "peak_rss_pid": 22674,
   "source_documents": 1000000,
   "generated_chunks": 3000000,
   "indexed_live_rows": 4000000,
@@ -15,13 +17,13 @@
   "generations": 3908,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 980.3735187126588,
-  "chunks_per_second": 2941.120556137976,
-  "indexed_rows_per_second": 3921.494074850635,
-  "wall_seconds": 1020.0193915,
+  "source_docs_per_second": 1033.1754313352292,
+  "chunks_per_second": 3099.5262940056878,
+  "indexed_rows_per_second": 4132.701725340917,
+  "wall_seconds": 967.889837167,
   "cpu_seconds": {
     "state": "observed",
-    "value": 1083.0351400000002
+    "value": 1036.368533
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -33,11 +35,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 476917956
+    "value": 476916549
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 4219125760
+    "value": 4231299072
   },
   "stages": {
     "analyzer": {
@@ -46,7 +48,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.057114125
+      "value": 0.040394667
     },
     "posting_builder": {
       "state": "unavailable",
@@ -54,7 +56,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 1.727808291
+      "value": 1.8492415
     },
     "root_mutation": {
       "state": "unavailable",
@@ -66,12 +68,12 @@
     }
   },
   "storage": {
-    "physical_index_page_bytes": 7766016000,
+    "physical_index_page_bytes": 7853572096,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 373,
-    "physical_total_bytes": 7766016373,
-    "physical_total_wal_excluded_bytes": 7766016373,
+    "physical_other_bytes": 374,
+    "physical_total_bytes": 7853572470,
+    "physical_total_wal_excluded_bytes": 7853572470,
     "other_paths": [
       "LOCK",
       "format.json",

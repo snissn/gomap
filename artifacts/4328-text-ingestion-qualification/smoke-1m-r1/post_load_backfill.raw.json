@@ -2,6 +2,8 @@
   "mode": "post_load_backfill",
   "scale": 1000000,
   "repetition": 1,
+  "peak_rss_scope": "fresh_process_per_mode",
+  "peak_rss_pid": 18645,
   "source_documents": 1000000,
   "generated_chunks": 0,
   "indexed_live_rows": 1000000,
@@ -15,13 +17,13 @@
   "generations": 1,
   "stale_debt": 0,
   "tombstone_debt": 0,
-  "source_docs_per_second": 122159.16695039599,
+  "source_docs_per_second": 119438.26927856462,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 122159.16695039599,
-  "wall_seconds": 8.186041416,
+  "indexed_rows_per_second": 119438.26927856462,
+  "wall_seconds": 8.372525875000001,
   "cpu_seconds": {
     "state": "observed",
-    "value": 11.366126000000001
+    "value": 11.429603
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -33,11 +35,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 60581571
+    "value": 60581625
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 3961847808
+    "value": 3265527808
   },
   "stages": {
     "analyzer": {
@@ -46,7 +48,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.152932875
+      "value": 0.105391541
     },
     "posting_builder": {
       "state": "unavailable",
@@ -54,7 +56,7 @@
     },
     "reopen": {
       "state": "observed",
-      "value": 0.154398167
+      "value": 0.153465542
     },
     "root_mutation": {
       "state": "unavailable",
@@ -69,9 +71,9 @@
     "physical_index_page_bytes": 355467264,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 373,
-    "physical_total_bytes": 355467637,
-    "physical_total_wal_excluded_bytes": 355467637,
+    "physical_other_bytes": 374,
+    "physical_total_bytes": 355467638,
+    "physical_total_wal_excluded_bytes": 355467638,
     "other_paths": [
       "LOCK",
       "format.json",
