@@ -380,10 +380,14 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, err
 	}
 	defer lifecycleLocks.releaseAll()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
 	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}
-	replaced, err := c.replaceChunkedDocumentBatch(plans, opts.hooks)
+	replaced, err := c.replaceChunkedDocumentBatchLocked(plans, opts.hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -403,17 +407,15 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	return results, nil
 }
 
-// replaceChunkedDocumentBatch discovers stale children from the same snapshot
-// used to plan each publication attempt. Cross-manager root drift forces a
-// retry and a fresh scan before the replacement can commit.
-func (c *Collection) replaceChunkedDocumentBatch(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
+// replaceChunkedDocumentBatchLocked discovers stale children from the same
+// snapshot used to plan each publication attempt. The caller holds the
+// collection schema write lock from the peer-domain flush through publication,
+// so another handle cannot hide a buffered write from the snapshot or publish
+// one between the scan and replacement.
+func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBatchPlan, hooks *chunkedIngestHooks) ([]int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {

@@ -380,7 +380,7 @@ func TestIngestChunkedDocumentsScansUnderCollectionMutationLock(t *testing.T) {
 	}
 }
 
-func TestIngestChunkedDocumentsRetriesCrossManagerMutationAfterStaleScan(t *testing.T) {
+func TestIngestChunkedDocumentsSerializesPeerBufferedWritesAcrossReplacement(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
@@ -407,14 +407,21 @@ func TestIngestChunkedDocumentsRetriesCrossManagerMutationAfterStaleScan(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	var once sync.Once
-	var writerErr error
-	hooks := &chunkedIngestHooks{afterBatchScan: func() {
-		once.Do(func() {
-			_, writerErr = second.InsertBatch([][]byte{lateID}, [][]byte{lateDocument})
-		})
-	}}
+	if _, err := second.InsertBatch([][]byte{lateID}, [][]byte{lateDocument}); err != nil {
+		t.Fatalf("stage cross-manager insert: %v", err)
+	}
 
+	schemaWriteLockedDuringScan := false
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		coord := second.collectionSchemaCoordinator()
+		if coord != nil && !coord.schemaMu.TryRLock() {
+			schemaWriteLockedDuringScan = true
+			return
+		}
+		if coord != nil {
+			coord.schemaMu.RUnlock()
+		}
+	}}
 	replacement, err := first.IngestChunkedDocuments(
 		[]SourceDocument{{ID: []byte("cross-manager"), Fields: map[string]any{"body": "replacement"}}},
 		cfg,
@@ -423,14 +430,17 @@ func TestIngestChunkedDocumentsRetriesCrossManagerMutationAfterStaleScan(t *test
 	if err != nil {
 		t.Fatalf("replacement batch: %v", err)
 	}
-	if writerErr != nil {
-		t.Fatalf("cross-manager insert: %v", writerErr)
+	if !schemaWriteLockedDuringScan {
+		t.Fatal("peer collection writes were not excluded across stale-child scan and publication")
 	}
 	if len(replacement) != 1 || replacement[0].Replaced != len(seed[0].ChildIDs)+1 {
 		t.Fatalf("replacement=%+v want replaced=%d", replacement, len(seed[0].ChildIDs)+1)
 	}
+	if err := second.Flush(); err != nil {
+		t.Fatalf("flush second handle: %v", err)
+	}
 	if got, err := first.Get(lateID); err != nil || got != nil {
-		t.Fatalf("late stale child survived replacement: %s err=%v", got, err)
+		t.Fatalf("buffered late stale child survived replacement: %s err=%v", got, err)
 	}
 }
 
