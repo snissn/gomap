@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,6 +65,9 @@ type config struct {
 	baseSHA             string
 	phases              string
 	selectedPhases      map[string]bool
+	queryRows           map[string]bool
+	cpuProfile          string
+	allocProfile        string
 }
 
 type report struct {
@@ -327,6 +331,10 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.baseRef, "base-ref", "origin/main", "Base ref label for report context")
 	fs.StringVar(&cfg.baseSHA, "base-sha", "", "Base SHA for report context")
 	fs.StringVar(&cfg.phases, "phases", "all", "Comma-separated phase selector: all or retrieval (load,queries,reopen)")
+	var queryRows string
+	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
+	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
+	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write an allocation profile after the selected single hybrid query row")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -374,6 +382,21 @@ func parseFlags(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.selectedPhases = normalizeSelectedPhases(selected, cfg)
+	if queryRows != "" {
+		cfg.queryRows = make(map[string]bool)
+		for _, name := range strings.Split(queryRows, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return config{}, errors.New("-query-rows contains an empty row name")
+			}
+			cfg.queryRows[name] = true
+		}
+	}
+	if cfg.cpuProfile != "" || cfg.allocProfile != "" {
+		if len(cfg.queryRows) != 1 {
+			return config{}, errors.New("-cpu-profile/-alloc-profile require exactly one -query-rows value")
+		}
+	}
 	if cfg.backfillRows <= 0 {
 		cfg.backfillRows = cfg.rows
 	}
@@ -949,6 +972,9 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		{name: "text_multi_term_or_score_only", query: "refund policy", operator: collections.TextSearchOperatorOR, shape: "multi-term OR current exact BM25F path"},
 	}
 	for _, tc := range textCases {
+		if !selectedQueryRow(cfg, tc.name) {
+			continue
+		}
 		report, guard, err := runTextQueryRow(col, cfg, tc.name, tc.query, tc.operator, tc.shape)
 		rows = append(rows, report)
 		guards = append(guards, guard)
@@ -996,6 +1022,9 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		)
 	}
 	for _, tc := range hybridCases {
+		if !selectedQueryRow(cfg, tc.name) {
+			continue
+		}
 		report, guard, err := runHybridQueryRow(col, cfg, tc.name, tc.shape, tc.opts)
 		rows = append(rows, report)
 		guards = append(guards, guard)
@@ -1004,6 +1033,10 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 		}
 	}
 	return rows, guards, nil
+}
+
+func selectedQueryRow(cfg config, name string) bool {
+	return len(cfg.queryRows) == 0 || cfg.queryRows[name]
 }
 
 func runTextQueryRow(col *collections.Collection, cfg config, name, query string, operator collections.TextSearchOperator, shape string) (queryReport, guardrailResult, error) {
@@ -1097,6 +1130,11 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 		return row, guard, queryErr
 	}
 	guard := hybridGuardrail(name, warm.Stats)
+	stopProfile, err := startQueryProfiles(cfg)
+	if err != nil {
+		return queryReport{}, guardrailResult{}, err
+	}
+	defer func() { _ = stopProfile() }()
 	durations := make([]int64, 0, cfg.queries)
 	var last collections.HybridSearchResponse
 	for i := 0; i < cfg.queries; i++ {
@@ -1118,6 +1156,10 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 			guard = g
 		}
 	}
+	if err := stopProfile(); err != nil {
+		return queryReport{}, guardrailResult{}, fmt.Errorf("write %s profile: %w", name, err)
+	}
+	stopProfile = func() error { return nil }
 	lat := summarizeLatency(durations)
 	stats := last.Stats
 	return queryReport{
@@ -1125,6 +1167,47 @@ func runHybridQueryRow(col *collections.Collection, cfg config, name, shape stri
 		TopK: cfg.topK, CandidateBudget: cfg.candidateLimit, Samples: len(durations), Results: len(last.Results), Latency: lat, RawLatencyNS: durations, OpsPerSec: opsPerSec(lat.MeanNS),
 		HybridStats: &stats, GuardrailOK: guard.OK, GuardrailFailure: guard.Failure,
 	}, guard, nil
+}
+
+func startQueryProfiles(cfg config) (func() error, error) {
+	if cfg.cpuProfile == "" && cfg.allocProfile == "" {
+		return func() error { return nil }, nil
+	}
+	writeAllocs := func() error {
+		if cfg.allocProfile == "" {
+			return nil
+		}
+		if err := os.MkdirAll(filepath.Dir(cfg.allocProfile), 0o755); err != nil {
+			return err
+		}
+		f, err := os.Create(cfg.allocProfile)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return pprof.Lookup("allocs").WriteTo(f, 0)
+	}
+	if cfg.cpuProfile == "" {
+		return writeAllocs, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.cpuProfile), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.Create(cfg.cpuProfile)
+	if err != nil {
+		return nil, err
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() error {
+		pprof.StopCPUProfile()
+		if err := f.Close(); err != nil {
+			return err
+		}
+		return writeAllocs()
+	}, nil
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, durations []int64, err error) queryReport {
