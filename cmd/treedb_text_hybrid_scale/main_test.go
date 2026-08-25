@@ -174,6 +174,37 @@ func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
 	}
 }
 
+func TestFailedQueryGuardrailsLeavePersistedReportIncomplete4327(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion: scaleSchemaVersion,
+		Artifacts: reportArtifacts{
+			OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md"),
+		},
+		SelectedPhases:  []string{"load", "queries"},
+		CompletedPhases: []string{"load"},
+	}
+	guard := guardrailResult{Name: "hybrid_scalar", OK: false, Failure: "fail closed"}
+	rep.Guardrails = append(rep.Guardrails, guard)
+	if err := completeQueryPhase(&rep, []guardrailResult{guard}, false); err == nil {
+		t.Fatal("completeQueryPhase accepted a failed guardrail")
+	}
+	if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
+		t.Fatalf("failed query phase was marked complete: %+v", rep)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read partial report: %v", err)
+	}
+	var decoded report
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal partial report: %v", err)
+	}
+	if decoded.Complete || strings.Join(decoded.CompletedPhases, ",") != "load" {
+		t.Fatalf("persisted failed query phase was marked complete: %+v", decoded)
+	}
+}
+
 func TestHybridFailureRowsPreserveFailClosedStats2731(t *testing.T) {
 	resp := collections.HybridSearchResponse{Stats: collections.HybridSearchStats{FailClosed: 1, FailClosedReason: collections.HybridFailClosedReasonTextIndexUnavailable}}
 	row := failedHybridQueryRow(config{rows: 1_000_000, topK: 10, candidateLimit: 64}, "hybrid_common", "common", resp, errors.New("bounded generation failed"))
@@ -343,6 +374,22 @@ func TestProfilePathsDoNotContaminateReportsOrDB4327(t *testing.T) {
 	}
 }
 
+func TestProfiledWarmupFailureCannotBeAllowed4327(t *testing.T) {
+	warmErr := errors.New("warm hybrid_scalar returned no results")
+	if err := profiledWarmupError(config{allowGuardrailFails: true}, warmErr); err != nil {
+		t.Fatalf("unprofiled allowed warm-up failure rejected: %v", err)
+	}
+	for _, cfg := range []config{
+		{allowGuardrailFails: true, cpuProfile: "cpu.pprof"},
+		{allowGuardrailFails: true, allocProfile: "allocs.pprof"},
+	} {
+		err := profiledWarmupError(cfg, warmErr)
+		if err == nil || !strings.Contains(err.Error(), "cannot produce requested profile") {
+			t.Fatalf("profiled warm-up failure err=%v", err)
+		}
+	}
+}
+
 func TestAllocationProfilesRequireStartupExactRate4327(t *testing.T) {
 	if err := requireExactMemProfileRate(true, 1); err != nil {
 		t.Fatalf("exact startup rate rejected: %v", err)
@@ -461,6 +508,24 @@ func TestRetrievalRepetitionsRequireRetrievalPhase4327(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("expected retrieval repetition acceptance: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestRetrievalRepetitionsRejectNonpositive4327(t *testing.T) {
+	for _, repetitions := range []string{"0", "-1"} {
+		t.Run(repetitions, func(t *testing.T) {
+			runDir := t.TempDir()
+			cmd := exec.Command("bash", "scripts/bench_text_hybrid_scale.sh")
+			cmd.Dir = filepath.Join("..", "..")
+			cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES=retrieval", "RETRIEVAL_REPETITIONS="+repetitions, "GO_BIN=true")
+			output, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "RETRIEVAL_REPETITIONS must be a positive integer") {
+				t.Fatalf("expected nonpositive repetition rejection, err=%v output=%s", err, output)
+			}
+			if _, err := os.Stat(filepath.Join(runDir, "10m_selected_matrix_commands.md")); !os.IsNotExist(err) {
+				t.Fatalf("nonpositive repetition count wrote a plan, err=%v", err)
 			}
 		})
 	}

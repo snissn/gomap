@@ -637,10 +637,7 @@ func run(cfg config) (report, error) {
 		}
 		rep.Queries = append(rep.Queries, queries...)
 		rep.Guardrails = append(rep.Guardrails, guards...)
-		if err := completePhase(&rep, "queries"); err != nil {
-			return rep, err
-		}
-		if err := failOnGuardrails(rep.Guardrails, cfg.allowGuardrailFails); err != nil {
+		if err := completeQueryPhase(&rep, guards, cfg.allowGuardrailFails); err != nil {
 			return rep, err
 		}
 	}
@@ -718,6 +715,17 @@ func run(cfg config) (report, error) {
 		return rep, err
 	}
 	return rep, nil
+}
+
+func completeQueryPhase(rep *report, guards []guardrailResult, allowGuardrailFails bool) error {
+	if err := failOnGuardrails(guards, allowGuardrailFails); err != nil {
+		rep.Bottlenecks = rankBottlenecks(*rep)
+		if writeErr := writeReports(*rep); writeErr != nil {
+			return writeErr
+		}
+		return err
+	}
+	return completePhase(rep, "queries")
 }
 
 func completePhase(rep *report, phase string) error {
@@ -1154,17 +1162,24 @@ func runTextQueryRow(col *collections.Collection, cfg config, name, query string
 func runHybridQueryRow(col *collections.Collection, cfg config, name, shape string, opts collections.HybridSearchOptions) (queryReport, guardrailResult, error) {
 	warm, err := col.SearchHybrid(opts)
 	if err != nil {
-		if cfg.allowGuardrailFails {
-			return failedHybridQueryRow(cfg, name, shape, warm, fmt.Errorf("warm %s: %w", name, err)), hybridFailureGuard(name, warm.Stats, err), nil
+		warmErr := fmt.Errorf("warm %s: %w", name, err)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
 		}
-		return queryReport{}, guardrailResult{}, fmt.Errorf("warm %s: %w", name, err)
+		if cfg.allowGuardrailFails {
+			return failedHybridQueryRow(cfg, name, shape, warm, warmErr), hybridFailureGuard(name, warm.Stats, err), nil
+		}
+		return queryReport{}, guardrailResult{}, warmErr
 	}
 	if len(warm.Results) == 0 {
-		err := fmt.Errorf("warm %s returned no results", name)
-		if cfg.allowGuardrailFails {
-			return failedHybridQueryRow(cfg, name, shape, warm, err), guardrailResult{Name: name, OK: false, Failure: err.Error()}, nil
+		warmErr := fmt.Errorf("warm %s returned no results", name)
+		if err := profiledWarmupError(cfg, warmErr); err != nil {
+			return queryReport{}, guardrailResult{}, err
 		}
-		return queryReport{}, guardrailResult{}, err
+		if cfg.allowGuardrailFails {
+			return failedHybridQueryRow(cfg, name, shape, warm, warmErr), guardrailResult{Name: name, OK: false, Failure: warmErr.Error()}, nil
+		}
+		return queryReport{}, guardrailResult{}, warmErr
 	}
 	guard := hybridGuardrail(name, warm.Stats)
 	stopProfile, err := startQueryProfiles(cfg)
@@ -1287,6 +1302,13 @@ func startQueryProfilesAtMemProfileRate(cfg config, memProfileRate int) (func() 
 		})
 		return stopErr
 	}, nil
+}
+
+func profiledWarmupError(cfg config, warmErr error) error {
+	if warmErr == nil || (cfg.cpuProfile == "" && cfg.allocProfile == "") {
+		return nil
+	}
+	return fmt.Errorf("%w; cannot produce requested profile without successful warm-up", warmErr)
 }
 
 func failedHybridQueryRow(cfg config, name, shape string, response collections.HybridSearchResponse, err error) queryReport {
