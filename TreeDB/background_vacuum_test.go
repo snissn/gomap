@@ -11,10 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func init() {
+	setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool { return true })
+}
 
 func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	concurrentMutation := fmt.Errorf("wrapped vacuum result: %w", backenddb.ErrVacuumConcurrentMutation)
@@ -242,6 +247,96 @@ func TestBackgroundIndexVacuumBacklogClearsResetsSkipCounter(t *testing.T) {
 	}
 	if got := d.bgVac.lastBacklogBytes.Load(); got != 0 {
 		t.Fatalf("last backlog bytes=%d want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumNativeRootWriteSkipsTriggerProbe(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(db *DB) bool {
+		return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
+	})
+	defer restoreForeground()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	writeBackgroundVacuumNativeRoot(t, d)
+	if got := d.cached.QueueBacklogBytes(); got != 0 {
+		t.Fatalf("queue backlog after native root write=%d want 0", got)
+	}
+	counts, restore := installBackgroundVacuumProbeCounter()
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes after native root write=%d want 0", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 1 {
+		t.Fatalf("consecutive foreground skips=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundSkips.Load(); got != 1 {
+		t.Fatalf("total foreground skips=%d want 1", got)
+	}
+	if got := d.bgVac.backlogSkips.Load(); got != 0 {
+		t.Fatalf("backlog skips=%d want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumNativeRootWriteForcesProbeAfterSkipCap(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(db *DB) bool {
+		return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
+	})
+	defer restoreForeground()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	writeBackgroundVacuumNativeRoot(t, d)
+	counts, restore := installBackgroundVacuumProbeCounter()
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes before foreground skip cap=%d want 0", got)
+	}
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("forced trigger probes=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundForcedRuns.Load(); got != 1 {
+		t.Fatalf("forced-after-foreground runs=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("consecutive foreground skips after forced probe=%d want 0", got)
+	}
+	if got := d.bgVac.backlogForcedRuns.Load(); got != 0 {
+		t.Fatalf("forced-after-backlog runs=%d want 0", got)
+	}
+}
+
+func writeBackgroundVacuumNativeRoot(t *testing.T, d *DB) {
+	t.Helper()
+	manager := collections.NewCollectionManager(d.backend)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "background-vacuum-native-root",
+		Options: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormatJSON,
+			DataRootStoragePolicy:   collections.RootStorageCompressed,
+			IndexStateStoragePolicy: collections.RootStorageCompressed,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	collection, err := manager.OpenCollection("background-vacuum-native-root")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := collection.InsertBatch(
+		[][]byte{[]byte("doc-1")},
+		[][]byte{[]byte(`{"_id":"doc-1","value":1}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 }
 

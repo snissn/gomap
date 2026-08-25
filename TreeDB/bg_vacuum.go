@@ -41,6 +41,7 @@ const (
 	backgroundIndexVacuumRetryReasonResourcePinned                 = "resource_pinned"
 	backgroundIndexVacuumOutcomeNone                               = "none"
 	backgroundIndexVacuumOutcomeBacklogSkip                        = "backlog_skip"
+	backgroundIndexVacuumOutcomeForegroundSkip                     = "foreground_skip"
 	backgroundIndexVacuumOutcomeUnchanged                          = "unchanged"
 	backgroundIndexVacuumOutcomeNoDebt                             = "no_debt"
 	backgroundIndexVacuumOutcomeRetry                              = "retry"
@@ -125,10 +126,13 @@ type bgIndexVacuumWorker struct {
 	unsupportedTotal             atomic.Uint64
 	permanentFailuresTotal       atomic.Uint64
 
-	backlogConsecutiveSkips atomic.Uint64
-	backlogSkips            atomic.Uint64
-	backlogForcedRuns       atomic.Uint64
-	lastBacklogBytes        atomic.Int64
+	backlogConsecutiveSkips    atomic.Uint64
+	backlogSkips               atomic.Uint64
+	backlogForcedRuns          atomic.Uint64
+	lastBacklogBytes           atomic.Int64
+	foregroundConsecutiveSkips atomic.Uint64
+	foregroundSkips            atomic.Uint64
+	foregroundForcedRuns       atomic.Uint64
 
 	lastFreelistReclaimablePages atomic.Uint64
 	lastFreelistReclaimableRatio atomic.Uint64
@@ -148,6 +152,11 @@ type bgIndexVacuumWorker struct {
 var bgIndexVacuumBacklogBytesHook struct {
 	mu sync.RWMutex
 	fn func(*DB) int64
+}
+
+var bgIndexVacuumForegroundWriteQuietHook struct {
+	mu sync.RWMutex
+	fn func(*DB) bool
 }
 
 var bgIndexVacuumFreelistDebtSnapshotHook struct {
@@ -174,6 +183,18 @@ func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() 
 		bgIndexVacuumBacklogBytesHook.mu.Lock()
 		bgIndexVacuumBacklogBytesHook.fn = prev
 		bgIndexVacuumBacklogBytesHook.mu.Unlock()
+	}
+}
+
+func setBackgroundIndexVacuumForegroundWriteQuietHookForTest(fn func(*DB) bool) func() {
+	bgIndexVacuumForegroundWriteQuietHook.mu.Lock()
+	prev := bgIndexVacuumForegroundWriteQuietHook.fn
+	bgIndexVacuumForegroundWriteQuietHook.fn = fn
+	bgIndexVacuumForegroundWriteQuietHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumForegroundWriteQuietHook.mu.Lock()
+		bgIndexVacuumForegroundWriteQuietHook.fn = prev
+		bgIndexVacuumForegroundWriteQuietHook.mu.Unlock()
 	}
 }
 
@@ -244,6 +265,16 @@ func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
 		return 0
 	}
 	return db.cached.QueueBacklogBytes()
+}
+
+func backgroundIndexVacuumForegroundWriteQuiet(db *DB) bool {
+	bgIndexVacuumForegroundWriteQuietHook.mu.RLock()
+	hook := bgIndexVacuumForegroundWriteQuietHook.fn
+	bgIndexVacuumForegroundWriteQuietHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db)
+	}
+	return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
 }
 
 func backgroundIndexVacuumFreelistDebtSnapshot(db *DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool) {
@@ -373,8 +404,24 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	} else {
 		w.backlogConsecutiveSkips.Store(0)
 	}
+	forcedAfterForeground := false
+	if !forcedAfterBacklog && !backgroundIndexVacuumForegroundWriteQuiet(db) {
+		consecutive := w.foregroundConsecutiveSkips.Load()
+		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
+			w.foregroundConsecutiveSkips.Store(consecutive + 1)
+			w.foregroundSkips.Add(1)
+			w.lastOutcome.Store(backgroundIndexVacuumOutcomeForegroundSkip)
+			w.finishRun(now, "")
+			return
+		}
+		forcedAfterForeground = true
+		w.foregroundForcedRuns.Add(1)
+		w.foregroundConsecutiveSkips.Store(0)
+	} else {
+		w.foregroundConsecutiveSkips.Store(0)
+	}
 
-	if !forcedAfterBacklog && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
+	if !forcedAfterBacklog && !forcedAfterForeground && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeUnchanged)
 		w.finishRun(now, "")
 		return
@@ -600,10 +647,13 @@ type bgIndexVacuumStats struct {
 	Probes  uint64
 	Vacuums uint64
 
-	BacklogConsecutiveSkips uint64
-	BacklogSkips            uint64
-	BacklogForcedRuns       uint64
-	LastBacklogBytes        int64
+	BacklogConsecutiveSkips    uint64
+	BacklogSkips               uint64
+	BacklogForcedRuns          uint64
+	LastBacklogBytes           int64
+	ForegroundConsecutiveSkips uint64
+	ForegroundSkips            uint64
+	ForegroundForcedRuns       uint64
 
 	LastRunUnix     int64
 	LastVacuumUnix  int64
@@ -645,6 +695,9 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		BacklogSkips:                 w.backlogSkips.Load(),
 		BacklogForcedRuns:            w.backlogForcedRuns.Load(),
 		LastBacklogBytes:             w.lastBacklogBytes.Load(),
+		ForegroundConsecutiveSkips:   w.foregroundConsecutiveSkips.Load(),
+		ForegroundSkips:              w.foregroundSkips.Load(),
+		ForegroundForcedRuns:         w.foregroundForcedRuns.Load(),
 		LastRunUnix:                  w.lastRunUnix.Load(),
 		LastVacuumUnix:               w.lastVacuumUnix.Load(),
 		LastSpanRatio:                w.lastSpanRatio.Load(),
@@ -709,6 +762,9 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.backlog_skips_total"] = fmt.Sprintf("%d", stats.BacklogSkips)
 	out["treedb.bg_vacuum.backlog_forced_runs"] = fmt.Sprintf("%d", stats.BacklogForcedRuns)
 	out["treedb.bg_vacuum.last_backlog_bytes"] = fmt.Sprintf("%d", stats.LastBacklogBytes)
+	out["treedb.bg_vacuum.foreground_skips_consecutive"] = fmt.Sprintf("%d", stats.ForegroundConsecutiveSkips)
+	out["treedb.bg_vacuum.foreground_skips_total"] = fmt.Sprintf("%d", stats.ForegroundSkips)
+	out["treedb.bg_vacuum.foreground_forced_runs"] = fmt.Sprintf("%d", stats.ForegroundForcedRuns)
 	out["treedb.bg_vacuum.last_run_unix"] = fmt.Sprintf("%d", stats.LastRunUnix)
 	out["treedb.bg_vacuum.last_vacuum_unix"] = fmt.Sprintf("%d", stats.LastVacuumUnix)
 	out["treedb.bg_vacuum.last_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastSpanRatio)
