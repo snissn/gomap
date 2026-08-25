@@ -509,7 +509,9 @@ func parsePhaseSelector(raw string) (map[string]bool, error) {
 	for _, phase := range strings.Split(raw, ",") {
 		switch strings.TrimSpace(phase) {
 		case "all":
-			return map[string]bool{"load": true, "queries": true, "reopen": true, "concurrent": true, "maintenance": true, "backfill": true}, nil
+			for _, name := range []string{"load", "queries", "reopen", "concurrent", "maintenance", "backfill"} {
+				selected[name] = true
+			}
 		case "retrieval":
 			selected["load"], selected["queries"], selected["reopen"] = true, true, true
 		case "":
@@ -1808,13 +1810,13 @@ func atomicWriteFile(path string, data []byte) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -1952,6 +1954,7 @@ func formatNS(ns int64) string {
 }
 
 func captureContext(cfg config) reportContext {
+	vcsStatus := strings.TrimSpace(runCmd("git", "status", "--porcelain"))
 	return reportContext{
 		RepoRoot:    strings.TrimSpace(runCmd("git", "rev-parse", "--show-toplevel")),
 		Branch:      strings.TrimSpace(runCmd("git", "branch", "--show-current")),
@@ -1965,8 +1968,8 @@ func captureContext(cfg config) reportContext {
 		NCPU:        runtime.NumCPU(),
 		Uptime:      strings.TrimSpace(runCmd("uptime")),
 		Command:     strings.Join(os.Args, " "),
-		VCSClean:    strings.TrimSpace(runCmd("git", "status", "--porcelain")) == "",
-		VCSStatus:   strings.TrimSpace(runCmd("git", "status", "--porcelain")),
+		VCSClean:    vcsStatus == "",
+		VCSStatus:   vcsStatus,
 		BinaryState: "go run (source tree; no standalone binary)",
 		Corpus:      "deterministic synthetic customer-support corpus v1",
 		Cache:       "warm in-process retrieval after fixture load/reopen",

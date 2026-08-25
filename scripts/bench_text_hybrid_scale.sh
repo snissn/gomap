@@ -45,6 +45,11 @@ GO_COUNT="${GO_COUNT:-1}"
 PHASES="${PHASES:-all}"
 RETRIEVAL_REPETITIONS="${RETRIEVAL_REPETITIONS:-1}"
 
+if (( RETRIEVAL_REPETITIONS > 1 )) && [[ "$PHASES" != "retrieval" ]]; then
+  echo "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval; refusing to repeat a non-retrieval campaign" >&2
+  exit 2
+fi
+
 mkdir -p "$RUN_DIR"
 
 {
