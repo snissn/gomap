@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,11 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	if len(rep.Queries) == 0 {
 		t.Fatal("no query rows")
 	}
+	for _, row := range rep.Queries {
+		if len(row.RawLatencyNS) != row.Samples {
+			t.Fatalf("row %q raw samples=%d want %d", row.Name, len(row.RawLatencyNS), row.Samples)
+		}
+	}
 	for _, guard := range rep.Guardrails {
 		if !guard.OK {
 			t.Fatalf("guardrail failed: %+v", guard)
@@ -81,6 +88,146 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
+	}
+}
+
+func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
+	cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", "retrieval"})
+	if err != nil {
+		t.Fatalf("parse retrieval phases: %v", err)
+	}
+	want := []string{"load", "queries", "reopen"}
+	if got := selectedPhaseNames(cfg.selectedPhases); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("selected phases=%v want %v", got, want)
+	}
+	for _, phases := range []string{"queries", "all,typo", "typo,all", ""} {
+		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", phases}); err == nil {
+			t.Fatalf("parseFlags accepted invalid selector %q", phases)
+		}
+	}
+	all, err := parsePhaseSelector("all,retrieval")
+	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill" {
+		t.Fatalf("parsePhaseSelector(all,retrieval) phases=%v err=%v", selectedPhaseNames(all), err)
+	}
+}
+
+func TestRetrievalQualificationExcludesDisabledProbeFromCompletion2731(t *testing.T) {
+	outDir := t.TempDir()
+	cfg, err := parseFlags([]string{"-out-dir", outDir, "-phases", "retrieval", "-run-reopen=false"})
+	if err != nil {
+		t.Fatalf("parse retrieval phases: %v", err)
+	}
+	cfg.rows, cfg.batchSize, cfg.dims, cfg.m, cfg.efConstruction, cfg.efSearch = 96, 48, 4, 4, 32, 32
+	cfg.topK, cfg.candidateLimit, cfg.queries, cfg.readers = 5, 16, 1, 2
+	rep, err := run(cfg)
+	if err != nil {
+		t.Fatalf("run retrieval qualification: %v", err)
+	}
+	want := []string{"load", "queries"}
+	if !rep.Complete || rep.Reopen != nil || len(rep.Queries) == 0 || strings.Join(rep.SelectedPhases, ",") != strings.Join(want, ",") || strings.Join(rep.CompletedPhases, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected retrieval-only report: %+v", rep)
+	}
+}
+
+func TestPartialReportIsAtomicallyLabeledIncomplete2731(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion:  scaleSchemaVersion,
+		Artifacts:      reportArtifacts{OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md")},
+		SelectedPhases: []string{"load", "queries", "reopen"}, CompletedPhases: []string{"load"},
+		Guardrails: []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	if err := writeReports(rep); err != nil {
+		t.Fatalf("write partial report: %v", err)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var decoded report
+	if err := json.Unmarshal(payload, &decoded); err != nil || decoded.Complete || len(decoded.CompletedPhases) != 1 {
+		t.Fatalf("partial report invalid or complete: decoded=%+v err=%v", decoded, err)
+	}
+	markdown, err := os.ReadFile(rep.Artifacts.Markdown)
+	if err != nil || !strings.Contains(string(markdown), "INCOMPLETE (partial/resumable evidence; not a completed qualification)") {
+		t.Fatalf("markdown did not fail closed: err=%v content=%s", err, markdown)
+	}
+}
+
+func TestCaptureContextUsesInvocationProvenance4327(t *testing.T) {
+	ctx := captureContext(config{baseRef: "origin/main"})
+	if ctx.VCSStatus == "" || ctx.BinaryState == "" || ctx.Command == "" || ctx.Corpus == "" || ctx.Cache == "" || ctx.Durability == "" || ctx.NoisePolicy == "" {
+		t.Fatalf("missing provenance: %+v", ctx)
+	}
+	if ctx.RepoRoot != "" || ctx.Branch != "" || ctx.Commit != "" {
+		t.Fatalf("context used ambient checkout state: %+v", ctx)
+	}
+}
+
+func TestInvocationProvenanceUsesEmbeddedBuildMetadata4327(t *testing.T) {
+	info := &debug.BuildInfo{Main: debug.Module{Path: "example.com/scale"}, GoVersion: "go1.26.0", Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: "abc123"}, {Key: "vcs.modified", Value: "false"}}}
+	state, clean, status := invocationProvenance("/tmp/scale", info)
+	if !clean || status != "clean (embedded build metadata)" || !strings.Contains(state, "executable=/tmp/scale") || !strings.Contains(state, "vcs_revision=abc123") {
+		t.Fatalf("embedded provenance state=%q clean=%v status=%q", state, clean, status)
+	}
+	state, clean, status = invocationProvenance("/tmp/scale", &debug.BuildInfo{})
+	if clean || status != "unknown (incomplete embedded VCS metadata)" || !strings.Contains(state, "vcs=unknown") {
+		t.Fatalf("incomplete metadata did not fail closed: state=%q clean=%v status=%q", state, clean, status)
+	}
+}
+
+func TestGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion:  scaleSchemaVersion,
+		Artifacts:      reportArtifacts{OutDir: outDir, JSONReport: filepath.Join(outDir, "scale_report.json"), Markdown: filepath.Join(outDir, "scale_report.md")},
+		SelectedPhases: []string{"load", "queries"}, CompletedPhases: []string{"load"},
+		Queries: []queryReport{{Name: "failed_query"}}, Guardrails: []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	err := completeGuardedPhase(&rep, "queries", rep.Guardrails, false)
+	if err == nil || !strings.Contains(err.Error(), "guardrail queries failed: fail closed") || rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
+		t.Fatalf("failed guardrail marked phase complete or lost strict error: report=%+v err=%v", rep, err)
+	}
+	payload, readErr := os.ReadFile(rep.Artifacts.JSONReport)
+	if readErr != nil {
+		t.Fatalf("read partial report: %v", readErr)
+	}
+	var persisted report
+	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load" || len(persisted.Guardrails) != 1 {
+		t.Fatalf("persisted report was not honest partial evidence: report=%+v err=%v", persisted, err)
+	}
+}
+
+func TestAllowedGuardrailFailurePersistsIncompletePhase4327(t *testing.T) {
+	outDir := t.TempDir()
+	rep := report{
+		SchemaVersion: scaleSchemaVersion,
+		Artifacts: reportArtifacts{
+			OutDir:     outDir,
+			JSONReport: filepath.Join(outDir, "scale_report.json"),
+			Markdown:   filepath.Join(outDir, "scale_report.md"),
+		},
+		SelectedPhases:  []string{"load", "queries", "reopen"},
+		CompletedPhases: []string{"load"},
+		Queries:         []queryReport{{Name: "failed_query"}},
+		Guardrails:      []guardrailResult{{Name: "queries", OK: false, Failure: "fail closed"}},
+	}
+	if err := completeGuardedPhase(&rep, "queries", rep.Guardrails, true); err != nil {
+		t.Fatalf("allowed diagnostic guardrail failure stopped execution: %v", err)
+	}
+	if err := completePhase(&rep, "reopen"); err != nil {
+		t.Fatalf("complete eligible later phase: %v", err)
+	}
+	if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load,reopen" {
+		t.Fatalf("allowed failed guardrail qualified report: %+v", rep)
+	}
+	payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+	if err != nil {
+		t.Fatalf("read persisted diagnostic report: %v", err)
+	}
+	var persisted report
+	if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || strings.Join(persisted.CompletedPhases, ",") != "load,reopen" || len(persisted.Guardrails) != 1 || persisted.Guardrails[0].OK {
+		t.Fatalf("persisted allowed diagnostic report was qualified: report=%+v err=%v", persisted, err)
 	}
 }
 
