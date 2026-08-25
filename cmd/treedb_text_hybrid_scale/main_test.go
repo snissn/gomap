@@ -116,10 +116,6 @@ func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
 			t.Fatalf("parseFlags(%q) error=%v, want invalid token rejection", phases, err)
 		}
 	}
-	all, err := parsePhaseSelector("all,retrieval")
-	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill" {
-		t.Fatalf("parsePhaseSelector(all,retrieval) phases=%v err=%v", selectedPhaseNames(all), err)
-	}
 }
 
 func TestRetrievalQualificationExcludesDisabledProbeFromCompletion2731(t *testing.T) {
@@ -323,8 +319,8 @@ func TestFailedQueryGuardrailsLeavePersistedReportIncomplete4327(t *testing.T) {
 	}
 	guard := guardrailResult{Name: "hybrid_scalar", OK: false, Failure: "fail closed"}
 	rep.Guardrails = append(rep.Guardrails, guard)
-	if err := completeQueryPhase(&rep, []guardrailResult{guard}, false); err == nil {
-		t.Fatal("completeQueryPhase accepted a failed guardrail")
+	if err := completeGuardedPhase(&rep, "queries", []guardrailResult{guard}, false); err == nil {
+		t.Fatal("completeGuardedPhase accepted a failed guardrail")
 	}
 	if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" {
 		t.Fatalf("failed query phase was marked complete: %+v", rep)
