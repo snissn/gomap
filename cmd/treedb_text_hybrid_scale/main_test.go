@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -104,6 +105,15 @@ func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
 	for _, phases := range []string{"queries", "all,typo", "typo,all", ""} {
 		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", phases}); err == nil {
 			t.Fatalf("parseFlags accepted invalid selector %q", phases)
+		}
+	}
+	all, err := parsePhaseSelector("all,retrieval")
+	if err != nil || strings.Join(selectedPhaseNames(all), ",") != "load,queries,reopen,concurrent,maintenance,backfill" {
+		t.Fatalf("parsePhaseSelector(all,retrieval) phases=%v err=%v", selectedPhaseNames(all), err)
+	}
+	for _, phases := range []string{"all,typo", "typo,all"} {
+		if _, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", phases}); err == nil || !strings.Contains(err.Error(), "unknown -phases value") {
+			t.Fatalf("parseFlags(%q) error=%v, want invalid token rejection", phases, err)
 		}
 	}
 	all, err := parsePhaseSelector("all,retrieval")
@@ -537,10 +547,16 @@ func TestAllocationProfileFocusesTimedHybridStack4327(t *testing.T) {
 
 func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
 	runDir := t.TempDir()
-	cmd := exec.Command("bash", "scripts/bench_text_hybrid_scale.sh")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
 	cmd.Dir = filepath.Join("..", "..")
 	cmd.Env = append(os.Environ(), "RUN_DIR="+runDir, "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES=retrieval", "GO_BIN=true")
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("generate 10M plan timed out: %v\n%s", ctx.Err(), output)
+	}
+	if err != nil {
 		t.Fatalf("generate 10M plan: %v\n%s", err, output)
 	}
 	plan, err := os.ReadFile(filepath.Join(runDir, "10m_selected_matrix_commands.md"))
@@ -552,6 +568,38 @@ func TestTenMPlanPropagatesPhaseSelector4327(t *testing.T) {
 	}
 	if got := strings.Count(string(plan), "PHASES=retrieval"); got != 1 {
 		t.Fatalf("wrapper command phase selector count=%d plan:\n%s", got, plan)
+	}
+}
+
+func TestRetrievalRepetitionsRequireRetrievalPhase4327(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		phases  string
+		wantErr bool
+	}{
+		{name: "reject all", phases: "all", wantErr: true},
+		{name: "accept retrieval", phases: "retrieval"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", "scripts/bench_text_hybrid_scale.sh")
+			cmd.Dir = filepath.Join("..", "..")
+			cmd.Env = append(os.Environ(), "RUN_DIR="+t.TempDir(), "RUN_SMOKE=false", "RUN_1M=false", "RUN_10M=false", "RUN_GO_BENCH=false", "PHASES="+tc.phases, "RETRIEVAL_REPETITIONS=2", "GO_BIN=true")
+			output, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("repetition contract timed out: %v\n%s", ctx.Err(), output)
+			}
+			if tc.wantErr {
+				if err == nil || !strings.Contains(string(output), "RETRIEVAL_REPETITIONS>1 requires PHASES=retrieval") {
+					t.Fatalf("expected repetition rejection, err=%v output=%s", err, output)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected retrieval repetition acceptance: %v\n%s", err, output)
+			}
+		})
 	}
 }
 
