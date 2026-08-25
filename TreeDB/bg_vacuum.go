@@ -394,6 +394,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 			consecutive++
 			w.backlogConsecutiveSkips.Store(consecutive)
 			w.backlogSkips.Add(1)
+			w.foregroundConsecutiveSkips.Store(0)
 			w.lastOutcome.Store(backgroundIndexVacuumOutcomeBacklogSkip)
 			w.finishRun(now, "")
 			return

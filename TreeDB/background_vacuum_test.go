@@ -322,6 +322,38 @@ func TestBackgroundIndexVacuumNativeRootWriteForcesProbeAfterSkipCap(t *testing.
 	}
 }
 
+func TestBackgroundIndexVacuumBacklogSkipResetsForegroundSkipCap(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool { return false })
+	defer restoreForeground()
+	var backlog atomic.Int64
+	restoreBacklog := setBackgroundIndexVacuumBacklogBytesHookForTest(func(*DB) int64 { return backlog.Load() })
+	defer restoreBacklog()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 1 {
+		t.Fatalf("foreground skips before backlog=%d want 1", got)
+	}
+	backlog.Store(1)
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("foreground skips after backlog=%d want 0", got)
+	}
+	backlog.Store(0)
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes before fresh foreground skip cap=%d want 0", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 2 {
+		t.Fatalf("foreground skips after reset=%d want 2", got)
+	}
+}
+
 func TestBackgroundIndexVacuumNativeRootWriteQuietTransitionRunsEligibleVacuum(t *testing.T) {
 	var quiet atomic.Bool
 	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool {
