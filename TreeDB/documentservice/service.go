@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -26,12 +27,17 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu       sync.RWMutex
-	benchmarkSearchCache         map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool    sync.Pool
-	denseVectorNativeAfterSearch func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations    *vectorpartition.OperationsV1
-	closed                       bool
+	benchmarkSearchCacheMu         sync.RWMutex
+	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool      sync.Pool
+	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations      *vectorpartition.OperationsV1
+	diagnosticsEnabled             atomic.Bool
+	diagnosticsMu                  sync.Mutex
+	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsBeforeActivePublish func()
+	closed                         bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -233,6 +239,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
 		s.benchmarkSearchCacheMu.RUnlock()
 		if cached {
+			s.noteDiagnosticsIndex(req.Name, info)
 			return info, nil
 		}
 		col, _, err := s.openIndex(ctx, req.Name, 0)
@@ -274,6 +281,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			}
 		}
 	}
+	s.noteDiagnosticsIndex(req.Name, info)
 	return info, nil
 }
 
@@ -340,13 +348,16 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if len(insertIDs) > 0 {
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
+			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
 			// Upsert is a service contract, while Collection.InsertBatch is an
 			// insert-only primitive. If another request inserts one of these IDs
 			// between the read preflight and InsertBatch, fall back per item to
 			// replace-or-insert semantics instead of leaking ErrDocumentExists.
 			for _, doc := range inserts {
-				wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, true)
+				wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, true, func() {
+					s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+				})
 				if err != nil {
 					return UpsertDocumentsResponse{}, err
 				}
@@ -362,7 +373,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}
 	for _, doc := range updates {
-		wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, false)
+		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
+			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+		})
 		if err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -820,7 +833,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 			stats.ServiceResponseNanos = 1
 		}
 	}
-	return BenchmarkVectorSearchResponse{
+	response := BenchmarkVectorSearchResponse{
 		Index:                     info,
 		Results:                   results,
 		Metric:                    info.Metric,
@@ -832,7 +845,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		Stats:                     stats,
 		Diagnostics:               stats.Diagnostics(),
 		compactIDs:                compactIDs,
-	}, nil
+	}
+	s.noteDiagnosticsIndex(index, info)
+	return response, nil
 }
 
 // SearchKeyword runs ranked lexical search over the service content text index.
@@ -1101,6 +1116,7 @@ func (s *Service) warmBenchmarkSearchCache(ctx context.Context, index string, in
 	if err := validateBenchmarkVectorSearchRoute(BenchmarkVectorQueryModeExact, BenchmarkVectorSearchRequest{}, response); err != nil {
 		return err
 	}
+	s.noteDiagnosticsIndex(index, info)
 	return nil
 }
 
@@ -1134,6 +1150,7 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 		if expectedGeneration != 0 && expectedGeneration != info.Generation {
 			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 		}
+		s.noteDiagnosticsIndex(name, info)
 		return col, info, nil
 	}
 	s.benchmarkSearchCacheMu.RUnlock()
@@ -1148,7 +1165,54 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if expectedGeneration != 0 && expectedGeneration != info.Generation {
 		return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 	}
+	s.noteDiagnosticsIndex(name, info)
 	return col, info, nil
+}
+
+func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	insert := s.completedDiagnosticsInsert(name, info)
+	if s.diagnosticsBeforeActivePublish != nil {
+		s.diagnosticsBeforeActivePublish()
+	}
+	s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
+}
+
+// publishDiagnosticsInsert records the completed insert snapshot only while
+// this exact index generation remains active. A reopen cannot replace a newer
+// completed snapshot for the same identity.
+func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert collections.CollectionInsertStats) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	s.diagnosticsCompleted.Store(name, &diagnosticsCompletedInsert{generation: info.Generation, insert: insert})
+	active := s.diagnosticsActive.Load()
+	if active != nil && active.name == name && active.info.Generation == info.Generation {
+		s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
+	}
+}
+
+type diagnosticsCompletedInsert struct {
+	generation uint64
+	insert     collections.CollectionInsertStats
+}
+
+func (s *Service) completedDiagnosticsInsert(name string, info IndexInfo) collections.CollectionInsertStats {
+	value, ok := s.diagnosticsCompleted.Load(name)
+	if !ok {
+		return collections.CollectionInsertStats{}
+	}
+	completed, ok := value.(*diagnosticsCompletedInsert)
+	if !ok || completed.generation != info.Generation {
+		return collections.CollectionInsertStats{}
+	}
+	return completed.insert
 }
 
 func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
@@ -1360,6 +1424,10 @@ func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
+	return upsertPreparedDocumentWithInsertCallback(ctx, col, doc, preferInsert, nil)
+}
+
+func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool, afterInsert func()) (inserted bool, updated bool, err error) {
 	const maxAttempts = 4
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctxErr(ctx); err != nil {
@@ -1367,6 +1435,9 @@ func upsertPreparedDocument(ctx context.Context, col *collections.Collection, do
 		}
 		if preferInsert {
 			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
+				if afterInsert != nil {
+					afterInsert()
+				}
 				return true, false, nil
 			} else if !collections.IsDuplicateKeyError(err) {
 				return false, false, wrapServiceError(CodeInternal, "insert document failed", err)
