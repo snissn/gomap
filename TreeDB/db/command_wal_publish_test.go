@@ -1787,6 +1787,9 @@ func TestCommandWALCleanupConvergesAfterActiveAppend(t *testing.T) {
 	if appendErr != nil {
 		t.Fatalf("append after cleanup scan: %v", appendErr)
 	}
+	if err := journal.Flush(); err != nil {
+		t.Fatalf("Flush appended active segment: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
 		t.Fatalf("covered old segment stat=%v, want removed", err)
 	}
