@@ -165,6 +165,19 @@ func (db *DB) vacuumOnlineStatsSnapshot() VacuumOnlineStats {
 	return *stats
 }
 
+func (db *DB) publishVacuumOnlineStats(stats VacuumOnlineStats) {
+	for {
+		current := db.vacuumOnlineLast.Load()
+		if current != nil && current.AttemptID >= stats.AttemptID {
+			return
+		}
+		published := stats
+		if db.vacuumOnlineLast.CompareAndSwap(current, &published) {
+			return
+		}
+	}
+}
+
 func vacuumDurableResourceSummary(resources *rootpublication.StableResourceSet) (descriptors, bytes uint64) {
 	if resources == nil {
 		return 0, 0
@@ -391,7 +404,7 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		seed.TotalDuration = time.Since(attemptStarted)
 		seed.Canceled = errors.Is(retErr, context.Canceled)
 		published := seed
-		db.vacuumOnlineLast.Store(&published)
+		db.publishVacuumOnlineStats(published)
 	}()
 	if lockMaintenance {
 		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
@@ -452,7 +465,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.Canceled = errors.Is(retErr, context.Canceled)
 		runStats.WorkCompleted = retErr == nil
 		published := *runStats
-		db.vacuumOnlineLast.Store(&published)
+		db.publishVacuumOnlineStats(published)
 	}()
 	if db.readOnly {
 		return ErrReadOnly
@@ -509,6 +522,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	var replacementSelection *durableRootSelectionV1
 	var replacementRuntime *rootPublicationRuntimeV1
 	var replacementGen *indexGen
+	var pendingDiagnosticResources *rootpublication.StableResourceSet
+	defer func() {
+		if pendingDiagnosticResources != nil {
+			pendingDiagnosticResources.Release()
+		}
+	}()
 	defer func() {
 		if replacementSelection == nil {
 			return
@@ -1169,6 +1188,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			return err
 		}
 		runStats.DurableResourceCaptures++
+		pendingDiagnosticResources = durableResources
 		runStats.ExactCandidateScan = resourceWork.ExactCandidateScan
 		runStats.ReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 		runStats.UniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
@@ -1179,9 +1199,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		recordWriterHold()
 		cutoverLocked = false
 		db.writeMu.Unlock()
-		descriptors, bytes := vacuumDurableResourceSummary(durableResources)
-		runStats.DurableResourceDescriptors += descriptors
-		runStats.DurableResourceBytes += bytes
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
@@ -1201,13 +1218,13 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		holdStarted = time.Now()
 		holdActive = true
 		if finalSyncErr != nil {
-			durableResources.Release()
+			pendingDiagnosticResources.Release()
+			pendingDiagnosticResources = nil
 			unlockCutover(false)
 			cleanupNewPager()
 			return finalSyncErr
 		}
 		selected, selectionErr := selectDurableRootV1(newPager, newPager.PageCount(), db.validateDurableDependencyManifestV1)
-		durableResources.Release()
 		if selectionErr != nil {
 			unlockCutover(false)
 			cleanupNewPager()
@@ -1385,6 +1402,11 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.clearLeafGenerationReachabilityCaches()
 
 		unlockCutover(true)
+		descriptors, bytes := vacuumDurableResourceSummary(pendingDiagnosticResources)
+		runStats.DurableResourceDescriptors += descriptors
+		runStats.DurableResourceBytes += bytes
+		pendingDiagnosticResources.Release()
+		pendingDiagnosticResources = nil
 		if valueLogRefTrackerErr != nil {
 			db.reportError(valueLogRefTrackerErr)
 		}

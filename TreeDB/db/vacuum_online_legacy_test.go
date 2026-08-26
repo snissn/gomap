@@ -61,6 +61,15 @@ func TestVacuumDurableResourceSummaryNil(t *testing.T) {
 	}
 }
 
+func TestPublishVacuumOnlineStatsKeepsNewestAttempt(t *testing.T) {
+	database := &DB{}
+	database.publishVacuumOnlineStats(VacuumOnlineStats{AttemptID: 2, WorkCompleted: true})
+	database.publishVacuumOnlineStats(VacuumOnlineStats{AttemptID: 1, Canceled: true})
+	if got := database.VacuumOnlineStats(); got.AttemptID != 2 || !got.WorkCompleted {
+		t.Fatalf("published stats=%+v want attempt 2", got)
+	}
+}
+
 func TestVacuumIndexOnlineInitialCaptureFailureRecordsAttempt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
