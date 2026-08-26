@@ -989,8 +989,6 @@ type rebuiltDurableResourceWorkV1 struct {
 	ExactCandidateScan            bool
 	ReusedNonValueLogDescriptors  uint64
 	UniqueScannedExternalSegments uint64
-	Descriptors                   uint64
-	Bytes                         uint64
 }
 
 func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {

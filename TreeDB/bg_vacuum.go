@@ -512,24 +512,6 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.lastVacuumUnix.Store(now.Unix())
 }
 
-func (w *bgIndexVacuumWorker) recordOnlineVacuum(db *DB) {
-	if w == nil || db == nil || db.backend == nil {
-		return
-	}
-	stats := db.backend.VacuumOnlineStats()
-	w.lastOnlineVacuum.Store(&stats)
-}
-
-func (w *bgIndexVacuumWorker) recordOnlineVacuumIfAdvanced(db *DB, beforeAttemptID uint64) {
-	if w == nil || db == nil || db.backend == nil {
-		return
-	}
-	after := db.backend.VacuumOnlineStats()
-	if after.AttemptID != 0 && after.AttemptID != beforeAttemptID {
-		w.lastOnlineVacuum.Store(&after)
-	}
-}
-
 func (w *bgIndexVacuumWorker) recordProbeDuration(d time.Duration) {
 	ns := uint64(d)
 	w.probeDurationLastNs.Store(ns)
