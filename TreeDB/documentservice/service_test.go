@@ -133,6 +133,20 @@ func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServiceUnfilteredCountHonorsCancellation(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := svc.CountDocuments(canceled, "docs", CountDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("CountDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
