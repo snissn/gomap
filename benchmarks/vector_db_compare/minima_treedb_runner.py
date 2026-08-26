@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -18,6 +19,7 @@ from treedb_client import TreeDBClient
 
 CLIENT_VERSION = "0.1.0"
 SERVICE_CONTRACT = "treedb-document-service/v1alpha2"
+SERVICE_LOG_TAIL_BYTES = 64 << 10
 
 
 def scalar_filter(spec: dict[str, Any]) -> dict[str, Any]:
@@ -36,6 +38,8 @@ class ServiceController:
     def __init__(self, binary: Path, url: str, data_dir: Path, profile: str, timeout: float) -> None:
         self.binary, self.url, self.data_dir, self.profile, self.timeout = binary, url.rstrip("/"), data_dir, profile, timeout
         self.process: subprocess.Popen[str] | None = None
+        self.log_path = data_dir.parent / "treedb-document-service.log"
+        self.log_file: Any | None = None
         self.rss_max = 0
         self.cpu_seconds = 0.0
         self.samples_complete = True
@@ -59,15 +63,16 @@ class ServiceController:
         address = self.url.removeprefix("http://")
         if "/" in address or self.url.startswith("https://"):
             raise ValueError("owned TreeDB service URL must be a plain http://host:port address")
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
         self.process = subprocess.Popen(
             [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
         )
         deadline, last = time.monotonic() + self.timeout, ""
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
-                last = self.process.stdout.read() if self.process.stdout is not None else ""
-                raise RuntimeError(f"TreeDB service exited during startup: {last}")
+                raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
             try:
                 health = TreeDBClient(self.url, timeout=1).health()
                 if health.get("ok") is True and health.get("contract_version") == SERVICE_CONTRACT:
@@ -79,17 +84,33 @@ class ServiceController:
         raise TimeoutError(f"TreeDB service readiness exceeded {self.timeout}s: {last}")
 
     def stop(self) -> None:
-        if self.process is None:
-            return
-        if self.process.poll() is None:
-            self._sample()
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=self.timeout)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=self.timeout)
-        self.process = None
+        if self.process is not None:
+            if self.process.poll() is None:
+                self._sample()
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=self.timeout)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=self.timeout)
+            self.process = None
+        if self.log_file is not None:
+            self.log_file.close()
+            self.log_file = None
+
+    def log_evidence(self) -> dict[str, Any]:
+        tail = b""
+        if self.log_path.is_file():
+            with self.log_path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - SERVICE_LOG_TAIL_BYTES))
+                tail = stream.read(SERVICE_LOG_TAIL_BYTES)
+        return {
+            "path": str(self.log_path),
+            "tail": tail.decode("utf-8", errors="replace"),
+            "max_tail_bytes": SERVICE_LOG_TAIL_BYTES,
+        }
 
     def resource(self) -> dict[str, Any]:
         self._sample()
@@ -191,7 +212,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                 self.collection, batch, defer_vector_index_rebuild=True))
             if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
                 raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
-
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
@@ -333,7 +353,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             "configuration": {"url": self.url, "collection": self.collection, "dimension": str(self.config["dimension"]),
                               "metric": self.config["metric"], "scalar_fields": "user_id,fpath",
                               "vector_strategy": "native_runtime", "ef_search": str(self.ef_search),
-                              "profile": self.controller.profile, "service_binary": str(self.controller.binary)},
+                              "profile": self.controller.profile, "service_binary": str(self.controller.binary),
+                              "service_log_path": str(self.controller.log_path)},
             "environment": {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
                             "cpu": platform.processor() or "unavailable", "memory": common.memory_bytes(),
                             "python": platform.python_version()},
@@ -378,6 +399,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             for scenario, value in self.route_evidence.items()
         }
         raw["resource_measurement"] = resource
+        raw["service_log"] = self.controller.log_evidence()
         raw["resource_availability"] = {
             "baseline": {"rss_bytes": "owned TreeDB service process", "cpu_seconds": "owned TreeDB service process",
                          "disk_bytes": str(self.controller.data_dir), "bytes_per_op": "unavailable",

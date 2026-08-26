@@ -411,6 +411,11 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.RestartBoundary.NewProcessIdentity = ""
 			a.RawEvidence["treedb"] = raw
 		}},
+		{"missing TreeDB service log tail", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.ServiceLog.Tail = ""
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -504,6 +509,13 @@ func validMinimaArtifact() minimaArtifact {
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
 			},
+		}
+		if backend.Name == "treedb" {
+			evidence := rawEvidence[backend.Name]
+			evidence.ServiceLog = minimaRawServiceLog{
+				Path: "/tmp/treedb-service.log", Tail: "TreeDB Document Service listening", MaxTailBytes: 64 << 10,
+			}
+			rawEvidence[backend.Name] = evidence
 		}
 	}
 	artifact := minimaArtifact{

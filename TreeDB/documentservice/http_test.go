@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -135,6 +137,13 @@ func TestHTTPWriteJSONEncodeErrorKeepsErrorShape(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInternal)
+}
+func TestFormatErrorChainIncludesWrappedRootCause(t *testing.T) {
+	root := errors.New("slab rotation failed")
+	got := formatErrorChain(wrapServiceError(CodeInternal, "insert documents failed", root))
+	if !strings.Contains(got, "insert documents failed") || !strings.Contains(got, "slab rotation failed") {
+		t.Fatalf("error chain=%q", got)
+	}
 }
 
 func TestHTTPL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -19,6 +20,8 @@ class FakeClient:
     def query_by_embedding(self, *args: object, **kwargs: object) -> object:
         self.call = (*args, kwargs)
         return self.response
+
+
 
 
 class MinimaTreeDBRunnerTest(unittest.TestCase):
@@ -71,6 +74,18 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             "id": "d", "content": "c", "embedding": [1.0, 0.0],
             "meta": {"user_id": "u", "fpath": "/a"},
         })
+
+
+    def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = runner.ServiceController(
+                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1,
+            )
+            controller.log_path.write_bytes(b"x" * (runner.SERVICE_LOG_TAIL_BYTES + 10) + b"root cause\n")
+            evidence = controller.log_evidence()
+            self.assertEqual(evidence["path"], str(controller.log_path))
+            self.assertLessEqual(len(evidence["tail"].encode()), runner.SERVICE_LOG_TAIL_BYTES)
+            self.assertTrue(evidence["tail"].endswith("root cause\n"))
 
 
 if __name__ == "__main__":

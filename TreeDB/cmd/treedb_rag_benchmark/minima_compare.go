@@ -94,6 +94,12 @@ type minimaRawRestartBoundary struct {
 	Verified           bool   `json:"verified"`
 }
 
+type minimaRawServiceLog struct {
+	Path         string `json:"path"`
+	Tail         string `json:"tail"`
+	MaxTailBytes int    `json:"max_tail_bytes"`
+}
+
 type minimaRawBackendEvidence struct {
 	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                    []json.RawMessage                       `json:"events,omitempty"`
@@ -101,6 +107,7 @@ type minimaRawBackendEvidence struct {
 	FinalScrollState          minimaRawFinalState                     `json:"final_scroll_state"`
 	ResourceMeasurement       minimaRawResourceMeasurement            `json:"resource_measurement"`
 	RestartBoundary           minimaRawRestartBoundary                `json:"restart_boundary"`
+	ServiceLog                minimaRawServiceLog                     `json:"service_log,omitempty"`
 	ResourceAvailability      map[string]map[string]string            `json:"resource_availability,omitempty"`
 	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
 }
@@ -305,6 +312,11 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			restart.OldPID <= 0 || restart.NewPID <= 0 || restart.OldPID == restart.NewPID ||
 			restart.HookIdentity == "" || restart.OldProcessIdentity == "" || restart.NewProcessIdentity == "" {
 			return fmt.Errorf("minima artifact: %s backend restart boundary is unproven", name)
+		}
+		if name == "treedb" {
+			if raw.ServiceLog.Path == "" || raw.ServiceLog.Tail == "" || raw.ServiceLog.MaxTailBytes != 64<<10 {
+				return fmt.Errorf("minima artifact: TreeDB bounded service log evidence missing")
+			}
 		}
 		resource := raw.ResourceMeasurement
 		if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
