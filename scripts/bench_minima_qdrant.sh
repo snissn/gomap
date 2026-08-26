@@ -13,6 +13,7 @@ QDRANT_URL="${QDRANT_URL:-}"
 QDRANT_BIN="${QDRANT_BIN:-}"
 QDRANT_IMAGE="${QDRANT_IMAGE:-qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc}"
 QDRANT_COLLECTION="${QDRANT_COLLECTION:-gomap_minima_${RANDOM}_$$}"
+QDRANT_STORAGE_PATH_INPUT="${QDRANT_STORAGE_PATH:-}"
 QDRANT_STORAGE_PATH="${QDRANT_STORAGE_PATH:-$RUN_DIR/qdrant-storage}"
 QDRANT_READY_TIMEOUT="${QDRANT_READY_TIMEOUT:-120}"
 QDRANT_OPERATION_TIMEOUT="${QDRANT_OPERATION_TIMEOUT:-120}"
@@ -49,7 +50,23 @@ if [[ -n "$QDRANT_URL" && -n "$QDRANT_BIN" ]]; then
 	exit 2
 fi
 
-mkdir -p "$RUN_DIR" "$QDRANT_STORAGE_PATH" "$(dirname "$MANIFEST_PATH")" "$(dirname "$OUTPUT_PATH")"
+mkdir -p "$RUN_DIR" "$(dirname "$MANIFEST_PATH")" "$(dirname "$OUTPUT_PATH")"
+if [[ -n "$QDRANT_URL" ]]; then
+	if [[ -z "$QDRANT_RESTART_HOOK" || ! -x "$QDRANT_RESTART_HOOK" ]]; then
+		echo "External Qdrant requires executable QDRANT_RESTART_HOOK that restarts the same durable service and prints its PID" >&2
+		exit 2
+	fi
+	if [[ ! "$QDRANT_SERVER_PID" =~ ^[1-9][0-9]*$ ]]; then
+		echo "External Qdrant requires authoritative positive QDRANT_SERVER_PID" >&2
+		exit 2
+	fi
+	if [[ -z "$QDRANT_STORAGE_PATH_INPUT" || ! -d "$QDRANT_STORAGE_PATH_INPUT" ]]; then
+		echo "External Qdrant requires existing authoritative QDRANT_STORAGE_PATH" >&2
+		exit 2
+	fi
+else
+	mkdir -p "$QDRANT_STORAGE_PATH"
+fi
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install --disable-pip-version-check "qdrant-client==1.19.0"
 
@@ -59,10 +76,6 @@ go run ./TreeDB/cmd/treedb_rag_benchmark \
 	-dump-minima-manifest "$MANIFEST_PATH"
 
 if [[ -n "$QDRANT_URL" ]]; then
-	if [[ -z "$QDRANT_RESTART_HOOK" || ! -x "$QDRANT_RESTART_HOOK" ]]; then
-		echo "External Qdrant requires executable QDRANT_RESTART_HOOK that restarts the same durable service and prints its PID" >&2
-		exit 2
-	fi
 	DEPLOYMENT=external
 elif [[ -n "$QDRANT_BIN" ]]; then
 	if [[ ! -x "$QDRANT_BIN" ]]; then
@@ -110,6 +123,10 @@ else
 		QDRANT_SERVER_PID=$(docker inspect --format '{{.State.Pid}}' "$QDRANT_CONTAINER")
 	fi
 fi
+if [[ ! "$QDRANT_SERVER_PID" =~ ^[1-9][0-9]*$ ]]; then
+	echo "Qdrant qualification requires an authoritative host server PID; got: ${QDRANT_SERVER_PID:-unset}" >&2
+	exit 2
+fi
 
 QDRANT_API_KEY="$QDRANT_API_KEY" "$VENV/bin/python" - "$QDRANT_URL" "$QDRANT_READY_TIMEOUT" <<'PY'
 import json
@@ -154,12 +171,8 @@ fi
 if [[ "$DEPLOYMENT" == "docker" ]]; then
 	RUNNER_ARGS+=(--image "$QDRANT_IMAGE")
 fi
-if [[ "$DEPLOYMENT" != "external" ]]; then
-	RUNNER_ARGS+=(--storage-path "$QDRANT_STORAGE_PATH")
-fi
-if [[ -n "$QDRANT_SERVER_PID" ]]; then
-	RUNNER_ARGS+=(--server-pid "$QDRANT_SERVER_PID")
-fi
+RUNNER_ARGS+=(--storage-path "$QDRANT_STORAGE_PATH")
+RUNNER_ARGS+=(--server-pid "$QDRANT_SERVER_PID")
 
 QDRANT_API_KEY="$QDRANT_API_KEY" "$VENV/bin/python" \
 	benchmarks/vector_db_compare/minima_qdrant_runner.py \

@@ -401,6 +401,16 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"measured allocations omitted", func(a *minimaArtifact) {
 			minimaTestRow(a, "treedb", "small").Resource.AllocationAvailability = "measured"
 		}},
+		{"unchanged restart PID", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.RestartBoundary.NewPID = raw.RestartBoundary.OldPID
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"missing restart process identity", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.RestartBoundary.NewProcessIdentity = ""
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -483,7 +493,12 @@ func validMinimaArtifact() minimaArtifact {
 			PhaseLatencyDistributions: map[string]minimaRawLatencyDistribution{
 				"search": {Count: 1, TotalNanos: 7, MinimumNanos: 7, P50Nanos: 7, P95Nanos: 7, P99Nanos: 7, MaximumNanos: 7},
 			},
-			Events:              []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
+			Events: []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
+			RestartBoundary: minimaRawRestartBoundary{
+				HookIdentity: "test restart hook", OldPID: 100, NewPID: 101,
+				OldProcessIdentity: "old process", NewProcessIdentity: "new process",
+				PIDChanged: true, Verified: true,
+			},
 			ResourceMeasurement: minimaRawResourceMeasurement{Captured: true},
 			ResourceAvailability: map[string]map[string]string{
 				"baseline": {"rss_bytes": "test"},

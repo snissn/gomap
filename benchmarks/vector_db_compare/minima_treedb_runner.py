@@ -306,8 +306,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         self.operations["explicit_delete_visible"] = True
         self.evidence.preclose["small"] = self.search("small_preclose", "small")
         assert self.client is not None
+        self.capture_restart_origin()
         self.client.close()
         self.client = None
+        self.restart_backend()
         self.reopen_attempted = True
         self.connect()
         self.ensure_compatible()

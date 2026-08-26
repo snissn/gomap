@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import subprocess
 import threading
 import time
 import sys
@@ -54,7 +56,7 @@ class SharedQdrant:
 
     def restart(self) -> int:
         self.restart_count += 1
-        return 1
+        return 2
 
     def factory(self) -> "FakeClient":
         client = FakeClient(self)
@@ -258,7 +260,8 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
     return runner.QdrantMinimaRunner(manifest, client_factory=shared.factory, models=Models, url="http://fake",
         collection="tiny", allow_drop=allow_drop, operation_timeout=1, optimizer_timeout=0.1,
         poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
-        server_pid=None, restart_server=shared.restart, restart_identity="fake owned server")
+        server_pid=1, restart_server=shared.restart, restart_identity="fake owned server",
+        process_identity=lambda pid: f"fake-process-{pid}")
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -395,6 +398,9 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertTrue(all(client.closed for client in shared.clients))
         self.assertEqual(shared.restart_count, 1)
         raw = artifact["backend_raw_evidence"]["qdrant"]
+        self.assertEqual(raw["restart_boundary"]["old_pid"], 1)
+        self.assertEqual(raw["restart_boundary"]["new_pid"], 2)
+        self.assertTrue(raw["restart_boundary"]["verified"])
         self.assertTrue(raw["final_scroll_state"]["match"])
         self.assertFalse(artifact["passing"])
         self.assertEqual(artifact["state"], "partial")
@@ -443,6 +449,42 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "restart hook"):
             workload.run()
         workload.close()
+    def test_restart_rejects_noop_pid(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.restart_server = lambda: workload.server_pid
+        with self.assertRaisesRegex(RuntimeError, "original PID"):
+            workload.restart_backend()
+
+    def test_qdrant_evidence_inputs_require_pid_and_storage(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runner.validate_qdrant_evidence_inputs(123, Path(directory))
+            for pid, storage in ((None, Path(directory)), (0, Path(directory)), (123, None),
+                                 (123, Path(directory) / "missing")):
+                with self.subTest(pid=pid, storage=storage), self.assertRaises(RuntimeError):
+                    runner.validate_qdrant_evidence_inputs(pid, storage)
+
+    def test_external_launcher_requires_explicit_storage_before_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            hook = Path(directory) / "restart"
+            hook.write_text("#!/usr/bin/env bash\nprintf '2\\n'\n", encoding="utf-8")
+            hook.chmod(0o755)
+            environment = dict(os.environ)
+            environment.pop("QDRANT_STORAGE_PATH", None)
+            environment.update({
+                "QDRANT_URL": "http://127.0.0.1:1",
+                "QDRANT_RESTART_HOOK": str(hook),
+                "QDRANT_SERVER_PID": "1",
+                "RUN_DIR": str(Path(directory) / "run"),
+            })
+            script = Path(__file__).resolve().parents[2] / "scripts" / "bench_minima_qdrant.sh"
+            result = subprocess.run(
+                ["bash", str(script)], cwd=script.parents[1], env=environment,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("authoritative QDRANT_STORAGE_PATH", result.stderr)
+
 
     def test_reads_after_writer_completion_fail_overlap_contracts(self) -> None:
         manifest = tiny_manifest()

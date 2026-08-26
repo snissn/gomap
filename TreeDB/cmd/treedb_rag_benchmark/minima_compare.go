@@ -84,12 +84,23 @@ type minimaRawResourceMeasurement struct {
 	End        *minimaRawResourceSnapshot `json:"end,omitempty"`
 }
 
+type minimaRawRestartBoundary struct {
+	HookIdentity       string `json:"hook_identity"`
+	OldPID             int    `json:"old_pid"`
+	NewPID             int    `json:"new_pid"`
+	OldProcessIdentity string `json:"old_process_identity"`
+	NewProcessIdentity string `json:"new_process_identity"`
+	PIDChanged         bool   `json:"pid_changed"`
+	Verified           bool   `json:"verified"`
+}
+
 type minimaRawBackendEvidence struct {
 	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                    []json.RawMessage                       `json:"events,omitempty"`
 	TimedOverlap              minimaRawTimedOverlap                   `json:"timed_overlap"`
 	FinalScrollState          minimaRawFinalState                     `json:"final_scroll_state"`
 	ResourceMeasurement       minimaRawResourceMeasurement            `json:"resource_measurement"`
+	RestartBoundary           minimaRawRestartBoundary                `json:"restart_boundary"`
 	ResourceAvailability      map[string]map[string]string            `json:"resource_availability,omitempty"`
 	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
 }
@@ -289,6 +300,12 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			return fmt.Errorf("minima artifact: %s raw full-state evidence mismatch", name)
 		}
 		actualHashes[name] = state.ActualHash
+		restart := raw.RestartBoundary
+		if !restart.Verified || !restart.PIDChanged ||
+			restart.OldPID <= 0 || restart.NewPID <= 0 || restart.OldPID == restart.NewPID ||
+			restart.HookIdentity == "" || restart.OldProcessIdentity == "" || restart.NewProcessIdentity == "" {
+			return fmt.Errorf("minima artifact: %s backend restart boundary is unproven", name)
+		}
 		resource := raw.ResourceMeasurement
 		if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
 			return fmt.Errorf("minima artifact: %s raw resource evidence missing", name)

@@ -682,6 +682,22 @@ def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[st
             "measurement_error": error,
         },
     }
+def server_process_identity(pid: int) -> str:
+    if type(pid) is not int or pid <= 0:
+        raise RuntimeError("server process identity requires a positive PID")
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)],
+            check=True, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"cannot capture server process identity for PID {pid}: {exc}") from exc
+    identity = " ".join(result.stdout.split())
+    if not identity:
+        raise RuntimeError(f"cannot capture server process identity for PID {pid}")
+    return identity
+
+
 
 
 def resource_delta(baseline: dict[str, Any], end: dict[str, Any]) -> dict[str, Any]:
@@ -790,7 +806,8 @@ class QdrantMinimaRunner:
                  collection: str, allow_drop: bool, operation_timeout: int, optimizer_timeout: float,
                  poll_interval: float, server_version: str, deployment: str, image: str,
                  storage_path: Path | None, server_pid: int | None,
-                 restart_server: Callable[[], int] | None = None, restart_identity: str = "") -> None:
+                 restart_server: Callable[[], int] | None = None, restart_identity: str = "",
+                 process_identity: Callable[[int], str] = server_process_identity) -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
         self.mutation_vectors = {
@@ -803,7 +820,7 @@ class QdrantMinimaRunner:
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
         self.server_pid = server_pid
-        self.restart_server, self.restart_identity = restart_server, restart_identity
+        self.restart_server, self.restart_identity, self.process_identity = restart_server, restart_identity, process_identity
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
         self.operations = {
@@ -817,6 +834,8 @@ class QdrantMinimaRunner:
         self.reopen_attempted = self.reopen_parity = False
         self.resource_baseline: dict[str, Any] | None = None
         self.completed_resource_segments: list[dict[str, Any]] = []
+        self.restart_boundary: dict[str, Any] = {}
+        self.restart_origin: tuple[int, str] | None = None
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
@@ -824,16 +843,37 @@ class QdrantMinimaRunner:
     def connect(self) -> None:
         self.client = self.client_factory()
 
+    def capture_restart_origin(self) -> None:
+        old_pid = self.server_pid
+        if type(old_pid) is not int or old_pid <= 0:
+            raise RuntimeError("close/reopen requires the original backend server PID")
+        old_process_identity = self.process_identity(old_pid)
+        if self.resource_baseline is not None:
+            self.completed_resource_segments.append(
+                resource_delta(self.resource_baseline, server_resource_usage(old_pid, self.storage_path))
+            )
+        self.restart_origin = (old_pid, old_process_identity)
+
     def restart_backend(self) -> None:
         if self.restart_server is None or not self.restart_identity:
             raise RuntimeError("close/reopen requires an explicit backend restart hook")
-        if self.resource_baseline is not None:
-            self.completed_resource_segments.append(
-                resource_delta(self.resource_baseline, server_resource_usage(self.server_pid, self.storage_path))
-            )
+        if self.restart_origin is None:
+            self.capture_restart_origin()
+        old_pid, old_process_identity = self.restart_origin
+        self.restart_origin = None
         new_pid = self.restart_server()
         if type(new_pid) is not int or new_pid <= 0:
             raise RuntimeError("backend restart hook must return the restarted Qdrant server PID")
+        if new_pid == old_pid:
+            raise RuntimeError("backend restart hook returned the original PID; restart is unproven")
+        new_process_identity = self.process_identity(new_pid)
+        self.restart_boundary = {
+            "hook_identity": self.restart_identity,
+            "old_pid": old_pid, "new_pid": new_pid,
+            "old_process_identity": old_process_identity,
+            "new_process_identity": new_process_identity,
+            "pid_changed": True, "verified": True,
+        }
         self.server_pid = new_pid
         self.resource_baseline = server_resource_usage(self.server_pid, self.storage_path)
 
@@ -1304,6 +1344,7 @@ class QdrantMinimaRunner:
                 assert self.client is not None
                 for scenario in self.specs:
                     self.evidence.preclose[scenario] = self.search("preclose_reopen_baseline", scenario)
+                self.capture_restart_origin()
                 self.client.close()
                 self.client = None
                 self.restart_backend()
@@ -1416,6 +1457,7 @@ class QdrantMinimaRunner:
                 "phase_latency_distributions": latency_distributions, "events": self.evidence.events,
                 "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
                 "resource_measurement": resource,
+                "restart_boundary": self.restart_boundary,
                 "resource_availability": {
                     "baseline": resource["baseline"]["availability"],
                     "end": resource["end"]["availability"],
@@ -1461,6 +1503,13 @@ def restart_from_hook(hook: Path, url: str, api_key: str, ready_timeout: float) 
     raise TimeoutError(f"restarted Qdrant did not become ready within {ready_timeout}s: {last}")
 
 
+def validate_qdrant_evidence_inputs(server_pid: int | None, storage_path: Path | None) -> None:
+    if type(server_pid) is not int or server_pid <= 0:
+        raise RuntimeError("Qdrant qualification requires an authoritative positive server PID")
+    if storage_path is None or not storage_path.is_dir():
+        raise RuntimeError("Qdrant qualification requires an existing authoritative storage path")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -1474,14 +1523,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--deployment", choices=("external", "standalone", "docker"), required=True)
     parser.add_argument("--image", default="")
-    parser.add_argument("--storage-path", type=Path)
+    parser.add_argument("--storage-path", type=Path, required=True)
     parser.add_argument("--restart-hook", type=Path, required=True)
-    parser.add_argument("--server-pid", type=int)
+    parser.add_argument("--server-pid", type=int, required=True)
     return parser.parse_args()
 
 
 def main() -> int:
     args, manifest = parse_args(), None
+    validate_qdrant_evidence_inputs(args.server_pid, args.storage_path)
     manifest = load_manifest(args.manifest)
     installed = importlib.metadata.version("qdrant-client")
     if installed != CLIENT_VERSION:
