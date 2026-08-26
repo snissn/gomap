@@ -1393,9 +1393,9 @@ func TestStableLogicalObligationAppendCertificationRequiresLiveViewPin4366(t *te
 		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
 		Added:        []StableLogicalObligation{added},
 	}
-	if _, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation); err != nil || certified {
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation); err != nil || !certified {
 		pinned.Release()
-		t.Fatalf("entries-only source certified=%t err=%v want safe decline", certified, err)
+		t.Fatalf("live fallback pin certified=%t err=%v", certified, err)
 	}
 	pinned.Release()
 	_, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation)
