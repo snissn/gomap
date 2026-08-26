@@ -5,7 +5,7 @@
   "fixture_sha256": "61f7900d8d0487c396029b887ed3014e9596e5bf45a08903589bdcf9bf646fb3",
   "ids_sha256": "593bb64528dee44260768fb852b4d5ec53208d2725c8006b3165dc63903126a9",
   "peak_rss_scope": "fresh_process_per_mode",
-  "peak_rss_pid": 97400,
+  "peak_rss_pid": 6604,
   "source_documents": 100000,
   "generated_chunks": 0,
   "indexed_live_rows": 50000,
@@ -22,13 +22,13 @@
     "reason": "TreeDB exposes deleted-document tombstone debt but no stale-debt counter"
   },
   "tombstone_debt": 50000,
-  "source_docs_per_second": 44310.70161132016,
+  "source_docs_per_second": 70972.76995329288,
   "chunks_per_second": 0,
-  "indexed_rows_per_second": 22155.35080566008,
-  "wall_seconds": 2.256791167,
+  "indexed_rows_per_second": 35486.38497664644,
+  "wall_seconds": 1.408991083,
   "cpu_seconds": {
     "state": "observed",
-    "value": 2.2557660000000004
+    "value": 1.6266580000000002
   },
   "bytes_per_op": {
     "state": "unavailable",
@@ -40,11 +40,11 @@
   },
   "cumulative_allocations": {
     "state": "observed",
-    "value": 8724891
+    "value": 8724877
   },
   "peak_rss_bytes": {
     "state": "observed",
-    "value": 470122496
+    "value": 422428672
   },
   "stages": {
     "analyzer": {
@@ -53,7 +53,7 @@
     },
     "checkpoint": {
       "state": "observed",
-      "value": 0.013811958
+      "value": 0.015916375
     },
     "posting_builder": {
       "state": "unavailable",
@@ -61,7 +61,7 @@
     },
     "reopen_validation": {
       "state": "observed",
-      "value": 0.117002125
+      "value": 0.103841166
     },
     "root_mutation": {
       "state": "unavailable",
@@ -76,9 +76,9 @@
     "physical_index_page_bytes": 49020928,
     "physical_value_log_bytes": 0,
     "physical_wal_bytes": 0,
-    "physical_other_bytes": 374,
-    "physical_total_bytes": 49021302,
-    "physical_total_wal_excluded_bytes": 49021302,
+    "physical_other_bytes": 373,
+    "physical_total_bytes": 49021301,
+    "physical_total_wal_excluded_bytes": 49021301,
     "other_paths": [
       "LOCK",
       "format.json",
