@@ -151,6 +151,15 @@ type testCreateCollectionPublishHook struct {
 	fn func(CollectionMeta)
 }
 
+var testBeforeSchemaBackfillPublishHook struct {
+	installMu sync.Mutex
+	ptr       atomic.Pointer[testSchemaBackfillPublishHook]
+}
+
+type testSchemaBackfillPublishHook struct {
+	fn func(string)
+}
+
 type collectionCatalogLoadFaultStage string
 
 const (
@@ -3868,6 +3877,22 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c.db.CommandWALEnabled() {
 		return nil, fmt.Errorf("%w: collection catalog index mutation is rejected under command_wal_v2 until catalog index commands are supported", backenddb.ErrCommandWALRejected)
 	}
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		meta, err := c.createIndexOnce(def)
+		if err == nil {
+			return meta, nil
+		}
+		if !isRetriableTextIndexMutationError(err) {
+			return nil, err
+		}
+		lastErr = err
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) createIndexOnce(def IndexDefinition) (*CollectionMeta, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -3927,6 +3952,12 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
+	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, newMeta, plan.rootNames, plan.tables)
+	if err != nil {
+		resetCollectionTables(plan.tables)
+		return nil, err
+	}
+	defer cleanupPointerized()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
@@ -3937,7 +3968,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		resetCollectionTables(plan.tables)
 	}()
 	for i, rootName := range plan.rootNames {
-		iter := plan.tables[i].NewIterator(nil, nil)
+		iter := publishTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      plan.baseRootIDs[rootName],
@@ -3946,7 +3977,13 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		})
 	}
 
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if hook := testBeforeSchemaBackfillPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
+		hook.fn("index")
+	}
+	preflight := func() error {
+		return c.validateMutationRootDescriptors(snap.Pager(), snapshotUserRoot(snap), snapshotSystemRoot(snap), snapshotCommitSeq(snap))
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildSchemaAndRootDescriptorSystemIterator(baseMeta, newMeta, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {
