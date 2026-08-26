@@ -13,6 +13,8 @@ const (
 	minimaDimension      = 8
 	minimaLookupLimit    = 4096
 	minimaRepresentative = 500000
+	minimaOrderTolerance = 0
+	minimaScoreTolerance = 0.000001
 )
 
 type minimaWorkloadConfig struct {
@@ -29,6 +31,8 @@ type minimaWorkloadConfig struct {
 	WarmupQueries     int      `json:"warmup_queries"`
 	TimedQueries      int      `json:"timed_queries"`
 	LookupLimit       int      `json:"lookup_limit"`
+	OrderTolerance    int      `json:"order_tolerance"`
+	ScoreTolerance    float64  `json:"score_tolerance"`
 	Ordering          string   `json:"ordering"`
 	Completion        string   `json:"completion_boundary"`
 	Timing            string   `json:"timing_boundary"`
@@ -59,22 +63,49 @@ type minimaQuerySpec struct {
 	OracleScore []float64 `json:"oracle_scores"`
 }
 
+type minimaInsertRange struct {
+	Scenario string `json:"scenario"`
+	Start    int    `json:"start"`
+	Rows     int    `json:"rows"`
+}
+
+type minimaFilterInput struct {
+	UserID string `json:"user_id"`
+	FPath  string `json:"fpath"`
+}
+
+type minimaInterleaveStep struct {
+	Ordinal      int    `json:"ordinal"`
+	Actor        string `json:"actor"`
+	Scenario     string `json:"scenario"`
+	QueryOrdinal int    `json:"query_ordinal,omitempty"`
+	InsertStart  int    `json:"insert_start,omitempty"`
+	InsertRows   int    `json:"insert_rows,omitempty"`
+}
+
 type minimaOperationSpec struct {
-	Ordinal int    `json:"ordinal"`
-	Name    string `json:"name"`
-	Target  string `json:"target"`
-	Timed   bool   `json:"timed"`
+	Ordinal      int                       `json:"ordinal"`
+	Name         string                    `json:"name"`
+	Target       string                    `json:"target"`
+	Timed        bool                      `json:"timed"`
+	Effect       string                    `json:"effect"`
+	InsertRanges []minimaInsertRange       `json:"insert_ranges,omitempty"`
+	Filter       *minimaFilterInput        `json:"filter,omitempty"`
+	IDs          []string                  `json:"ids,omitempty"`
+	Documents    []minimaGeneratedDocument `json:"documents,omitempty"`
+	Schedule     []minimaInterleaveStep    `json:"schedule,omitempty"`
 }
 
 type minimaManifest struct {
-	Schema          string                `json:"schema"`
-	Config          minimaWorkloadConfig  `json:"config"`
-	Corpora         []minimaScenarioSpec  `json:"corpora"`
-	Queries         []minimaQuerySpec     `json:"queries"`
-	Operations      []minimaOperationSpec `json:"operations"`
-	CorpusSHA256    string                `json:"corpus_sha256"`
-	QuerySHA256     string                `json:"query_sha256"`
-	OperationSHA256 string                `json:"operation_sha256"`
+	Schema              string                `json:"schema"`
+	Config              minimaWorkloadConfig  `json:"config"`
+	Corpora             []minimaScenarioSpec  `json:"corpora"`
+	Queries             []minimaQuerySpec     `json:"queries"`
+	Operations          []minimaOperationSpec `json:"operations"`
+	CorpusSHA256        string                `json:"corpus_sha256"`
+	QuerySHA256         string                `json:"query_sha256"`
+	OperationSHA256     string                `json:"operation_sha256"`
+	ExpectedStateSHA256 string                `json:"expected_state_sha256"`
 }
 
 type minimaGeneratedDocument struct {
@@ -91,6 +122,7 @@ func defaultMinimaWorkloadConfig() minimaWorkloadConfig {
 		Dimension: minimaDimension, Metric: "cosine", ScalarFields: []string{"user_id", "fpath"},
 		TopK: 5, BatchSize: 256, ReaderConcurrency: 4, WriterConcurrency: 1,
 		WarmupQueries: 32, TimedQueries: 1024, LookupLimit: minimaLookupLimit,
+		OrderTolerance: minimaOrderTolerance, ScoreTolerance: minimaScoreTolerance,
 		Ordering:   "manifest_ordinal_serial; timed_search_round_robin",
 		Completion: "successful_mutation_response_before_visibility_probe",
 		Timing:     "storage_calls_only; embeddings_and_llm_excluded; fetch_and_decode_separate",
@@ -110,7 +142,7 @@ func buildMinimaManifest() minimaManifest {
 	}
 	for i := range corpora {
 		corpora[i].Selectivity = float64(corpora[i].EligibleRows) / float64(corpora[i].CorpusRows)
-		corpora[i].Generator = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-<ordinal%31>,/other/<ordinal%97>.txt"
+		corpora[i].Generator = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
 	}
 	queries := make([]minimaQuerySpec, 0, len(corpora))
 	for _, corpus := range corpora {
@@ -119,29 +151,146 @@ func buildMinimaManifest() minimaManifest {
 		vector[0] = 1
 		queries = append(queries, minimaQuerySpec{Scenario: corpus.Name, Vector: vector, OracleIDs: ids, OracleScore: scores})
 	}
+	initialRanges, concurrentRanges := minimaInsertRanges(corpora, defaultMinimaWorkloadConfig().BatchSize)
+	mixed := corpora[5]
+	mixedIDs, _ := minimaOracle(mixed)
+	replacements := make([]minimaGeneratedDocument, len(mixedIDs))
+	for i := range replacements {
+		replacements[i], _ = minimaDocumentAt(mixed, mixed.EligibleStart+i)
+		replacements[i].ID = fmt.Sprintf("minima/%s/replacement/%06d", mixed.Name, i)
+		replacements[i].Content = fmt.Sprintf("minima:%s:replacement:%d", mixed.Name, i)
+	}
+	updated, _ := minimaDocumentAt(corpora[0], corpora[0].EligibleStart)
+	updated.Content = "minima:small:16:updated"
+	deleted, _ := minimaDocumentAt(corpora[0], corpora[0].EligibleStart+1)
+	filter := &minimaFilterInput{UserID: mixed.UserID, FPath: mixed.FPath}
 	operations := []minimaOperationSpec{
-		{0, "ensure_compatible_collection", "all", false},
-		{1, "initial_batch_insert", "all", false},
-		{2, "warmup_search", "all", false},
-		{3, "timed_search_with_batch_insert", "all", true},
-		{4, "reindex_delete_by_user_and_fpath_while_reading", "mixed_broad_narrow", false},
-		{5, "reindex_replacement_insert_while_reading", "mixed_broad_narrow", false},
-		{6, "reindex_visibility_probe", "mixed_broad_narrow", false},
-		{7, "explicit_update", "small", false},
-		{8, "update_visibility_probe", "small", false},
-		{9, "explicit_delete", "small", false},
-		{10, "delete_visibility_probe", "small", false},
-		{11, "empty_user_and_file_probes", "empty_user,empty_file", false},
-		{12, "close", "all", false},
-		{13, "reopen", "all", false},
-		{14, "idempotent_ensure_after_reopen", "all", false},
-		{15, "final_manifest_and_oracle_comparison", "all", false},
+		{Ordinal: 0, Name: "ensure_compatible_collection", Target: "all", Effect: "none"},
+		{Ordinal: 1, Name: "initial_batch_insert", Target: "all", Effect: "insert", InsertRanges: initialRanges},
+		{Ordinal: 2, Name: "warmup_search", Target: "all", Effect: "none", Schedule: minimaReaderSchedule(corpora, defaultMinimaWorkloadConfig().WarmupQueries)},
+		{Ordinal: 3, Name: "timed_search_with_batch_insert", Target: "all", Timed: true, Effect: "insert", InsertRanges: concurrentRanges, Schedule: minimaInsertSchedule(concurrentRanges)},
+		{Ordinal: 4, Name: "reindex_delete_by_user_and_fpath_while_reading", Target: mixed.Name, Effect: "delete", Filter: filter, IDs: mixedIDs, Schedule: minimaMutationSchedule(mixed.Name)},
+		{Ordinal: 5, Name: "reindex_replacement_insert_while_reading", Target: mixed.Name, Effect: "insert", Documents: replacements, Schedule: minimaMutationSchedule(mixed.Name)},
+		{Ordinal: 6, Name: "reindex_visibility_probe", Target: mixed.Name, Effect: "none", Schedule: minimaReaderSchedule([]minimaScenarioSpec{mixed}, 1)},
+		{Ordinal: 7, Name: "explicit_update", Target: corpora[0].Name, Effect: "update", Documents: []minimaGeneratedDocument{updated}},
+		{Ordinal: 8, Name: "update_visibility_probe", Target: corpora[0].Name, Effect: "none", Schedule: minimaReaderSchedule(corpora[:1], 1)},
+		{Ordinal: 9, Name: "explicit_delete", Target: corpora[0].Name, Effect: "delete", IDs: []string{deleted.ID}},
+		{Ordinal: 10, Name: "delete_visibility_probe", Target: corpora[0].Name, Effect: "none", Schedule: minimaReaderSchedule(corpora[:1], 1)},
+		{Ordinal: 11, Name: "empty_user_and_file_probes", Target: "empty_user,empty_file", Effect: "none", Schedule: minimaReaderSchedule(corpora[6:], 2)},
+		{Ordinal: 12, Name: "close", Target: "all", Effect: "none"},
+		{Ordinal: 13, Name: "reopen", Target: "all", Effect: "none"},
+		{Ordinal: 14, Name: "idempotent_ensure_after_reopen", Target: "all", Effect: "none"},
+		{Ordinal: 15, Name: "final_manifest_and_oracle_comparison", Target: "all", Effect: "none", Schedule: minimaReaderSchedule(corpora, len(corpora))},
 	}
 	manifest := minimaManifest{Schema: minimaManifestSchema, Config: defaultMinimaWorkloadConfig(), Corpora: corpora, Queries: queries, Operations: operations}
 	manifest.CorpusSHA256 = minimaDigest(corpora)
 	manifest.QuerySHA256 = minimaDigest(queries)
 	manifest.OperationSHA256 = minimaDigest(operations)
+	manifest.ExpectedStateSHA256, _ = minimaExpectedStateHash(&manifest)
 	return manifest
+}
+func minimaInsertRanges(corpora []minimaScenarioSpec, batchSize int) ([]minimaInsertRange, []minimaInsertRange) {
+	initial := make([]minimaInsertRange, 0, len(corpora))
+	concurrent := make([]minimaInsertRange, 0, len(corpora))
+	for _, corpus := range corpora {
+		rows := min(batchSize, max(1, corpus.CorpusRows/8))
+		initial = append(initial, minimaInsertRange{Scenario: corpus.Name, Start: 0, Rows: corpus.CorpusRows - rows})
+		concurrent = append(concurrent, minimaInsertRange{Scenario: corpus.Name, Start: corpus.CorpusRows - rows, Rows: rows})
+	}
+	return initial, concurrent
+}
+
+func minimaReaderSchedule(corpora []minimaScenarioSpec, count int) []minimaInterleaveStep {
+	steps := make([]minimaInterleaveStep, count)
+	for i := range steps {
+		steps[i] = minimaInterleaveStep{Ordinal: i, Actor: "reader", Scenario: corpora[i%len(corpora)].Name, QueryOrdinal: i}
+	}
+	return steps
+}
+
+func minimaInsertSchedule(ranges []minimaInsertRange) []minimaInterleaveStep {
+	steps := make([]minimaInterleaveStep, 0, len(ranges)*3)
+	for i, insertion := range ranges {
+		steps = append(steps,
+			minimaInterleaveStep{Ordinal: len(steps), Actor: "reader_before", Scenario: insertion.Scenario, QueryOrdinal: i * 2},
+			minimaInterleaveStep{Ordinal: len(steps) + 1, Actor: "writer_batch", Scenario: insertion.Scenario, InsertStart: insertion.Start, InsertRows: insertion.Rows},
+			minimaInterleaveStep{Ordinal: len(steps) + 2, Actor: "reader_after", Scenario: insertion.Scenario, QueryOrdinal: i*2 + 1},
+		)
+	}
+	return steps
+}
+
+func minimaMutationSchedule(scenario string) []minimaInterleaveStep {
+	return []minimaInterleaveStep{
+		{Ordinal: 0, Actor: "reader_before", Scenario: scenario, QueryOrdinal: 0},
+		{Ordinal: 1, Actor: "writer_mutation", Scenario: scenario},
+		{Ordinal: 2, Actor: "reader_after", Scenario: scenario, QueryOrdinal: 1},
+	}
+}
+
+type minimaStateMutation struct {
+	Ordinal      int                       `json:"ordinal"`
+	Effect       string                    `json:"effect"`
+	Target       string                    `json:"target"`
+	InsertRanges []minimaInsertRange       `json:"insert_ranges,omitempty"`
+	IDs          []string                  `json:"ids,omitempty"`
+	Documents    []minimaGeneratedDocument `json:"documents,omitempty"`
+}
+
+type minimaPostOperationState struct {
+	BaseCorpusSHA256 string                `json:"base_corpus_sha256"`
+	LiveRows         map[string]int        `json:"live_rows"`
+	Mutations        []minimaStateMutation `json:"mutations"`
+}
+
+func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
+	state := minimaPostOperationState{BaseCorpusSHA256: manifest.CorpusSHA256, LiveRows: map[string]int{}}
+	specs := minimaScenarioMap(manifest)
+	for _, operation := range manifest.Operations {
+		switch operation.Effect {
+		case "none":
+			continue
+		case "insert":
+			for _, insertion := range operation.InsertRanges {
+				spec, ok := specs[insertion.Scenario]
+				if !ok || insertion.Start < 0 || insertion.Rows <= 0 || insertion.Start+insertion.Rows > spec.CorpusRows {
+					return "", fmt.Errorf("minima state: invalid insert range in operation %d", operation.Ordinal)
+				}
+				state.LiveRows[insertion.Scenario] += insertion.Rows
+			}
+			if len(operation.Documents) > 0 {
+				if _, ok := specs[operation.Target]; !ok {
+					return "", fmt.Errorf("minima state: insert targets unknown scenario %q", operation.Target)
+				}
+				state.LiveRows[operation.Target] += len(operation.Documents)
+			}
+		case "delete":
+			if _, ok := specs[operation.Target]; !ok || len(operation.IDs) == 0 {
+				return "", fmt.Errorf("minima state: invalid delete operation %d", operation.Ordinal)
+			}
+			state.LiveRows[operation.Target] -= len(operation.IDs)
+		case "update":
+			if _, ok := specs[operation.Target]; !ok || len(operation.Documents) == 0 {
+				return "", fmt.Errorf("minima state: invalid update operation %d", operation.Ordinal)
+			}
+		default:
+			return "", fmt.Errorf("minima state: unknown effect %q", operation.Effect)
+		}
+		state.Mutations = append(state.Mutations, minimaStateMutation{
+			Ordinal: operation.Ordinal, Effect: operation.Effect, Target: operation.Target,
+			InsertRanges: operation.InsertRanges, IDs: operation.IDs, Documents: operation.Documents,
+		})
+	}
+	for name, spec := range specs {
+		want := spec.CorpusRows
+		if name == "small" {
+			want--
+		}
+		if state.LiveRows[name] != want {
+			return "", fmt.Errorf("minima state: %s live rows=%d want %d", name, state.LiveRows[name], want)
+		}
+	}
+	return minimaDigest(state), nil
 }
 
 func minimaDigest(value any) string {
@@ -196,8 +345,12 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	if manifest.CorpusSHA256 != minimaDigest(manifest.Corpora) || manifest.QuerySHA256 != minimaDigest(manifest.Queries) || manifest.OperationSHA256 != minimaDigest(manifest.Operations) {
 		return fmt.Errorf("minima manifest: corpus/query/operation hash mismatch")
 	}
+	stateHash, err := minimaExpectedStateHash(manifest)
+	if err != nil || manifest.ExpectedStateSHA256 != stateHash {
+		return fmt.Errorf("minima manifest: post-operation state hash mismatch: %v", err)
+	}
 	frozen := buildMinimaManifest()
-	if manifest.CorpusSHA256 != frozen.CorpusSHA256 || manifest.QuerySHA256 != frozen.QuerySHA256 || manifest.OperationSHA256 != frozen.OperationSHA256 || minimaDigest(manifest.Config) != minimaDigest(frozen.Config) {
+	if manifest.CorpusSHA256 != frozen.CorpusSHA256 || manifest.QuerySHA256 != frozen.QuerySHA256 || manifest.OperationSHA256 != frozen.OperationSHA256 || manifest.ExpectedStateSHA256 != frozen.ExpectedStateSHA256 || minimaDigest(manifest.Config) != minimaDigest(frozen.Config) {
 		return fmt.Errorf("minima manifest: not the frozen workload")
 	}
 	if len(manifest.Corpora) != len(manifest.Queries) {
@@ -354,7 +507,7 @@ type minimaScenarioEvidence struct {
 	ReopenParity    bool                      `json:"reopen_parity"`
 	Recall          float64                   `json:"recall"`
 	Overlap         float64                   `json:"overlap"`
-	OrderTolerance  float64                   `json:"order_tolerance"`
+	OrderTolerance  int                       `json:"order_tolerance"`
 	ScoreTolerance  float64                   `json:"score_tolerance"`
 	Errors          int                       `json:"errors"`
 	Timeouts        int                       `json:"timeouts"`
@@ -417,8 +570,8 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 		if !backend.Operations.ManifestOrdered || !backend.Operations.BatchInsertDuringSearch || !backend.Operations.ReindexDeleteReplace || !backend.Operations.ExplicitUpdateVisible || !backend.Operations.ExplicitDeleteVisible || !backend.Operations.EmptyCasesChecked {
 			return fmt.Errorf("minima artifact: %s missing operation evidence", backend.Name)
 		}
-		if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash == "" {
-			return fmt.Errorf("minima artifact: %s missing reopen evidence", backend.Name)
+		if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash != artifact.Manifest.ExpectedStateSHA256 {
+			return fmt.Errorf("minima artifact: %s reopen state hash mismatch", backend.Name)
 		}
 		backends[backend.Name] = backend
 	}
@@ -455,12 +608,23 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		return fmt.Errorf("missing or incorrect selectivity/cardinality")
 	}
 	ids, scores := minimaOracle(spec)
-	if minimaDigest(row.OracleIDs) != minimaDigest(ids) || minimaDigest(row.OracleScores) != minimaDigest(scores) || len(row.ActualIDs) != len(ids) || len(row.ActualScores) != len(ids) || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || row.OrderTolerance < 0 || row.ScoreTolerance < 0 {
+	if minimaDigest(row.OracleIDs) != minimaDigest(ids) || minimaDigest(row.OracleScores) != minimaDigest(scores) || len(row.ActualIDs) != len(ids) || len(row.ActualScores) != len(ids) || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || row.OrderTolerance != minimaOrderTolerance || row.ScoreTolerance != minimaScoreTolerance {
 		return fmt.Errorf("missing exact oracle/candidate quality evidence")
 	}
-	for _, score := range row.ActualScores {
-		if !finiteNonnegative(score) {
-			return fmt.Errorf("non-finite actual score")
+	recall, overlap, ranks, err := minimaQuality(row.ActualIDs, ids)
+	if err != nil || math.Abs(row.Recall-recall) > 1e-12 || math.Abs(row.Overlap-overlap) > 1e-12 {
+		return fmt.Errorf("reported recall/overlap does not match actual IDs: %v", err)
+	}
+	for i, score := range row.ActualScores {
+		rank, ok := ranks[row.ActualIDs[i]]
+		if !ok {
+			return fmt.Errorf("actual ID %q lacks an exact oracle score", row.ActualIDs[i])
+		}
+		if absInt(rank-i) > row.OrderTolerance {
+			return fmt.Errorf("actual ordering exceeds tolerance")
+		}
+		if !finiteNonnegative(score) || math.Abs(score-scores[rank]) > row.ScoreTolerance {
+			return fmt.Errorf("actual score exceeds tolerance")
 		}
 	}
 	if !row.ReopenParity || minimaDigest(row.ReopenIDs) != minimaDigest(row.ActualIDs) {
@@ -525,6 +689,43 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		return fmt.Errorf("missing resource evidence")
 	}
 	return nil
+}
+
+func minimaQuality(actual, oracle []string) (float64, float64, map[string]int, error) {
+	ranks := make(map[string]int, len(oracle))
+	for i, id := range oracle {
+		if id == "" {
+			return 0, 0, nil, fmt.Errorf("empty oracle ID")
+		}
+		if _, duplicate := ranks[id]; duplicate {
+			return 0, 0, nil, fmt.Errorf("duplicate oracle ID %q", id)
+		}
+		ranks[id] = i
+	}
+	actualSet := make(map[string]bool, len(actual))
+	intersection := 0
+	for _, id := range actual {
+		if id == "" || actualSet[id] {
+			return 0, 0, nil, fmt.Errorf("empty or duplicate actual ID %q", id)
+		}
+		actualSet[id] = true
+		if _, ok := ranks[id]; ok {
+			intersection++
+		}
+	}
+	if len(oracle) == 0 && len(actual) == 0 {
+		return 1, 1, ranks, nil
+	}
+	recall := float64(intersection) / float64(len(oracle))
+	union := len(oracle) + len(actualSet) - intersection
+	return recall, float64(intersection) / float64(union), ranks, nil
+}
+
+func absInt(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func finiteFraction(value float64) bool {

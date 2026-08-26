@@ -11,14 +11,17 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 	if err := validateMinimaManifest(&manifest); err != nil {
 		t.Fatalf("validate Minima manifest: %v", err)
 	}
-	if got, want := manifest.CorpusSHA256, "ea94f52cb73705ddebfafcf49905b8cac6a2b4d772d5ed4fe7678dd3b3bdf75d"; got != want {
+	if got, want := manifest.CorpusSHA256, "8cec31c8c9f1b63dcc697e0036375bc9852ff00adc6c5656f88a94f7b7da45d8"; got != want {
 		t.Fatalf("corpus hash=%s want %s", got, want)
 	}
 	if got, want := manifest.QuerySHA256, "ec9a00e8632dffb97d51fa9678bf3aa0e97e522ce98816b48f624762777cd387"; got != want {
 		t.Fatalf("query hash=%s want %s", got, want)
 	}
-	if got, want := manifest.OperationSHA256, "7806f01de1fa15310a0d9d42534a2abc2aaedb73cfe27c6d2b52b41c24a1fa03"; got != want {
+	if got, want := manifest.OperationSHA256, "745fec08d42ef88884155d34531fdc1367ea8599687df1534a6171fec97617aa"; got != want {
 		t.Fatalf("operation hash=%s want %s", got, want)
+	}
+	if got, want := manifest.ExpectedStateSHA256, "1d8341ec8931db5cb552a81f29f11866a513a5f8251cd82289b9abb684ceddd5"; got != want {
+		t.Fatalf("state hash=%s want %s", got, want)
 	}
 
 	scenarios := minimaScenarioMap(&manifest)
@@ -53,6 +56,34 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		t.Fatal("small fixture lacks a closer cross-tenant distractor")
 	}
 }
+func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
+	manifest := buildMinimaManifest()
+	scenarios := minimaScenarioMap(&manifest)
+	const descriptor = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+	for _, scenario := range manifest.Corpora {
+		if scenario.Generator != descriptor {
+			t.Fatalf("%s generator=%q", scenario.Name, scenario.Generator)
+		}
+	}
+	for _, test := range []struct {
+		scenario string
+		ordinal  int
+		want     string
+	}{
+		{"all_match", 0, "f81213ad9e527715db1a23f266e6481c92eecab98bc347af6885199327bd301d"},
+		{"over_limit_4097", 999, "8f7cd25b7d266fd68e52391bf217f20a683e28408670e0abc9ef84df4e85effc"},
+		{"over_limit_4097", 1000, "f6fc74c883efb204ea705a2f71ec23ff0b2c7510943b0ba5790a5e0d195ae2c3"},
+		{"mixed_broad_narrow", 10020, "acaa0537c20dcc8905c2551233aecc83d4e5fd2957577759c60b1364c6ad2bbb"},
+	} {
+		document, err := minimaDocumentAt(scenarios[test.scenario], test.ordinal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := minimaDigest(document); got != test.want {
+			t.Errorf("%s/%d row hash=%s want %s", test.scenario, test.ordinal, got, test.want)
+		}
+	}
+}
 
 func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 	mutations := []struct {
@@ -62,11 +93,46 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"corpus hash mismatch", func(a *minimaArtifact) { a.Manifest.CorpusSHA256 = "bad" }},
 		{"query hash mismatch", func(a *minimaArtifact) { a.Manifest.QuerySHA256 = "bad" }},
 		{"operation hash mismatch", func(a *minimaArtifact) { a.Manifest.OperationSHA256 = "bad" }},
+		{"post-operation state hash mismatch", func(a *minimaArtifact) { a.Manifest.ExpectedStateSHA256 = "bad" }},
+		{"concrete insert range mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[1].InsertRanges[0].Rows--
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"interleaving schedule mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[3].Schedule[0].Actor = "writer_first"
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"replacement payload mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[5].Documents[0].Content = "doctored"
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"update input mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[7].Documents[0].Content = "doctored"
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"delete input mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[9].IDs[0] = "doctored"
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
 		{"backend manifest mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Manifest.OperationSHA256 = "bad" }},
 		{"cross-user leakage", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.CrossUserResults = 1 }},
 		{"stale insert", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleInsertIDs = 1 }},
 		{"stale update", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleUpdateIDs = 1 }},
 		{"stale delete", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleDeleteIDs = 1 }},
+		{"reported recall mismatch", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Recall = 0 }},
+		{"reported overlap mismatch", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Overlap = 0 }},
+		{"duplicate actual ID", func(a *minimaArtifact) {
+			row := minimaTestRow(a, "treedb", "small")
+			row.ActualIDs[1] = row.ActualIDs[0]
+		}},
+		{"ordering outside tolerance", func(a *minimaArtifact) {
+			row := minimaTestRow(a, "treedb", "small")
+			row.ActualIDs[0], row.ActualIDs[1] = row.ActualIDs[1], row.ActualIDs[0]
+			row.ActualScores[0], row.ActualScores[1] = row.ActualScores[1], row.ActualScores[0]
+		}},
+		{"score outside tolerance", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").ActualScores[0] += 0.01 }},
+		{"inflated order tolerance", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").OrderTolerance = 1 }},
+		{"inflated score tolerance", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").ScoreTolerance = 1 }},
 		{"missing native route", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.Identity = "" }},
 		{"wrong native route", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.Identity = "exact_fallback" }},
 		{"missing fallback counter", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Route.FullDocumentScanFallbacks = nil }},
@@ -104,6 +170,8 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"missing mismatch counter", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Visibility.MismatchCount = nil }},
 		{"missing retry counter", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Visibility.RetryCount = nil }},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
+		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
+		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
 		{"missing scenario reopen", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").ReopenParity = false }},
 		{"embedding timing contamination", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Timing.EmbeddingIncluded = true }},
 		{"llm timing contamination", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Timing.LLMIncluded = true }},
@@ -134,8 +202,8 @@ func validMinimaArtifact() minimaArtifact {
 		ExplicitUpdateVisible: true, ExplicitDeleteVisible: true, EmptyCasesChecked: true,
 	}
 	backends := []minimaBackendEvidence{
-		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: "result"}},
-		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: "result"}},
+		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
+		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
 	artifact := minimaArtifact{Schema: minimaArtifactSchema, State: "pass", Passing: true, Manifest: manifest, Backends: backends, Recommendation: "ready_direct"}
 	for _, backend := range backends {
@@ -170,7 +238,7 @@ func validMinimaArtifact() minimaArtifact {
 				Backend: backend.Name, Scenario: spec.Name, CorpusRows: spec.CorpusRows, ExpectedMatches: spec.EligibleRows, Selectivity: spec.Selectivity,
 				OracleIDs: ids, OracleScores: scores, ActualIDs: append([]string(nil), ids...), ActualScores: append([]float64(nil), scores...),
 				ReopenIDs: append([]string(nil), ids...), ReopenParity: true,
-				Recall: 1, Overlap: 1, OrderTolerance: 0.000001, ScoreTolerance: 0.000001,
+				Recall: 1, Overlap: 1, OrderTolerance: 0, ScoreTolerance: 0.000001,
 				Route: route, Visibility: minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry},
 				Timing: minimaTimingEvidence{Captured: true}, Resource: minimaResourceEvidence{Captured: true},
 			})
