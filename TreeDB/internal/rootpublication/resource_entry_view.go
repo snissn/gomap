@@ -114,11 +114,13 @@ type stableResourcePhysicalIndexNode struct {
 }
 
 type stableResourceKindView struct {
-	root         *stableResourceEntryNode
-	logical      *stableResourceLogicalIndexNode
-	physical     *stableResourcePhysicalIndexNode
-	reachability map[ReachabilityField]struct{}
-	count        int
+	root                   *stableResourceEntryNode
+	logical                *stableResourceLogicalIndexNode
+	physical               *stableResourcePhysicalIndexNode
+	reachability           map[ReachabilityField]struct{}
+	logicalCommitments     map[ReachabilityField]stableLogicalObligationCommitment
+	logicalObligationCount int
+	count                  int
 }
 
 func stableLogicalResourceKeyLess(left, right stableLogicalResourceKey) bool {
@@ -385,6 +387,8 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 			entry := &chunk[i]
 			view.logical = insertFreshStableResourceLogical(view.logical, entry)
 			view.physical = insertFreshStableResourcePhysical(view.physical, entry)
+			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, entry.logicalObligations.commitments)
+			view.logicalObligationCount += entry.logicalObligations.count
 			for field := range entry.reachability {
 				view.reachability[field] = struct{}{}
 			}
@@ -525,9 +529,13 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			reachability[field] = struct{}{}
 		}
 		next[kind] = stableResourceKindView{
-			root:    concatOwnedStableResourceEntryNodes(current.root, child.root),
-			logical: logical, physical: physical, reachability: reachability,
-			count: current.count + child.count,
+			root:                   concatOwnedStableResourceEntryNodes(current.root, child.root),
+			logical:                logical,
+			physical:               physical,
+			reachability:           reachability,
+			logicalCommitments:     addStableLogicalObligationCommitments(current.logicalCommitments, child.logicalCommitments),
+			logicalObligationCount: current.logicalObligationCount + child.logicalObligationCount,
+			count:                  current.count + child.count,
 		}
 	}
 	return next, true

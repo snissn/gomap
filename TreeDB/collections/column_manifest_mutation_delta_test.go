@@ -177,6 +177,12 @@ func TestColumnManifestMutationDeltaProductionRepeatedPublishReopen(t *testing.T
 		if work.AppendOnlyFastPath == 0 || work.NewlyAdmittedObligations == 0 {
 			t.Fatalf("publish %d did not certify append-only resource admission: %+v", i, work)
 		}
+		if work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FinalRequirementObligationsMaterialized != 0 {
+			t.Fatalf("publish %d did not keep final requirement proof mutation-local: %+v", i, work)
+		}
+		if work.FinalRequirementRecordsDecoded > uint64(stats.ColumnPublishManifestMutationRecords) {
+			t.Fatalf("publish %d decoded retained final requirement records: %+v", i, work)
+		}
 		// The retained semantic closure grows every generation, but candidate
 		// construction may visit only this root-local mutation plus the
 		// persistent-index path for each newly admitted obligation.
