@@ -244,13 +244,35 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.collection = "owned"
         workload.config = {"dimension": 8, "metric": "cosine"}
         workload.ef_search = 64
-        workload.route_evidence = {}
-        base_artifact = {"backends": [{}], "scenarios": [], "backend_raw_evidence": {"qdrant": {}}}
+        workload.route_evidence = {"small": SimpleNamespace(
+            native_base_plus_live_delta=True,
+            full_document_scan_fallbacks=0,
+            scalar_filter_unbounded=0,
+            scalar_filter_probe_ids=0,
+            scalar_filter_candidates=41,
+            scalar_filter_candidate_ids=5,
+            scalar_filter_retained_candidate_ids=5,
+            scalar_filter_refined_candidate_ids=5,
+            scalar_filter_membership_source="finite_scalar",
+            scalar_filter_plan="complete_finite_ann",
+            allowed_id_materialization_rows=0,
+            primary_document_scans=0,
+            scalar_filter_visited=41,
+            scalar_filter_scored=41,
+            scalar_filter_admitted=5,
+            visibility_mismatch_count=0,
+            visibility_retry_count=0,
+        )}
+        base_artifact = {"backends": [{}], "scenarios": [{"scenario": "small"}], "backend_raw_evidence": {"qdrant": {}}}
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
             artifact = workload.artifact()
         raw = artifact["backend_raw_evidence"]["treedb"]
         self.assertEqual(raw["resource_measurement"], resource)
         self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
+        self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
+        self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
+        self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)
+        self.assertEqual(raw["native_route_responses"]["small"]["candidate_ids"], 5)
 
 
 if __name__ == "__main__":

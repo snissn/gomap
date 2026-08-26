@@ -974,6 +974,7 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(result.scalar_filter_probe_truncated, 1)
             self.assertEqual(result.scalar_filter_candidates, 41)
             self.assertEqual(result.scalar_filter_candidate_ids, 5)
+            self.assertNotEqual(result.scalar_filter_candidates, result.scalar_filter_candidate_ids)
             self.assertEqual(result.scalar_filter_retained_candidate_ids, 23)
             self.assertEqual(result.scalar_filter_refined_candidate_ids, 5)
             self.assertEqual(result.scalar_filter_visited, 41)

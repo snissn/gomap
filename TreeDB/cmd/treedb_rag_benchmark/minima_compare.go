@@ -124,6 +124,21 @@ type minimaRawServiceLog struct {
 	MaxTailBytes int    `json:"max_tail_bytes"`
 }
 
+type minimaRawNativeRouteResponse struct {
+	MembershipSource     string `json:"membership_source"`
+	Plan                 string `json:"plan"`
+	ProbeIDs             int    `json:"probe_ids"`
+	Candidates           int    `json:"candidates"`
+	CandidateIDs         int    `json:"candidate_ids"`
+	Retained             int    `json:"retained"`
+	Refined              int    `json:"refined"`
+	Visited              int    `json:"visited"`
+	Scored               int    `json:"scored"`
+	Admitted             int    `json:"admitted"`
+	VisibilityMismatches int    `json:"visibility_mismatches"`
+	VisibilityRetries    int    `json:"visibility_retries"`
+}
+
 type minimaRawBackendEvidence struct {
 	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
 	Events                    []json.RawMessage                       `json:"events,omitempty"`
@@ -281,6 +296,43 @@ func combineMinimaEvidence(treedb, qdrant minimaArtifact, recommendation string)
 	}
 	return combined
 }
+func validateMinimaNativeRouteResponse(raw map[string]json.RawMessage, row minimaScenarioEvidence) error {
+	encoded, ok := raw[row.Scenario]
+	if !ok {
+		return fmt.Errorf("minima artifact: TreeDB raw route response missing for %s", row.Scenario)
+	}
+	var route minimaRawNativeRouteResponse
+	if err := json.Unmarshal(encoded, &route); err != nil {
+		return fmt.Errorf("minima artifact: decode TreeDB raw route response for %s: %w", row.Scenario, err)
+	}
+	if row.Route.ProbeIDs == nil ||
+		row.Route.CandidateIDs == nil ||
+		row.Route.RetainedCandidateIDs == nil ||
+		row.Route.RefinedCandidateIDs == nil ||
+		row.Route.VisitedCandidates == nil ||
+		row.Route.ScoredCandidates == nil ||
+		row.Route.AdmittedCandidates == nil ||
+		row.Visibility.MismatchCount == nil ||
+		row.Visibility.RetryCount == nil {
+		return fmt.Errorf("minima artifact: TreeDB route summary counters missing for %s", row.Scenario)
+	}
+	if route.MembershipSource != row.Route.MembershipSource ||
+		route.Plan != row.Route.Plan ||
+		route.ProbeIDs != *row.Route.ProbeIDs ||
+		route.Candidates != *row.Route.VisitedCandidates ||
+		route.CandidateIDs != *row.Route.CandidateIDs ||
+		route.Retained != *row.Route.RetainedCandidateIDs ||
+		route.Refined != *row.Route.RefinedCandidateIDs ||
+		route.Visited != *row.Route.VisitedCandidates ||
+		route.Scored != *row.Route.ScoredCandidates ||
+		route.Admitted != *row.Route.AdmittedCandidates ||
+		route.VisibilityMismatches != *row.Visibility.MismatchCount ||
+		route.VisibilityRetries != *row.Visibility.RetryCount {
+		return fmt.Errorf("minima artifact: TreeDB raw route response disagrees with summary for %s", row.Scenario)
+	}
+	return nil
+}
+
 func validateMinimaResourceMeasurement(backend string, resource minimaRawResourceMeasurement) error {
 	if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
 		return fmt.Errorf("minima artifact: %s raw resource evidence missing", backend)
@@ -389,6 +441,9 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			if raw.ServiceLog.Path == "" || raw.ServiceLog.Tail == "" || raw.ServiceLog.MaxTailBytes != 64<<10 {
 				return fmt.Errorf("minima artifact: TreeDB bounded service log evidence missing")
 			}
+			if len(raw.NativeRouteResponses) != len(artifact.Manifest.Corpora) {
+				return fmt.Errorf("minima artifact: TreeDB raw route responses are incomplete")
+			}
 		}
 		resource := raw.ResourceMeasurement
 		if err := validateMinimaResourceMeasurement(name, resource); err != nil {
@@ -403,6 +458,11 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 				row.Resource.CPUSeconds != resource.CPUSeconds ||
 				row.Resource.DiskBytes != resource.DiskBytes {
 				return fmt.Errorf("minima artifact: %s scenario resource summary does not match raw measurement", name)
+			}
+			if name == "treedb" {
+				if err := validateMinimaNativeRouteResponse(raw.NativeRouteResponses, row); err != nil {
+					return err
+				}
 			}
 		}
 	}

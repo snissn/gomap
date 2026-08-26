@@ -288,6 +288,14 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		}},
 		{"missing selectivity", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "broad_10pct").Selectivity = 0 }},
 		{"missing candidates", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "broad_10pct").Route.CandidateIDs = nil }},
+		{"raw candidate ID count aliases visits", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			var route minimaRawNativeRouteResponse
+			_ = json.Unmarshal(raw.NativeRouteResponses["small"], &route)
+			route.CandidateIDs = route.Candidates
+			raw.NativeRouteResponses["small"], _ = json.Marshal(route)
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"over-limit missing vector membership", func(a *minimaArtifact) {
 			minimaTestRow(a, "treedb", "over_limit_4097").Route.MembershipSource = "bounded_ids"
 		}},
@@ -537,15 +545,19 @@ func validMinimaArtifact() minimaArtifact {
 		for _, spec := range manifest.Corpora {
 			query := queries[spec.Name]
 			zeroMismatch, zeroRetry := 0, 0
+			candidateIDs, visited, scored, admitted := spec.EligibleRows, spec.EligibleRows, spec.EligibleRows, spec.EligibleRows
+			if backend.Name == "treedb" && spec.Name == "small" {
+				candidateIDs, visited, scored, admitted = 5, 41, 41, 5
+			}
 			route := minimaRouteEvidence{
 				Identity: "qdrant_filtered_hnsw", DeclaredScalarFiltering: true,
 				FullDocumentScanFallbacks: minimaTestInt(0), ScalarFilterUnbounded: minimaTestInt(0),
-				ProbeIDs: minimaTestInt(0), CandidateIDs: minimaTestInt(spec.EligibleRows),
+				ProbeIDs: minimaTestInt(0), CandidateIDs: minimaTestInt(candidateIDs),
 				RetainedCandidateIDs: minimaTestInt(0), RefinedCandidateIDs: minimaTestInt(0),
 				MembershipSource: "finite_scalar", Plan: "complete_finite_ann",
 				AllowedIDMaterializationRows: minimaTestInt(0), PrimaryDocumentScans: minimaTestInt(0),
-				VisitedCandidates: minimaTestInt(spec.EligibleRows), ScoredCandidates: minimaTestInt(spec.EligibleRows),
-				AdmittedCandidates: minimaTestInt(spec.EligibleRows),
+				VisitedCandidates: minimaTestInt(visited), ScoredCandidates: minimaTestInt(scored),
+				AdmittedCandidates: minimaTestInt(admitted),
 			}
 			if backend.Name == "treedb" {
 				route.Identity = "native_base_plus_live_delta"
@@ -561,6 +573,7 @@ func validMinimaArtifact() minimaArtifact {
 					route.RefinedCandidateIDs = minimaTestInt(spec.EligibleRows)
 				}
 			}
+			visibility := minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry}
 			artifact.Scenarios = append(artifact.Scenarios, minimaScenarioEvidence{
 				Backend: backend.Name, Scenario: spec.Name, CorpusRows: spec.CorpusRows, ExpectedMatches: spec.EligibleRows, Selectivity: spec.Selectivity,
 				InitialOracleIDs: query.InitialOracleIDs, InitialOracleScores: query.InitialOracleScores,
@@ -569,13 +582,21 @@ func validMinimaArtifact() minimaArtifact {
 				ActualIDs: append([]string(nil), query.FinalOracleIDs...), ActualScores: append([]float64(nil), query.FinalOracleScores...),
 				ReopenIDs: append([]string(nil), query.FinalOracleIDs...), ReopenParity: true,
 				Recall: 1, Overlap: 1, OrderTolerance: minimaOrderTolerance, ScoreTolerance: minimaScoreTolerance,
-				Route: route, Visibility: minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry},
+				Route: route, Visibility: visibility,
 				Timing: minimaTimingEvidence{Captured: true},
 				Resource: minimaResourceEvidence{
 					Captured: true, AllocationAvailability: "unavailable",
 					RSSBytes: resource.RSSBytes, CPUSeconds: resource.CPUSeconds, DiskBytes: resource.DiskBytes,
 				},
 			})
+			if backend.Name == "treedb" {
+				evidence := artifact.RawEvidence["treedb"]
+				if evidence.NativeRouteResponses == nil {
+					evidence.NativeRouteResponses = make(map[string]json.RawMessage, len(manifest.Corpora))
+				}
+				evidence.NativeRouteResponses[spec.Name] = minimaTestNativeRouteResponse(route, visibility)
+				artifact.RawEvidence["treedb"] = evidence
+			}
 		}
 	}
 	return artifact
@@ -583,6 +604,27 @@ func validMinimaArtifact() minimaArtifact {
 
 func minimaTestInt(value int) *int {
 	return &value
+}
+
+func minimaTestNativeRouteResponse(route minimaRouteEvidence, visibility minimaVisibilityEvidence) json.RawMessage {
+	raw, err := json.Marshal(minimaRawNativeRouteResponse{
+		MembershipSource:     route.MembershipSource,
+		Plan:                 route.Plan,
+		ProbeIDs:             *route.ProbeIDs,
+		Candidates:           *route.VisitedCandidates,
+		CandidateIDs:         *route.CandidateIDs,
+		Retained:             *route.RetainedCandidateIDs,
+		Refined:              *route.RefinedCandidateIDs,
+		Visited:              *route.VisitedCandidates,
+		Scored:               *route.ScoredCandidates,
+		Admitted:             *route.AdmittedCandidates,
+		VisibilityMismatches: *visibility.MismatchCount,
+		VisibilityRetries:    *visibility.RetryCount,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }
 
 func minimaTestEnvironment() map[string]string {
