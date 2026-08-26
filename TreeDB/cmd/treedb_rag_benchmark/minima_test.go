@@ -28,7 +28,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
 		t.Fatalf("timed repeat plan drifted: %+v", timed)
 	}
-	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "2ccd4e9badc7644e15cd4a5e4eeb68f59005c2e040506d5f9e4d5935e23f6fdd"; got != want {
+	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "84b8eb10e5f86c558264d00e8cae2c6844683aff2b8bca1d76cafe6b06890ea4"; got != want {
 		t.Fatalf("timed execution hash=%s want %s", got, want)
 	}
 	for i, round := range timed.Rounds {
@@ -46,7 +46,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 			t.Fatalf("concurrent reindex operation %d drifted: %+v", ordinal, plan)
 		}
 	}
-	if got, want := minimaReindexExecutionDigest(minimaExpectedReindexExecution(&manifest)), "9ec2d96b41783bf9ac323f522244940b023c4d27efd759714c149e0ae4568ee0"; got != want {
+	if got, want := minimaReindexExecutionDigest(minimaExpectedReindexExecution(&manifest)), "99823f1eac0fb27dce81e21e0cf5884019c6a911c410be11b675b2315cbde534"; got != want {
 		t.Fatalf("reindex execution hash=%s want %s", got, want)
 	}
 
@@ -302,14 +302,28 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"correct assertions with fake raw assignment", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0].Scenario = "fake"
 		}},
-		{"timed reader did not overlap writer", func(a *minimaArtifact) {
+		{"timed reader intervals after writer completion", func(a *minimaArtifact) {
 			operations := &minimaTestBackend(a, "treedb").Operations
+			writerEnd := operations.TimedExecutionTrace.Rounds[0].WriterEndedMonotonicNS
 			for i := range operations.TimedExecutionTrace.Queries {
 				query := &operations.TimedExecutionTrace.Queries[i]
 				if query.Round == 0 && query.Reader == 3 {
-					query.WriterInFlight = false
+					query.StartedMonotonicNS = writerEnd
+					query.EndedMonotonicNS = writerEnd + 1
 				}
 			}
+			operations.TimedExecutionSHA256 = minimaTimedExecutionDigest(operations.TimedExecutionTrace)
+		}},
+		{"missing timed writer interval", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.TimedExecutionTrace.Rounds[0].WriterStartedMonotonicNS = 0
+			operations.TimedExecutionTrace.Rounds[0].WriterEndedMonotonicNS = 0
+			operations.TimedExecutionSHA256 = minimaTimedExecutionDigest(operations.TimedExecutionTrace)
+		}},
+		{"missing timed query interval", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.TimedExecutionTrace.Queries[0].StartedMonotonicNS = 0
+			operations.TimedExecutionTrace.Queries[0].EndedMonotonicNS = 0
 			operations.TimedExecutionSHA256 = minimaTimedExecutionDigest(operations.TimedExecutionTrace)
 		}},
 		{"correct assertions with incomplete raw reindex trace", func(a *minimaArtifact) {
@@ -317,9 +331,25 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			operations.ReindexExecutionTrace.Operations[0].ReaderQueries =
 				operations.ReindexExecutionTrace.Operations[0].ReaderQueries[:3]
 		}},
-		{"reindex reader did not overlap mutation", func(a *minimaArtifact) {
+		{"reindex reader interval after mutation completion", func(a *minimaArtifact) {
 			operations := &minimaTestBackend(a, "treedb").Operations
-			operations.ReindexExecutionTrace.Operations[1].ReaderQueries[2].MutationInFlight = false
+			mutationEnd := operations.ReindexExecutionTrace.Operations[1].MutationEndedMonotonicNS
+			query := &operations.ReindexExecutionTrace.Operations[1].ReaderQueries[2]
+			query.StartedMonotonicNS = mutationEnd
+			query.EndedMonotonicNS = mutationEnd + 1
+			operations.ReindexExecutionSHA256 = minimaReindexExecutionDigest(operations.ReindexExecutionTrace)
+		}},
+		{"missing reindex mutation interval", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.ReindexExecutionTrace.Operations[0].MutationStartedMonotonicNS = 0
+			operations.ReindexExecutionTrace.Operations[0].MutationEndedMonotonicNS = 0
+			operations.ReindexExecutionSHA256 = minimaReindexExecutionDigest(operations.ReindexExecutionTrace)
+		}},
+		{"missing reindex query interval", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			query := &operations.ReindexExecutionTrace.Operations[0].ReaderQueries[0]
+			query.StartedMonotonicNS = 0
+			query.EndedMonotonicNS = 0
 			operations.ReindexExecutionSHA256 = minimaReindexExecutionDigest(operations.ReindexExecutionTrace)
 		}},
 		{"wrong reindex execution hash", func(a *minimaArtifact) {

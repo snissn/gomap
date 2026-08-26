@@ -674,28 +674,51 @@ func validateMinimaConcurrentMutationPlans(manifest *minimaManifest) error {
 }
 
 type minimaTimedQueryObservation struct {
-	Ordinal        int    `json:"ordinal"`
-	Round          int    `json:"round"`
-	Reader         int    `json:"reader"`
-	Scenario       string `json:"scenario"`
-	WriterInFlight bool   `json:"writer_in_flight"`
+	Ordinal            int    `json:"ordinal"`
+	Round              int    `json:"round"`
+	Reader             int    `json:"reader"`
+	Scenario           string `json:"scenario"`
+	StartedMonotonicNS int64  `json:"started_monotonic_ns"`
+	EndedMonotonicNS   int64  `json:"ended_monotonic_ns"`
+}
+
+type minimaObservedTimedRound struct {
+	Ordinal                  int               `json:"ordinal"`
+	QueryStart               int               `json:"query_start"`
+	QueryCount               int               `json:"query_count"`
+	InsertRange              minimaInsertRange `json:"insert_range"`
+	StartBarrier             string            `json:"start_barrier"`
+	EndBarrier               string            `json:"end_barrier"`
+	WriterStartedMonotonicNS int64             `json:"writer_started_monotonic_ns"`
+	WriterEndedMonotonicNS   int64             `json:"writer_ended_monotonic_ns"`
 }
 
 type minimaTimedExecutionTrace struct {
 	Queries []minimaTimedQueryObservation `json:"queries"`
-	Rounds  []minimaTimedRound            `json:"rounds"`
+	Rounds  []minimaObservedTimedRound    `json:"rounds"`
 }
 
 func minimaExpectedTimedExecution(plan *minimaTimedReaderPlan) minimaTimedExecutionTrace {
-	trace := minimaTimedExecutionTrace{Rounds: append([]minimaTimedRound(nil), plan.Rounds...)}
+	var trace minimaTimedExecutionTrace
+	for _, round := range plan.Rounds {
+		base := int64(round.Ordinal+1) * 1_000_000
+		trace.Rounds = append(trace.Rounds, minimaObservedTimedRound{
+			Ordinal: round.Ordinal, QueryStart: round.QueryStart, QueryCount: round.QueryCount,
+			InsertRange: round.InsertRange, StartBarrier: round.StartBarrier, EndBarrier: round.EndBarrier,
+			WriterStartedMonotonicNS: base + 100, WriterEndedMonotonicNS: base + 900,
+		})
+	}
 	roundIndex := 0
 	for ordinal := range plan.QueryCount {
 		for ordinal >= plan.Rounds[roundIndex].QueryStart+plan.Rounds[roundIndex].QueryCount {
 			roundIndex++
 		}
+		base := int64(plan.Rounds[roundIndex].Ordinal+1) * 1_000_000
+		started := base + 200 + int64(ordinal-plan.Rounds[roundIndex].QueryStart)*2
 		trace.Queries = append(trace.Queries, minimaTimedQueryObservation{
 			Ordinal: ordinal, Round: roundIndex, Reader: ordinal % plan.ReaderConcurrency,
-			Scenario: plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)], WriterInFlight: true,
+			Scenario:           plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)],
+			StartedMonotonicNS: started, EndedMonotonicNS: started + 1,
 		})
 	}
 	return trace
@@ -704,30 +727,62 @@ func minimaExpectedTimedExecution(plan *minimaTimedReaderPlan) minimaTimedExecut
 func minimaTimedExecutionDigest(observed minimaTimedExecutionTrace) string {
 	var trace strings.Builder
 	for _, query := range observed.Queries {
-		fmt.Fprintf(&trace, "query|ordinal=%d|round=%d|reader=%d|scenario=%s|writer_in_flight=%t\n",
-			query.Ordinal, query.Round, query.Reader, query.Scenario, query.WriterInFlight)
+		fmt.Fprintf(&trace, "query|ordinal=%d|round=%d|reader=%d|scenario=%s|started_monotonic_ns=%d|ended_monotonic_ns=%d\n",
+			query.Ordinal, query.Round, query.Reader, query.Scenario, query.StartedMonotonicNS, query.EndedMonotonicNS)
 	}
 	for _, round := range observed.Rounds {
-		fmt.Fprintf(&trace, "round|ordinal=%d|query_start=%d|query_count=%d|insert=%s:%d:%d|start=%s|end=%s\n",
+		fmt.Fprintf(&trace, "round|ordinal=%d|query_start=%d|query_count=%d|insert=%s:%d:%d|start=%s|end=%s|writer_started_monotonic_ns=%d|writer_ended_monotonic_ns=%d\n",
 			round.Ordinal, round.QueryStart, round.QueryCount,
 			round.InsertRange.Scenario, round.InsertRange.Start, round.InsertRange.Rows,
-			round.StartBarrier, round.EndBarrier)
+			round.StartBarrier, round.EndBarrier, round.WriterStartedMonotonicNS, round.WriterEndedMonotonicNS)
 	}
 	return artifactHash("", []byte(trace.String())).SHA256
 }
 
+func minimaValidInterval(start, end int64) bool {
+	return start >= 0 && start < end
+}
+
+func minimaIntervalsOverlap(firstStart, firstEnd, secondStart, secondEnd int64) bool {
+	return minimaValidInterval(firstStart, firstEnd) &&
+		minimaValidInterval(secondStart, secondEnd) &&
+		firstStart < secondEnd && secondStart < firstEnd
+}
+
 func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, plan *minimaTimedReaderPlan) error {
+	if len(observed.Rounds) != len(plan.Rounds) || len(observed.Queries) != plan.QueryCount {
+		return fmt.Errorf("timed trace cardinality mismatch")
+	}
 	overlap := make([][]bool, len(plan.Rounds))
-	for round := range overlap {
+	for round := range plan.Rounds {
+		planned, actual := plan.Rounds[round], observed.Rounds[round]
+		if actual.Ordinal != planned.Ordinal || actual.QueryStart != planned.QueryStart ||
+			actual.QueryCount != planned.QueryCount || actual.InsertRange != planned.InsertRange ||
+			actual.StartBarrier != planned.StartBarrier || actual.EndBarrier != planned.EndBarrier ||
+			!minimaValidInterval(actual.WriterStartedMonotonicNS, actual.WriterEndedMonotonicNS) {
+			return fmt.Errorf("timed round %d raw writer interval mismatch", round)
+		}
 		overlap[round] = make([]bool, plan.ReaderConcurrency)
 	}
+	expected := minimaExpectedTimedExecution(plan)
+	seenQueries := make([]bool, plan.QueryCount)
 	for _, query := range observed.Queries {
-		if query.Round < 0 || query.Round >= len(overlap) || query.Reader < 0 || query.Reader >= plan.ReaderConcurrency {
-			return fmt.Errorf("timed query has invalid round/reader")
+		if query.Ordinal < 0 || query.Ordinal >= plan.QueryCount || seenQueries[query.Ordinal] {
+			return fmt.Errorf("timed query ordinal mismatch")
 		}
-		if query.WriterInFlight {
+		assignment := expected.Queries[query.Ordinal]
+		if query.Round != assignment.Round || query.Reader != assignment.Reader ||
+			query.Scenario != assignment.Scenario || !minimaValidInterval(query.StartedMonotonicNS, query.EndedMonotonicNS) {
+			return fmt.Errorf("timed query %d assignment/interval mismatch", query.Ordinal)
+		}
+		writer := observed.Rounds[query.Round]
+		if minimaIntervalsOverlap(
+			query.StartedMonotonicNS, query.EndedMonotonicNS,
+			writer.WriterStartedMonotonicNS, writer.WriterEndedMonotonicNS,
+		) {
 			overlap[query.Round][query.Reader] = true
 		}
+		seenQueries[query.Ordinal] = true
 	}
 	for round := range overlap {
 		for reader := range overlap[round] {
@@ -740,18 +795,21 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, pl
 }
 
 type minimaObservedReindexQuery struct {
-	Reader           int    `json:"reader"`
-	QueryOrdinal     int    `json:"query_ordinal"`
-	Scenario         string `json:"scenario"`
-	MutationInFlight bool   `json:"mutation_in_flight"`
+	Reader             int    `json:"reader"`
+	QueryOrdinal       int    `json:"query_ordinal"`
+	Scenario           string `json:"scenario"`
+	StartedMonotonicNS int64  `json:"started_monotonic_ns"`
+	EndedMonotonicNS   int64  `json:"ended_monotonic_ns"`
 }
 
 type minimaObservedReindexOperation struct {
-	OperationOrdinal int                          `json:"operation_ordinal"`
-	Mutation         string                       `json:"mutation"`
-	StartBarrier     string                       `json:"start_barrier"`
-	EndBarrier       string                       `json:"end_barrier"`
-	ReaderQueries    []minimaObservedReindexQuery `json:"reader_queries"`
+	OperationOrdinal           int                          `json:"operation_ordinal"`
+	Mutation                   string                       `json:"mutation"`
+	StartBarrier               string                       `json:"start_barrier"`
+	EndBarrier                 string                       `json:"end_barrier"`
+	MutationStartedMonotonicNS int64                        `json:"mutation_started_monotonic_ns"`
+	MutationEndedMonotonicNS   int64                        `json:"mutation_ended_monotonic_ns"`
+	ReaderQueries              []minimaObservedReindexQuery `json:"reader_queries"`
 }
 
 type minimaReindexExecutionTrace struct {
@@ -765,14 +823,17 @@ func minimaExpectedReindexExecution(manifest *minimaManifest) minimaReindexExecu
 			continue
 		}
 		plan := operation.ConcurrentPlan
+		base := int64(operation.Ordinal+1) * 1_000_000
 		observation := minimaObservedReindexOperation{
 			OperationOrdinal: operation.Ordinal, Mutation: plan.Mutation,
 			StartBarrier: plan.StartBarrier, EndBarrier: plan.EndBarrier,
+			MutationStartedMonotonicNS: base + 100, MutationEndedMonotonicNS: base + 900,
 		}
 		for _, assignment := range plan.ReaderAssignments {
+			started := base + 200 + int64(assignment.Reader)*10
 			observation.ReaderQueries = append(observation.ReaderQueries, minimaObservedReindexQuery{
-				Reader: assignment.Reader, QueryOrdinal: assignment.QueryOrdinal,
-				Scenario: assignment.Scenario, MutationInFlight: true,
+				Reader: assignment.Reader, QueryOrdinal: assignment.QueryOrdinal, Scenario: assignment.Scenario,
+				StartedMonotonicNS: started, EndedMonotonicNS: started + 1,
 			})
 		}
 		trace.Operations = append(trace.Operations, observation)
@@ -783,33 +844,32 @@ func minimaExpectedReindexExecution(manifest *minimaManifest) minimaReindexExecu
 func minimaReindexExecutionDigest(observed minimaReindexExecutionTrace) string {
 	var trace strings.Builder
 	for _, operation := range observed.Operations {
-		fmt.Fprintf(&trace, "reindex|operation=%d|mutation=%s|start=%s|end=%s\n",
-			operation.OperationOrdinal, operation.Mutation, operation.StartBarrier, operation.EndBarrier)
+		fmt.Fprintf(&trace, "reindex|operation=%d|mutation=%s|start=%s|end=%s|mutation_started_monotonic_ns=%d|mutation_ended_monotonic_ns=%d\n",
+			operation.OperationOrdinal, operation.Mutation, operation.StartBarrier, operation.EndBarrier,
+			operation.MutationStartedMonotonicNS, operation.MutationEndedMonotonicNS)
 		for _, query := range operation.ReaderQueries {
-			fmt.Fprintf(&trace, "reindex_query|operation=%d|reader=%d|query_ordinal=%d|scenario=%s|mutation_in_flight=%t\n",
-				operation.OperationOrdinal, query.Reader, query.QueryOrdinal, query.Scenario, query.MutationInFlight)
+			fmt.Fprintf(&trace, "reindex_query|operation=%d|reader=%d|query_ordinal=%d|scenario=%s|started_monotonic_ns=%d|ended_monotonic_ns=%d\n",
+				operation.OperationOrdinal, query.Reader, query.QueryOrdinal, query.Scenario,
+				query.StartedMonotonicNS, query.EndedMonotonicNS)
 		}
 	}
 	return artifactHash("", []byte(trace.String())).SHA256
 }
 
 func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace, manifest *minimaManifest) error {
-	plans := make(map[int]*minimaConcurrentMutationPlan)
-	for i := range manifest.Operations {
-		if manifest.Operations[i].ConcurrentPlan != nil {
-			plans[manifest.Operations[i].Ordinal] = manifest.Operations[i].ConcurrentPlan
-		}
-	}
-	if len(observed.Operations) != len(plans) {
+	expected := minimaExpectedReindexExecution(manifest)
+	if len(observed.Operations) != len(expected.Operations) {
 		return fmt.Errorf("reindex operation count mismatch")
 	}
-	seenOperations := make(map[int]bool, len(plans))
-	for _, operation := range observed.Operations {
-		plan, ok := plans[operation.OperationOrdinal]
-		if !ok || seenOperations[operation.OperationOrdinal] ||
+	for index, operation := range observed.Operations {
+		expectedOperation := expected.Operations[index]
+		manifestOperation := manifest.Operations[expectedOperation.OperationOrdinal]
+		plan := manifestOperation.ConcurrentPlan
+		if operation.OperationOrdinal != expectedOperation.OperationOrdinal || plan == nil ||
 			operation.Mutation != plan.Mutation ||
 			operation.StartBarrier != plan.StartBarrier ||
 			operation.EndBarrier != plan.EndBarrier ||
+			!minimaValidInterval(operation.MutationStartedMonotonicNS, operation.MutationEndedMonotonicNS) ||
 			len(operation.ReaderQueries) != len(plan.ReaderAssignments) {
 			return fmt.Errorf("reindex operation %d trace mismatch", operation.OperationOrdinal)
 		}
@@ -819,7 +879,12 @@ func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace
 				return fmt.Errorf("reindex operation %d reader assignment mismatch", operation.OperationOrdinal)
 			}
 			assignment := plan.ReaderAssignments[query.Reader]
-			if query.QueryOrdinal != assignment.QueryOrdinal || query.Scenario != assignment.Scenario || !query.MutationInFlight {
+			if query.QueryOrdinal != assignment.QueryOrdinal || query.Scenario != assignment.Scenario ||
+				!minimaValidInterval(query.StartedMonotonicNS, query.EndedMonotonicNS) ||
+				!minimaIntervalsOverlap(
+					query.StartedMonotonicNS, query.EndedMonotonicNS,
+					operation.MutationStartedMonotonicNS, operation.MutationEndedMonotonicNS,
+				) {
 				return fmt.Errorf("reindex operation %d reader %d did not overlap mutation", operation.OperationOrdinal, query.Reader)
 			}
 			seenReaders[query.Reader] = true
@@ -827,7 +892,6 @@ func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace
 		if len(seenReaders) != plan.ReaderConcurrency {
 			return fmt.Errorf("reindex operation %d missing reader overlap", operation.OperationOrdinal)
 		}
-		seenOperations[operation.OperationOrdinal] = true
 	}
 	return nil
 }
@@ -1030,7 +1094,6 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			return fmt.Errorf("minima artifact: %s did not consume identical manifests", backend.Name)
 		}
 		timedPlan := artifact.Manifest.Operations[3].TimedPlan
-		expectedTimedTrace := minimaExpectedTimedExecution(timedPlan)
 		observedTimedTrace := backend.Operations.TimedExecutionTrace
 		observedTimedDigest := minimaTimedExecutionDigest(observedTimedTrace)
 		expectedReindexTrace := minimaExpectedReindexExecution(&artifact.Manifest)
@@ -1042,11 +1105,9 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			backend.Operations.TimedQueriesExecuted != timedPlan.QueryCount ||
 			backend.Operations.TimedRoundsCompleted != len(timedPlan.Rounds) ||
 			backend.Operations.TimedExecutionSHA256 != observedTimedDigest ||
-			observedTimedDigest != minimaTimedExecutionDigest(expectedTimedTrace) ||
 			backend.Operations.ReindexOperationsExecuted != len(observedReindexTrace.Operations) ||
 			backend.Operations.ReindexOperationsExecuted != len(expectedReindexTrace.Operations) ||
-			backend.Operations.ReindexExecutionSHA256 != observedReindexDigest ||
-			observedReindexDigest != minimaReindexExecutionDigest(expectedReindexTrace) {
+			backend.Operations.ReindexExecutionSHA256 != observedReindexDigest {
 			return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
 		}
 		if err := validateMinimaObservedTimedExecution(observedTimedTrace, timedPlan); err != nil {
