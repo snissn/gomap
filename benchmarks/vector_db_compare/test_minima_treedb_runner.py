@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,6 +89,79 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(evidence["path"], str(controller.log_path))
             self.assertLessEqual(len(evidence["tail"].encode()), runner.SERVICE_LOG_TAIL_BYTES)
             self.assertTrue(evidence["tail"].endswith("root cause\n"))
+
+    def test_start_timeout_cleans_live_child_and_can_retry_same_port(self) -> None:
+        service_source = f"""#!{sys.executable}
+import argparse
+import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-addr", required=True)
+parser.add_argument("-dir", required=True)
+parser.add_argument("-profile")
+args = parser.parse_args()
+data_dir = Path(args.dir)
+data_dir.mkdir(parents=True, exist_ok=True)
+(data_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        contract = "{runner.SERVICE_CONTRACT}" if (data_dir / "compatible").exists() else "wrong"
+        body = json.dumps({{"ok": True, "contract_version": contract}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+class Server(HTTPServer):
+    allow_reuse_address = True
+
+host, port = args.addr.rsplit(":", 1)
+Server((host, int(port)), Handler).serve_forever()
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "never-ready-service"
+            binary.write_text(service_source, encoding="utf-8")
+            binary.chmod(0o755)
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+            data_dir = root / "data"
+            controller = runner.ServiceController(
+                binary, f"http://127.0.0.1:{port}", data_dir, "test", 2,
+            )
+            original_stop = controller.stop
+
+            def noisy_stop() -> None:
+                original_stop()
+                raise RuntimeError("cleanup noise")
+
+            with mock.patch.object(controller, "stop", side_effect=noisy_stop):
+                with self.assertRaisesRegex(TimeoutError, "readiness exceeded"):
+                    controller.start()
+            child_pid = int((data_dir / "pid").read_text(encoding="utf-8"))
+            self.assertIsNone(controller.process)
+            self.assertIsNone(controller.log_file)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+
+            (data_dir / "compatible").touch()
+            try:
+                controller.start()
+                self.assertIsNotNone(controller.pid)
+                self.assertIsNotNone(controller.log_file)
+            finally:
+                controller.stop()
+            self.assertIsNone(controller.process)
+            self.assertIsNone(controller.log_file)
 
     def test_artifact_uses_shared_segment_delta_resource_semantics(self) -> None:
         baseline = {

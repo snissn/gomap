@@ -54,23 +54,30 @@ class ServiceController:
             raise ValueError("owned TreeDB service URL must be a plain http://host:port address")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_file = self.log_path.open("a", encoding="utf-8", buffering=1)
-        self.process = subprocess.Popen(
-            [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile],
-            stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
-        )
-        deadline, last = time.monotonic() + self.timeout, ""
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
+        try:
+            self.process = subprocess.Popen(
+                [str(self.binary), "-addr", address, "-dir", str(self.data_dir), "-profile", self.profile],
+                stdout=self.log_file, stderr=subprocess.STDOUT, text=True,
+            )
+            deadline, last = time.monotonic() + self.timeout, ""
+            while time.monotonic() < deadline:
+                if self.process.poll() is not None:
+                    raise RuntimeError(f"TreeDB service exited during startup; log tail: {self.log_evidence()['tail']}")
+                try:
+                    health = TreeDBClient(self.url, timeout=1).health()
+                    if health.get("ok") is True and health.get("contract_version") == SERVICE_CONTRACT:
+                        return
+                    last = repr(health)
+                except BaseException as exc:
+                    last = repr(exc)
+                time.sleep(0.05)
+            raise TimeoutError(f"TreeDB service readiness exceeded {self.timeout}s: {last}")
+        except BaseException:
             try:
-                health = TreeDBClient(self.url, timeout=1).health()
-                if health.get("ok") is True and health.get("contract_version") == SERVICE_CONTRACT:
-                    return
-                last = repr(health)
-            except BaseException as exc:
-                last = repr(exc)
-            time.sleep(0.05)
-        raise TimeoutError(f"TreeDB service readiness exceeded {self.timeout}s: {last}")
+                self.stop()
+            except BaseException:
+                pass
+            raise
 
     def stop(self) -> None:
         if self.process is not None:
