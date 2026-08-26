@@ -10,13 +10,15 @@ import (
 )
 
 const (
-	minimaManifestSchema = "treedb_rag_minima_manifest/v1"
-	minimaArtifactSchema = "treedb_rag_application/minima_v4"
-	minimaDimension      = 8
-	minimaLookupLimit    = 4096
-	minimaRepresentative = 500000
-	minimaOrderTolerance = 0
-	minimaScoreTolerance = 0.000001
+	minimaManifestSchema   = "treedb_rag_minima_manifest/v1"
+	minimaArtifactSchema   = "treedb_rag_application/minima_v4"
+	minimaDimension        = 8
+	minimaLookupLimit      = 4096
+	minimaRepresentative   = 500000
+	minimaOrderTolerance   = 0
+	minimaScoreTolerance   = 0.000001
+	minimaGenerator        = "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
+	minimaPayloadGenerator = "id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
 )
 
 type minimaWorkloadConfig struct {
@@ -174,15 +176,15 @@ func buildMinimaManifest() minimaManifest {
 		{Name: "sparse_over_limit", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 100000, EligibleRows: minimaLookupLimit + 1, Filter: "user_id", UserID: "sparse-user", DistractorRows: 100000},
 		{Name: "mixed_broad_narrow", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 10020, EligibleRows: 5, BroadStart: 10000, BroadRows: 50000, NarrowStart: 10020, NarrowRows: 5, Filter: "user_id+fpath", UserID: "mixed-user", FPath: "/mixed/target.txt", DistractorRows: 10000},
 		{Name: "empty_user", Shape: "small", CorpusRows: 128, EligibleStart: 0, EligibleRows: 0, Filter: "user_id", UserID: "missing-user"},
-		{Name: "empty_file", Shape: "small", CorpusRows: 128, EligibleStart: 0, EligibleRows: 0, BroadStart: 16, BroadRows: 16, Filter: "user_id+fpath", UserID: "small-user", FPath: "/missing.txt"},
+		{Name: "empty_file", Shape: "small", CorpusRows: 128, EligibleStart: 0, EligibleRows: 0, BroadStart: 16, BroadRows: 16, Filter: "user_id+fpath", UserID: "empty-file-user", FPath: "/empty_file/missing.txt"},
 	}
 	for i := range corpora {
 		corpora[i].Selectivity = float64(corpora[i].EligibleRows) / float64(corpora[i].CorpusRows)
-		corpora[i].Generator = "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+		corpora[i].Generator = minimaGenerator
 	}
 	queries := make([]minimaQuerySpec, 0, len(corpora))
 	for _, corpus := range corpora {
-		ids, scores := minimaOracle(corpus)
+		ids, scores, _ := minimaGlobalOracle(corpora, corpus)
 		vector := make([]float64, minimaDimension)
 		vector[0] = 1
 		queries = append(queries, minimaQuerySpec{Scenario: corpus.Name, Vector: vector, InitialOracleIDs: ids, InitialOracleScores: scores})
@@ -410,7 +412,7 @@ func minimaPayloadCorpusDigest(corpora []minimaScenarioSpec) string {
 			BroadStart: corpus.BroadStart, BroadRows: corpus.BroadRows,
 			NarrowStart: corpus.NarrowStart, NarrowRows: corpus.NarrowRows,
 			Filter: corpus.Filter, UserID: corpus.UserID, FPath: corpus.FPath, Selectivity: corpus.Selectivity,
-			PayloadGenerator: "id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)",
+			PayloadGenerator: minimaPayloadGenerator,
 		}
 	}
 	return minimaDigest(payload)
@@ -496,8 +498,23 @@ func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocu
 	if ordinal < 0 || ordinal >= spec.CorpusRows {
 		return minimaGeneratedDocument{}, fmt.Errorf("minima document ordinal %d outside [0,%d)", ordinal, spec.CorpusRows)
 	}
-	userID := fmt.Sprintf("other-user-%02d", ordinal%31)
-	fpath := fmt.Sprintf("/other/%02d.txt", ordinal%97)
+	userID, fpath := minimaDocumentScalarsAt(spec, ordinal)
+	score := 0.9 - float64(ordinal)*0.000003
+	vector := make([]float64, minimaDimension)
+	vector[0], vector[1] = score, math.Sqrt(1-score*score)
+	return minimaGeneratedDocument{
+		ID: fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal), Content: fmt.Sprintf("minima:%s:%d", spec.Name, ordinal),
+		Vector: vector, UserID: userID, FPath: fpath,
+	}, nil
+}
+
+func minimaDefaultScalarsAt(spec minimaScenarioSpec, ordinal int) (string, string) {
+	return fmt.Sprintf("%s-other-user-%02d", spec.Name, ordinal%31),
+		fmt.Sprintf("/%s/other/%02d.txt", spec.Name, ordinal%97)
+}
+
+func minimaDocumentScalarsAt(spec minimaScenarioSpec, ordinal int) (string, string) {
+	userID, fpath := minimaDefaultScalarsAt(spec, ordinal)
 	if spec.Filter == "user_id" && ordinal >= spec.EligibleStart && ordinal < spec.EligibleStart+spec.EligibleRows {
 		userID = spec.UserID
 	}
@@ -509,13 +526,46 @@ func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocu
 			fpath = spec.FPath
 		}
 	}
-	score := 0.9 - float64(ordinal)*0.000003
-	vector := make([]float64, minimaDimension)
-	vector[0], vector[1] = score, math.Sqrt(1-score*score)
-	return minimaGeneratedDocument{
-		ID: fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal), Content: fmt.Sprintf("minima:%s:%d", spec.Name, ordinal),
-		Vector: vector, UserID: userID, FPath: fpath,
-	}, nil
+	return userID, fpath
+}
+
+func minimaGlobalOracle(corpora []minimaScenarioSpec, target minimaScenarioSpec) ([]string, []float64, int) {
+	candidates := make([]minimaScoredDocument, 0, len(corpora)*5)
+	matches := 0
+	for _, corpus := range corpora {
+		if corpus.UserID != target.UserID {
+			continue
+		}
+		start, rows := 0, 0
+		switch {
+		case target.Filter == "user_id" && corpus.Filter == "user_id":
+			start, rows = corpus.EligibleStart, corpus.EligibleRows
+		case target.Filter == "user_id" && corpus.Filter == "user_id+fpath":
+			start, rows = corpus.BroadStart, corpus.BroadRows
+		case target.Filter == "user_id+fpath" && corpus.Filter == "user_id+fpath" && corpus.FPath == target.FPath:
+			start, rows = corpus.NarrowStart, corpus.NarrowRows
+		}
+		matches += rows
+		for ordinal := start; ordinal < start+min(5, rows); ordinal++ {
+			document, _ := minimaDocumentAt(corpus, ordinal)
+			if minimaDocumentMatches(target, document) {
+				candidates = append(candidates, minimaScoredDocument{ID: document.ID, Score: minimaDocumentScore(document)})
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Score == candidates[j].Score {
+			return candidates[i].ID < candidates[j].ID
+		}
+		return candidates[i].Score > candidates[j].Score
+	})
+	count := min(5, len(candidates))
+	ids := make([]string, count)
+	scores := make([]float64, count)
+	for i := range count {
+		ids[i], scores[i] = candidates[i].ID, candidates[i].Score
+	}
+	return ids, scores, matches
 }
 
 func minimaOracle(spec minimaScenarioSpec) ([]string, []float64) {
@@ -535,6 +585,9 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	}
 	if manifest.CorpusSHA256 != minimaDigest(manifest.Corpora) || manifest.QuerySHA256 != minimaDigest(manifest.Queries) || manifest.OperationSHA256 != minimaDigest(manifest.Operations) {
 		return fmt.Errorf("minima manifest: corpus/query/operation hash mismatch")
+	}
+	if err := validateMinimaScalarNamespaces(manifest); err != nil {
+		return err
 	}
 	if err := validateMinimaTimedPlan(manifest); err != nil {
 		return err
@@ -566,13 +619,14 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 			return fmt.Errorf("minima manifest: selectivity mismatch for %s", corpus.Name)
 		}
 		query := manifest.Queries[i]
-		initialIDs, initialScores := minimaOracle(corpus)
+		initialIDs, initialScores, globalMatches := minimaGlobalOracle(manifest.Corpora, corpus)
 		finalIDs, finalScores := minimaFinalOracleFromState(corpus, applied)
 		if query.Scenario != corpus.Name ||
 			minimaDigest(query.InitialOracleIDs) != minimaDigest(initialIDs) ||
 			minimaDigest(query.InitialOracleScores) != minimaDigest(initialScores) ||
 			minimaDigest(query.FinalOracleIDs) != minimaDigest(finalIDs) ||
 			minimaDigest(query.FinalOracleScores) != minimaDigest(finalScores) ||
+			globalMatches != corpus.EligibleRows ||
 			len(query.Vector) != manifest.Config.Dimension {
 			return fmt.Errorf("minima manifest: exact initial/final oracle mismatch for %s", corpus.Name)
 		}
@@ -591,6 +645,47 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	mixed := byName["mixed_broad_narrow"]
 	if mixed.BroadRows <= minimaLookupLimit || mixed.NarrowRows != mixed.EligibleRows || mixed.EligibleRows != 5 {
 		return fmt.Errorf("minima manifest: mixed cardinality mismatch")
+	}
+	return nil
+}
+
+func validateMinimaScalarNamespaces(manifest *minimaManifest) error {
+	names := make(map[string]bool, len(manifest.Corpora))
+	declaredUsers := make(map[string]string, len(manifest.Corpora))
+	declaredPaths := make(map[string]string, len(manifest.Corpora))
+	for _, corpus := range manifest.Corpora {
+		if corpus.Name == "" || names[corpus.Name] || corpus.UserID == "" || corpus.Generator != minimaGenerator {
+			return fmt.Errorf("minima manifest: invalid or duplicate scalar namespace for %s", corpus.Name)
+		}
+		if owner := declaredUsers[corpus.UserID]; owner != "" {
+			return fmt.Errorf("minima manifest: user_id %q shared by %s and %s", corpus.UserID, owner, corpus.Name)
+		}
+		if corpus.FPath != "" {
+			if owner := declaredPaths[corpus.FPath]; owner != "" {
+				return fmt.Errorf("minima manifest: fpath %q shared by %s and %s", corpus.FPath, owner, corpus.Name)
+			}
+			declaredPaths[corpus.FPath] = corpus.Name
+		}
+		names[corpus.Name] = true
+		declaredUsers[corpus.UserID] = corpus.Name
+	}
+	defaultUsers := make(map[string]string, len(manifest.Corpora)*31)
+	defaultPaths := make(map[string]string, len(manifest.Corpora)*97)
+	for _, corpus := range manifest.Corpora {
+		for ordinal := range 31 {
+			userID, _ := minimaDefaultScalarsAt(corpus, ordinal)
+			if owner := declaredUsers[userID]; owner != "" || defaultUsers[userID] != "" {
+				return fmt.Errorf("minima manifest: default user_id %q is not scenario-unique", userID)
+			}
+			defaultUsers[userID] = corpus.Name
+		}
+		for ordinal := range 97 {
+			_, fpath := minimaDefaultScalarsAt(corpus, ordinal)
+			if owner := declaredPaths[fpath]; owner != "" || defaultPaths[fpath] != "" {
+				return fmt.Errorf("minima manifest: default fpath %q is not scenario-unique", fpath)
+			}
+			defaultPaths[fpath] = corpus.Name
+		}
 	}
 	return nil
 }

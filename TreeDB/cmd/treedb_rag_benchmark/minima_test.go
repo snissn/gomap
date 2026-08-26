@@ -11,16 +11,16 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 	if err := validateMinimaManifest(&manifest); err != nil {
 		t.Fatalf("validate Minima manifest: %v", err)
 	}
-	if got, want := manifest.CorpusSHA256, "856df3d20b5177e0b7354aeac41b9d052e5f1075e00cec686ff823b110916ccc"; got != want {
+	if got, want := manifest.CorpusSHA256, "0b1a213652fc97a4460f254f4d9e90f027e4b30ef6111a26807591ade10923e1"; got != want {
 		t.Fatalf("corpus hash=%s want %s", got, want)
 	}
 	if got, want := manifest.QuerySHA256, "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a"; got != want {
 		t.Fatalf("query hash=%s want %s", got, want)
 	}
-	if got, want := manifest.OperationSHA256, "f2d85501ae55255784749f042892836078335a99e7603ac254bd1a88eafa9179"; got != want {
+	if got, want := manifest.OperationSHA256, "08f38acec8a5ad746dbffadef5ad9c198852c88d1920746229cb0733bfd9c434"; got != want {
 		t.Fatalf("operation hash=%s want %s", got, want)
 	}
-	if got, want := manifest.ExpectedStateSHA256, "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f"; got != want {
+	if got, want := manifest.ExpectedStateSHA256, "c2986f2b44e67b33e7bb3f92f5f92b1316e60117ed2505bef73327e0b1e5687f"; got != want {
 		t.Fatalf("state hash=%s want %s", got, want)
 	}
 	timed := manifest.Operations[3].TimedPlan
@@ -99,10 +99,24 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		t.Fatal("small fixture lacks a closer cross-tenant distractor")
 	}
 }
+func TestMinimaOraclesCoverSharedCollection(t *testing.T) {
+	manifest := buildMinimaManifest()
+	queries := minimaQueryMap(&manifest)
+	for _, scenario := range manifest.Corpora {
+		ids, scores, matches := minimaGlobalOracle(manifest.Corpora, scenario)
+		query := queries[scenario.Name]
+		if matches != scenario.EligibleRows ||
+			minimaDigest(ids) != minimaDigest(query.InitialOracleIDs) ||
+			minimaDigest(scores) != minimaDigest(query.InitialOracleScores) {
+			t.Fatalf("%s global oracle rows=%d want %d", scenario.Name, matches, scenario.EligibleRows)
+		}
+	}
+}
+
 func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 	manifest := buildMinimaManifest()
 	scenarios := minimaScenarioMap(&manifest)
-	const descriptor = "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+	const descriptor = "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
 	for _, scenario := range manifest.Corpora {
 		if scenario.Generator != descriptor {
 			t.Fatalf("%s generator=%q", scenario.Name, scenario.Generator)
@@ -113,9 +127,9 @@ func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 		ordinal  int
 		want     string
 	}{
-		{"all_match", 0, "49c93c317d874812cff7048ea4900f3aed46ca87c0f263d112e5c90637c5d7f1"},
-		{"over_limit_4097", 999, "dd794a8cfbe7cc12516c387f2ac55f409627d2ed1a6ed8e9fc6d0565a470e1d9"},
-		{"over_limit_4097", 1000, "66beec1714f2f5f5e6bea1cb055d8e88e92652a12ba3719d6a3d0807d2363dda"},
+		{"all_match", 0, "b913568b0ecd518b82885618db0811bde2f333397b7cc025c3e0d8fc8d9915da"},
+		{"over_limit_4097", 999, "3d462831f43b17f5d5dc38c1b7a9a50be603fee60a2c3c7f371da2f6cfaa6685"},
+		{"over_limit_4097", 1000, "02bf9f175ac99ae7b929d52fd5be179c24e894658b98a7be32c41ebc30cc2b3a"},
 		{"mixed_broad_narrow", 10020, "c55992ec81d614872e34bd00c69f3a52adf195feb8f48b08d5ad0e03a6b9bf3e"},
 	} {
 		document, err := minimaDocumentAt(scenarios[test.scenario], test.ordinal)
@@ -183,6 +197,14 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"query hash mismatch", func(a *minimaArtifact) { a.Manifest.QuerySHA256 = "bad" }},
 		{"operation hash mismatch", func(a *minimaArtifact) { a.Manifest.OperationSHA256 = "bad" }},
 		{"post-operation state hash mismatch", func(a *minimaArtifact) { a.Manifest.ExpectedStateSHA256 = "bad" }},
+		{"cross-scenario tenant collision", func(a *minimaArtifact) {
+			a.Manifest.Corpora[7].UserID = a.Manifest.Corpora[0].UserID
+			a.Manifest.CorpusSHA256 = minimaDigest(a.Manifest.Corpora)
+		}},
+		{"cross-scenario default namespace collision", func(a *minimaArtifact) {
+			a.Manifest.Corpora[7].Name = a.Manifest.Corpora[0].Name
+			a.Manifest.CorpusSHA256 = minimaDigest(a.Manifest.Corpora)
+		}},
 		{"concrete insert range mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[1].InsertRanges[0].Rows--
 			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
