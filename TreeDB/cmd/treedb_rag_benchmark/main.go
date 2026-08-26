@@ -13,6 +13,7 @@ import (
 func main() {
 	cfg := defaultApplicationConfig()
 	var (
+		workload   = flag.String("workload", "application", "workload mode: application or minima")
 		outDir     = flag.String("out-dir", ".", "directory receiving JSON, markdown, and artifact manifest")
 		dir        = flag.String("dir", "", "benchmark database root (default: temporary)")
 		keepDir    = flag.Bool("keep-dir", false, "keep a temporary benchmark database root")
@@ -21,9 +22,32 @@ func main() {
 		hostNote   = flag.String("host-note", "", "free-form host note recorded in provenance")
 		smoke      = flag.Bool("smoke", false, "run a bounded diagnostic that cannot claim final p99/QPS evidence")
 		dumpInputs = flag.String("dump-semantic-inputs", "", "write the exact semantic generation input manifest and exit")
+		dumpMinima = flag.String("dump-minima-manifest", "", "write the frozen compact Minima fixture/operation manifest and exit")
 		cellWorker = flag.Bool("cell-worker", false, "serve long-lived JSON-line cell requests for per-cell interleaving")
 	)
 	flag.Parse()
+	cfg.Workload = strings.TrimSpace(*workload)
+	switch cfg.Workload {
+	case "application":
+		if *dumpMinima != "" {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: -dump-minima-manifest requires -workload=minima")
+			os.Exit(2)
+		}
+	case "minima":
+		if *dumpMinima == "" {
+			fmt.Fprintln(os.Stderr, "treedb_rag_benchmark: Minima product execution is dependency-gated; use -dump-minima-manifest for preflight")
+			os.Exit(2)
+		}
+		if err := writeMinimaManifest(*dumpMinima); err != nil {
+			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: dump Minima manifest: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("wrote %s\n", *dumpMinima)
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: unknown workload %q\n", cfg.Workload)
+		os.Exit(2)
+	}
 	if *dumpInputs != "" {
 		if err := writeSemanticInputManifest(*dumpInputs); err != nil {
 			fmt.Fprintf(os.Stderr, "treedb_rag_benchmark: dump semantic inputs: %v\n", err)

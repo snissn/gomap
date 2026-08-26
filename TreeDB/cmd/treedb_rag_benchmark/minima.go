@@ -1,0 +1,536 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+)
+
+const (
+	minimaManifestSchema = "treedb_rag_minima_manifest/v1"
+	minimaArtifactSchema = "treedb_rag_application/minima_v4"
+	minimaDimension      = 8
+	minimaLookupLimit    = 4096
+	minimaRepresentative = 500000
+)
+
+type minimaWorkloadConfig struct {
+	Collection        string   `json:"collection"`
+	VectorField       string   `json:"vector_field"`
+	ContentField      string   `json:"content_field"`
+	Dimension         int      `json:"dimension"`
+	Metric            string   `json:"metric"`
+	ScalarFields      []string `json:"scalar_fields"`
+	TopK              int      `json:"top_k"`
+	BatchSize         int      `json:"batch_size"`
+	ReaderConcurrency int      `json:"reader_concurrency"`
+	WriterConcurrency int      `json:"writer_concurrency"`
+	WarmupQueries     int      `json:"warmup_queries"`
+	TimedQueries      int      `json:"timed_queries"`
+	LookupLimit       int      `json:"lookup_limit"`
+	Ordering          string   `json:"ordering"`
+	Completion        string   `json:"completion_boundary"`
+	Timing            string   `json:"timing_boundary"`
+}
+
+type minimaScenarioSpec struct {
+	Name           string  `json:"name"`
+	Shape          string  `json:"shape"`
+	CorpusRows     int     `json:"corpus_rows"`
+	EligibleStart  int     `json:"eligible_start"`
+	EligibleRows   int     `json:"eligible_rows"`
+	BroadStart     int     `json:"broad_start,omitempty"`
+	BroadRows      int     `json:"broad_rows,omitempty"`
+	NarrowStart    int     `json:"narrow_start,omitempty"`
+	NarrowRows     int     `json:"narrow_rows,omitempty"`
+	Filter         string  `json:"filter"`
+	UserID         string  `json:"user_id,omitempty"`
+	FPath          string  `json:"fpath,omitempty"`
+	Selectivity    float64 `json:"selectivity"`
+	DistractorRows int     `json:"closer_cross_tenant_distractor_rows"`
+	Generator      string  `json:"generator"`
+}
+
+type minimaQuerySpec struct {
+	Scenario    string    `json:"scenario"`
+	Vector      []float64 `json:"vector"`
+	OracleIDs   []string  `json:"oracle_ids"`
+	OracleScore []float64 `json:"oracle_scores"`
+}
+
+type minimaOperationSpec struct {
+	Ordinal int    `json:"ordinal"`
+	Name    string `json:"name"`
+	Target  string `json:"target"`
+	Timed   bool   `json:"timed"`
+}
+
+type minimaManifest struct {
+	Schema          string                `json:"schema"`
+	Config          minimaWorkloadConfig  `json:"config"`
+	Corpora         []minimaScenarioSpec  `json:"corpora"`
+	Queries         []minimaQuerySpec     `json:"queries"`
+	Operations      []minimaOperationSpec `json:"operations"`
+	CorpusSHA256    string                `json:"corpus_sha256"`
+	QuerySHA256     string                `json:"query_sha256"`
+	OperationSHA256 string                `json:"operation_sha256"`
+}
+
+type minimaGeneratedDocument struct {
+	ID      string    `json:"id"`
+	Content string    `json:"content"`
+	Vector  []float64 `json:"vector"`
+	UserID  string    `json:"user_id"`
+	FPath   string    `json:"fpath"`
+}
+
+func defaultMinimaWorkloadConfig() minimaWorkloadConfig {
+	return minimaWorkloadConfig{
+		Collection: "minima", VectorField: "embedding", ContentField: "content",
+		Dimension: minimaDimension, Metric: "cosine", ScalarFields: []string{"user_id", "fpath"},
+		TopK: 5, BatchSize: 256, ReaderConcurrency: 4, WriterConcurrency: 1,
+		WarmupQueries: 32, TimedQueries: 1024, LookupLimit: minimaLookupLimit,
+		Ordering:   "manifest_ordinal_serial; timed_search_round_robin",
+		Completion: "successful_mutation_response_before_visibility_probe",
+		Timing:     "storage_calls_only; embeddings_and_llm_excluded; fetch_and_decode_separate",
+	}
+}
+
+func buildMinimaManifest() minimaManifest {
+	corpora := []minimaScenarioSpec{
+		{Name: "small", Shape: "small", CorpusRows: 128, EligibleStart: 16, EligibleRows: 16, Filter: "user_id", UserID: "small-user", DistractorRows: 16},
+		{Name: "all_match", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 0, EligibleRows: minimaRepresentative, Filter: "user_id", UserID: "all-user"},
+		{Name: "over_limit_4097", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 1000, EligibleRows: minimaLookupLimit + 1, Filter: "user_id", UserID: "over-user", DistractorRows: 1000},
+		{Name: "broad_10pct", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 20000, EligibleRows: 50000, Filter: "user_id", UserID: "broad-user", DistractorRows: 20000},
+		{Name: "sparse_over_limit", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 100000, EligibleRows: minimaLookupLimit + 1, Filter: "user_id", UserID: "sparse-user", DistractorRows: 100000},
+		{Name: "mixed_broad_narrow", Shape: "representative", CorpusRows: minimaRepresentative, EligibleStart: 10020, EligibleRows: 5, BroadStart: 10000, BroadRows: 50000, NarrowStart: 10020, NarrowRows: 5, Filter: "user_id+fpath", UserID: "mixed-user", FPath: "/mixed/target.txt", DistractorRows: 10000},
+		{Name: "empty_user", Shape: "small", CorpusRows: 128, EligibleStart: 0, EligibleRows: 0, Filter: "user_id", UserID: "missing-user"},
+		{Name: "empty_file", Shape: "small", CorpusRows: 128, EligibleStart: 0, EligibleRows: 0, BroadStart: 16, BroadRows: 16, Filter: "user_id+fpath", UserID: "small-user", FPath: "/missing.txt"},
+	}
+	for i := range corpora {
+		corpora[i].Selectivity = float64(corpora[i].EligibleRows) / float64(corpora[i].CorpusRows)
+		corpora[i].Generator = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-<ordinal%31>,/other/<ordinal%97>.txt"
+	}
+	queries := make([]minimaQuerySpec, 0, len(corpora))
+	for _, corpus := range corpora {
+		ids, scores := minimaOracle(corpus)
+		vector := make([]float64, minimaDimension)
+		vector[0] = 1
+		queries = append(queries, minimaQuerySpec{Scenario: corpus.Name, Vector: vector, OracleIDs: ids, OracleScore: scores})
+	}
+	operations := []minimaOperationSpec{
+		{0, "ensure_compatible_collection", "all", false},
+		{1, "initial_batch_insert", "all", false},
+		{2, "warmup_search", "all", false},
+		{3, "timed_search_with_batch_insert", "all", true},
+		{4, "reindex_delete_by_user_and_fpath_while_reading", "mixed_broad_narrow", false},
+		{5, "reindex_replacement_insert_while_reading", "mixed_broad_narrow", false},
+		{6, "reindex_visibility_probe", "mixed_broad_narrow", false},
+		{7, "explicit_update", "small", false},
+		{8, "update_visibility_probe", "small", false},
+		{9, "explicit_delete", "small", false},
+		{10, "delete_visibility_probe", "small", false},
+		{11, "empty_user_and_file_probes", "empty_user,empty_file", false},
+		{12, "close", "all", false},
+		{13, "reopen", "all", false},
+		{14, "idempotent_ensure_after_reopen", "all", false},
+		{15, "final_manifest_and_oracle_comparison", "all", false},
+	}
+	manifest := minimaManifest{Schema: minimaManifestSchema, Config: defaultMinimaWorkloadConfig(), Corpora: corpora, Queries: queries, Operations: operations}
+	manifest.CorpusSHA256 = minimaDigest(corpora)
+	manifest.QuerySHA256 = minimaDigest(queries)
+	manifest.OperationSHA256 = minimaDigest(operations)
+	return manifest
+}
+
+func minimaDigest(value any) string {
+	raw, _ := json.Marshal(value)
+	return artifactHash("", raw).SHA256
+}
+
+func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocument, error) {
+	if ordinal < 0 || ordinal >= spec.CorpusRows {
+		return minimaGeneratedDocument{}, fmt.Errorf("minima document ordinal %d outside [0,%d)", ordinal, spec.CorpusRows)
+	}
+	userID := fmt.Sprintf("other-user-%02d", ordinal%31)
+	fpath := fmt.Sprintf("/other/%02d.txt", ordinal%97)
+	if spec.Filter == "user_id" && ordinal >= spec.EligibleStart && ordinal < spec.EligibleStart+spec.EligibleRows {
+		userID = spec.UserID
+	}
+	if spec.Filter == "user_id+fpath" {
+		if ordinal >= spec.BroadStart && ordinal < spec.BroadStart+spec.BroadRows {
+			userID = spec.UserID
+		}
+		if ordinal >= spec.NarrowStart && ordinal < spec.NarrowStart+spec.NarrowRows {
+			fpath = spec.FPath
+		}
+	}
+	x := float64(ordinal+1) / 1000000
+	norm := math.Hypot(1, x)
+	vector := make([]float64, minimaDimension)
+	vector[0], vector[1] = 1/norm, x/norm
+	return minimaGeneratedDocument{
+		ID: fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal), Content: fmt.Sprintf("minima:%s:%d", spec.Name, ordinal),
+		Vector: vector, UserID: userID, FPath: fpath,
+	}, nil
+}
+
+func minimaOracle(spec minimaScenarioSpec) ([]string, []float64) {
+	count := min(5, spec.EligibleRows)
+	ids := make([]string, count)
+	scores := make([]float64, count)
+	for i := range count {
+		ordinal := spec.EligibleStart + i
+		x := float64(ordinal+1) / 1000000
+		ids[i] = fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal)
+		scores[i] = 1 / math.Hypot(1, x)
+	}
+	return ids, scores
+}
+
+func validateMinimaManifest(manifest *minimaManifest) error {
+	if manifest == nil || manifest.Schema != minimaManifestSchema {
+		return fmt.Errorf("minima manifest: missing schema")
+	}
+	if manifest.CorpusSHA256 != minimaDigest(manifest.Corpora) || manifest.QuerySHA256 != minimaDigest(manifest.Queries) || manifest.OperationSHA256 != minimaDigest(manifest.Operations) {
+		return fmt.Errorf("minima manifest: corpus/query/operation hash mismatch")
+	}
+	frozen := buildMinimaManifest()
+	if manifest.CorpusSHA256 != frozen.CorpusSHA256 || manifest.QuerySHA256 != frozen.QuerySHA256 || manifest.OperationSHA256 != frozen.OperationSHA256 || minimaDigest(manifest.Config) != minimaDigest(frozen.Config) {
+		return fmt.Errorf("minima manifest: not the frozen workload")
+	}
+	if len(manifest.Corpora) != len(manifest.Queries) {
+		return fmt.Errorf("minima manifest: corpus/query cardinality mismatch")
+	}
+	for i, corpus := range manifest.Corpora {
+		if corpus.CorpusRows <= 0 || corpus.EligibleRows < 0 || corpus.EligibleStart < 0 || corpus.EligibleStart+corpus.EligibleRows > corpus.CorpusRows {
+			return fmt.Errorf("minima manifest: invalid cardinality for %s", corpus.Name)
+		}
+		selectivity := float64(corpus.EligibleRows) / float64(corpus.CorpusRows)
+		if corpus.Selectivity != selectivity {
+			return fmt.Errorf("minima manifest: selectivity mismatch for %s", corpus.Name)
+		}
+		query := manifest.Queries[i]
+		ids, scores := minimaOracle(corpus)
+		if query.Scenario != corpus.Name || minimaDigest(query.OracleIDs) != minimaDigest(ids) || minimaDigest(query.OracleScore) != minimaDigest(scores) || len(query.Vector) != manifest.Config.Dimension {
+			return fmt.Errorf("minima manifest: exact oracle mismatch for %s", corpus.Name)
+		}
+	}
+	byName := minimaScenarioMap(manifest)
+	if byName["over_limit_4097"].EligibleRows != minimaLookupLimit+1 || byName["all_match"].EligibleRows != byName["all_match"].CorpusRows {
+		return fmt.Errorf("minima manifest: over-limit/all-match cardinality mismatch")
+	}
+	if byName["broad_10pct"].Selectivity != 0.10 {
+		return fmt.Errorf("minima manifest: broad selectivity mismatch")
+	}
+	sparse := byName["sparse_over_limit"]
+	if sparse.EligibleRows <= minimaLookupLimit || sparse.Selectivity >= 0.01 {
+		return fmt.Errorf("minima manifest: sparse selectivity mismatch")
+	}
+	mixed := byName["mixed_broad_narrow"]
+	if mixed.BroadRows <= minimaLookupLimit || mixed.NarrowRows != mixed.EligibleRows || mixed.EligibleRows != 5 {
+		return fmt.Errorf("minima manifest: mixed cardinality mismatch")
+	}
+	return nil
+}
+
+func minimaScenarioMap(manifest *minimaManifest) map[string]minimaScenarioSpec {
+	out := make(map[string]minimaScenarioSpec, len(manifest.Corpora))
+	for _, scenario := range manifest.Corpora {
+		out[scenario.Name] = scenario
+	}
+	return out
+}
+
+func writeMinimaManifest(path string) error {
+	manifest := buildMinimaManifest()
+	if err := validateMinimaManifest(&manifest); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return os.WriteFile(path, raw, 0o644)
+}
+
+type minimaManifestHashes struct {
+	CorpusSHA256    string `json:"corpus_sha256"`
+	QuerySHA256     string `json:"query_sha256"`
+	OperationSHA256 string `json:"operation_sha256"`
+}
+
+type minimaOperationEvidence struct {
+	ManifestOrdered         bool `json:"manifest_ordered"`
+	BatchInsertDuringSearch bool `json:"batch_insert_during_search"`
+	ReindexDeleteReplace    bool `json:"reindex_delete_replace"`
+	ExplicitUpdateVisible   bool `json:"explicit_update_visible"`
+	ExplicitDeleteVisible   bool `json:"explicit_delete_visible"`
+	EmptyCasesChecked       bool `json:"empty_cases_checked"`
+}
+
+type minimaReopenEvidence struct {
+	Attempted          bool   `json:"attempted"`
+	CommittedParity    bool   `json:"committed_parity"`
+	ResultManifestHash string `json:"result_manifest_hash"`
+}
+
+type minimaBackendEvidence struct {
+	Name          string                  `json:"name"`
+	ServerVersion string                  `json:"server_version"`
+	ClientVersion string                  `json:"client_version"`
+	Durability    string                  `json:"durability"`
+	Configuration map[string]string       `json:"configuration"`
+	Environment   map[string]string       `json:"environment"`
+	Manifest      minimaManifestHashes    `json:"manifest"`
+	Operations    minimaOperationEvidence `json:"operations"`
+	Reopen        minimaReopenEvidence    `json:"reopen"`
+}
+
+type minimaCorrectnessEvidence struct {
+	CrossUserResults int `json:"cross_user_results"`
+	StaleInsertIDs   int `json:"stale_insert_ids"`
+	StaleUpdateIDs   int `json:"stale_update_ids"`
+	StaleDeleteIDs   int `json:"stale_delete_ids"`
+}
+
+type minimaRouteEvidence struct {
+	Identity                     string `json:"identity"`
+	DeclaredScalarFiltering      bool   `json:"declared_scalar_filtering"`
+	NativeBasePlusLiveDelta      bool   `json:"native_base_plus_live_delta"`
+	FullDocumentScanFallbacks    *int   `json:"full_document_scan_fallbacks"`
+	ScalarFilterUnbounded        *int   `json:"scalar_filter_unbounded"`
+	ProbeIDs                     *int   `json:"probe_ids"`
+	CandidateIDs                 *int   `json:"candidate_ids"`
+	RetainedCandidateIDs         *int   `json:"retained_candidate_ids"`
+	RefinedCandidateIDs          *int   `json:"refined_candidate_ids"`
+	MembershipSource             string `json:"membership_source"`
+	Plan                         string `json:"plan"`
+	AllowedIDMaterializationRows *int   `json:"allowed_id_materialization_rows"`
+	PrimaryDocumentScans         *int   `json:"primary_document_scans"`
+	VisitedCandidates            *int   `json:"visited_candidates"`
+	ScoredCandidates             *int   `json:"scored_candidates"`
+	AdmittedCandidates           *int   `json:"admitted_candidates"`
+}
+
+type minimaVisibilityEvidence struct {
+	GenerationConsistent bool `json:"generation_consistent"`
+	MismatchCount        *int `json:"visibility_mismatch_count"`
+	RetryCount           *int `json:"visibility_retry_count"`
+}
+
+type minimaTimingEvidence struct {
+	Captured          bool    `json:"captured"`
+	WriterMillis      float64 `json:"writer_millis"`
+	SearchMillis      float64 `json:"search_millis"`
+	FetchMillis       float64 `json:"fetch_millis"`
+	DecodeMillis      float64 `json:"decode_millis"`
+	EmbeddingIncluded bool    `json:"embedding_included"`
+	LLMIncluded       bool    `json:"llm_included"`
+}
+
+type minimaResourceEvidence struct {
+	Captured    bool    `json:"captured"`
+	BytesPerOp  float64 `json:"bytes_per_op"`
+	AllocsPerOp float64 `json:"allocs_per_op"`
+	RSSBytes    int64   `json:"rss_bytes"`
+	CPUSeconds  float64 `json:"cpu_seconds"`
+	DiskBytes   int64   `json:"disk_bytes"`
+}
+
+type minimaScenarioEvidence struct {
+	Backend         string                    `json:"backend"`
+	Scenario        string                    `json:"scenario"`
+	CorpusRows      int                       `json:"corpus_rows"`
+	ExpectedMatches int                       `json:"expected_matches"`
+	Selectivity     float64                   `json:"selectivity"`
+	OracleIDs       []string                  `json:"oracle_ids"`
+	OracleScores    []float64                 `json:"oracle_scores"`
+	ActualIDs       []string                  `json:"actual_ids"`
+	ActualScores    []float64                 `json:"actual_scores"`
+	ReopenIDs       []string                  `json:"reopen_ids"`
+	ReopenParity    bool                      `json:"reopen_parity"`
+	Recall          float64                   `json:"recall"`
+	Overlap         float64                   `json:"overlap"`
+	OrderTolerance  float64                   `json:"order_tolerance"`
+	ScoreTolerance  float64                   `json:"score_tolerance"`
+	Errors          int                       `json:"errors"`
+	Timeouts        int                       `json:"timeouts"`
+	Correctness     minimaCorrectnessEvidence `json:"correctness"`
+	Route           minimaRouteEvidence       `json:"route"`
+	Visibility      minimaVisibilityEvidence  `json:"visibility"`
+	Timing          minimaTimingEvidence      `json:"timing"`
+	Resource        minimaResourceEvidence    `json:"resource"`
+}
+
+type minimaArtifact struct {
+	Schema         string                   `json:"schema"`
+	State          string                   `json:"state"`
+	Passing        bool                     `json:"passing"`
+	Manifest       minimaManifest           `json:"manifest"`
+	Backends       []minimaBackendEvidence  `json:"backends"`
+	Scenarios      []minimaScenarioEvidence `json:"scenarios"`
+	Failures       []string                 `json:"failures"`
+	Recommendation string                   `json:"readiness_recommendation"`
+}
+
+func validateMinimaArtifact(artifact *minimaArtifact) error {
+	if artifact == nil || artifact.Schema != minimaArtifactSchema {
+		return fmt.Errorf("minima artifact: missing schema")
+	}
+	if err := validateMinimaManifest(&artifact.Manifest); err != nil {
+		return err
+	}
+	if artifact.State == "partial" {
+		if artifact.Passing || artifact.Recommendation != "not_evaluated" {
+			return fmt.Errorf("minima artifact: partial run marked passing or recommended")
+		}
+		return nil
+	}
+	if artifact.State != "pass" || !artifact.Passing || len(artifact.Failures) != 0 {
+		return fmt.Errorf("minima artifact: final state is not a clean pass")
+	}
+	if artifact.Recommendation != "ready_direct" && artifact.Recommendation != "ready_with_alpha_limitations" && artifact.Recommendation != "not_ready" && artifact.Recommendation != "unsuitable" {
+		return fmt.Errorf("minima artifact: missing readiness recommendation")
+	}
+	backends := make(map[string]minimaBackendEvidence, len(artifact.Backends))
+	for _, backend := range artifact.Backends {
+		if backend.Name != "treedb" && backend.Name != "qdrant" {
+			return fmt.Errorf("minima artifact: unknown backend %q", backend.Name)
+		}
+		if _, exists := backends[backend.Name]; exists {
+			return fmt.Errorf("minima artifact: duplicate backend %q", backend.Name)
+		}
+		if backend.ServerVersion == "" || backend.ClientVersion == "" || backend.Durability == "" || len(backend.Configuration) == 0 || len(backend.Environment) == 0 {
+			return fmt.Errorf("minima artifact: %s missing environment/version/durability/config", backend.Name)
+		}
+		for _, key := range []string{"os", "arch", "cpu", "memory"} {
+			if backend.Environment[key] == "" {
+				return fmt.Errorf("minima artifact: %s missing environment %s", backend.Name, key)
+			}
+		}
+		if backend.Manifest.CorpusSHA256 != artifact.Manifest.CorpusSHA256 || backend.Manifest.QuerySHA256 != artifact.Manifest.QuerySHA256 || backend.Manifest.OperationSHA256 != artifact.Manifest.OperationSHA256 {
+			return fmt.Errorf("minima artifact: %s did not consume identical manifests", backend.Name)
+		}
+		if !backend.Operations.ManifestOrdered || !backend.Operations.BatchInsertDuringSearch || !backend.Operations.ReindexDeleteReplace || !backend.Operations.ExplicitUpdateVisible || !backend.Operations.ExplicitDeleteVisible || !backend.Operations.EmptyCasesChecked {
+			return fmt.Errorf("minima artifact: %s missing operation evidence", backend.Name)
+		}
+		if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash == "" {
+			return fmt.Errorf("minima artifact: %s missing reopen evidence", backend.Name)
+		}
+		backends[backend.Name] = backend
+	}
+	if len(backends) != 2 {
+		return fmt.Errorf("minima artifact: requires TreeDB and Qdrant evidence")
+	}
+	specs := minimaScenarioMap(&artifact.Manifest)
+	seen := make(map[string]bool, len(artifact.Scenarios))
+	for _, row := range artifact.Scenarios {
+		if _, ok := backends[row.Backend]; !ok {
+			return fmt.Errorf("minima artifact: scenario has unknown backend %q", row.Backend)
+		}
+		spec, ok := specs[row.Scenario]
+		if !ok {
+			return fmt.Errorf("minima artifact: unknown scenario %q", row.Scenario)
+		}
+		key := row.Backend + "/" + row.Scenario
+		if seen[key] {
+			return fmt.Errorf("minima artifact: duplicate scenario %s", key)
+		}
+		seen[key] = true
+		if err := validateMinimaScenarioEvidence(row, spec); err != nil {
+			return fmt.Errorf("minima artifact: %s: %w", key, err)
+		}
+	}
+	if len(seen) != len(specs)*len(backends) {
+		return fmt.Errorf("minima artifact: missing per-backend scenario evidence")
+	}
+	return nil
+}
+
+func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec) error {
+	if row.CorpusRows != spec.CorpusRows || row.ExpectedMatches != spec.EligibleRows || row.Selectivity != spec.Selectivity {
+		return fmt.Errorf("missing or incorrect selectivity/cardinality")
+	}
+	ids, scores := minimaOracle(spec)
+	if minimaDigest(row.OracleIDs) != minimaDigest(ids) || minimaDigest(row.OracleScores) != minimaDigest(scores) || len(row.ActualIDs) != len(ids) || len(row.ActualScores) != len(ids) || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || row.OrderTolerance < 0 || row.ScoreTolerance < 0 {
+		return fmt.Errorf("missing exact oracle/candidate quality evidence")
+	}
+	for _, score := range row.ActualScores {
+		if !finiteNonnegative(score) {
+			return fmt.Errorf("non-finite actual score")
+		}
+	}
+	if !row.ReopenParity || minimaDigest(row.ReopenIDs) != minimaDigest(row.ActualIDs) {
+		return fmt.Errorf("missing per-scenario reopen evidence")
+	}
+	if row.Errors != 0 || row.Timeouts != 0 {
+		return fmt.Errorf("errors or timeouts recorded")
+	}
+	if row.Correctness.CrossUserResults != 0 || row.Correctness.StaleInsertIDs != 0 || row.Correctness.StaleUpdateIDs != 0 || row.Correctness.StaleDeleteIDs != 0 {
+		return fmt.Errorf("tenant leakage or stale visibility")
+	}
+	routeCounters := []*int{
+		row.Route.FullDocumentScanFallbacks, row.Route.ScalarFilterUnbounded, row.Route.ProbeIDs,
+		row.Route.CandidateIDs, row.Route.RetainedCandidateIDs, row.Route.RefinedCandidateIDs,
+		row.Route.AllowedIDMaterializationRows, row.Route.PrimaryDocumentScans,
+		row.Route.VisitedCandidates, row.Route.ScoredCandidates, row.Route.AdmittedCandidates,
+	}
+	for _, counter := range routeCounters {
+		if counter == nil {
+			return fmt.Errorf("missing route/probe/candidate counter")
+		}
+	}
+	if row.Route.Identity == "" || *row.Route.FullDocumentScanFallbacks != 0 {
+		return fmt.Errorf("missing route or fallback used")
+	}
+	if spec.EligibleRows > 0 && (*row.Route.CandidateIDs <= 0 || *row.Route.VisitedCandidates <= 0 || *row.Route.ScoredCandidates <= 0 || *row.Route.AdmittedCandidates <= 0) {
+		return fmt.Errorf("missing candidate counters")
+	}
+	if row.Backend == "treedb" {
+		if row.Route.Identity != "native_base_plus_live_delta" || !row.Route.NativeBasePlusLiveDelta || !row.Route.DeclaredScalarFiltering {
+			return fmt.Errorf("wrong or missing native route")
+		}
+		if *row.Route.ScalarFilterUnbounded != 0 {
+			return fmt.Errorf("scalar_filter_unbounded cardinality-only failure")
+		}
+		if *row.Route.ProbeIDs > minimaLookupLimit {
+			return fmt.Errorf("probe exceeds lookup limit")
+		}
+		if *row.Route.AllowedIDMaterializationRows >= spec.CorpusRows && spec.CorpusRows > 0 {
+			return fmt.Errorf("collection-sized allowed-ID materialization")
+		}
+		if *row.Route.PrimaryDocumentScans != 0 {
+			return fmt.Errorf("primary-document scan on ANN path")
+		}
+		if spec.EligibleRows > minimaLookupLimit && (row.Route.MembershipSource != "vector_aligned_scalar" || row.Route.Plan != "vector_aligned_ann") {
+			return fmt.Errorf("over-limit row lacks vector-aligned evidence")
+		}
+		if spec.Name == "mixed_broad_narrow" && (*row.Route.RetainedCandidateIDs < spec.NarrowRows || *row.Route.RefinedCandidateIDs != spec.EligibleRows || row.Route.MembershipSource != "bounded_candidate_refinement" || (row.Route.Plan != "mixed_refined" && row.Route.Plan != "complete_finite_ann")) {
+			return fmt.Errorf("mixed row lacks retained/refined exact or finite plan")
+		}
+	}
+	if !row.Visibility.GenerationConsistent {
+		return fmt.Errorf("mixed-generation result")
+	}
+	if row.Visibility.MismatchCount == nil || row.Visibility.RetryCount == nil {
+		return fmt.Errorf("missing visibility mismatch/retry counters")
+	}
+	if !row.Timing.Captured || row.Timing.EmbeddingIncluded || row.Timing.LLMIncluded || !finiteNonnegative(row.Timing.WriterMillis) || !finiteNonnegative(row.Timing.SearchMillis) || !finiteNonnegative(row.Timing.FetchMillis) || !finiteNonnegative(row.Timing.DecodeMillis) {
+		return fmt.Errorf("contaminated or missing timing evidence")
+	}
+	if !row.Resource.Captured || !finiteNonnegative(row.Resource.BytesPerOp) || !finiteNonnegative(row.Resource.AllocsPerOp) || row.Resource.RSSBytes < 0 || !finiteNonnegative(row.Resource.CPUSeconds) || row.Resource.DiskBytes < 0 {
+		return fmt.Errorf("missing resource evidence")
+	}
+	return nil
+}
+
+func finiteFraction(value float64) bool {
+	return finiteNonnegative(value) && value <= 1
+}
+
+func finiteNonnegative(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
