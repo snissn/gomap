@@ -891,11 +891,14 @@ func validateMinimaObservedTimedExecution(observed minimaTimedExecutionTrace, pl
 }
 
 type minimaObservedReindexQuery struct {
-	Reader             int    `json:"reader"`
-	QueryOrdinal       int    `json:"query_ordinal"`
-	Scenario           string `json:"scenario"`
-	StartedMonotonicNS int64  `json:"started_monotonic_ns"`
-	EndedMonotonicNS   int64  `json:"ended_monotonic_ns"`
+	Reader             int       `json:"reader"`
+	QueryOrdinal       int       `json:"query_ordinal"`
+	Scenario           string    `json:"scenario"`
+	StartedMonotonicNS int64     `json:"started_monotonic_ns"`
+	EndedMonotonicNS   int64     `json:"ended_monotonic_ns"`
+	ResultCaptured     bool      `json:"result_captured"`
+	ActualIDs          []string  `json:"actual_ids"`
+	ActualScores       []float64 `json:"actual_scores"`
 }
 
 type minimaObservedReindexOperation struct {
@@ -914,6 +917,7 @@ type minimaReindexExecutionTrace struct {
 
 func minimaExpectedReindexExecution(manifest *minimaManifest) minimaReindexExecutionTrace {
 	var trace minimaReindexExecutionTrace
+	queries := minimaQueryMap(manifest)
 	for _, operation := range manifest.Operations {
 		if operation.ConcurrentPlan == nil {
 			continue
@@ -927,9 +931,15 @@ func minimaExpectedReindexExecution(manifest *minimaManifest) minimaReindexExecu
 		}
 		for _, assignment := range plan.ReaderAssignments {
 			started := base + 200 + int64(assignment.Reader)*10
+			query := queries[assignment.Scenario]
+			ids, scores := query.InitialOracleIDs, query.InitialOracleScores
+			if plan.Mutation == "replacement_insert" {
+				ids, scores = query.FinalOracleIDs, query.FinalOracleScores
+			}
 			observation.ReaderQueries = append(observation.ReaderQueries, minimaObservedReindexQuery{
 				Reader: assignment.Reader, QueryOrdinal: assignment.QueryOrdinal, Scenario: assignment.Scenario,
 				StartedMonotonicNS: started, EndedMonotonicNS: started + 1,
+				ResultCaptured: true, ActualIDs: ids, ActualScores: scores,
 			})
 		}
 		trace.Operations = append(trace.Operations, observation)
@@ -954,6 +964,7 @@ func minimaReindexExecutionDigest(observed minimaReindexExecutionTrace) string {
 
 func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace, manifest *minimaManifest) error {
 	expected := minimaExpectedReindexExecution(manifest)
+	queries := minimaQueryMap(manifest)
 	if len(observed.Operations) != len(expected.Operations) {
 		return fmt.Errorf("reindex operation count mismatch")
 	}
@@ -982,6 +993,25 @@ func validateMinimaObservedReindexExecution(observed minimaReindexExecutionTrace
 					operation.MutationStartedMonotonicNS, operation.MutationEndedMonotonicNS,
 				) {
 				return fmt.Errorf("reindex operation %d reader %d did not overlap mutation", operation.OperationOrdinal, query.Reader)
+			}
+			oracle, ok := queries[query.Scenario]
+			if !ok || !query.ResultCaptured {
+				return fmt.Errorf("reindex operation %d reader %d result was not captured", operation.OperationOrdinal, query.Reader)
+			}
+			var preIDs, postIDs []string
+			var preScores, postScores []float64
+			switch operation.Mutation {
+			case "delete_by_user_id_and_fpath":
+				preIDs, preScores = oracle.InitialOracleIDs, oracle.InitialOracleScores
+			case "replacement_insert":
+				postIDs, postScores = oracle.FinalOracleIDs, oracle.FinalOracleScores
+			default:
+				return fmt.Errorf("reindex operation %d has unsupported mutation", operation.OperationOrdinal)
+			}
+			_, _, preErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, preIDs, preScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
+			_, _, postErr := validateMinimaRanking(query.ActualIDs, query.ActualScores, postIDs, postScores, manifest.Config.OrderTolerance, manifest.Config.ScoreTolerance)
+			if preErr != nil && postErr != nil {
+				return fmt.Errorf("reindex operation %d reader %d returned an impossible mixed mutation state", operation.OperationOrdinal, query.Reader)
 			}
 			seenReaders[query.Reader] = true
 		}

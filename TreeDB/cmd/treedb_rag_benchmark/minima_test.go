@@ -384,6 +384,17 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			query.EndedMonotonicNS = 0
 			operations.ReindexExecutionSHA256 = minimaReindexExecutionDigest(operations.ReindexExecutionTrace)
 		}},
+		{"missing reindex reader result", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Operations.ReindexExecutionTrace.Operations[0].ReaderQueries[0].ResultCaptured = false
+		}},
+		{"mixed pre/post reindex reader result", func(a *minimaArtifact) {
+			query := &minimaTestBackend(a, "treedb").Operations.ReindexExecutionTrace.Operations[1].ReaderQueries[0]
+			initial := minimaQueryMap(&a.Manifest)[query.Scenario]
+			query.ActualIDs = append([]string(nil), query.ActualIDs...)
+			query.ActualScores = append([]float64(nil), query.ActualScores...)
+			query.ActualIDs[0] = initial.InitialOracleIDs[0]
+			query.ActualScores[0] = initial.InitialOracleScores[0]
+		}},
 		{"wrong reindex execution hash", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Operations.ReindexExecutionSHA256 = "wrong"
 		}},

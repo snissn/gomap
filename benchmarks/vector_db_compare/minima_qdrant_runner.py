@@ -1256,8 +1256,21 @@ class QdrantMinimaRunner:
             start_barrier.wait()
             try:
                 interval: dict[str, int] = {}
-                self.search(operation["name"], assignment["scenario"], interval)
-                observations[assignment["reader"]] = {**assignment, **interval}
+                ids, scores = self.search(operation["name"], assignment["scenario"], interval)
+                query = self.queries[assignment["scenario"]]
+                oracles = (
+                    ((query["initial_oracle_ids"], query["initial_oracle_scores"]), ([], []))
+                    if operation["effect"] == "delete"
+                    else (([], []), (query["final_oracle_ids"], query["final_oracle_scores"]))
+                )
+                if not any(self.results_match((ids, scores), oracle) for oracle in oracles):
+                    raise RuntimeError(
+                        f"concurrent mutation reader returned impossible mixed state for operation {operation['ordinal']}"
+                    )
+                observations[assignment["reader"]] = {
+                    **assignment, **interval, "result_captured": True,
+                    "actual_ids": ids, "actual_scores": scores,
+                }
             except BaseException:
                 end_barrier.abort()
                 raise

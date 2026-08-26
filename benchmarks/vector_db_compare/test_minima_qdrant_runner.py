@@ -466,6 +466,20 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             for operation in reindex_trace["operations"]
             for row in operation["reader_queries"]
         ))
+        queries = {row["scenario"]: row for row in manifest["queries"]}
+        for operation in reindex_trace["operations"]:
+            for row in operation["reader_queries"]:
+                query = queries[row["scenario"]]
+                oracles = (
+                    ((query["initial_oracle_ids"], query["initial_oracle_scores"]), ([], []))
+                    if operation["mutation"] == "delete_by_user_id_and_fpath"
+                    else (([], []), (query["final_oracle_ids"], query["final_oracle_scores"]))
+                )
+                self.assertTrue(row["result_captured"])
+                self.assertTrue(any(
+                    workload.results_match((row["actual_ids"], row["actual_scores"]), oracle)
+                    for oracle in oracles
+                ))
         self.assertTrue(operations["reindex_delete_replace"])
         self.assertNotIn("phase_latency_samples", raw)
         self.assertGreater(raw["phase_latency_distributions"]["search"]["count"], 0)
