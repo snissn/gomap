@@ -228,12 +228,13 @@ type CommandJournal struct {
 	stableResourcePins     *rootpublication.IdentityPinRegistry
 }
 
-// CommandJournalCleanupSnapshot freezes the append/rotation namespace state
-// that ordinary WAL cleanup must revalidate immediately before deletion.
-// StableIdentity is captured from the exact active writer handle.
+// CommandJournalCleanupSnapshot captures the monotonic append/rotation
+// namespace state that ordinary WAL cleanup must revalidate immediately before
+// deletion. StableIdentity is captured from the exact active writer handle.
 type CommandJournalCleanupSnapshot struct {
 	CleanupEpoch          uint64
 	NamespaceGeneration   uint64
+	Lane                  int
 	SegmentSeq            uint64
 	ActiveSegmentMaxLSN   uint64
 	ActiveBytes           int64
@@ -1044,6 +1045,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 	return CommandJournalCleanupSnapshot{
 		CleanupEpoch:          j.cleanupEpoch,
 		NamespaceGeneration:   j.namespaceGeneration,
+		Lane:                  j.lane,
 		SegmentSeq:            j.segmentSeq,
 		ActiveSegmentMaxLSN:   j.activeSegmentMaxLSN,
 		ActiveBytes:           j.writer.ActiveBytes(),
@@ -1066,13 +1068,39 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 	return j.cleanupSnapshotLocked()
 }
 
-// WithCleanupSnapshot revalidates snapshot and retains the journal owner lock
-// while fn acquires exact identity deletion leases and unlinks covered closed
-// segments. Appends and rotations therefore cannot enter between the final
-// epoch check and namespace mutation. The callback reports whether it changed
+func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {
+	if current.PendingStableRotation != 0 || current.PendingSuccessor {
+		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command WAL rotation/retry ownership is pending"))
+	}
+	if current.CleanupEpoch < captured.CleanupEpoch ||
+		current.NamespaceGeneration < captured.NamespaceGeneration ||
+		current.Lane != captured.Lane ||
+		current.SegmentSeq < captured.SegmentSeq {
+		return ErrCommandWALCleanupSnapshotStale
+	}
+	if current.SegmentSeq == captured.SegmentSeq {
+		if current.ActivePath != captured.ActivePath ||
+			!rootpublication.SamePhysicalIdentity(current.ActiveIdentity, captured.ActiveIdentity) ||
+			current.ActiveBytes < captured.ActiveBytes ||
+			current.ActiveSegmentMaxLSN < captured.ActiveSegmentMaxLSN {
+			return ErrCommandWALCleanupSnapshotStale
+		}
+		return nil
+	}
+	if current.CleanupEpoch == captured.CleanupEpoch ||
+		current.NamespaceGeneration == captured.NamespaceGeneration {
+		return ErrCommandWALCleanupSnapshotStale
+	}
+	return nil
+}
+
+// WithCleanupSnapshot revalidates that snapshot authority advanced only
+// monotonically, then retains the journal owner lock while fn marks every
+// captured/current active generation, acquires exact identity deletion leases,
+// and unlinks covered closed segments. The callback reports whether it changed
 // the namespace, including a partial batch that also returned an error, so the
 // next cleanup proof cannot reuse the pre-unlink generation.
-func (j *CommandJournal) WithCleanupSnapshot(snapshot CommandJournalCleanupSnapshot, fn func(*rootpublication.IdentityPinRegistry) (bool, error)) error {
+func (j *CommandJournal) WithCleanupSnapshot(snapshot CommandJournalCleanupSnapshot, fn func(*rootpublication.IdentityPinRegistry, CommandJournalCleanupSnapshot) (bool, error)) error {
 	if j == nil {
 		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command journal is closed"))
 	}
@@ -1082,13 +1110,13 @@ func (j *CommandJournal) WithCleanupSnapshot(snapshot CommandJournalCleanupSnaps
 	if err != nil {
 		return errors.Join(ErrCommandWALCleanupSnapshotStale, err)
 	}
-	if current != snapshot {
-		return ErrCommandWALCleanupSnapshotStale
+	if err := validateMonotonicCleanupSnapshot(snapshot, current); err != nil {
+		return err
 	}
 	if fn == nil {
 		return nil
 	}
-	mutated, err := fn(j.stableResourcePins)
+	mutated, err := fn(j.stableResourcePins, current)
 	if mutated {
 		j.namespaceGeneration++
 		j.cleanupEpoch++

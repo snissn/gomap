@@ -373,19 +373,22 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 }
 
 type commandWALSegmentCleanupDecision struct {
-	Path         string
-	Size         int64
-	ScannedBytes int64
-	Frames       uint64
-	MinLSN       uint64
-	MaxLSN       uint64
-	Active       bool
-	Covered      bool
-	Removed      bool
-	Pinned       bool
-	Error        string
-	identity     rootpublication.StableIdentity
-	file         *os.File
+	Path            string
+	Size            int64
+	ScannedBytes    int64
+	Frames          uint64
+	MinLSN          uint64
+	MaxLSN          uint64
+	Active          bool
+	Covered         bool
+	Removed         bool
+	Pinned          bool
+	Error           string
+	identity        rootpublication.StableIdentity
+	file            *os.File
+	lane            int
+	seq             uint64
+	generationKnown bool
 }
 
 type commandWALSegmentScanResult struct {
@@ -659,15 +662,18 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
-			Path:         seg.path,
-			Size:         info.Size(),
-			ScannedBytes: scan.scannedBytes,
-			Frames:       scan.frames,
-			MinLSN:       scan.minLSN,
-			MaxLSN:       scan.maxLSN,
-			Active:       active,
-			Covered:      scan.maxLSN <= cleanupThrough,
-			identity:     identity,
+			Path:            seg.path,
+			Size:            info.Size(),
+			ScannedBytes:    scan.scannedBytes,
+			Frames:          scan.frames,
+			MinLSN:          scan.minLSN,
+			MaxLSN:          scan.maxLSN,
+			Active:          active,
+			Covered:         scan.maxLSN <= cleanupThrough,
+			identity:        identity,
+			lane:            seg.lane,
+			seq:             seg.seq,
+			generationKnown: true,
 		}
 		// Only deletion candidates need their discovery handles retained until
 		// exact identity leases are acquired. Keeping handles for active or

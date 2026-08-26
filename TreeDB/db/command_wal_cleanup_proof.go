@@ -142,21 +142,14 @@ func (db *DB) revalidateDurableWALCleanupProofV1(proof durableWALCleanupProofV1)
 	if err != nil {
 		return errors.Join(errDurableWALCleanupProofStale, err)
 	}
-	current.journalOwner = proof.journalOwner
-	current.journal = proof.journal
-	if !current.sameAuthority(proof) {
-		return errDurableWALCleanupProofStale
+	if current.cleanupThrough < proof.cleanupThrough {
+		return fmt.Errorf("%w: cleanup frontier regressed from %d to %d", errDurableWALCleanupProofStale, proof.cleanupThrough, current.cleanupThrough)
+	}
+	if current.durableWALLSN < proof.durableWALLSN {
+		return fmt.Errorf("%w: durable WAL LSN regressed from %d to %d", errDurableWALCleanupProofStale, proof.durableWALLSN, current.durableWALLSN)
+	}
+	if db.commandJournal != proof.journalOwner {
+		return fmt.Errorf("%w: command journal owner changed during revalidation", errDurableWALCleanupProofStale)
 	}
 	return nil
-}
-
-func (proof durableWALCleanupProofV1) sameAuthority(other durableWALCleanupProofV1) bool {
-	return proof.selectedSlot == other.selectedSlot &&
-		proof.roots == other.roots &&
-		proof.rootCount == other.rootCount &&
-		proof.cleanupThrough == other.cleanupThrough &&
-		proof.durableWALLSN == other.durableWALLSN &&
-		proof.journalOwner == other.journalOwner &&
-		proof.journal == other.journal &&
-		proof.journalOwner != nil
 }
