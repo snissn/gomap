@@ -1,26 +1,26 @@
 {
-  "schema_version": "treedb_text_ingest_qualification/v4",
+  "schema_version": "treedb_text_ingest_qualification/v5",
   "fixture_sha256": "4a428d15dbbd6bc9d99580a620b51753012ba31a3a3461c26369ff846e7288fc",
   "analyzer": "simple",
   "field_weights": "title=3,body=1",
   "ids_sha256": "0928e721472e4e5ba2303d617604df949dfcf76caa49a8c8fc630c62a6a53cae",
-  "command": "/tmp/treedb_text_ingest_qual-bf2d22f98 -produce-smoke /tmp/gomap-4328-auth-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
-  "commit": "bf2d22f981593bb13831d809d95800205abf431d",
+  "command": "/tmp/treedb_text_ingest_qual-10c0b4c55 -produce-smoke /tmp/gomap-4328-v5-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
+  "commit": "10c0b4c55348775103a9727c104dea1103e0f944",
   "host": "Darwin 25.2.0 arm64",
-  "cache_state": "producer compiled once with persistent GOCACHE=/Users/michaelseiler/orca/workspaces/gomap/.gocache-go126; serialized runs reuse the immutable binary",
+  "cache_state": "producer compiled once with a persistent Go build cache; serialized runs reuse the immutable binary",
   "durability": "TreeDB default WAL-on durability",
-  "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen, and score-only probe are separately observed after timed wall",
+  "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen plus collection/stat/probe validation, and final close are separately observed after the timed wall",
   "observed": {
     "vcs_clean": true,
-    "commit": "bf2d22f981593bb13831d809d95800205abf431d",
+    "commit": "10c0b4c55348775103a9727c104dea1103e0f944",
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false
   },
-  "commit_url": "https://github.com/snissn/gomap/commit/bf2d22f981593bb13831d809d95800205abf431d",
-  "tree_oid": "14abb36b3a1520e4bad3173e543e5c17bb1bfac3",
+  "commit_url": "https://github.com/snissn/gomap/commit/10c0b4c55348775103a9727c104dea1103e0f944",
+  "tree_oid": "a96172f6a7b385cfcce46be935208c7ae2b8bf4a",
   "implementation_path": "TreeDB/collections/document_chunking.go",
-  "implementation_blob_oid": "2e0b19164ba51587cb39751eed74348e552b9bc4",
+  "implementation_blob_oid": "44295fa09e0e78eccb76a8ba327aa87831978a6d",
   "acceptance": {
     "source_chunk_10000": {
       "frozen_baseline_row_sha256": "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc",
@@ -33,7 +33,7 @@
       "maximum_physical_total_wal_excluded_bytes": 1073741824
     }
   },
-  "treedb_subtree_oid": "07257ef50a094fb4fb75c1f0d9bd65e606fed05c",
-  "qualification_harness_subtree_oid": "e3c93837b281fdecede83cb8a79e23209e22fd5f",
-  "report_payload_sha256": "dae30f42ebc96e863da5f3a5d1a66b4c21ef3bd9f738ce6855a90d6097da879f"
+  "treedb_subtree_oid": "4928b649dae066cb24d648b43930e0a1c5fb6334",
+  "qualification_harness_subtree_oid": "4168d88634950c078af501898a15c0b0a0d51fdf",
+  "report_payload_sha256": "9cce2e9466693b7bed3172d7cac499a511bc6dc6f3fba0ed4bb7c5881a63f9b0"
 }

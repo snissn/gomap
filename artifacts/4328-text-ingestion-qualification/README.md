@@ -6,8 +6,8 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 
 The current public `IngestChunkedDocuments` 10k fixture is
 `smoke-10k-r1/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
-batches of at most 256 sources, 41 text generations, 0.607 s source/chunk wall,
-83,771,392-byte peak RSS, 3,604,490 cumulative allocations, and 40,370,550
+batches of at most 256 sources, 41 text generations, 0.491 s source/chunk wall,
+84,279,296-byte peak RSS, 3,565,309 cumulative allocations, and 39,846,262
 WAL-excluded physical bytes. Against the frozen baseline (20,001 generations,
 155.567 s, 4,180,574,208-byte RSS, 82,293,880 cumulative allocations, and
 5,621,678,453-byte WAL-excluded physical), it meets the generation, sub-1-GiB
@@ -21,20 +21,21 @@ process; rows bind the actual repetition, deterministic per-scale fixture and
 ID hashes, and process-scoped peak RSS, while maintenance rows bind observed
 deletion tombstone debt. Source fixture construction is outside the
 timed/allocation boundary and no duplicate encoded document corpus is retained
-through chunk ingestion. Every source row records
-actual batch size/count and checkpoint/close/reopen score-only zero-fetch
-evidence. Generated DB directories were deleted after copying only raw rows; no
+through chunk ingestion. Every source row records actual batch size/count and
+checkpoint/close/reopen-validation score-only zero-fetch evidence. The v5
+validator pins each deterministic mode/scale probe result count and digest.
+Generated DB directories were deleted after copying only raw rows; no
 transient DBs are retained.
 
 ## Measured revision
 
 The measurements were produced at the clean, immutable commit
-[`bf2d22f981593bb13831d809d95800205abf431d`](https://github.com/snissn/gomap/commit/bf2d22f981593bb13831d809d95800205abf431d),
-root tree `14abb36b3a1520e4bad3173e543e5c17bb1bfac3`, TreeDB subtree
-`07257ef50a094fb4fb75c1f0d9bd65e606fed05c`, and qualification-harness
-subtree `e3c93837b281fdecede83cb8a79e23209e22fd5f`. Its
+[`10c0b4c55348775103a9727c104dea1103e0f944`](https://github.com/snissn/gomap/commit/10c0b4c55348775103a9727c104dea1103e0f944),
+root tree `a96172f6a7b385cfcce46be935208c7ae2b8bf4a`, TreeDB subtree
+`4928b649dae066cb24d648b43930e0a1c5fb6334`, and qualification-harness
+subtree `4168d88634950c078af501898a15c0b0a0d51fdf`. Its
 `TreeDB/collections/document_chunking.go` blob is
-`2e0b19164ba51587cb39751eed74348e552b9bc4`. `SHA256SUMS` binds the final
+`44295fa09e0e78eccb76a8ba327aa87831978a6d`. `SHA256SUMS` binds the final
 retained manifest, report, and every raw row.
 
 JSON shape validation alone does not prove those Git relationships. The CLI
