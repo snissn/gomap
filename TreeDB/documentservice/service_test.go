@@ -133,6 +133,42 @@ func TestServiceUpsertDeleteCountFilterRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServiceUnfilteredCountHonorsCancellation(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	// openIndex and the pre-scan guard consume two checks; the ID callback consumes the third.
+	cancelOnScan := &cancelOnErrContext{Context: canceled, cancel: cancel, cancelAt: 3}
+	if _, err := svc.CountDocuments(cancelOnScan, "docs", CountDocumentsRequest{}); ErrorCodeOf(err) != CodeIndexUnavailable {
+		t.Fatalf("CountDocuments err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	if cancelOnScan.checks != cancelOnScan.cancelAt {
+		t.Fatalf("context checks=%d want=%d", cancelOnScan.checks, cancelOnScan.cancelAt)
+	}
+}
+
+type cancelOnErrContext struct {
+	context.Context
+	checks   int
+	cancel   context.CancelFunc
+	cancelAt int
+}
+
+func (c *cancelOnErrContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
 func TestServiceUpsertInsertRaceFallsBackToReplace(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
