@@ -155,6 +155,8 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {

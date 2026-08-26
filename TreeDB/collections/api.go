@@ -4401,6 +4401,8 @@ func (c *Collection) compactRootOverlays(ctx context.Context) (collectionRootOve
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if c.writeDomain != nil {
