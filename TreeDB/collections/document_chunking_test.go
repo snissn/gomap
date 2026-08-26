@@ -704,6 +704,76 @@ func TestInsertBatchAcquiresSchemaBeforeNativeVectorAdmission(t *testing.T) {
 	}
 }
 
+func TestCreateIndexAcquiresSchemaBeforeNativeVectorAdmission(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	manager := NewCollectionManager(d)
+	if _, err := manager.CreateCollection(&CollectionMeta{Name: "schema-order"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := manager.OpenCollection("schema-order")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	peer, err := NewCollectionManager(d).OpenCollection("schema-order")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	if _, err := peer.InsertBatch(
+		[][]byte{[]byte("buffered-schema-writer")},
+		[][]byte{[]byte(`{"body":"text only"}`)},
+	); err != nil {
+		t.Fatalf("buffer peer write: %v", err)
+	}
+	peer.writeDomain.mu.Lock()
+	hasBufferedPrimary := hasBufferedPrimaryWritesLocked(peer.writeDomain, peer.collectionName())
+	peer.writeDomain.mu.Unlock()
+	if !hasBufferedPrimary {
+		t.Fatal("test setup did not retain a buffered primary write")
+	}
+
+	admission := col.nativeVectorAdmissionMutex()
+	admission.Lock()
+	admissionLocked := true
+	defer func() {
+		if admissionLocked {
+			admission.Unlock()
+		}
+	}()
+
+	created := make(chan error, 1)
+	go func() {
+		_, err := peer.CreateIndex(IndexDefinition{
+			Name: "by_body", Field: "body", ValueType: IndexValueString,
+		})
+		created <- err
+	}()
+
+	coord := col.collectionSchemaCoordinator()
+	deadline := time.Now().Add(time.Second)
+	for coord.schemaMu.TryRLock() {
+		coord.schemaMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("CreateIndex did not acquire the schema write lock before vector admission")
+		}
+		runtime.Gosched()
+	}
+
+	admission.Unlock()
+	admissionLocked = false
+	select {
+	case err := <-created:
+		if err != nil {
+			t.Fatalf("CreateIndex: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CreateIndex remained blocked after vector admission release")
+	}
+}
+
 func TestIngestChunkedDocumentsBlocksNativeVectorCreationBeforeFlush(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")
