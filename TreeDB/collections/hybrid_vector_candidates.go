@@ -67,6 +67,27 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 
 	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 }
+func (c *Collection) searchHybridVectorCandidatesNativeScalar(query HybridVectorQuery, filter *HybridScalarFilter) (HybridCandidateResponse, error) {
+	requested := query.CandidateLimit
+	if err := validateHybridVectorCandidateQuery(query); err != nil {
+		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
+		response.Stats.FailClosed = 1
+		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
+		return response, err
+	}
+	opts := hybridVectorSearchOptions(query)
+	opts.StatsMode = VectorIndexSearchStatsModeProduction
+	opts.DeclaredScalarFilter = filter
+	var buffer VectorIndexSearchBuffer
+	vectorResponse, err := c.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil {
+		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+		stats.FailClosed = 1
+		stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
+		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
+	}
+	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+}
 
 func hybridVectorSearchOptions(query HybridVectorQuery) VectorIndexSearchOptions {
 	return VectorIndexSearchOptions{
@@ -402,6 +423,14 @@ func hybridVectorCandidateStatsFromSearch(requested int, vectorStats VectorIndex
 		DocumentsFetched: vectorStats.DocumentsFetched,
 		DocumentsMissing: vectorStats.DocumentsMissing,
 	}
+	stats.ScalarFilterPlan = vectorStats.ScalarFilterPlan
+	stats.ScalarFilterInputIDs = vectorStats.ScalarFilterProbeIDs
+	stats.ScalarFilterProbeTruncated = vectorStats.ScalarFilterProbeTruncated
+	stats.ScalarFilterFinalIDs = vectorStats.ScalarFilterCandidateIDs
+	stats.ScalarFilterVisited = vectorStats.ScalarFilterVisited
+	stats.ScalarFilterMatched = vectorStats.ScalarFilterAdmitted
+	stats.ScalarFilterUnderfill = vectorStats.ScalarFilterUnderfill
+	stats.ScalarFilterExactScoring = vectorStats.ScalarFilterExactScoring
 	if vectorStats.CandidateRows > returned64 {
 		stats.Truncated = vectorStats.CandidateRows - returned64
 	}
