@@ -26,9 +26,9 @@ type LastOpenedIndexStats struct {
 }
 
 type diagnosticsActiveIndex struct {
-	name string
-	info IndexInfo
-	col  *collections.Collection
+	name   string
+	info   IndexInfo
+	insert collections.CollectionInsertStats
 }
 
 // DiagnosticsSnapshot copies existing stats without taking the service write
@@ -47,10 +47,17 @@ func (s *Service) DiagnosticsSnapshot(databaseStats func() map[string]string) Di
 	if s.manager != nil {
 		out.Collections = cloneDiagnosticsStats(s.manager.Stats())
 	}
-	if active := s.diagnosticsActive.Load(); active != nil && active.col != nil {
-		out.LastOpened = &LastOpenedIndexStats{Name: active.name, Generation: active.info.Generation, Insert: active.col.LastInsertStats()}
+	if active := s.diagnosticsActive.Load(); active != nil {
+		out.LastOpened = &LastOpenedIndexStats{Name: active.name, Generation: active.info.Generation, Insert: cloneDiagnosticsInsertStats(active.insert)}
 	}
 	return out
+}
+
+func cloneDiagnosticsInsertStats(stats collections.CollectionInsertStats) collections.CollectionInsertStats {
+	if len(stats.SecondaryRuns) > 0 {
+		stats.SecondaryRuns = append([]collections.CollectionSecondaryRunStats(nil), stats.SecondaryRuns...)
+	}
+	return stats
 }
 
 func cloneDiagnosticsStats(in map[string]string) map[string]string {

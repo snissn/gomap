@@ -70,6 +70,41 @@ func TestDiagnosticsSnapshotConcurrentWithWrites(t *testing.T) {
 	<-done
 }
 
+func TestDiagnosticsSnapshotKeepsCompletedInsertAcrossReopenAndFailedUpsert(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	h := svc.DiagnosticsHandler(nil)
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertDocuments: %v", err)
+	}
+	snapshot := func() DiagnosticsSnapshot {
+		t.Helper()
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/debug/treedb/stats", nil))
+		var out DiagnosticsSnapshot
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatalf("decode snapshot: %v", err)
+		}
+		return out
+	}
+	if got := snapshot().LastOpened; got == nil || got.Insert.Documents != 1 {
+		t.Fatalf("initial insert snapshot=%+v", got)
+	}
+	if _, err := svc.OpenIndex(ctx, "docs"); err != nil {
+		t.Fatalf("OpenIndex: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{}); ErrorCodeOf(err) != CodeInvalidRequest {
+		t.Fatalf("validation upsert err=%v", err)
+	}
+	if got := snapshot().LastOpened; got == nil || got.Name != "docs" || got.Insert.Documents != 1 {
+		t.Fatalf("completed insert clobbered by reopen/validation: %+v", got)
+	}
+}
+
 func BenchmarkDiagnosticsOpenIndex(b *testing.B) {
 	for _, diagnostics := range []bool{false, true} {
 		b.Run(map[bool]string{false: "off", true: "on"}[diagnostics], func(b *testing.B) {

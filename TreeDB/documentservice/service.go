@@ -388,6 +388,7 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if rebuildErr != nil {
 		return UpsertDocumentsResponse{}, rebuildErr
 	}
+	s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 	return UpsertDocumentsResponse{Index: info, Upserted: len(prepared), Inserted: inserted, Updated: updated, IDs: ids, CompactEmbeddings: compactEmbeddings}, nil
 }
 
@@ -1137,7 +1138,7 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 		if expectedGeneration != 0 && expectedGeneration != info.Generation {
 			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 		}
-		s.noteDiagnosticsIndex(name, info, col)
+		s.noteDiagnosticsIndex(name, info)
 		return col, info, nil
 	}
 	s.benchmarkSearchCacheMu.RUnlock()
@@ -1152,13 +1153,41 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if expectedGeneration != 0 && expectedGeneration != info.Generation {
 		return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 	}
-	s.noteDiagnosticsIndex(name, info, col)
+	s.noteDiagnosticsIndex(name, info)
 	return col, info, nil
 }
 
-func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo, col *collections.Collection) {
-	if s != nil && s.diagnosticsEnabled.Load() {
-		s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, col: col})
+func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	for {
+		active := s.diagnosticsActive.Load()
+		if active != nil && active.name == name && active.info.Generation == info.Generation {
+			return
+		}
+		if s.diagnosticsActive.CompareAndSwap(active, &diagnosticsActiveIndex{name: name, info: info}) {
+			return
+		}
+	}
+}
+
+// publishDiagnosticsInsert records the completed insert snapshot only while
+// this exact index generation remains active. A reopen cannot replace a newer
+// completed snapshot for the same identity.
+func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert collections.CollectionInsertStats) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	for {
+		active := s.diagnosticsActive.Load()
+		if active == nil || active.name != name || active.info.Generation != info.Generation {
+			return
+		}
+		next := &diagnosticsActiveIndex{name: name, info: info, insert: insert}
+		if s.diagnosticsActive.CompareAndSwap(active, next) {
+			return
+		}
 	}
 }
 
