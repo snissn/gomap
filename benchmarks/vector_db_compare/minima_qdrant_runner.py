@@ -694,7 +694,7 @@ def cpu_time_seconds(value: str) -> float:
     return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
-def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[str, Any]:
+def server_resource_usage(pid: int | None, storage_path: Path | None, server_name: str) -> dict[str, Any]:
     rss: int | None = None
     cpu: float | None = None
     error = ""
@@ -718,8 +718,8 @@ def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[st
         "cpu_seconds": cpu or 0.0,
         "disk_bytes": disk_bytes(storage_path),
         "availability": {
-            "rss_bytes": f"Qdrant server PID {pid}" if rss is not None else "unavailable",
-            "cpu_seconds": f"Qdrant server PID {pid}" if cpu is not None else "unavailable",
+            "rss_bytes": f"{server_name} server PID {pid}" if rss is not None else "unavailable",
+            "cpu_seconds": f"{server_name} server PID {pid}" if cpu is not None else "unavailable",
             "disk_bytes": str(storage_path) if disk_available else "unavailable",
             "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
             "measurement_error": error,
@@ -850,7 +850,8 @@ class QdrantMinimaRunner:
                  poll_interval: float, server_version: str, deployment: str, image: str,
                  storage_path: Path | None, server_pid: int | None,
                  restart_server: Callable[[], int] | None = None, restart_identity: str = "",
-                 process_identity: Callable[[int], str] = server_process_identity) -> None:
+                 process_identity: Callable[[int], str] = server_process_identity,
+                 resource_server_name: str = "Qdrant") -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
         self.mutation_vectors = {
@@ -862,7 +863,7 @@ class QdrantMinimaRunner:
         self.url, self.collection, self.allow_drop = url, collection, allow_drop
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
-        self.server_pid = server_pid
+        self.server_pid, self.resource_server_name = server_pid, resource_server_name
         self.restart_server, self.restart_identity, self.process_identity = restart_server, restart_identity, process_identity
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
@@ -893,7 +894,8 @@ class QdrantMinimaRunner:
         old_process_identity = self.process_identity(old_pid)
         if self.resource_baseline is not None:
             self.completed_resource_segments.append(
-                resource_delta(self.resource_baseline, server_resource_usage(old_pid, self.storage_path))
+                resource_delta(self.resource_baseline, server_resource_usage(
+                    old_pid, self.storage_path, self.resource_server_name))
             )
         self.restart_origin = (old_pid, old_process_identity)
 
@@ -918,12 +920,15 @@ class QdrantMinimaRunner:
             "pid_changed": True, "verified": True,
         }
         self.server_pid = new_pid
-        self.resource_baseline = server_resource_usage(self.server_pid, self.storage_path)
+        self.resource_baseline = server_resource_usage(
+            self.server_pid, self.storage_path, self.resource_server_name)
 
     def resource_evidence(self) -> dict[str, Any]:
-        baseline = self.resource_baseline or server_resource_usage(self.server_pid, self.storage_path)
+        baseline = self.resource_baseline or server_resource_usage(
+            self.server_pid, self.storage_path, self.resource_server_name)
         segments = [*self.completed_resource_segments,
-                    resource_delta(baseline, server_resource_usage(self.server_pid, self.storage_path))]
+                    resource_delta(baseline, server_resource_usage(
+                        self.server_pid, self.storage_path, self.resource_server_name))]
         captured = bool(segments) and all(segment["captured"] for segment in segments)
         return {
             "captured": captured,
@@ -1346,7 +1351,8 @@ class QdrantMinimaRunner:
                 }
 
     def run(self) -> None:
-        self.resource_baseline = server_resource_usage(self.server_pid, self.storage_path)
+        self.resource_baseline = server_resource_usage(
+            self.server_pid, self.storage_path, self.resource_server_name)
         for ordinal, operation in enumerate(self.manifest["operations"]):
             if operation["ordinal"] != ordinal or operation["name"] != OPERATION_NAMES[ordinal]:
                 raise RuntimeError("operation stream changed after validation")

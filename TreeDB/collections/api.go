@@ -6244,18 +6244,24 @@ func pointerizeInsertBatchPlanRuns(db *backenddb.DB, meta CollectionMeta, plan *
 	if plan == nil || db == nil || !db.HasValueLogAppender() {
 		return nil, nil
 	}
-	var obsolete []memtable.Table
+	replacements := make([]memtable.Table, len(plan.runs))
 	for i := range plan.runs {
 		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, plan.runs[i].name, plan.runs[i].table)
 		if err != nil {
-			resetCollectionTables(obsolete)
+			resetCollectionTables(replacements)
 			return nil, err
 		}
-		if !pointerized {
+		if pointerized {
+			replacements[i] = pointerizedTable
+		}
+	}
+	obsolete := make([]memtable.Table, 0, len(plan.runs))
+	for i, replacement := range replacements {
+		if replacement == nil {
 			continue
 		}
 		obsolete = append(obsolete, plan.runs[i].table)
-		plan.runs[i].table = pointerizedTable
+		plan.runs[i].table = replacement
 	}
 	return obsolete, nil
 }

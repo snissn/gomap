@@ -220,6 +220,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             finally:
                 controller.stop()
 
+    def test_resource_provenance_names_treedb_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                common.subprocess, "run", return_value=SimpleNamespace(stdout="2048 00:02.5")
+            ):
+                resource = common.server_resource_usage(321, Path(directory), "TreeDB")
+        self.assertEqual(resource["availability"]["rss_bytes"], "TreeDB server PID 321")
+        self.assertEqual(resource["availability"]["cpu_seconds"], "TreeDB server PID 321")
+
     def test_artifact_uses_shared_segment_delta_resource_semantics(self) -> None:
         baseline = {
             "captured": True, "rss_bytes": 100, "cpu_seconds": 1.0, "disk_bytes": 1000,

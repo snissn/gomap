@@ -692,6 +692,82 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	requireCollectionMaintenanceTemplateReads(t, reopenedCol)
 }
 
+type failSecondCollectionValueLogAppender struct {
+	calls int
+}
+
+func (a *failSecondCollectionValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	a.calls++
+	if a.calls == 2 {
+		return nil, errors.New("injected second root append failure")
+	}
+	ptrs := make([]page.ValuePtr, len(values))
+	for i, value := range values {
+		ptrs[i] = page.ValuePtr{
+			FileID: page.ValueLogFileID(1),
+			Offset: uint64(i + 1),
+			Length: uint32(len(value)),
+		}
+	}
+	return ptrs, nil
+}
+
+func (*failSecondCollectionValueLogAppender) Flush() error { return nil }
+func (*failSecondCollectionValueLogAppender) Sync() error  { return nil }
+func (*failSecondCollectionValueLogAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func TestPointerizeInsertBatchPlanRunsLaterFailurePreservesPlanOwnership(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	appender := &failSecondCollectionValueLogAppender{}
+	d.SetValueLogAppender(appender)
+	defer d.SetValueLogAppender(nil)
+
+	newRun := func(rootName string) collectionRootRun {
+		table := newCollectionRunTable(1)
+		setCollectionRunValue(table, []byte("large"), bytes.Repeat([]byte("v"), page.PageSize+1))
+		table.Freeze()
+		return collectionRootRun{name: rootName, kind: collectionRootSecondary, table: table}
+	}
+	plan := &insertBatchPlan{runs: []collectionRootRun{
+		newRun(collectionSecondaryRootName("docs", "first")),
+		newRun(collectionSecondaryRootName("docs", "second")),
+	}}
+	originals := []memtable.Table{plan.runs[0].table, plan.runs[1].table}
+	defer func() {
+		for i, original := range originals {
+			if plan.runs[i].table != original {
+				resetCollectionRunTable(plan.runs[i].table)
+			}
+			resetCollectionRunTable(original)
+		}
+	}()
+
+	obsolete, err := pointerizeInsertBatchPlanRuns(d, CollectionMeta{Name: "docs"}, plan)
+	if err == nil || !strings.Contains(err.Error(), "injected second root append failure") {
+		t.Fatalf("pointerize err=%v want injected later failure", err)
+	}
+	if obsolete != nil {
+		t.Fatalf("obsolete tables=%v want nil on failure", obsolete)
+	}
+	if appender.calls != 2 {
+		t.Fatalf("value-log append calls=%d want 2", appender.calls)
+	}
+	for i, original := range originals {
+		if plan.runs[i].table != original {
+			t.Fatalf("run %d table ownership changed on failure", i)
+		}
+		if original.Len() != 1 {
+			t.Fatalf("run %d original table was released on failure", i)
+		}
+	}
+}
+
 func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)

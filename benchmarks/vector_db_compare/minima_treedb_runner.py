@@ -147,7 +147,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                          optimizer_timeout=operation_timeout, poll_interval=0.05,
                          server_version=SERVICE_CONTRACT, deployment="owned_process", image="",
                          storage_path=controller.data_dir, server_pid=controller.pid,
-                         restart_server=self.restart_controller, restart_identity="owned TreeDB service controller")
+                         restart_server=self.restart_controller, restart_identity="owned TreeDB service controller",
+                         resource_server_name="TreeDB")
         self.clients, self.ef_search = clients, ef_search
         self.route_evidence: dict[str, Any] = {}
     def restart_controller(self) -> int:
@@ -296,7 +297,8 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def run_small(self) -> None:
         """Exercise the real small-scenario lifecycle without claiming qualification."""
-        self.resource_baseline = common.server_resource_usage(self.controller.pid, self.storage_path)
+        self.resource_baseline = common.server_resource_usage(
+            self.controller.pid, self.storage_path, self.resource_server_name)
         self.connect()
         self.create_owned_collection()
         spec = self.specs["small"]

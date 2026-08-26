@@ -355,19 +355,21 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual([row["kind"] for row in evidence.events], ["timeout", "error"])
 
     def test_unowned_server_resources_are_not_claimed(self) -> None:
-        resource = runner.server_resource_usage(None, None)
+        resource = runner.server_resource_usage(None, None, "Qdrant")
         self.assertFalse(resource["captured"])
         self.assertEqual(resource["rss_bytes"], 0)
         self.assertEqual(resource["cpu_seconds"], 0.0)
         self.assertEqual(resource["availability"]["rss_bytes"], "unavailable")
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
-            self.assertFalse(runner.server_resource_usage(123, None)["captured"])
+            self.assertFalse(runner.server_resource_usage(123, None, "Qdrant")["captured"])
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
-                owned = runner.server_resource_usage(123, Path(directory))
+                owned = runner.server_resource_usage(123, Path(directory), "Qdrant")
         self.assertTrue(owned["captured"])
         self.assertEqual(owned["rss_bytes"], 2048 * 1024)
         self.assertEqual(owned["cpu_seconds"], 62.5)
+        self.assertEqual(owned["availability"]["rss_bytes"], "Qdrant server PID 123")
+        self.assertEqual(owned["availability"]["cpu_seconds"], "Qdrant server PID 123")
         baseline = {**owned, "rss_bytes": 1024, "cpu_seconds": 1.0, "disk_bytes": 100}
         end = {**owned, "rss_bytes": 4096, "cpu_seconds": 2.5, "disk_bytes": 250}
         delta = runner.resource_delta(baseline, end)
