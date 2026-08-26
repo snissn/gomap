@@ -290,26 +290,49 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 			docs = append(docs, doc)
 		}
 		return DenseVectorSearchResponse{
-			Index:                      info,
-			Documents:                  docs,
-			Metric:                     info.Metric,
-			Route:                      RouteAnn,
-			Exact:                      false,
-			Candidates:                 len(search.Results),
-			ScalarFilterPlan:           search.Stats.ScalarFilterPlan,
-			ScalarFilterProbeIDs:       search.Stats.ScalarFilterProbeIDs,
-			ScalarFilterProbeTruncated: search.Stats.ScalarFilterProbeTruncated,
-			ScalarFilterCandidateIDs:   search.Stats.ScalarFilterCandidateIDs,
-			ScalarFilterVisited:        search.Stats.ScalarFilterVisited,
-			ScalarFilterAdmitted:       search.Stats.ScalarFilterAdmitted,
-			ScalarFilterExactScoring:   search.Stats.ScalarFilterExactScoring > 0,
-			ScalarFilterUnderfill:      search.Stats.ScalarFilterUnderfill > 0,
+			Index:                            info,
+			Documents:                        docs,
+			Metric:                           info.Metric,
+			Route:                            RouteAnn,
+			Exact:                            false,
+			Candidates:                       len(search.Results),
+			NativeBasePlusLiveDelta:          true,
+			ScalarFilterMembershipSource:     denseNativeScalarMembershipSource(search.Stats.ScalarFilterPlan),
+			ScalarFilterPlan:                 search.Stats.ScalarFilterPlan,
+			ScalarFilterProbeIDs:             search.Stats.ScalarFilterProbeIDs,
+			ScalarFilterProbeTruncated:       search.Stats.ScalarFilterProbeTruncated,
+			ScalarFilterCandidates:           search.Stats.ScalarFilterCandidates,
+			ScalarFilterCandidateIDs:         search.Stats.ScalarFilterCandidateIDs,
+			ScalarFilterRetainedCandidateIDs: search.Stats.ScalarFilterRetainedCandidateIDs,
+			ScalarFilterRefinedCandidateIDs:  search.Stats.ScalarFilterRefinedCandidateIDs,
+			ScalarFilterVisited:              search.Stats.ScalarFilterVisited,
+			ScalarFilterScored:               search.Stats.ScalarFilterScored,
+			ScalarFilterAdmitted:             search.Stats.ScalarFilterAdmitted,
+			ScalarFilterExactScoring:         search.Stats.ScalarFilterExactScoring > 0,
+			ScalarFilterUnderfill:            search.Stats.ScalarFilterUnderfill > 0,
+			AllowedIDMaterializationRows:     search.Stats.ScalarFilterRetainedCandidateIDs,
+			DocumentMaterializationRows:      fetched.Stats.DocumentsFetched,
+			VisibilityMismatchCount:          uint64(attempt),
+			VisibilityRetryCount:             uint64(attempt),
 		}, nil
 	}
 	return DenseVectorSearchResponse{}, mapVectorIndexSearchError(
 		"native ann vector search",
 		fmt.Errorf("%w after %d attempts", collections.ErrVectorIndexSnapshotMismatch, denseVectorNativeSnapshotAttempts),
 	)
+}
+
+func denseNativeScalarMembershipSource(plan collections.NativeScalarFilterPlan) string {
+	switch plan {
+	case collections.NativeScalarFilterPlanCompleteExact, collections.NativeScalarFilterPlanCompleteFinite:
+		return "bounded_complete_set"
+	case collections.NativeScalarFilterPlanMixed:
+		return "bounded_candidate_refinement"
+	case collections.NativeScalarFilterPlanVectorAligned:
+		return "vector_aligned_scalar"
+	default:
+		return ""
+	}
 }
 
 func validateDenseNativeVectorSearchRoute(response collections.VectorIndexSearchResponse) error {

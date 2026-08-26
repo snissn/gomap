@@ -15,8 +15,8 @@ Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_D
 - delete by server-side metadata filter
 - count/filter/list documents
 - exact dense-vector search with optional metadata filters and embedding echo
-- `ann` dense-vector search through a compatible `column_graph` index; use
-  `route="exact"` for filtered correctness checks
+- `ann` dense-vector search through compatible `native_runtime` and
+  `column_graph` indexes; declared scalar filters use native filtered ANN
 - benchmark lifecycle helpers for reset/create, vector-index optimize/rebuild, and fail-closed no-document vector-index search
 - explicit scalar_u8 + rerank benchmark request fields (`query_mode="quantized_rerank"`, quantized index name, rerank candidate count)
 - ranked keyword search over the service `content` text index, including declared-field metadata filters
@@ -28,7 +28,7 @@ Not supported:
 
 - using benchmark no-document vector-index routes as Haystack/exact dense-search evidence
 - in-place `drop_old` reset for existing `column_graph` benchmark indexes; use a fresh data directory or unique index name
-- filtered `route="ann"` dense requests (the service fails closed; use `route="exact"`)
+- unsupported filtered `route="ann"` shapes (the service fails closed rather than using exact or primary-scan fallback)
 - async client APIs
 - client-side scans or text/vector fallbacks to emulate unsupported TreeDB behavior
 

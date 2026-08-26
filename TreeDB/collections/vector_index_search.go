@@ -592,14 +592,18 @@ type VectorIndexSearchStats struct {
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
 	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
 	// ScalarFilterPlan identifies the native declared-scalar execution plan.
-	ScalarFilterPlan           NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs       uint64                 `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidateIDs   uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterVisited        uint64                 `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterAdmitted       uint64                 `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterUnderfill      uint64                 `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterExactScoring   uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlan                 NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs             uint64                 `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated       uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates           uint64                 `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs         uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs uint64                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs  uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited              uint64                 `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored               uint64                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
 }
 
 type vectorIndexSearchVisibility struct {
@@ -1497,8 +1501,12 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 				response.Stats.ScalarFilterPlan = scalarPlan.identity
 				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
 				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
+				response.Stats.ScalarFilterCandidates = uint64(scalarWork.visited)
 				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
+				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
+				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
 				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterScored = uint64(scalarWork.visited)
 				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
 				if scalarWork.underfill {
 					response.Stats.ScalarFilterUnderfill = 1

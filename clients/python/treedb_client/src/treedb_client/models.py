@@ -437,6 +437,28 @@ class ScalarFieldDeclaration:
         return {"field": field, "value_type": value_type}
 
 
+@dataclass(frozen=True)
+class ScalarFieldInfo:
+    """Declared scalar field and its backing TreeDB index."""
+
+    field: str
+    index_name: str
+    value_type: str
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ScalarFieldInfo":
+        data = _as_mapping(data, "scalar field info")
+        _reject_unknown(data, ["field", "index_name", "value_type"], "scalar field info")
+        return cls(
+            field=_as_str(data.get("field"), "scalar field info.field"),
+            index_name=_as_str(data.get("index_name"), "scalar field info.index_name"),
+            value_type=_as_str(data.get("value_type"), "scalar field info.value_type"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"field": self.field, "index_name": self.index_name, "value_type": self.value_type}
+
+
 ScalarFieldDeclarationLike = ScalarFieldDeclaration | Mapping[str, Any]
 
 
@@ -456,6 +478,7 @@ class IndexInfo:
     vector_ef_construction: int = 0
     vector_ef_search: int = 0
     quantized_indexes: list[QuantizedIndexInfo] = field(default_factory=list)
+    scalar_fields: list[ScalarFieldInfo] = field(default_factory=list)
     text_field: str = ""
     text_index_name: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -476,6 +499,7 @@ class IndexInfo:
             "vector_ef_construction",
             "vector_ef_search",
             "quantized_indexes",
+            "scalar_fields",
             "text_field",
             "text_index_name",
             "document_type",
@@ -497,6 +521,7 @@ class IndexInfo:
             ),
             vector_ef_search=_as_optional_int_default(data.get("vector_ef_search"), "index.vector_ef_search"),
             quantized_indexes=[QuantizedIndexInfo.from_dict(item) for item in data.get("quantized_indexes", [])],
+            scalar_fields=[ScalarFieldInfo.from_dict(item) for item in data.get("scalar_fields", [])],
             text_field=_as_optional_str_default(data.get("text_field", ""), "index.text_field"),
             text_index_name=_as_optional_str_default(data.get("text_index_name", ""), "index.text_index_name"),
             document_type=_as_str(data["document_type"], "index.document_type"),
@@ -519,6 +544,7 @@ class IndexInfo:
                 "vector_ef_construction": self.vector_ef_construction,
                 "vector_ef_search": self.vector_ef_search,
                 "quantized_indexes": [item.to_dict() for item in self.quantized_indexes],
+                "scalar_fields": [item.to_dict() for item in self.scalar_fields],
                 "text_field": self.text_field,
                 "text_index_name": self.text_index_name,
                 "document_type": self.document_type,
@@ -605,6 +631,28 @@ class DenseVectorSearchResponse:
     # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
     # legacy exact scan path.
     route: Optional[str] = None
+    native_base_plus_live_delta: bool = False
+    scalar_filter_membership_source: str = ""
+    scalar_filter_plan: str = ""
+    scalar_filter_probe_ids: int = 0
+    scalar_filter_probe_truncated: int = 0
+    scalar_filter_candidates: int = 0
+    scalar_filter_candidate_ids: int = 0
+    scalar_filter_retained_candidate_ids: int = 0
+    scalar_filter_refined_candidate_ids: int = 0
+    scalar_filter_visited: int = 0
+    scalar_filter_scored: int = 0
+    scalar_filter_admitted: int = 0
+    scalar_filter_exact_scoring: bool = False
+    scalar_filter_underfill: bool = False
+    scalar_filter_unbounded: int = 0
+    exact_fallbacks: int = 0
+    full_document_scan_fallbacks: int = 0
+    allowed_id_materialization_rows: int = 0
+    primary_document_scans: int = 0
+    document_materialization_rows: int = 0
+    visibility_mismatch_count: int = 0
+    visibility_retry_count: int = 0
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DenseVectorSearchResponse":
@@ -616,6 +664,28 @@ class DenseVectorSearchResponse:
             exact=_as_bool(data["exact"], "exact"),
             candidates=_as_int(data["candidates"], "candidates"),
             route=_as_optional_str_default(data.get("route"), "vector search response.route"),
+            native_base_plus_live_delta=_as_bool(data.get("native_base_plus_live_delta", False), "native_base_plus_live_delta"),
+            scalar_filter_membership_source=_as_str(data.get("scalar_filter_membership_source", ""), "scalar_filter_membership_source"),
+            scalar_filter_plan=_as_str(data.get("scalar_filter_plan", ""), "scalar_filter_plan"),
+            scalar_filter_probe_ids=_as_int(data.get("scalar_filter_probe_ids", 0), "scalar_filter_probe_ids"),
+            scalar_filter_probe_truncated=_as_int(data.get("scalar_filter_probe_truncated", 0), "scalar_filter_probe_truncated"),
+            scalar_filter_candidates=_as_int(data.get("scalar_filter_candidates", 0), "scalar_filter_candidates"),
+            scalar_filter_candidate_ids=_as_int(data.get("scalar_filter_candidate_ids", 0), "scalar_filter_candidate_ids"),
+            scalar_filter_retained_candidate_ids=_as_int(data.get("scalar_filter_retained_candidate_ids", 0), "scalar_filter_retained_candidate_ids"),
+            scalar_filter_refined_candidate_ids=_as_int(data.get("scalar_filter_refined_candidate_ids", 0), "scalar_filter_refined_candidate_ids"),
+            scalar_filter_visited=_as_int(data.get("scalar_filter_visited", 0), "scalar_filter_visited"),
+            scalar_filter_scored=_as_int(data.get("scalar_filter_scored", 0), "scalar_filter_scored"),
+            scalar_filter_admitted=_as_int(data.get("scalar_filter_admitted", 0), "scalar_filter_admitted"),
+            scalar_filter_exact_scoring=_as_bool(data.get("scalar_filter_exact_scoring", False), "scalar_filter_exact_scoring"),
+            scalar_filter_underfill=_as_bool(data.get("scalar_filter_underfill", False), "scalar_filter_underfill"),
+            scalar_filter_unbounded=_as_int(data.get("scalar_filter_unbounded", 0), "scalar_filter_unbounded"),
+            exact_fallbacks=_as_int(data.get("exact_fallbacks", 0), "exact_fallbacks"),
+            full_document_scan_fallbacks=_as_int(data.get("full_document_scan_fallbacks", 0), "full_document_scan_fallbacks"),
+            allowed_id_materialization_rows=_as_int(data.get("allowed_id_materialization_rows", 0), "allowed_id_materialization_rows"),
+            primary_document_scans=_as_int(data.get("primary_document_scans", 0), "primary_document_scans"),
+            document_materialization_rows=_as_int(data.get("document_materialization_rows", 0), "document_materialization_rows"),
+            visibility_mismatch_count=_as_int(data.get("visibility_mismatch_count", 0), "visibility_mismatch_count"),
+            visibility_retry_count=_as_int(data.get("visibility_retry_count", 0), "visibility_retry_count"),
         )
 
 

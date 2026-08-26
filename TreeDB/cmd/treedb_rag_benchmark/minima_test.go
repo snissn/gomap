@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -510,5 +512,57 @@ func TestMinimaArtifactRejectsNonFiniteMetrics(t *testing.T) {
 	minimaTestRow(&artifact, "treedb", "small").Recall = math.NaN()
 	if err := validateMinimaArtifact(&artifact); err == nil {
 		t.Fatal("non-finite quality metric accepted")
+	}
+}
+
+func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
+	full := validMinimaArtifact()
+	tree := cloneMinimaArtifact(t, full)
+	tree.State, tree.Passing, tree.Recommendation = "partial", false, "not_evaluated"
+	tree.Backends, tree.Scenarios = tree.Backends[:1], tree.Scenarios[:len(tree.Manifest.Corpora)]
+	qdrant := cloneMinimaArtifact(t, full)
+	qdrant.State, qdrant.Passing, qdrant.Recommendation = "partial", false, "not_evaluated"
+	qdrant.Backends, qdrant.Scenarios = qdrant.Backends[1:], qdrant.Scenarios[len(qdrant.Manifest.Corpora):]
+	for i := range qdrant.Scenarios {
+		qdrant.Scenarios[i].Route.FullDocumentScanFallbacks = nil
+		qdrant.Scenarios[i].Route.ScalarFilterUnbounded = nil
+		qdrant.Scenarios[i].Route.ProbeIDs = nil
+		qdrant.Scenarios[i].Route.CandidateIDs = nil
+		qdrant.Scenarios[i].Route.RetainedCandidateIDs = nil
+		qdrant.Scenarios[i].Route.RefinedCandidateIDs = nil
+		qdrant.Scenarios[i].Route.AllowedIDMaterializationRows = nil
+		qdrant.Scenarios[i].Route.PrimaryDocumentScans = nil
+		qdrant.Scenarios[i].Route.VisitedCandidates = nil
+		qdrant.Scenarios[i].Route.ScoredCandidates = nil
+		qdrant.Scenarios[i].Route.AdmittedCandidates = nil
+	}
+	dir := t.TempDir()
+	treePath, qdrantPath := filepath.Join(dir, "tree.json"), filepath.Join(dir, "qdrant.json")
+	for path, artifact := range map[string]minimaArtifact{treePath: tree, qdrantPath: qdrant} {
+		raw, err := json.Marshal(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var combined minimaArtifact
+	if err := json.Unmarshal(raw, &combined); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMinimaArtifact(&combined); err != nil || combined.State != "pass" || !combined.Passing {
+		t.Fatalf("combined artifact=%+v err=%v", combined, err)
+	}
+	if info, err := os.Stat(report); err != nil || info.Size() == 0 {
+		t.Fatalf("report info=%v err=%v", info, err)
 	}
 }

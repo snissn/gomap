@@ -1281,24 +1281,27 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	if row.Correctness.CrossUserResults != 0 || row.Correctness.StaleInsertIDs != 0 || row.Correctness.StaleUpdateIDs != 0 || row.Correctness.StaleDeleteIDs != 0 {
 		return fmt.Errorf("tenant leakage or stale visibility")
 	}
-	routeCounters := []*int{
-		row.Route.FullDocumentScanFallbacks, row.Route.ScalarFilterUnbounded, row.Route.ProbeIDs,
-		row.Route.CandidateIDs, row.Route.RetainedCandidateIDs, row.Route.RefinedCandidateIDs,
-		row.Route.AllowedIDMaterializationRows, row.Route.PrimaryDocumentScans,
-		row.Route.VisitedCandidates, row.Route.ScoredCandidates, row.Route.AdmittedCandidates,
-	}
-	for _, counter := range routeCounters {
-		if counter == nil {
-			return fmt.Errorf("missing route/probe/candidate counter")
-		}
-	}
-	if row.Route.Identity == "" || *row.Route.FullDocumentScanFallbacks != 0 {
-		return fmt.Errorf("missing route or fallback used")
-	}
-	if spec.EligibleRows > 0 && (*row.Route.CandidateIDs <= 0 || *row.Route.VisitedCandidates <= 0 || *row.Route.ScoredCandidates <= 0 || *row.Route.AdmittedCandidates <= 0) {
-		return fmt.Errorf("missing candidate counters")
+	if row.Route.Identity == "" {
+		return fmt.Errorf("missing route identity")
 	}
 	if row.Backend == "treedb" {
+		routeCounters := []*int{
+			row.Route.FullDocumentScanFallbacks, row.Route.ScalarFilterUnbounded, row.Route.ProbeIDs,
+			row.Route.CandidateIDs, row.Route.RetainedCandidateIDs, row.Route.RefinedCandidateIDs,
+			row.Route.AllowedIDMaterializationRows, row.Route.PrimaryDocumentScans,
+			row.Route.VisitedCandidates, row.Route.ScoredCandidates, row.Route.AdmittedCandidates,
+		}
+		for _, counter := range routeCounters {
+			if counter == nil {
+				return fmt.Errorf("missing native route/probe/candidate counter")
+			}
+		}
+		if *row.Route.FullDocumentScanFallbacks != 0 {
+			return fmt.Errorf("native fallback used")
+		}
+		if spec.EligibleRows > 0 && (*row.Route.CandidateIDs <= 0 || *row.Route.VisitedCandidates <= 0 || *row.Route.ScoredCandidates <= 0 || *row.Route.AdmittedCandidates <= 0) {
+			return fmt.Errorf("missing candidate counters")
+		}
 		if row.Route.Identity != "native_base_plus_live_delta" || !row.Route.NativeBasePlusLiveDelta || !row.Route.DeclaredScalarFiltering {
 			return fmt.Errorf("wrong or missing native route")
 		}
@@ -1320,6 +1323,8 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		if spec.Name == "mixed_broad_narrow" && (*row.Route.RetainedCandidateIDs < spec.NarrowRows || *row.Route.RefinedCandidateIDs != spec.EligibleRows || row.Route.MembershipSource != "bounded_candidate_refinement" || (row.Route.Plan != "mixed_refined" && row.Route.Plan != "complete_finite_ann")) {
 			return fmt.Errorf("mixed row lacks retained/refined exact or finite plan")
 		}
+	} else if !row.Route.DeclaredScalarFiltering || row.Route.MembershipSource == "" || row.Route.Plan == "" {
+		return fmt.Errorf("missing comparator filter route evidence")
 	}
 	if !row.Visibility.GenerationConsistent {
 		return fmt.Errorf("mixed-generation result")

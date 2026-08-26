@@ -40,8 +40,8 @@ Supported now:
 - delete by ID or metadata filter;
 - count/filter/list documents;
 - exact dense-vector search with metadata filters;
-- dense `route=ann` search through the `column_graph` vector index when present,
-  with `route=exact` retained for filtered correctness checks;
+- dense `route=ann` search through compatible `native_runtime` and
+  `column_graph` vector indexes, including declared scalar filters on `native_runtime`;
 - ranked keyword search over the declared `content` text index, including
   declared-field metadata filters;
 - TreeDB collection-native hybrid search over text and/or vector sources,
@@ -53,12 +53,13 @@ Not supported now:
 - client-side or service-side full-document scan fallbacks for keyword/hybrid;
 - silent vector-only/text-only downgrade when a requested source/index is
   missing, stale, corrupt, or unavailable;
-- filtered `route=ann` dense requests (use the explicit `route=exact` path).
+- unsupported scalar shapes on filtered `route=ann` dense requests.
 
-Dense `route=ann` uses the `column_graph` graph traversal and returns exact
-scores for its bounded candidate set; `route=exact` scans only documents
-matching a bounded metadata filter. The service does not claim ANN behavior for
-indexes without a compatible `column_graph` vector index.
+Dense `route=ann` uses graph traversal and returns exact scores for its bounded
+candidate set. Declared scalar filters on `native_runtime` expose plan,
+membership, candidate-work, fallback, materialization, and visibility-retry
+diagnostics. `route=exact` scans only documents matching a bounded metadata
+filter. Neither route silently substitutes a primary-document scan.
 
 ## Haystack document mapping
 
@@ -479,9 +480,10 @@ Response:
 }
 ```
 
-Omit `route` (or use `route=ann`) for the default `column_graph` traversal when
-the index supports it. ANN responses report `route=ann` and `exact=false`;
-filtered ANN requests fail closed instead of silently switching to a scan.
+Omit `route` (or use `route=ann`) for default graph traversal when the index
+supports it. ANN responses report `route=ann` and `exact=false`; declared scalar
+filters use `native_runtime` filtered ANN, while unsupported shapes fail closed
+instead of silently switching to a scan.
 Tie order is deterministic: higher score first, then document ID ascending.
 
 ## Keyword search

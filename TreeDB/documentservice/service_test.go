@@ -1146,7 +1146,10 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 	if err != nil || hookCalls != 2 || len(got.Documents) != 1 ||
 		got.Documents[0].Content != "v1" ||
 		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{0, 1}) ||
-		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 {
+		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 ||
+		got.VisibilityMismatchCount != 1 || got.VisibilityRetryCount != 1 ||
+		!got.NativeBasePlusLiveDelta || got.ExactFallbacks != 0 ||
+		got.DocumentMaterializationRows != 1 {
 		t.Fatalf("retry success response=%+v err=%v hookCalls=%d", got, err, hookCalls)
 	}
 
