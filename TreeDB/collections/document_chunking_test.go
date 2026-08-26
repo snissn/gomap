@@ -590,9 +590,13 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 	}
 }
 
-func TestIngestChunkedDocumentsUsesMutationBeforeVectorLockOrder(t *testing.T) {
-	_, _, col := openChunkingTestCollection(t)
-	index, err := newVectorIndex(col, VectorIndexOptions{
+func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
 	})
 	if err != nil {
@@ -605,6 +609,12 @@ func TestIngestChunkedDocumentsUsesMutationBeforeVectorLockOrder(t *testing.T) {
 			mutation.Unlock()
 		}
 	}()
+	admissionHeld := make(chan struct{})
+	var hookOnce sync.Once
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		hookOnce.Do(func() { close(admissionHeld) })
+	})
+	defer restoreFlushHook()
 	ingested := make(chan error, 1)
 	go func() {
 		_, err := col.IngestChunkedDocuments(
@@ -614,68 +624,81 @@ func TestIngestChunkedDocumentsUsesMutationBeforeVectorLockOrder(t *testing.T) {
 		)
 		ingested <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-admissionHeld:
+	case <-time.After(time.Second):
+		t.Fatal("ingestion did not reach the admission-protected flush")
+	}
 
 	registered := make(chan struct{})
 	go func() {
-		col.RegisterVectorIndex(index)
+		peer.RegisterVectorIndex(index)
 		close(registered)
 	}()
 	select {
 	case <-registered:
-	case <-time.After(time.Second):
-		t.Fatal("vector registration deadlocked behind ingestion holding the vector lock")
+		t.Fatal("vector registration completed while ingestion held admission")
+	case <-time.After(20 * time.Millisecond):
 	}
 	mutation.Unlock()
 	released = true
 	select {
 	case err := <-ingested:
-		if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
-			t.Fatalf("ingest error=%v, want text-only vector rejection", err)
+		if err != nil {
+			t.Fatalf("ingest: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("ingestion remained blocked after vector registration")
+		t.Fatal("ingestion remained blocked after mutation release")
+	}
+	select {
+	case <-registered:
+	case <-time.After(time.Second):
+		t.Fatal("vector registration remained blocked after ingestion")
 	}
 }
 
-func TestIngestChunkedDocumentsRejectsVectorIndexAddedAfterScan(t *testing.T) {
+func TestIngestChunkedDocumentsBlocksNativeVectorCreationBeforeFlush(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		t.Fatalf("open second collection handle: %v", err)
 	}
-	cfg := fixedWindowCfg(8, 1)
-	seed, err := first.IngestChunkedDocuments(
-		[]SourceDocument{{ID: []byte("vector-race"), Fields: map[string]any{"body": strings.Repeat("original child ", 8)}}},
-		cfg,
-		ChunkedIngestOptions{},
-	)
-	if err != nil || len(seed) != 1 || len(seed[0].ChildIDs) == 0 {
-		t.Fatalf("seed batch=%+v err=%v", seed, err)
-	}
-
-	var once sync.Once
-	var vectorErr error
-	hooks := &chunkedIngestHooks{afterBatchScan: func() {
-		once.Do(func() {
-			_, vectorErr = second.CreateVectorIndex(VectorIndexDefinition{
-				Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
-			})
+	attempted := make(chan struct{})
+	created := make(chan error, 1)
+	var hookOnce sync.Once
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() {
+		hookOnce.Do(func() {
+			go func() {
+				close(attempted)
+				_, err := second.CreateVectorIndex(VectorIndexDefinition{
+					Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3,
+				})
+				created <- err
+			}()
+			<-attempted
+			select {
+			case err := <-created:
+				t.Fatalf("native vector creation completed before chunk flush: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
 		})
-	}}
-	_, err = first.IngestChunkedDocuments(
-		[]SourceDocument{{ID: []byte("vector-race"), Fields: map[string]any{"body": "replacement"}}},
-		cfg,
-		ChunkedIngestOptions{hooks: hooks},
-	)
-	if vectorErr != nil {
-		t.Fatalf("create concurrent vector index: %v", vectorErr)
+	})
+	defer restoreFlushHook()
+
+	if _, err := first.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("native-vector-race"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	); err != nil {
+		t.Fatalf("chunk ingest: %v", err)
 	}
-	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
-		t.Fatalf("replacement error=%v, want text-only vector rejection", err)
-	}
-	if got, err := first.Get(seed[0].ChildIDs[0]); err != nil || got == nil {
-		t.Fatalf("original child changed before vector rejection: %s err=%v", got, err)
+	select {
+	case err := <-created:
+		if err != nil {
+			t.Fatalf("create native vector index: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native vector creation remained blocked after chunk publication")
 	}
 }
 

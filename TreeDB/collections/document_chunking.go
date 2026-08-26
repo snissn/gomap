@@ -384,6 +384,10 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	defer lifecycleLocks.releaseAll()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
+	defer unlockAdHocAdmission()
+	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
+	defer unlockNativeAdmission()
 	if c.registeredAdHocVectorIndexCount() > 0 {
 		return nil, errBatchChunkIngestVectorIndexed
 	}
@@ -402,7 +406,7 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	if len(catalog.meta.VectorIndexes) > 0 {
 		return nil, errBatchChunkIngestVectorIndexed
 	}
-	if err := c.flushCollectionWriteDomainsForSchemaMutation(); err != nil {
+	if err := c.flushCollectionWriteDomainsWithVectorAdmissionLocked(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}
 	replaced, err := c.replaceChunkedDocumentBatchLocked(plans, opts.hooks)
@@ -437,11 +441,6 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	unlockAdHocVectorAdmission := c.lockAdHocVectorAdmissionRead()
-	defer unlockAdHocVectorAdmission()
-	if c.registeredAdHocVectorIndexCount() > 0 {
-		return nil, errBatchChunkIngestVectorIndexed
-	}
 	c.vectorIndexesMu.RLock()
 	defer c.vectorIndexesMu.RUnlock()
 	if len(c.vectorIndexes) > 0 {

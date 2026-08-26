@@ -303,6 +303,31 @@ func (c *Collection) lockAdHocVectorAdmissionRead() func() {
 	return coord.adHocVectorAdmissionMu.RUnlock
 }
 
+func (c *Collection) lockNativeVectorAdmissionWrite() func() {
+	admissionMu := c.nativeVectorAdmissionMutex()
+	if admissionMu == nil {
+		return func() {}
+	}
+	domains := []*collectionWriteDomain{c.writeDomain}
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		domains = coord.snapshotDomains()
+	}
+	for {
+		for _, domain := range domains {
+			domain.waitIndexedAsyncFlush()
+		}
+		admissionMu.Lock()
+		running := false
+		for _, domain := range domains {
+			running = running || domain.indexedAsyncFlushRunning()
+		}
+		if !running {
+			return admissionMu.Unlock
+		}
+		admissionMu.Unlock()
+	}
+}
+
 func (c *Collection) lockLegacyVectorSidecar() func() {
 	coord := c.collectionSchemaCoordinator()
 	if coord == nil {
@@ -327,6 +352,30 @@ func (c *Collection) flushCollectionWriteDomainsForSchemaMutation() error {
 			continue
 		}
 		if err := flushCollectionWriteDomain(c.db, domain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Collection) flushCollectionWriteDomainsWithVectorAdmissionLocked() error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	runCollectionSchemaMutationFlushHookForTest()
+	coord := c.collectionSchemaCoordinator()
+	if coord == nil {
+		return c.flushBufferedWritesWithVectorAdmissionLocked()
+	}
+	for _, domain := range coord.snapshotDomains() {
+		if domain == nil {
+			continue
+		}
+		collection := &Collection{db: c.db, writeDomain: domain}
+		unlockMutation := lockCollectionDomainMutation(domain)
+		err := collection.flushBufferedWritesWithVectorAdmissionLocked()
+		unlockMutation.Unlock()
+		if err != nil {
 			return err
 		}
 	}
