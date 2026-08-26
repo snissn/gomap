@@ -97,6 +97,9 @@ func TestDiagnosticsSnapshotKeepsCompletedInsertAcrossReopenAndFailedUpsert(t *t
 	if _, err := svc.OpenIndex(ctx, "docs"); err != nil {
 		t.Fatalf("OpenIndex: %v", err)
 	}
+	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{0, 1}}}}); err != nil {
+		t.Fatalf("update-only UpsertDocuments: %v", err)
+	}
 	if _, err := svc.UpsertDocuments(ctx, "docs", UpsertDocumentsRequest{}); ErrorCodeOf(err) != CodeInvalidRequest {
 		t.Fatalf("validation upsert err=%v", err)
 	}
