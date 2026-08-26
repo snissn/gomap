@@ -241,6 +241,33 @@ func TestDiagnosticsSnapshotCachedNativeCreateIsLastOpened(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsSnapshotCachedBenchmarkSearchIsLastOpened(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	svc.DiagnosticsHandler(nil)
+	request := func(name string) CreateIndexRequest {
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+	}
+	for _, name := range []string{"a", "b"} {
+		if _, err := svc.CreateIndex(ctx, request(name)); err != nil {
+			t.Fatalf("CreateIndex %q: %v", name, err)
+		}
+		if _, err := svc.UpsertDocuments(ctx, name, UpsertDocumentsRequest{Documents: []Document{{ID: name, Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+			t.Fatalf("UpsertDocuments %q: %v", name, err)
+		}
+	}
+	if got := svc.benchmarkSearchCacheSizeForTest(); got != 2 {
+		t.Fatalf("native cache size=%d want 2", got)
+	}
+	if _, err := svc.SearchBenchmarkVector(ctx, "a", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction}); err != nil {
+		t.Fatalf("SearchBenchmarkVector a: %v", err)
+	}
+	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Name != "a" {
+		t.Fatalf("cached benchmark search did not become last opened: %+v", got)
+	}
+}
+
 func BenchmarkDiagnosticsOpenIndex(b *testing.B) {
 	for _, diagnostics := range []bool{false, true} {
 		b.Run(map[bool]string{false: "off", true: "on"}[diagnostics], func(b *testing.B) {

@@ -833,7 +833,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 			stats.ServiceResponseNanos = 1
 		}
 	}
-	return BenchmarkVectorSearchResponse{
+	response := BenchmarkVectorSearchResponse{
 		Index:                     info,
 		Results:                   results,
 		Metric:                    info.Metric,
@@ -845,7 +845,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		Stats:                     stats,
 		Diagnostics:               stats.Diagnostics(),
 		compactIDs:                compactIDs,
-	}, nil
+	}
+	s.noteDiagnosticsIndex(index, info)
+	return response, nil
 }
 
 // SearchKeyword runs ranked lexical search over the service content text index.
@@ -1114,6 +1116,7 @@ func (s *Service) warmBenchmarkSearchCache(ctx context.Context, index string, in
 	if err := validateBenchmarkVectorSearchRoute(BenchmarkVectorQueryModeExact, BenchmarkVectorSearchRequest{}, response); err != nil {
 		return err
 	}
+	s.noteDiagnosticsIndex(index, info)
 	return nil
 }
 
