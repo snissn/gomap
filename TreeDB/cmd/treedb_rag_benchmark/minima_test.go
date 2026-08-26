@@ -28,7 +28,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
 		t.Fatalf("timed repeat plan drifted: %+v", timed)
 	}
-	if got, want := minimaTimedExecutionDigest(timed), "1ad0f1c42629b4145e4b264db179e7e5515b47ea08ea474ad571f0e45f433ea5"; got != want {
+	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "1ad0f1c42629b4145e4b264db179e7e5515b47ea08ea474ad571f0e45f433ea5"; got != want {
 		t.Fatalf("timed execution hash=%s want %s", got, want)
 	}
 	for i, round := range timed.Rounds {
@@ -272,6 +272,13 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"one timed query reported", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Operations.TimedQueriesExecuted = 1 }},
 		{"missing timed round reported", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Operations.TimedRoundsCompleted-- }},
 		{"wrong timed assignment hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Operations.TimedExecutionSHA256 = "wrong" }},
+		{"correct assertions with incomplete raw trace", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.TimedExecutionTrace.Queries = operations.TimedExecutionTrace.Queries[:1]
+		}},
+		{"correct assertions with fake raw assignment", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0].Scenario = "fake"
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -301,11 +308,12 @@ func validMinimaArtifact() minimaArtifact {
 	manifest := buildMinimaManifest()
 	hashes := minimaManifestHashes{CorpusSHA256: manifest.CorpusSHA256, QuerySHA256: manifest.QuerySHA256, OperationSHA256: manifest.OperationSHA256}
 	timed := manifest.Operations[3].TimedPlan
+	trace := minimaExpectedTimedExecution(timed)
 	operations := minimaOperationEvidence{
 		ManifestOrdered: true, BatchInsertDuringSearch: true, ReindexDeleteReplace: true,
 		ExplicitUpdateVisible: true, ExplicitDeleteVisible: true, EmptyCasesChecked: true,
 		TimedQueriesExecuted: timed.QueryCount, TimedRoundsCompleted: len(timed.Rounds),
-		TimedExecutionSHA256: minimaTimedExecutionDigest(timed),
+		TimedExecutionSHA256: minimaTimedExecutionDigest(trace), TimedExecutionTrace: trace,
 	}
 	backends := []minimaBackendEvidence{
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},

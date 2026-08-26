@@ -615,17 +615,41 @@ func validateMinimaTimedPlan(manifest *minimaManifest) error {
 	}
 	return nil
 }
-func minimaTimedExecutionDigest(plan *minimaTimedReaderPlan) string {
-	var trace strings.Builder
+
+type minimaTimedQueryObservation struct {
+	Ordinal  int    `json:"ordinal"`
+	Round    int    `json:"round"`
+	Reader   int    `json:"reader"`
+	Scenario string `json:"scenario"`
+}
+
+type minimaTimedExecutionTrace struct {
+	Queries []minimaTimedQueryObservation `json:"queries"`
+	Rounds  []minimaTimedRound            `json:"rounds"`
+}
+
+func minimaExpectedTimedExecution(plan *minimaTimedReaderPlan) minimaTimedExecutionTrace {
+	trace := minimaTimedExecutionTrace{Rounds: append([]minimaTimedRound(nil), plan.Rounds...)}
 	roundIndex := 0
 	for ordinal := range plan.QueryCount {
 		for ordinal >= plan.Rounds[roundIndex].QueryStart+plan.Rounds[roundIndex].QueryCount {
 			roundIndex++
 		}
-		fmt.Fprintf(&trace, "query|ordinal=%d|round=%d|reader=%d|scenario=%s\n",
-			ordinal, roundIndex, ordinal%plan.ReaderConcurrency, plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)])
+		trace.Queries = append(trace.Queries, minimaTimedQueryObservation{
+			Ordinal: ordinal, Round: roundIndex, Reader: ordinal % plan.ReaderConcurrency,
+			Scenario: plan.ScenarioOrder[ordinal%len(plan.ScenarioOrder)],
+		})
 	}
-	for _, round := range plan.Rounds {
+	return trace
+}
+
+func minimaTimedExecutionDigest(observed minimaTimedExecutionTrace) string {
+	var trace strings.Builder
+	for _, query := range observed.Queries {
+		fmt.Fprintf(&trace, "query|ordinal=%d|round=%d|reader=%d|scenario=%s\n",
+			query.Ordinal, query.Round, query.Reader, query.Scenario)
+	}
+	for _, round := range observed.Rounds {
 		fmt.Fprintf(&trace, "round|ordinal=%d|query_start=%d|query_count=%d|insert=%s:%d:%d|start=%s|end=%s\n",
 			round.Ordinal, round.QueryStart, round.QueryCount,
 			round.InsertRange.Scenario, round.InsertRange.Start, round.InsertRange.Rows,
@@ -669,15 +693,16 @@ type minimaManifestHashes struct {
 }
 
 type minimaOperationEvidence struct {
-	ManifestOrdered         bool   `json:"manifest_ordered"`
-	BatchInsertDuringSearch bool   `json:"batch_insert_during_search"`
-	ReindexDeleteReplace    bool   `json:"reindex_delete_replace"`
-	ExplicitUpdateVisible   bool   `json:"explicit_update_visible"`
-	ExplicitDeleteVisible   bool   `json:"explicit_delete_visible"`
-	EmptyCasesChecked       bool   `json:"empty_cases_checked"`
-	TimedQueriesExecuted    int    `json:"timed_queries_executed"`
-	TimedRoundsCompleted    int    `json:"timed_rounds_completed"`
-	TimedExecutionSHA256    string `json:"timed_execution_sha256"`
+	ManifestOrdered         bool                      `json:"manifest_ordered"`
+	BatchInsertDuringSearch bool                      `json:"batch_insert_during_search"`
+	ReindexDeleteReplace    bool                      `json:"reindex_delete_replace"`
+	ExplicitUpdateVisible   bool                      `json:"explicit_update_visible"`
+	ExplicitDeleteVisible   bool                      `json:"explicit_delete_visible"`
+	EmptyCasesChecked       bool                      `json:"empty_cases_checked"`
+	TimedQueriesExecuted    int                       `json:"timed_queries_executed"`
+	TimedRoundsCompleted    int                       `json:"timed_rounds_completed"`
+	TimedExecutionSHA256    string                    `json:"timed_execution_sha256"`
+	TimedExecutionTrace     minimaTimedExecutionTrace `json:"timed_execution_trace"`
 }
 
 type minimaReopenEvidence struct {
@@ -828,11 +853,17 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			return fmt.Errorf("minima artifact: %s did not consume identical manifests", backend.Name)
 		}
 		timedPlan := artifact.Manifest.Operations[3].TimedPlan
+		expectedTrace := minimaExpectedTimedExecution(timedPlan)
+		observedTrace := backend.Operations.TimedExecutionTrace
+		observedDigest := minimaTimedExecutionDigest(observedTrace)
 		if !backend.Operations.ManifestOrdered || !backend.Operations.BatchInsertDuringSearch || !backend.Operations.ReindexDeleteReplace || !backend.Operations.ExplicitUpdateVisible || !backend.Operations.ExplicitDeleteVisible || !backend.Operations.EmptyCasesChecked ||
+			backend.Operations.TimedQueriesExecuted != len(observedTrace.Queries) ||
+			backend.Operations.TimedRoundsCompleted != len(observedTrace.Rounds) ||
 			backend.Operations.TimedQueriesExecuted != timedPlan.QueryCount ||
 			backend.Operations.TimedRoundsCompleted != len(timedPlan.Rounds) ||
-			backend.Operations.TimedExecutionSHA256 != minimaTimedExecutionDigest(timedPlan) {
-			return fmt.Errorf("minima artifact: %s missing or incomplete operation execution evidence", backend.Name)
+			backend.Operations.TimedExecutionSHA256 != observedDigest ||
+			observedDigest != minimaTimedExecutionDigest(expectedTrace) {
+			return fmt.Errorf("minima artifact: %s missing or incomplete observed operation execution evidence", backend.Name)
 		}
 		if !backend.Reopen.Attempted || !backend.Reopen.CommittedParity || backend.Reopen.ResultManifestHash != artifact.Manifest.ExpectedStateSHA256 {
 			return fmt.Errorf("minima artifact: %s reopen state hash mismatch", backend.Name)
