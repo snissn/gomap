@@ -546,6 +546,54 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 	}
 }
 
+func TestIngestChunkedDocumentsUsesMutationBeforeVectorLockOrder(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	mutation := col.lockMutation()
+	released := false
+	defer func() {
+		if !released {
+			mutation.Unlock()
+		}
+	}()
+	ingested := make(chan error, 1)
+	go func() {
+		_, err := col.IngestChunkedDocuments(
+			[]SourceDocument{{ID: []byte("lock-order"), Fields: map[string]any{"body": "text only"}}},
+			fixedWindowCfg(8, 1),
+			ChunkedIngestOptions{},
+		)
+		ingested <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+
+	registered := make(chan struct{})
+	go func() {
+		col.RegisterVectorIndex(index)
+		close(registered)
+	}()
+	select {
+	case <-registered:
+	case <-time.After(time.Second):
+		t.Fatal("vector registration deadlocked behind ingestion holding the vector lock")
+	}
+	mutation.Unlock()
+	released = true
+	select {
+	case err := <-ingested:
+		if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+			t.Fatalf("ingest error=%v, want text-only vector rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ingestion remained blocked after vector registration")
+	}
+}
+
 func TestIngestChunkedDocumentsRejectsVectorIndexAddedAfterScan(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")

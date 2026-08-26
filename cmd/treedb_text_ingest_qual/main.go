@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -73,7 +74,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact: %v\n", err)
 		os.Exit(1)
 	}
-	if err := verifyGitProvenance(manifest, resolveLocalGit); err != nil {
+	if err := verifyGitProvenance(manifest, gitBlobOID(manifestBytes), resolveLocalGit); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact Git provenance: %v\n", err)
 		os.Exit(1)
 	}
@@ -108,7 +109,14 @@ func resolveLocalGit(args ...string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func verifyGitProvenance(m manifest, resolve gitResolver) error {
+func gitBlobOID(data []byte) string {
+	h := sha1.New()
+	_, _ = fmt.Fprintf(h, "blob %d\x00", len(data))
+	_, _ = h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func verifyGitProvenance(m manifest, manifestBlobOID string, resolve gitResolver) error {
 	objectType, err := resolve("cat-file", "-t", m.Commit)
 	if err != nil {
 		return fmt.Errorf("resolve measured commit: %w", err)
@@ -171,6 +179,13 @@ func verifyGitProvenance(m manifest, resolve gitResolver) error {
 	}
 	if candidateBlob != m.ImplementationBlobOID {
 		return fmt.Errorf("candidate HEAD implementation blob is %s, want measured blob %s", candidateBlob, m.ImplementationBlobOID)
+	}
+	candidateManifestBlob, err := resolve("rev-parse", "--verify", "HEAD:"+qualificationManifestPath)
+	if err != nil {
+		return fmt.Errorf("resolve candidate HEAD qualification manifest: %w", err)
+	}
+	if candidateManifestBlob != manifestBlobOID {
+		return fmt.Errorf("supplied qualification manifest blob is %s, want candidate HEAD blob %s", manifestBlobOID, candidateManifestBlob)
 	}
 	for _, path := range []string{qualificationTreeDBPath, qualificationHarnessPath} {
 		status, err := resolve("status", "--porcelain=v1", "--untracked-files=all", "--", path)

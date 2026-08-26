@@ -16,10 +16,12 @@ also rejects staged, unstaged, or untracked changes anywhere under either
 measured runtime subtree. It resolves every measured OID from the manifest
 commit and requires candidate `HEAD` to have byte-identical
 `TreeDB` and `cmd/treedb_text_ingest_qual` subtrees. The implementation blob is
-an additional narrow check, not the candidate-equivalence boundary; later
-artifact-only commits outside those subtrees may differ.
+an additional narrow check, not the candidate-equivalence boundary. The
+supplied manifest bytes must also hash to the exact manifest blob committed at
+candidate `HEAD`; artifact-only descendants remain valid only while that blob
+is unchanged.
 
-Use schema `treedb_text_ingest_qualification/v5` for both `manifest.json` and
+Use schema `treedb_text_ingest_qualification/v6` for both `manifest.json` and
 `report.json`. The manifest authenticates the canonical report payload (with
 `manifest_sha256` blank) through `report_payload_sha256`; the report separately
 binds the SHA-256 of the exact manifest bytes. Rows must cover the complete mode

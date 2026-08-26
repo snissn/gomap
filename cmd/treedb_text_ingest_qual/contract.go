@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	contractVersion                            = "treedb_text_ingest_qualification/v5"
+	contractVersion                            = "treedb_text_ingest_qualification/v6"
 	qualificationAnalyzer                      = "simple"
 	qualificationFieldWeights                  = "title=3,body=1"
 	qualificationProbeQuery                    = "refund"
@@ -23,6 +23,7 @@ const (
 	qualificationTreeDBPath                    = "TreeDB"
 	qualificationHarnessPath                   = "cmd/treedb_text_ingest_qual"
 	qualificationImplementationPath            = "TreeDB/collections/document_chunking.go"
+	qualificationManifestPath                  = "artifacts/4328-text-ingestion-qualification/manifest.json"
 	sourceChunkBaselineRowSHA256               = "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc"
 	sourceChunkBaselineWallSeconds             = 155.566929083
 	sourceChunkBaselineRSSBytes                = 4_180_574_208

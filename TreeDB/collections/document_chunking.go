@@ -384,11 +384,6 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	defer lifecycleLocks.releaseAll()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	if len(c.vectorIndexes) > 0 {
-		return nil, errBatchChunkIngestVectorIndexed
-	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -439,6 +434,11 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	if len(c.vectorIndexes) > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return nil, fmt.Errorf("collections: publish chunk write domains before batch replacement: %w", err)
 	}

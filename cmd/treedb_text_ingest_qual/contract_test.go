@@ -12,14 +12,16 @@ import (
 	"testing"
 )
 
+const testManifestBlobOID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func TestValidateCompleteMatrix(t *testing.T) {
 	m := validManifest()
 	r := validReport(t, m)
 	if err := validate(m, r, manifestHash(t, m)); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyGitProvenance(m, func(args ...string) (string, error) {
-		value, ok := validGitOutputs(m)[gitKey(args...)]
+	if err := verifyGitProvenance(m, testManifestBlobOID, func(args ...string) (string, error) {
+		value, ok := validGitOutputs(m, testManifestBlobOID)[gitKey(args...)]
 		if !ok {
 			return "", errors.New("unexpected Git invocation")
 		}
@@ -198,6 +200,7 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 	candidateTreeDB := gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath)
 	candidateHarness := gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath)
 	candidatePath := gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath)
+	candidateManifest := gitKey("rev-parse", "--verify", "HEAD:"+qualificationManifestPath)
 	for _, tc := range []struct {
 		name, key, value, fail, want string
 	}{
@@ -218,9 +221,11 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 		{name: "candidate harness mismatch", key: candidateHarness, value: strings.Repeat("f", 40), want: "candidate HEAD qualification harness subtree"},
 		{name: "candidate path unavailable", key: candidatePath, fail: "missing HEAD path", want: "resolve candidate HEAD implementation path"},
 		{name: "candidate blob", key: candidatePath, value: strings.Repeat("d", 40), want: "candidate HEAD implementation blob"},
+		{name: "candidate manifest unavailable", key: candidateManifest, fail: "missing HEAD manifest", want: "resolve candidate HEAD qualification manifest"},
+		{name: "candidate manifest mismatch", key: candidateManifest, value: strings.Repeat("d", 40), want: "supplied qualification manifest blob"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			outputs := validGitOutputs(m)
+			outputs := validGitOutputs(m, testManifestBlobOID)
 			if tc.value != "" {
 				outputs[tc.key] = tc.value
 			}
@@ -235,7 +240,7 @@ func TestVerifyGitProvenanceRejectsUnavailableAndMismatchedObjects(t *testing.T)
 				}
 				return value, nil
 			}
-			if err := verifyGitProvenance(m, resolve); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if err := verifyGitProvenance(m, testManifestBlobOID, resolve); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err=%v want %q", err, tc.want)
 			}
 		})
@@ -253,7 +258,7 @@ func TestVerifyGitProvenanceRejectsRuntimeSubtreeChanges(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := validManifest()
-			outputs := validGitOutputs(m)
+			outputs := validGitOutputs(m, testManifestBlobOID)
 			outputs[gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", tc.path)] = tc.status
 			resolve := func(args ...string) (string, error) {
 				value, ok := outputs[gitKey(args...)]
@@ -262,7 +267,7 @@ func TestVerifyGitProvenanceRejectsRuntimeSubtreeChanges(t *testing.T) {
 				}
 				return value, nil
 			}
-			if err := verifyGitProvenance(m, resolve); err == nil || !strings.Contains(err.Error(), tc.path) {
+			if err := verifyGitProvenance(m, testManifestBlobOID, resolve); err == nil || !strings.Contains(err.Error(), tc.path) {
 				t.Fatalf("error=%v want dirty %s rejection", err, tc.path)
 			}
 		})
@@ -621,7 +626,7 @@ func gitKey(args ...string) string {
 	return strings.Join(args, "\x00")
 }
 
-func validGitOutputs(m manifest) map[string]string {
+func validGitOutputs(m manifest, manifestBlobOID string) map[string]string {
 	return map[string]string{
 		gitKey("cat-file", "-t", m.Commit):                                                          "commit",
 		gitKey("rev-parse", "--verify", m.Commit+"^{tree}"):                                         m.TreeOID,
@@ -632,6 +637,7 @@ func validGitOutputs(m manifest) map[string]string {
 		gitKey("rev-parse", "--verify", "HEAD:"+qualificationTreeDBPath):                            m.TreeDBSubtreeOID,
 		gitKey("rev-parse", "--verify", "HEAD:"+qualificationHarnessPath):                           m.QualificationHarnessSubtreeOID,
 		gitKey("rev-parse", "--verify", "HEAD:"+m.ImplementationPath):                               m.ImplementationBlobOID,
+		gitKey("rev-parse", "--verify", "HEAD:"+qualificationManifestPath):                          manifestBlobOID,
 		gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", qualificationTreeDBPath):  "",
 		gitKey("status", "--porcelain=v1", "--untracked-files=all", "--", qualificationHarnessPath): "",
 	}
