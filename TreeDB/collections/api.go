@@ -567,6 +567,10 @@ type ColumnPublishCandidateResourceWork struct {
 	RetainedIndexNodeVisits         uint64
 	RetainedIndexNodeCopies         uint64
 	LogicalIndexNodesAdmitted       uint64
+	AggregateMembershipProbes       uint64
+	AggregateMembershipNodeVisits   uint64
+	AggregateMembershipNodeCopies   uint64
+	AggregateMembershipAdmissions   uint64
 	// PhysicalEntryLookup* mirrors indexed root-publication work after its
 	// small <=16-entry linear fast path.
 	PhysicalEntryLookupProbes               uint64
@@ -608,6 +612,10 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
 	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
 	work.LogicalIndexNodesAdmitted += other.LogicalIndexNodesAdmitted
+	work.AggregateMembershipProbes += other.AggregateMembershipProbes
+	work.AggregateMembershipNodeVisits += other.AggregateMembershipNodeVisits
+	work.AggregateMembershipNodeCopies += other.AggregateMembershipNodeCopies
+	work.AggregateMembershipAdmissions += other.AggregateMembershipAdmissions
 	work.PhysicalEntryLookupProbes += other.PhysicalEntryLookupProbes
 	work.PhysicalEntryLookupComparisons += other.PhysicalEntryLookupComparisons
 	work.PhysicalEntryLookupAdmissions += other.PhysicalEntryLookupAdmissions

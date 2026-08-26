@@ -198,6 +198,27 @@ type stableLogicalObligationIndexNode struct {
 	right      *stableLogicalObligationIndexNode
 }
 
+func findStableLogicalObligationIndex(root *stableLogicalObligationIndexNode, obligation StableLogicalObligation, work *StableResourceClosureWork) (StableLogicalObligation, bool) {
+	key := stableLogicalObligationKey(obligation)
+	if work != nil {
+		work.AggregateMembershipProbes++
+	}
+	for root != nil {
+		if work != nil {
+			work.AggregateMembershipNodeVisits++
+		}
+		if key == root.key {
+			return root.obligation, true
+		}
+		if stableLogicalObligationIndexLess(key, root.key) {
+			root = root.left
+		} else {
+			root = root.right
+		}
+	}
+	return StableLogicalObligation{}, false
+}
+
 func newStableLogicalObligationView(values []StableLogicalObligation) stableLogicalObligationView {
 	return newStableLogicalObligationViewWithWork(values, nil)
 }
@@ -485,6 +506,10 @@ type StableResourceClosureWork struct {
 	RetainedIndexNodeVisits                 uint64
 	RetainedIndexNodeCopies                 uint64
 	LogicalIndexNodesAdmitted               uint64
+	AggregateMembershipProbes               uint64
+	AggregateMembershipNodeVisits           uint64
+	AggregateMembershipNodeCopies           uint64
+	AggregateMembershipAdmissions           uint64
 	NewlyAdmittedEntries                    uint64
 	NewlyAdmittedObligations                uint64
 	RemovedObligations                      uint64
@@ -528,6 +553,10 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 	work.RetainedIndexNodeVisits += other.RetainedIndexNodeVisits
 	work.RetainedIndexNodeCopies += other.RetainedIndexNodeCopies
 	work.LogicalIndexNodesAdmitted += other.LogicalIndexNodesAdmitted
+	work.AggregateMembershipProbes += other.AggregateMembershipProbes
+	work.AggregateMembershipNodeVisits += other.AggregateMembershipNodeVisits
+	work.AggregateMembershipNodeCopies += other.AggregateMembershipNodeCopies
+	work.AggregateMembershipAdmissions += other.AggregateMembershipAdmissions
 	work.NewlyAdmittedEntries += other.NewlyAdmittedEntries
 	work.NewlyAdmittedObligations += other.NewlyAdmittedObligations
 	work.RemovedObligations += other.RemovedObligations
@@ -854,7 +883,7 @@ func (builder *StableResourceSetBuilder) addToViewsLocked(token *StableResourceT
 			token.releaseFrom(ResourceOwnerBuilder)
 			return err
 		}
-		merged, ok := mergeDistinctStableResourceKindViews(builder.kindViews, views)
+		merged, ok := mergeDistinctStableResourceKindViews(builder.kindViews, views, nil)
 		if !ok {
 			releaseStableResourceKindViews(views)
 			return ErrResourceConflict
@@ -1214,8 +1243,31 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		}
 		return nil
 	}
+	if err := rejectDistinctLogicalObligationOverlap(*entries, incoming); err != nil {
+		return err
+	}
 	*entries = append(*entries, cloneStableResourceEntry(incoming))
 	return nil
+}
+
+func rejectDistinctLogicalObligationOverlap(entries []stableResourceEntry, incoming stableResourceEntry) error {
+	var overlapErr error
+	incoming.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		for i := range entries {
+			existing, found := findStableLogicalObligationIndex(entries[i].logicalObligations.index, obligation, nil)
+			if !found {
+				continue
+			}
+			if existing != obligation {
+				overlapErr = fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, stableLogicalObligationKey(obligation))
+			} else {
+				overlapErr = fmt.Errorf("%w: distinct resource repeated logical obligation %+v", ErrResourceConflict, stableLogicalObligationKey(obligation))
+			}
+			return false
+		}
+		return true
+	})
+	return overlapErr
 }
 
 func cloneStableResourceEntryIntoBuilder(builder *StableResourceSetBuilder, source *stableResourceEntry) error {
@@ -1399,7 +1451,7 @@ func (builder *StableResourceSetBuilder) mergeViewSet(child *StableResourceSet) 
 		builder.mu.Unlock()
 		return true, err
 	}
-	merged, distinct := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews)
+	merged, distinct := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews, nil)
 	if distinct {
 		if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
 			child.mu.Unlock()
@@ -1551,27 +1603,35 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		return StableResourceClosureWork{}, err
 	}
 
-	merged, distinct := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews)
-	if distinct {
-		normalized, work, err := validateAppendOnlyProducerViews(child.kindViews, mutation)
-		_ = normalized
-		if err != nil {
-			child.mu.Unlock()
-			builder.mu.Unlock()
-			return work, err
-		}
-		if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
-			child.mu.Unlock()
-			builder.mu.Unlock()
-			return work, ErrResourceOwnership
-		}
-		builder.kindViews = merged
-		child.kindViews = nil
-		child.entries = nil
+	_, directWork, err := validateAppendOnlyProducerViews(child.kindViews, mutation)
+	if err != nil {
 		child.mu.Unlock()
 		builder.mu.Unlock()
-		work.AppendOnlyFastPath = 1
-		return work, nil
+		return directWork, err
+	}
+	merged, distinct := mergeDistinctStableResourceKindViews(builder.kindViews, child.kindViews, &directWork)
+	if distinct {
+		admissible, complete := true, true
+		rangeStableResourceKindViews(child.kindViews, func(entry *stableResourceEntry) bool {
+			var entryComplete bool
+			admissible, entryComplete = stableResourceViewsAdmitLogicalObligations(builder.kindViews, entry, nil, nil, &directWork)
+			complete = complete && entryComplete
+			return admissible && complete
+		})
+		if admissible && complete {
+			if !child.owner.CompareAndSwap(uint32(ResourceOwnerBuilder), uint32(ResourceOwnerTransferred)) {
+				child.mu.Unlock()
+				builder.mu.Unlock()
+				return directWork, ErrResourceOwnership
+			}
+			builder.kindViews = merged
+			child.kindViews = nil
+			child.entries = nil
+			child.mu.Unlock()
+			builder.mu.Unlock()
+			directWork.AppendOnlyFastPath = 1
+			return directWork, nil
+		}
 	}
 	if plan, work, certified, err := certifiedAppendOnlyPhysicalCoalesce(builder.kindViews, child.kindViews, mutation); certified || err != nil {
 		if err != nil {
@@ -1616,7 +1676,7 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		return StableResourceClosureWork{}, err
 	}
 	temporaryChildBuilder.mu.Lock()
-	temporaryChild := &StableResourceSet{entries: temporaryChildBuilder.entries, createdAt: child.createdAt}
+	temporaryChild := &StableResourceSet{entries: temporaryChildBuilder.entries}
 	temporaryChild.owner.Store(uint32(ResourceOwnerBuilder))
 	temporaryChildBuilder.entries = nil
 	temporaryChildBuilder.closed = true
@@ -1707,6 +1767,11 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			preflightErr = fmt.Errorf("%w: logical resource %+v changed stable identity", ErrResourceConflict, child.token.logicalKey())
 			return false
 		}
+		admissible, complete := stableResourceViewsAdmitLogicalObligations(nextViews, child, existing, nil, &work)
+		if !complete || !admissible {
+			certified = false
+			return false
+		}
 
 		physicalKey := child.token.physicalIdentityKey()
 		var candidates []*stableResourceEntry
@@ -1789,6 +1854,14 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			certified = false
 			return false
 		}
+		child.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+			var admitted bool
+			view.logicalMembership, admitted = insertStableLogicalMembership(view.logicalMembership, obligation, &work)
+			if admitted {
+				view.logicalMembershipCount++
+			}
+			return true
+		})
 		view.reachability = cloneReachabilityUnion(view.reachability, child.reachability)
 		if !replacedLogicalCommitments {
 			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, child.logicalObligations.commitments)
@@ -1912,7 +1985,7 @@ func validateAppendOnlyProducerViews(views map[ResourceKind]stableResourceKindVi
 	for _, field := range normalized.ScopedFields {
 		scoped[field] = struct{}{}
 	}
-	seen := make(map[StableLogicalObligation]struct{}, len(desired))
+	seen := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(desired))
 	var validateErr error
 	rangeStableResourceKindViews(views, func(entry *stableResourceEntry) bool {
 		work.SourceEntriesInspected++
@@ -1932,11 +2005,12 @@ func validateAppendOnlyProducerViews(views map[ResourceKind]stableResourceKindVi
 				validateErr = fmt.Errorf("%w: append-only producer supplied unannounced logical obligation %+v", ErrResourceConflict, obligation)
 				return false
 			}
-			if _, duplicate := seen[obligation]; duplicate {
-				validateErr = fmt.Errorf("%w: append-only producer repeated logical obligation %+v", ErrResourceConflict, obligation)
+			key := stableLogicalObligationKey(obligation)
+			if existing, duplicate := seen[key]; duplicate {
+				validateErr = fmt.Errorf("%w: append-only producer logical obligation key %+v repeats immutable payload %+v as %+v", ErrResourceConflict, key, existing, obligation)
 				return false
 			}
-			seen[obligation] = struct{}{}
+			seen[key] = obligation
 			return true
 		})
 		return validateErr == nil
@@ -1993,7 +2067,7 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 	for _, entry := range builder.entries {
 		work.RetainedObligations += uint64(entry.logicalObligations.count)
 	}
-	seen := make(map[StableLogicalObligation]struct{}, len(desired))
+	seen := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(desired))
 	for _, entry := range child.entries {
 		for field := range entry.reachability {
 			if _, applies := scoped[field]; !applies {
@@ -2015,11 +2089,12 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 				err = fmt.Errorf("%w: append-only producer supplied unannounced logical obligation %+v", ErrResourceConflict, obligation)
 				return false
 			}
-			if _, duplicate := seen[obligation]; duplicate {
-				err = fmt.Errorf("%w: append-only producer repeated logical obligation %+v", ErrResourceConflict, obligation)
+			key := stableLogicalObligationKey(obligation)
+			if existing, duplicate := seen[key]; duplicate {
+				err = fmt.Errorf("%w: append-only producer logical obligation key %+v repeats immutable payload %+v as %+v", ErrResourceConflict, key, existing, obligation)
 				return false
 			}
-			seen[obligation] = struct{}{}
+			seen[key] = obligation
 			return true
 		})
 		if err != nil {
@@ -2107,6 +2182,10 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 			break
 		}
 		if !coalesced {
+			if overlapErr := rejectDistinctLogicalObligationOverlap(merged, incoming); overlapErr != nil {
+				err = overlapErr
+				break
+			}
 			merged = append(merged, cloneStableResourceEntry(incoming))
 			lookup.add(merged, len(merged)-1)
 			work.PhysicalEntryLookupAdmissions++
@@ -2197,7 +2276,7 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 	if builder.kindViews != nil {
 		views := builder.kindViews
 		set := &StableResourceSet{
-			kindViews: views, createdAt: time.Now(),
+			kindViews:    views,
 			pinHighWater: stableResourcePinCountsFromViews(views),
 		}
 		set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -2212,7 +2291,7 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 		return nil, err
 	}
 	set := &StableResourceSet{
-		entries: entries, kindViews: views, createdAt: time.Now(),
+		entries: entries, kindViews: views,
 		pinHighWater: stableResourcePinCounts(entries),
 	}
 	set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -2271,12 +2350,12 @@ func sortStableResourceEntries(entries []stableResourceEntry) {
 }
 
 type StableResourceSet struct {
-	mu           sync.Mutex
-	entries      []stableResourceEntry
-	kindViews    map[ResourceKind]stableResourceKindView
-	pinHighWater map[ResourceKind]uint64
-	owner        atomic.Uint32
-	createdAt    time.Time
+	mu                        sync.Mutex
+	entries                   []stableResourceEntry
+	kindViews                 map[ResourceKind]stableResourceKindView
+	logicalMembershipEvidence map[ResourceKind]stableLogicalMembershipEvidence
+	pinHighWater              map[ResourceKind]uint64
+	owner                     atomic.Uint32
 }
 
 func (set *StableResourceSet) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -2333,13 +2412,12 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 		return nil, false, nil
 	}
 	views, ok := cloneStableResourceKindViews(source.kindViews, excludedKinds)
-	createdAt := source.createdAt
 	source.mu.Unlock()
 	if !ok {
 		return nil, false, ErrResourceOwnership
 	}
 	set := &StableResourceSet{
-		kindViews: views, createdAt: createdAt,
+		kindViews:    views,
 		pinHighWater: stableResourcePinCountsFromViews(views),
 	}
 	set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -2553,9 +2631,9 @@ func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResou
 // CertifyStableLogicalObligationAppendMutation binds an exact append mutation
 // to the capture-time source and producer commitments without materializing the
 // retained obligation history. An entry may extend the same logical and physical
-// source resource, or introduce obligations for a field that is empty in the
-// source. Every other shape requires the caller's exact requirements fallback
-// before ownership changes.
+// source resource or introduce obligations proven absent by the source's complete
+// aggregate membership index. Every other shape requires the caller's exact
+// requirements fallback before ownership changes.
 func CertifyStableLogicalObligationAppendMutation(source, producer *StableResourceSet, mutation StableLogicalObligationMutation, excluded ...ResourceKind) (StableResourceClosureWork, bool, error) {
 	var normalized StableLogicalObligationMutation
 	var work StableResourceClosureWork
@@ -2581,7 +2659,7 @@ func CertifyStableLogicalObligationAppendMutation(source, producer *StableResour
 	if err != nil || !complete {
 		return work, false, err
 	}
-	matches, matchErr := stableAppendProducerHasPhysicalPredecessors(source, producerViews, baseCommitments, excluded...)
+	matches, matchErr := stableAppendProducerHasPhysicalPredecessors(source, producerViews, &work, excluded...)
 	if matchErr != nil || !matches {
 		return work, false, matchErr
 	}
@@ -2600,7 +2678,7 @@ func CertifyStableLogicalObligationAppendMutation(source, producer *StableResour
 	return work, true, nil
 }
 
-func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, producer map[ResourceKind]stableResourceKindView, baseCommitments map[ReachabilityField]stableLogicalObligationCommitment, excluded ...ResourceKind) (bool, error) {
+func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, producer map[ResourceKind]stableResourceKindView, work *StableResourceClosureWork, excluded ...ResourceKind) (bool, error) {
 	if stableResourceKindViewCount(producer) == 0 {
 		return true, nil
 	}
@@ -2619,14 +2697,6 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return false, ErrResourceOwnership
 	}
-	fieldsAreFresh := func(entry *stableResourceEntry) bool {
-		for field, commitment := range entry.logicalObligations.commitments {
-			if commitment.count != 0 && baseCommitments[field].count != 0 {
-				return false
-			}
-		}
-		return true
-	}
 	var matchErr error
 	matches := rangeStableResourceKindViews(producer, func(entry *stableResourceEntry) bool {
 		producerToken := activeEntryToken(*entry)
@@ -2638,11 +2708,7 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 			return true
 		}
 		var predecessor *stableResourceEntry
-		if source.kindViews != nil {
-			if view, ok := source.kindViews[producerToken.kind]; ok {
-				predecessor = findStableResourceLogical(view.logical, producerToken.logicalKey())
-			}
-		} else {
+		if source.kindViews == nil {
 			for i := range source.entries {
 				candidate := &source.entries[i]
 				candidateToken := activeEntryToken(*candidate)
@@ -2655,16 +2721,42 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 					break
 				}
 			}
+			if predecessor == nil {
+				if len(source.entries) == 0 {
+					return true
+				}
+				admissible, complete := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidence, source.pinHighWater, entry, nil, excludedKinds, work)
+				return complete && admissible
+			}
+			predecessorToken := activeEntryToken(*predecessor)
+			if predecessorToken == nil || predecessorToken.released.Load() {
+				matchErr = ErrResourceOwnership
+				return false
+			}
+			if predecessorToken.physicalIdentityKey() != producerToken.physicalIdentityKey() {
+				return false
+			}
+			admissible, complete := stableLogicalMembershipEvidenceAdmits(source.logicalMembershipEvidence, source.pinHighWater, entry, predecessor, excludedKinds, work)
+			return complete && admissible
 		}
+		if view, ok := source.kindViews[producerToken.kind]; ok {
+			predecessor = findStableResourceLogical(view.logical, producerToken.logicalKey())
+		}
+
 		if predecessor == nil {
-			return fieldsAreFresh(entry)
+			admissible, complete := stableResourceViewsAdmitLogicalObligations(source.kindViews, entry, nil, excludedKinds, work)
+			return complete && admissible
 		}
 		predecessorToken := activeEntryToken(*predecessor)
 		if predecessorToken == nil || predecessorToken.released.Load() {
 			matchErr = ErrResourceOwnership
 			return false
 		}
-		return predecessorToken.physicalIdentityKey() == producerToken.physicalIdentityKey()
+		if predecessorToken.physicalIdentityKey() != producerToken.physicalIdentityKey() {
+			return false
+		}
+		admissible, complete := stableResourceViewsAdmitLogicalObligations(source.kindViews, entry, predecessor, excludedKinds, work)
+		return complete && admissible
 	})
 	return matches, matchErr
 }
@@ -3622,15 +3714,85 @@ func (set *StableResourceSet) Release() {
 	}
 }
 
+func stableLogicalObligationCommitmentsEqual(left, right map[ReachabilityField]stableLogicalObligationCommitment) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for field, commitment := range left {
+		if right[field] != commitment {
+			return false
+		}
+	}
+	return true
+}
+
+func appendStableLogicalMembershipEvidenceCandidates(target map[ResourceKind][]stableLogicalMembershipEvidence, set *StableResourceSet) map[ResourceKind][]stableLogicalMembershipEvidence {
+	if set.kindViews != nil {
+		for kind, view := range set.kindViews {
+			evidence := stableLogicalMembershipEvidenceFromKindView(view)
+			if evidence.logicalObligationCount != 0 && stableLogicalMembershipEvidenceComplete(evidence) {
+				if target == nil {
+					target = make(map[ResourceKind][]stableLogicalMembershipEvidence)
+				}
+				target[kind] = append(target[kind], evidence)
+			}
+		}
+		return target
+	}
+	for kind, evidence := range set.logicalMembershipEvidence {
+		if evidence.logicalObligationCount != 0 && stableLogicalMembershipEvidenceComplete(evidence) {
+			if target == nil {
+				target = make(map[ResourceKind][]stableLogicalMembershipEvidence)
+			}
+			target[kind] = append(target[kind], evidence)
+		}
+	}
+	return target
+}
+
+func stableUnionLogicalMembershipEvidence(entries []stableResourceEntry, candidates map[ResourceKind][]stableLogicalMembershipEvidence) map[ResourceKind]stableLogicalMembershipEvidence {
+	summaries := make(map[ResourceKind]stableLogicalMembershipEvidence)
+	for i := range entries {
+		entry := &entries[i]
+		kind := entry.token.kind
+		summary := summaries[kind]
+		summary.logicalObligationCount += entry.logicalObligations.count
+		if summary.commitments == nil && len(entry.logicalObligations.commitments) != 0 {
+			summary.commitments = make(map[ReachabilityField]stableLogicalObligationCommitment, len(entry.logicalObligations.commitments))
+		}
+		for field, incoming := range entry.logicalObligations.commitments {
+			commitment := summary.commitments[field]
+			commitment.add(incoming)
+			summary.commitments[field] = commitment
+		}
+		summaries[kind] = summary
+	}
+	for kind, summary := range summaries {
+		for _, candidate := range candidates[kind] {
+			// This shares the count + SHA-256 multiset commitment's documented
+			// collision boundary; it is not relaxed equality.
+			if candidate.logicalObligationCount == summary.logicalObligationCount && stableLogicalObligationCommitmentsEqual(candidate.commitments, summary.commitments) {
+				summary.root = candidate.root
+				summary.logicalMembershipCount = candidate.logicalMembershipCount
+				break
+			}
+		}
+		summaries[kind] = summary
+	}
+	return summaries
+}
+
 func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, error) {
-	view := &StableResourceSet{createdAt: time.Now()}
+	view := &StableResourceSet{}
 	view.owner.Store(uint32(ResourceOwnerView))
 	lookup := stableResourceEntryLookup{}
+	var evidenceCandidates map[ResourceKind][]stableLogicalMembershipEvidence
 	for _, set := range sets {
 		if set == nil {
 			continue
 		}
 		set.mu.Lock()
+		evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
 		var mergeErr error
 		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 			var err error
@@ -3654,6 +3816,9 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 		}
 	}
 	sortStableResourceEntries(view.entries)
+	if len(evidenceCandidates) != 0 {
+		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+	}
 	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil
 }
