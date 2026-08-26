@@ -1,26 +1,26 @@
 {
-  "schema_version": "treedb_text_ingest_qualification/v5",
+  "schema_version": "treedb_text_ingest_qualification/v6",
   "fixture_sha256": "4a428d15dbbd6bc9d99580a620b51753012ba31a3a3461c26369ff846e7288fc",
   "analyzer": "simple",
   "field_weights": "title=3,body=1",
   "ids_sha256": "0928e721472e4e5ba2303d617604df949dfcf76caa49a8c8fc630c62a6a53cae",
-  "command": "/tmp/treedb_text_ingest_qual-10c0b4c55 -produce-smoke /tmp/gomap-4328-v5-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
-  "commit": "10c0b4c55348775103a9727c104dea1103e0f944",
+  "command": "/tmp/treedb_text_ingest_qual-d8071c241 -produce-smoke /tmp/gomap-4328-v6-matrix/smoke-{scale}-r{repetition} -scale {scale} -repetition {repetition}",
+  "commit": "d8071c241af9961959d4a005587f461953eba488",
   "host": "Darwin 25.2.0 arm64",
   "cache_state": "producer compiled once with a persistent Go build cache; serialized runs reuse the immutable binary",
   "durability": "TreeDB default WAL-on durability",
   "timed_boundary": "CreateTextIndex and mode mutation through completed public API calls; checkpoint, close, reopen plus collection/stat/probe validation, and final close are separately observed after the timed wall",
   "observed": {
     "vcs_clean": true,
-    "commit": "10c0b4c55348775103a9727c104dea1103e0f944",
+    "commit": "d8071c241af9961959d4a005587f461953eba488",
     "durability": "TreeDB default WAL-on durability",
     "vector_indexes": 0,
     "vectors_enabled": false
   },
-  "commit_url": "https://github.com/snissn/gomap/commit/10c0b4c55348775103a9727c104dea1103e0f944",
-  "tree_oid": "a96172f6a7b385cfcce46be935208c7ae2b8bf4a",
+  "commit_url": "https://github.com/snissn/gomap/commit/d8071c241af9961959d4a005587f461953eba488",
+  "tree_oid": "97720d4d19dd9746706e8ad4888707ef94efa084",
   "implementation_path": "TreeDB/collections/document_chunking.go",
-  "implementation_blob_oid": "44295fa09e0e78eccb76a8ba327aa87831978a6d",
+  "implementation_blob_oid": "bebb0d3970180be7f7f5cd5f9ecade87ac34c948",
   "acceptance": {
     "source_chunk_10000": {
       "frozen_baseline_row_sha256": "ba1216299351acdcf749899c6e31f4cc4e705f1dda60a73cc5223c60099647cc",
@@ -33,7 +33,7 @@
       "maximum_physical_total_wal_excluded_bytes": 1073741824
     }
   },
-  "treedb_subtree_oid": "4928b649dae066cb24d648b43930e0a1c5fb6334",
-  "qualification_harness_subtree_oid": "4168d88634950c078af501898a15c0b0a0d51fdf",
-  "report_payload_sha256": "9cce2e9466693b7bed3172d7cac499a511bc6dc6f3fba0ed4bb7c5881a63f9b0"
+  "treedb_subtree_oid": "10e5d93b2e8880de491583a938ea7447ddd1faed",
+  "qualification_harness_subtree_oid": "37f31d5a8ac72ec8c2b513181917d31fb00bc075",
+  "report_payload_sha256": "8b8a6ca33dab2566a8c5d8f045cf8e086d18c2d61d493a44777eed58eb874e23"
 }
