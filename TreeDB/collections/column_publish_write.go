@@ -698,6 +698,8 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 		LogicalObligationNormalizations: work.LogicalObligationNormalizations,
 		RetainedIndexNodeVisits:         work.RetainedIndexNodeVisits, RetainedIndexNodeCopies: work.RetainedIndexNodeCopies,
 		LogicalIndexNodesAdmitted: work.LogicalIndexNodesAdmitted,
+		AggregateMembershipProbes: work.AggregateMembershipProbes, AggregateMembershipNodeVisits: work.AggregateMembershipNodeVisits,
+		AggregateMembershipNodeCopies: work.AggregateMembershipNodeCopies, AggregateMembershipAdmissions: work.AggregateMembershipAdmissions,
 		PhysicalEntryLookupProbes: work.PhysicalEntryLookupProbes, PhysicalEntryLookupComparisons: work.PhysicalEntryLookupComparisons,
 		PhysicalEntryLookupAdmissions: work.PhysicalEntryLookupAdmissions, NewlyAdmittedEntries: work.NewlyAdmittedEntries,
 		NewlyAdmittedObligations: work.NewlyAdmittedObligations, RemovedObligations: work.RemovedObligations,
