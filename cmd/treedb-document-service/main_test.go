@@ -108,3 +108,57 @@ func TestShutdownDrainsDiagnosticsBeforeDatabaseCleanup(t *testing.T) {
 		t.Fatalf("close reopened: %v", err)
 	}
 }
+
+func TestShutdownTimeoutLeavesServiceAndDatabaseLiveForRetry(t *testing.T) {
+	dir := t.TempDir()
+	backend, cleanup, stats, err := treedb.OpenBackendWithCachedLeafLogStats(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	service := documentservice.New(collections.NewCollectionManager(backend))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	diagnostics := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		service.DiagnosticsHandler(stats).ServeHTTP(w, r)
+	})}
+	go func() { _ = diagnostics.Serve(listener) }()
+	requestDone := make(chan struct{})
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String() + "/debug/treedb/stats")
+		if err == nil {
+			_ = response.Body.Close()
+		}
+		close(requestDone)
+	}()
+	<-started
+	cleanupCalls := 0
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err = shutdownDocumentService(timeoutCtx, nil, diagnostics, service, func() error {
+		cleanupCalls++
+		return cleanup()
+	})
+	cancel()
+	if err == nil {
+		t.Fatal("shutdown unexpectedly drained a blocked diagnostics handler")
+	}
+	if cleanupCalls != 0 || service.DiagnosticsSnapshot(nil).ServiceClosed {
+		t.Fatalf("timeout entered teardown: cleanup=%d closed=%v", cleanupCalls, service.DiagnosticsSnapshot(nil).ServiceClosed)
+	}
+	close(release)
+	<-requestDone
+	if err := shutdownDocumentService(context.Background(), nil, diagnostics, service, func() error {
+		cleanupCalls++
+		return cleanup()
+	}); err != nil {
+		t.Fatalf("retry shutdown: %v", err)
+	}
+	if cleanupCalls != 1 || !service.DiagnosticsSnapshot(nil).ServiceClosed {
+		t.Fatalf("retry teardown: cleanup=%d closed=%v", cleanupCalls, service.DiagnosticsSnapshot(nil).ServiceClosed)
+	}
+}

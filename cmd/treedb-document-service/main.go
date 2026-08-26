@@ -59,13 +59,21 @@ func main() {
 	service := documentservice.New(manager)
 	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
 	var diagnosticsServer *http.Server
-	var shutdownOnce sync.Once
+	var shutdownMu sync.Mutex
+	shutdownComplete := false
 	shutdown := func() {
-		shutdownOnce.Do(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup)
-		})
+		shutdownMu.Lock()
+		defer shutdownMu.Unlock()
+		if shutdownComplete {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup); err != nil {
+			log.Printf("TreeDB Document Service shutdown incomplete: %v", err)
+			return
+		}
+		shutdownComplete = true
 	}
 	defer shutdown()
 	var diagnosticsHandler http.Handler
@@ -118,13 +126,17 @@ func main() {
 // shutdownDocumentService preserves callback lifetime: stop request admission,
 // drain diagnostics, then release service state and its database.
 func shutdownDocumentService(ctx context.Context, appServer, diagnosticsServer *http.Server, service *documentservice.Service, cleanup func() error) error {
-	var err error
 	if appServer != nil {
-		err = errors.Join(err, appServer.Shutdown(ctx))
+		if err := appServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
 	if diagnosticsServer != nil {
-		err = errors.Join(err, diagnosticsServer.Shutdown(ctx))
+		if err := diagnosticsServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
 	}
+	var err error
 	if service != nil {
 		err = errors.Join(err, service.Close())
 	}
