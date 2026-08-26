@@ -551,6 +551,10 @@ func populateNativeScalarColumnsFromSecondaryIndexes(idx *VectorIndex, snap *bac
 			continue
 		}
 		for it.Valid() {
+			if it.IsDeleted() {
+				it.Next()
+				continue
+			}
 			key := it.Key()
 			n, err := indexComponentLength(def.ValueType, key)
 			if err != nil {

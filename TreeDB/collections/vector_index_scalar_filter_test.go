@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -553,6 +554,85 @@ func TestNativeScalarColumnsReopenFromSecondaryIndexes(t *testing.T) {
 	response = searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 3)
 	if len(response.Results) != 1 || string(response.Results[0].ID) != "gamma" {
 		t.Fatalf("base+delta update/delete second reopen results=%+v", response.Results)
+	}
+}
+
+func TestNativeScalarReloadSkipsBufferedOverlayTombstones(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := VectorIndexDefinition{
+		Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatJSON,
+			BufferedIndexedOverlayRoots:      true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes:       []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("doc")},
+		[][]byte{[]byte(`{"embedding":[1,0],"tenant":"alpha"}`)},
+	); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if _, err := col.CompactRootOverlays(context.Background()); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if replaced, err := col.Replace([]byte("doc"), []byte(`{"embedding":[1,0],"tenant":"beta"}`)); err != nil || !replaced {
+		_ = d.Close()
+		t.Fatalf("replace=%v err=%v", replaced, err)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCollection, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchNativeScalarTest(t, reopenedCollection, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 1); len(got.Results) != 0 {
+		t.Fatalf("reopened old buffered scalar results=%+v", got.Results)
+	}
+	if got := searchNativeScalarTest(t, reopenedCollection, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "beta"}, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "doc" {
+		t.Fatalf("reopened updated buffered scalar results=%+v", got.Results)
 	}
 }
 
