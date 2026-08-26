@@ -6,8 +6,8 @@ Status: the strict full 10k/100k/1M matrix is retained in `manifest.json` and
 
 The current public `IngestChunkedDocuments` 10k fixture is
 `smoke-10k-r1/`: 10,000 parents, 30,000 children, 40,000 live rows, 40 durable
-batches of at most 256 sources, 41 text generations, 0.487 s source/chunk wall,
-84,672,512-byte peak RSS, 3,559,985 cumulative allocations, and 40,370,550
+batches of at most 256 sources, 41 text generations, 0.588 s source/chunk wall,
+78,528,512-byte peak RSS, 3,585,055 cumulative allocations, and 35,127,670
 WAL-excluded physical bytes. Against the frozen baseline (20,001 generations,
 155.567 s, 4,180,574,208-byte RSS, 82,293,880 cumulative allocations, and
 5,621,678,453-byte WAL-excluded physical), it meets the generation, sub-1-GiB
@@ -22,18 +22,19 @@ ID hashes, and process-scoped peak RSS, while maintenance rows bind observed
 deletion tombstone debt. Source fixture construction is outside the
 timed/allocation boundary and no duplicate encoded document corpus is retained
 through chunk ingestion. Every source row records actual batch size/count and
-checkpoint/close/reopen-validation score-only zero-fetch evidence. The v6
-validator pins each deterministic mode/scale probe result count and digest.
-Generated DB directories were deleted after copying only raw rows; no
+checkpoint/close/reopen-validation score-only zero-fetch evidence. The v7
+validator pins each deterministic mode/scale probe result count and digest and
+verifies every current raw row against manifest-anchored digests and its report
+row. Generated DB directories were deleted after copying only raw rows; no
 transient DBs are retained.
 
 ## Measured revision
 
 The measurements were produced at the clean, immutable commit
-[`d8071c241af9961959d4a005587f461953eba488`](https://github.com/snissn/gomap/commit/d8071c241af9961959d4a005587f461953eba488),
-root tree `97720d4d19dd9746706e8ad4888707ef94efa084`, TreeDB subtree
+[`44a8b3f75e1d1e9b90b943dc89a9789fd32ebaa8`](https://github.com/snissn/gomap/commit/44a8b3f75e1d1e9b90b943dc89a9789fd32ebaa8),
+root tree `c27ba324959b4820288a714e1d7b7099450f3d82`, TreeDB subtree
 `10e5d93b2e8880de491583a938ea7447ddd1faed`, and qualification-harness
-subtree `37f31d5a8ac72ec8c2b513181917d31fb00bc075`. Its
+subtree `9522058bb8ab5c704f5f750584016995258b52c1`. Its
 `TreeDB/collections/document_chunking.go` blob is
 `bebb0d3970180be7f7f5cd5f9ecade87ac34c948`. `SHA256SUMS` binds the final
 retained manifest, report, and every raw row.
