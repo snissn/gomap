@@ -20,6 +20,7 @@ QDRANT_OPTIMIZER_TIMEOUT="${QDRANT_OPTIMIZER_TIMEOUT:-600}"
 QDRANT_API_KEY="${QDRANT_API_KEY:-}"
 ALLOW_DROP="${ALLOW_DROP:-false}"
 QDRANT_PID=""
+QDRANT_SERVER_PID="${QDRANT_SERVER_PID:-}"
 QDRANT_CONTAINER=""
 DEPLOYMENT=""
 
@@ -67,6 +68,7 @@ elif [[ -n "$QDRANT_BIN" ]]; then
 	QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" \
 		"$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
 	QDRANT_PID=$!
+	QDRANT_SERVER_PID="$QDRANT_PID"
 else
 	if [[ ! "$QDRANT_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
 		echo "QDRANT_IMAGE must be digest-pinned, got: $QDRANT_IMAGE" >&2
@@ -131,6 +133,9 @@ if [[ "$DEPLOYMENT" == "docker" ]]; then
 fi
 if [[ "$DEPLOYMENT" != "external" ]]; then
 	RUNNER_ARGS+=(--storage-path "$QDRANT_STORAGE_PATH")
+fi
+if [[ -n "$QDRANT_SERVER_PID" ]]; then
+	RUNNER_ARGS+=(--server-pid "$QDRANT_SERVER_PID")
 fi
 
 QDRANT_API_KEY="$QDRANT_API_KEY" "$VENV/bin/python" \

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import threading
+import time
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import minima_qdrant_runner as runner
@@ -43,6 +46,7 @@ class SharedQdrant:
         self.clients: list[FakeClient] = []
         self.index_fields: list[str] = []
         self.query_filters: list[Model] = []
+        self.lock = threading.Lock()
 
     def factory(self) -> "FakeClient":
         client = FakeClient(self)
@@ -80,24 +84,29 @@ class FakeClient:
         )
 
     def upsert(self, *, points: list[Model], **_: object) -> None:
-        for point in points:
-            self.shared.points[point.id] = point
+        time.sleep(0.002)
+        with self.shared.lock:
+            for point in points:
+                self.shared.points[point.id] = point
 
     @staticmethod
     def _matches(point: Model, filter_value: Model) -> bool:
         return all(point.payload[condition.key] == condition.match.value for condition in filter_value.must)
 
     def query_points(self, *, query: list[float], query_filter: Model, using: str, limit: int, **_: object) -> Model:
-        self.shared.query_filters.append(query_filter)
-        matches = [point for point in self.shared.points.values() if self._matches(point, query_filter)]
+        time.sleep(0.002)
+        with self.shared.lock:
+            self.shared.query_filters.append(query_filter)
+            matches = [point for point in self.shared.points.values() if self._matches(point, query_filter)]
         scored = sorted(
-            ((runner.cosine(point.vector[using], query), point) for point in matches),
+            ((runner.document_score({"vector": point.vector[using]}), point) for point in matches),
             key=lambda item: (-item[0], item[1].payload["id"]),
         )[:limit]
         return Model(points=[Model(payload=point.payload, score=score) for score, point in scored])
 
     def retrieve(self, *, ids: list[str], **_: object) -> list[Model]:
-        return [self.shared.points[value] for value in ids if value in self.shared.points]
+        with self.shared.lock:
+            return [self.shared.points[value] for value in ids if value in self.shared.points]
 
     def delete(self, *, points_selector: Model, **_: object) -> None:
         if hasattr(points_selector, "must"):
@@ -171,14 +180,19 @@ def tiny_manifest() -> dict[str, object]:
     updated = runner.generated_document(small, 0)
     updated["content"] = "minima:small:0:updated"
     deleted = runner.generated_document(small, 1)
-    insert_schedule = []
-    for insertion in concurrent_ranges:
-        insert_schedule.extend([
-            {"ordinal": len(insert_schedule), "actor": "reader_before", "scenario": insertion["scenario"]},
-            {"ordinal": len(insert_schedule) + 1, "actor": "writer_batch", "scenario": insertion["scenario"],
-             "insert_start": insertion["start"], "insert_rows": insertion["rows"]},
-            {"ordinal": len(insert_schedule) + 2, "actor": "reader_after", "scenario": insertion["scenario"], "query_ordinal": 1},
-        ])
+    timed_plan = {
+        "query_count": config["timed_queries"], "scenario_order": [row["name"] for row in corpora],
+        "reader_concurrency": config["reader_concurrency"], "writer_concurrency": config["writer_concurrency"],
+        "assignment": "round=ordinal/1;reader=ordinal%1;scenario=scenario_order[ordinal%8]",
+        "rounds": [
+            {
+                "ordinal": ordinal, "query_start": ordinal, "query_count": 1, "insert_range": insertion,
+                "start_barrier": "round_start_readers_and_writer",
+                "end_barrier": "round_end_queries_and_insert_complete",
+            }
+            for ordinal, insertion in enumerate(concurrent_ranges)
+        ],
+    }
     mutation_schedule = lambda: [
         {"ordinal": 0, "actor": "reader_before", "scenario": "mixed_broad_narrow"},
         {"ordinal": 1, "actor": "writer_mutation", "scenario": "mixed_broad_narrow"},
@@ -188,7 +202,8 @@ def tiny_manifest() -> dict[str, object]:
         {"ordinal": 0, "name": runner.OPERATION_NAMES[0], "target": "all", "effect": "none"},
         {"ordinal": 1, "name": runner.OPERATION_NAMES[1], "target": "all", "effect": "insert", "insert_ranges": initial_ranges},
         {"ordinal": 2, "name": runner.OPERATION_NAMES[2], "target": "all", "effect": "none", "schedule": reader_schedule([row["name"] for row in corpora])},
-        {"ordinal": 3, "name": runner.OPERATION_NAMES[3], "target": "all", "timed": True, "effect": "insert", "insert_ranges": concurrent_ranges, "schedule": insert_schedule},
+        {"ordinal": 3, "name": runner.OPERATION_NAMES[3], "target": "all", "timed": True, "effect": "insert",
+         "insert_ranges": concurrent_ranges, "timed_reader_plan": timed_plan},
         {"ordinal": 4, "name": runner.OPERATION_NAMES[4], "target": "mixed_broad_narrow", "effect": "delete",
          "filter": {"user_id": "mixed-user", "fpath": "/mixed/target.txt"}, "ids": mixed_ids, "schedule": mutation_schedule()},
         {"ordinal": 5, "name": runner.OPERATION_NAMES[5], "target": "mixed_broad_narrow", "effect": "insert", "documents": replacements, "schedule": mutation_schedule()},
@@ -210,7 +225,7 @@ def tiny_manifest() -> dict[str, object]:
         ordinals = range(spec["eligible_start"], stop)
         queries.append({"scenario": spec["name"], "vector": vector,
             "initial_oracle_ids": [f"minima/{spec['name']}/{ordinal:06d}" for ordinal in ordinals],
-            "initial_oracle_scores": [1 / runner.math.hypot(1, (ordinal + 1) / 1_000_000) for ordinal in range(spec["eligible_start"], stop)],
+            "initial_oracle_scores": [runner.document_score(runner.generated_document(spec, ordinal)) for ordinal in range(spec["eligible_start"], stop)],
             "final_oracle_ids": [], "final_oracle_scores": []})
     manifest = {"schema": runner.MANIFEST_SCHEMA, "config": config, "corpora": corpora, "queries": queries,
                 "operations": operations, "corpus_sha256": "", "query_sha256": "", "operation_sha256": "", "expected_state_sha256": ""}
@@ -224,7 +239,8 @@ def tiny_manifest() -> dict[str, object]:
 def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bool = False) -> runner.QdrantMinimaRunner:
     return runner.QdrantMinimaRunner(manifest, client_factory=shared.factory, models=Models, url="http://fake",
         collection="tiny", allow_drop=allow_drop, operation_timeout=1, optimizer_timeout=0.1,
-        poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None)
+        poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
+        server_pid=None)
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -240,6 +256,25 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         changed["operations"][7]["documents"][0]["content"] = "doctored"
         with self.assertRaisesRegex(ValueError, "operation_sha256 mismatch"):
             runner.validate_manifest(changed, require_frozen=False)
+
+    def test_go_python_oracle_score_rounding_tolerance(self) -> None:
+        manifest = tiny_manifest()
+        manifest["queries"][0]["initial_oracle_scores"][0] += 2e-16
+        manifest["queries"][0]["final_oracle_scores"][0] += 2e-16
+        manifest.update(runner.manifest_hashes(manifest))
+        self.assertIs(runner.validate_manifest(manifest, require_frozen=False), manifest)
+
+        changed = copy.deepcopy(manifest)
+        changed["queries"][0]["initial_oracle_scores"][0] += 2e-12
+        changed.update(runner.manifest_hashes(changed))
+        with self.assertRaisesRegex(ValueError, "exact initial scores mismatch"):
+            runner.validate_manifest(changed, require_frozen=False)
+
+    def test_go_json_encoding_contract(self) -> None:
+        self.assertEqual(
+            runner.go_json({"html": "<>&", "fixed": 1e-5, "scientific": 1e-7, "zero": 0.0}),
+            '{"html":"\\u003c\\u003e\\u0026","fixed":0.00001,"scientific":1e-7,"zero":0}',
+        )
 
     def test_operation_ordering_rejected_even_when_rehashed(self) -> None:
         manifest = tiny_manifest()
@@ -265,6 +300,11 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         for document in reversed(docs):
             second.add(document)
         self.assertEqual(first.hexdigest(), second.hexdigest())
+        vector_changed = runner.StateAccumulator()
+        for document in docs:
+            changed_vector = {**document, "vector": [0.0] * len(document["vector"])}
+            vector_changed.add(changed_vector)
+        self.assertEqual(first.hexdigest(), vector_changed.hexdigest())
         docs[0]["content"] += ":changed"
         changed = runner.StateAccumulator()
         for document in docs:
@@ -280,6 +320,18 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual((evidence.errors["small"], evidence.timeouts["small"]), (2, 1))
         self.assertEqual([row["kind"] for row in evidence.events], ["timeout", "error"])
 
+    def test_unowned_server_resources_are_not_claimed(self) -> None:
+        resource = runner.server_resource_usage(None, None)
+        self.assertFalse(resource["captured"])
+        self.assertEqual(resource["rss_bytes"], 0)
+        self.assertEqual(resource["cpu_seconds"], 0.0)
+        self.assertEqual(resource["availability"]["rss_bytes"], "unavailable")
+        with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
+            owned = runner.server_resource_usage(123, None)
+        self.assertTrue(owned["captured"])
+        self.assertEqual(owned["rss_bytes"], 2048 * 1024)
+        self.assertEqual(owned["cpu_seconds"], 62.5)
+
     def test_fake_qdrant_lifecycle_and_exact_oracles(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)
@@ -292,6 +344,15 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertTrue(artifact["backend_raw_evidence"]["final_scroll_state"]["match"])
         self.assertFalse(artifact["passing"])
         self.assertEqual(artifact["state"], "partial")
+        operations = artifact["backends"][0]["operations"]
+        trace = operations["timed_execution_trace"]
+        self.assertEqual(operations["timed_queries_executed"], manifest["config"]["timed_queries"])
+        self.assertEqual(operations["timed_rounds_completed"], len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
+        self.assertEqual(len(trace["queries"]), manifest["config"]["timed_queries"])
+        self.assertEqual(len(trace["rounds"]), len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
+        self.assertEqual(operations["timed_execution_sha256"], runner.timed_trace_digest(trace))
+        self.assertTrue(operations["batch_insert_during_search"])
+        self.assertTrue(artifact["backend_raw_evidence"]["timed_overlap"]["all_rounds_writer_search_overlap_observed"])
         self.assertTrue(all(row["initial_actual_ids"] == row["initial_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["actual_ids"] == row["final_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["reopen_ids"] == row["actual_ids"] for row in artifact["scenarios"]))

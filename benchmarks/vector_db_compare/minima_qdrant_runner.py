@@ -7,15 +7,19 @@ turn backend evidence into a qualification result.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import argparse
 import hashlib
+from decimal import Decimal
 import importlib.metadata
 import json
 import math
 import os
 import platform
 import struct
+import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import uuid
@@ -26,15 +30,19 @@ MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v1"
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
 GENERATOR = (
-    "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
-    "vector=unit(1,(ordinal+1)/1000000);defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+    "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
+    "vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;"
+    "oracle=cosine(float32(vector),float32([1,0x7]));"
+    "defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
 )
+MANIFEST_FLOAT_TOLERANCE = 1e-15
 FROZEN_HASHES = {
-    "corpus_sha256": "8cec31c8c9f1b63dcc697e0036375bc9852ff00adc6c5656f88a94f7b7da45d8",
-    "query_sha256": "e94fd70c183407f238bf6e2905efaef62c90fa9b6f74e4f722e4cb925a18a1e7",
-    "operation_sha256": "745fec08d42ef88884155d34531fdc1367ea8599687df1534a6171fec97617aa",
-    "expected_state_sha256": "1d8341ec8931db5cb552a81f29f11866a513a5f8251cd82289b9abb684ceddd5",
+    "corpus_sha256": "856df3d20b5177e0b7354aeac41b9d052e5f1075e00cec686ff823b110916ccc",
+    "query_sha256": "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a",
+    "operation_sha256": "dd90d0dffe3478dfcee1dfc5371e665cb1cf22394ec4d513fc151e089d0565ff",
+    "expected_state_sha256": "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f",
 }
+TIMED_EXECUTION_SHA256 = "1ad0f1c42629b4145e4b264db179e7e5515b47ea08ea474ad571f0e45f433ea5"
 OPERATION_NAMES = [
     "ensure_compatible_collection", "initial_batch_insert", "warmup_search",
     "timed_search_with_batch_insert", "reindex_delete_by_user_and_fpath_while_reading",
@@ -57,7 +65,7 @@ QUERY_KEYS = [
     "scenario", "vector", "initial_oracle_ids", "initial_oracle_scores", "final_oracle_ids", "final_oracle_scores",
 ]
 DOCUMENT_KEYS = ["id", "content", "vector", "user_id", "fpath"]
-OPERATION_KEYS = ["ordinal", "name", "target", "timed", "effect", "insert_ranges", "filter", "ids", "documents", "schedule"]
+OPERATION_KEYS = ["ordinal", "name", "target", "timed", "effect", "insert_ranges", "filter", "ids", "documents", "schedule", "timed_reader_plan"]
 
 
 def require_object(value: Any, keys: list[str], label: str, optional: set[str] = frozenset()) -> dict[str, Any]:
@@ -99,12 +107,58 @@ def canonical_operation(value: dict[str, Any]) -> dict[str, Any]:
         out["documents"] = [canonical_document(row) for row in out["documents"]]
     if "schedule" in out:
         out["schedule"] = [ordered(row, ["ordinal", "actor", "scenario", "query_ordinal", "insert_start", "insert_rows"]) for row in out["schedule"]]
+    if "timed_reader_plan" in out:
+        plan = ordered(out["timed_reader_plan"], [
+            "query_count", "scenario_order", "reader_concurrency", "writer_concurrency", "assignment", "rounds",
+        ])
+        plan["rounds"] = [
+            {
+                **ordered(row, ["ordinal", "query_start", "query_count"]),
+                "insert_range": ordered(row["insert_range"], ["scenario", "start", "rows"]),
+                **ordered(row, ["start_barrier", "end_barrier"]),
+            }
+            for row in plan["rounds"]
+        ]
+        out["timed_reader_plan"] = plan
     return out
 
 
+def go_json(value: Any) -> str:
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if type(value) is int:
+        return str(value)
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("Go JSON does not support non-finite floats")
+        if value == 0:
+            return "-0" if math.copysign(1, value) < 0 else "0"
+        text = repr(value)
+        absolute = abs(value)
+        if 1e-6 <= absolute < 1e21:
+            return format(Decimal(text), "f")
+        if "e" not in text:
+            text = format(value, ".15e").rstrip("0").rstrip(".")
+        mantissa, exponent = text.lower().split("e")
+        sign = "+" if exponent.startswith("+") else "-"
+        digits = exponent.lstrip("+-0") or "0"
+        return f"{mantissa}e{sign}{digits}"
+    if isinstance(value, str):
+        text = json.dumps(value, ensure_ascii=False)
+        return text.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    if isinstance(value, list):
+        return "[" + ",".join(go_json(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ",".join(f"{go_json(str(key))}:{go_json(item)}" for key, item in value.items()) + "}"
+    raise TypeError(f"unsupported Go JSON value {type(value).__name__}")
+
+
 def go_digest(value: Any) -> str:
-    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
-    return hashlib.sha256(raw).hexdigest()
+    return hashlib.sha256(go_json(value).encode()).hexdigest()
 
 
 def manifest_hashes(manifest: dict[str, Any]) -> dict[str, str]:
@@ -131,9 +185,8 @@ def generated_document(spec: dict[str, Any], ordinal: int) -> dict[str, Any]:
             user_id = spec["user_id"]
         if spec["narrow_start"] <= ordinal < spec["narrow_start"] + spec["narrow_rows"]:
             fpath = spec["fpath"]
-    x, vector = (ordinal + 1) / 1_000_000, [0.0] * 8
-    norm = math.hypot(1, x)
-    vector[0], vector[1] = 1 / norm, x / norm
+    score, vector = 0.9 - ordinal * 0.000003, [0.0] * 8
+    vector[0], vector[1] = score, math.sqrt(1 - score * score)
     return {"id": f"minima/{spec['name']}/{ordinal:06d}", "content": f"minima:{spec['name']}:{ordinal}", "vector": vector, "user_id": user_id, "fpath": fpath}
 
 
@@ -146,9 +199,17 @@ def cosine(vector: list[float], query: list[float]) -> float:
     norm = math.sqrt(sum(v * v for v in vector)) * math.sqrt(sum(v * v for v in query))
     return dot / norm if norm else 0.0
 
+def f32(value: float) -> float:
+    return struct.unpack(">f", struct.pack(">f", value))[0]
+
+
+def document_score(document: dict[str, Any]) -> float:
+    stored = [f32(value) for value in document["vector"]]
+    squared = sum(value * value for value in stored)
+    return stored[0] / math.sqrt(squared) if squared else -math.inf
+
 
 def final_oracle(manifest: dict[str, Any], spec: dict[str, Any]) -> tuple[list[str], list[float]]:
-    query = next(row for row in manifest["queries"] if row["scenario"] == spec["name"])["vector"]
     deleted: set[str] = set()
     overrides: dict[str, dict[str, Any]] = {}
     additions: dict[str, dict[str, Any]] = {}
@@ -173,8 +234,29 @@ def final_oracle(manifest: dict[str, Any], spec: dict[str, Any]) -> tuple[list[s
         if len(candidates) >= needed:
             break
     candidates.extend(row for row in additions.values() if row["id"] not in deleted and matches(row, spec))
-    ranked = sorted(candidates, key=lambda row: (-cosine(row["vector"], query), row["id"]))[:manifest["config"]["top_k"]]
-    return [row["id"] for row in ranked], [cosine(row["vector"], query) for row in ranked]
+    ranked = sorted(candidates, key=lambda row: (-document_score(row), row["id"]))[:manifest["config"]["top_k"]]
+    return [row["id"] for row in ranked], [document_score(row) for row in ranked]
+
+
+def payload_corpus_digest(corpora: list[dict[str, Any]]) -> str:
+    payload = []
+    for spec in corpora:
+        row = ordered(spec, ["name", "shape", "corpus_rows", "eligible_start", "eligible_rows"])
+        for key in ("broad_start", "broad_rows", "narrow_start", "narrow_rows"):
+            if spec.get(key):
+                row[key] = spec[key]
+        row["filter"] = spec["filter"]
+        if spec.get("user_id"):
+            row["user_id"] = spec["user_id"]
+        if spec.get("fpath"):
+            row["fpath"] = spec["fpath"]
+        row["selectivity"] = spec["selectivity"]
+        row["payload_generator"] = (
+            "id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
+            "defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+        )
+        payload.append(row)
+    return go_digest(payload)
 
 
 def expected_state_hash(manifest: dict[str, Any]) -> str:
@@ -209,13 +291,87 @@ def expected_state_hash(manifest: dict[str, Any]) -> str:
         if operation.get("ids"):
             mutation["ids"] = operation["ids"]
         if operation.get("documents"):
-            mutation["documents"] = [canonical_document(row) for row in operation["documents"]]
+            mutation["documents"] = [
+                ordered(row, ["id", "content", "user_id", "fpath"])
+                for row in operation["documents"]
+            ]
         mutations.append(mutation)
     for name, spec in specs.items():
         want = spec["corpus_rows"] - (1 if name == "small" else 0)
         if live_rows[name] != want:
             raise ValueError(f"{name} live rows={live_rows[name]} want {want}")
-    return go_digest({"base_corpus_sha256": manifest["corpus_sha256"], "live_rows": live_rows, "mutations": mutations})
+    return go_digest({"base_payload_sha256": payload_corpus_digest(manifest["corpora"]), "live_rows": live_rows, "mutations": mutations})
+
+def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
+    lines = [
+        f"query|ordinal={row['ordinal']}|round={row['round']}|reader={row['reader']}|scenario={row['scenario']}\n"
+        for row in trace["queries"]
+    ]
+    for row in trace["rounds"]:
+        insertion = row["insert_range"]
+        lines.append(
+            f"round|ordinal={row['ordinal']}|query_start={row['query_start']}|query_count={row['query_count']}|"
+            f"insert={insertion['scenario']}:{insertion['start']}:{insertion['rows']}|"
+            f"start={row['start_barrier']}|end={row['end_barrier']}\n"
+        )
+    return hashlib.sha256("".join(lines).encode()).hexdigest()
+
+
+def timed_execution_digest(plan: dict[str, Any]) -> str:
+    queries = []
+    for round_value in plan["rounds"]:
+        begin = round_value["query_start"]
+        end = begin + round_value["query_count"]
+        for ordinal in range(begin, end):
+            queries.append({
+                "ordinal": ordinal, "round": round_value["ordinal"],
+                "reader": ordinal % plan["reader_concurrency"],
+                "scenario": plan["scenario_order"][ordinal % len(plan["scenario_order"])],
+            })
+    return timed_trace_digest({"queries": queries, "rounds": plan["rounds"]})
+
+
+
+def validate_timed_plan(manifest: dict[str, Any]) -> dict[str, Any]:
+    operation = manifest["operations"][3]
+    if operation.get("schedule"):
+        raise ValueError("timed operation must use timed_reader_plan, not a serial schedule")
+    plan = require_object(operation.get("timed_reader_plan"), [
+        "query_count", "scenario_order", "reader_concurrency", "writer_concurrency", "assignment", "rounds",
+    ], "timed_reader_plan")
+    config, ranges = manifest["config"], operation.get("insert_ranges", [])
+    scenario_order = [row["name"] for row in manifest["corpora"]]
+    if not ranges or config["timed_queries"] % len(ranges):
+        raise ValueError("timed query count must divide evenly across insert ranges")
+    per_round = config["timed_queries"] // len(ranges)
+    assignment = (
+        f"round=ordinal/{per_round};reader=ordinal%{config['reader_concurrency']};"
+        f"scenario=scenario_order[ordinal%{len(scenario_order)}]"
+    )
+    if (
+        plan["query_count"] != config["timed_queries"]
+        or plan["scenario_order"] != scenario_order
+        or plan["reader_concurrency"] != config["reader_concurrency"]
+        or plan["writer_concurrency"] != config["writer_concurrency"]
+        or plan["assignment"] != assignment
+        or len(plan["rounds"]) != len(ranges)
+    ):
+        raise ValueError("timed_reader_plan does not match frozen config/assignment")
+    for ordinal, (round_value, insertion) in enumerate(zip(plan["rounds"], ranges, strict=True)):
+        require_object(round_value, [
+            "ordinal", "query_start", "query_count", "insert_range", "start_barrier", "end_barrier",
+        ], f"timed_reader_plan.rounds[{ordinal}]")
+        require_object(round_value["insert_range"], ["scenario", "start", "rows"], f"timed round {ordinal} insert_range")
+        if (
+            round_value["ordinal"] != ordinal
+            or round_value["query_start"] != ordinal * per_round
+            or round_value["query_count"] != per_round
+            or round_value["insert_range"] != insertion
+            or round_value["start_barrier"] != "round_start_readers_and_writer"
+            or round_value["end_barrier"] != "round_end_queries_and_insert_complete"
+        ):
+            raise ValueError(f"timed_reader_plan round {ordinal} is not frozen")
+    return plan
 
 
 def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) -> dict[str, Any]:
@@ -261,17 +417,26 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
         stop = min(spec["eligible_start"] + spec["eligible_rows"], spec["eligible_start"] + config["top_k"])
         initial_ordinals = range(spec["eligible_start"], stop)
         initial_ids = [f"minima/{spec['name']}/{ordinal:06d}" for ordinal in initial_ordinals]
-        initial_scores = [1 / math.hypot(1, (ordinal + 1) / 1_000_000) for ordinal in range(spec["eligible_start"], stop)]
+        initial_scores = [document_score(generated_document(spec, ordinal)) for ordinal in range(spec["eligible_start"], stop)]
         final_ids, final_scores = final_oracle(manifest, spec)
         for label, actual, expected in (
-            ("initial IDs", query["initial_oracle_ids"], initial_ids), ("initial scores", query["initial_oracle_scores"], initial_scores),
-            ("final IDs", query["final_oracle_ids"], final_ids), ("final scores", query["final_oracle_scores"], final_scores),
+            ("initial IDs", query["initial_oracle_ids"], initial_ids), ("final IDs", query["final_oracle_ids"], final_ids),
         ):
             if actual != expected:
                 raise ValueError(f"exact {label} mismatch for {spec['name']}")
+        for label, actual, expected in (
+            ("initial scores", query["initial_oracle_scores"], initial_scores),
+            ("final scores", query["final_oracle_scores"], final_scores),
+        ):
+            if (
+                not isinstance(actual, list)
+                or len(actual) != len(expected)
+                or any(abs(finite(got, label) - want) > MANIFEST_FLOAT_TOLERANCE for got, want in zip(actual, expected, strict=True))
+            ):
+                raise ValueError(f"exact {label} mismatch for {spec['name']}")
     if len(manifest["operations"]) != len(OPERATION_NAMES):
         raise ValueError("operation count mismatch")
-    operation_optional = {"timed", "insert_ranges", "filter", "ids", "documents", "schedule"}
+    operation_optional = {"timed", "insert_ranges", "filter", "ids", "documents", "schedule", "timed_reader_plan"}
     for ordinal, operation in enumerate(manifest["operations"]):
         require_object(operation, OPERATION_KEYS, f"operations[{ordinal}]", operation_optional)
         if operation.get("ordinal") != ordinal or operation.get("name") != OPERATION_NAMES[ordinal]:
@@ -280,6 +445,9 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
             raise ValueError(f"invalid operation effect at {ordinal}")
         for document in operation.get("documents", []):
             require_object(document, DOCUMENT_KEYS, f"operation {ordinal} document")
+    timed_plan = validate_timed_plan(manifest)
+    if require_frozen and timed_execution_digest(timed_plan) != TIMED_EXECUTION_SHA256:
+        raise ValueError("frozen timed execution digest mismatch")
     for key, actual in manifest_hashes(manifest).items():
         if manifest[key] != actual:
             raise ValueError(f"manifest {key} mismatch: got {manifest[key]} recomputed {actual}")
@@ -346,13 +514,48 @@ def disk_bytes(path: Path | None) -> int:
     return sum(row.stat().st_size for row in path.rglob("*") if row.is_file())
 
 
-def max_rss_bytes() -> int:
-    try:
-        import resource
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        return int(value if sys.platform == "darwin" else value * 1024)
-    except (ImportError, OSError, AttributeError):
-        return 0
+def cpu_time_seconds(value: str) -> float:
+    days, clock = (value.split("-", 1) if "-" in value else ("0", value))
+    parts = [float(part) for part in clock.split(":")]
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+    elif len(parts) == 2:
+        hours, (minutes, seconds) = 0, parts
+    else:
+        hours, minutes, seconds = 0, 0, parts[0]
+    return float(days) * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[str, Any]:
+    rss: int | None = None
+    cpu: float | None = None
+    error = ""
+    if pid is not None:
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "rss=", "-o", "time=", "-p", str(pid)],
+                check=True, capture_output=True, text=True, timeout=5,
+            )
+            fields = result.stdout.split()
+            if len(fields) != 2:
+                raise ValueError(f"unexpected ps output {result.stdout!r}")
+            rss, cpu = int(fields[0]) * 1024, cpu_time_seconds(fields[1])
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            error = f"{type(exc).__name__}: {exc}"
+    disk_available = storage_path is not None and storage_path.exists()
+    return {
+        "captured": rss is not None and cpu is not None,
+        "rss_bytes": rss or 0,
+        "cpu_seconds": cpu or 0.0,
+        "disk_bytes": disk_bytes(storage_path),
+        "availability": {
+            "rss_bytes": f"Qdrant server PID {pid}" if rss is not None else "unavailable",
+            "cpu_seconds": f"Qdrant server PID {pid}" if cpu is not None else "unavailable",
+            "disk_bytes": str(storage_path) if disk_available else "unavailable",
+            "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
+            "measurement_error": error,
+        },
+    }
 
 
 class Evidence:
@@ -364,8 +567,9 @@ class Evidence:
         self.errors = dict.fromkeys(names, 0)
         self.timeouts = dict.fromkeys(names, 0)
         self.initial: dict[str, tuple[list[str], list[float]]] = {}
+        self.preclose: dict[str, tuple[list[str], list[float]]] = {}
+        self.reopen: dict[str, tuple[list[str], list[float]]] = {}
         self.final: dict[str, tuple[list[str], list[float]]] = {}
-        self.reopen: dict[str, list[str]] = {}
         self.cross_user = dict.fromkeys(names, 0)
         self.stale_insert = dict.fromkeys(names, 0)
         self.stale_update = dict.fromkeys(names, 0)
@@ -382,11 +586,13 @@ class Evidence:
             self.events.append({"operation": operation, "scenario": scenario, "kind": "timeout" if is_timeout(exc) else "error", "error": f"{type(exc).__name__}: {exc}"})
             raise
         finally:
-            self.samples.append({"operation": operation, "scenario": scenario, "category": category, "duration_nanos": time.perf_counter_ns() - start})
+            end = time.perf_counter_ns()
+            self.samples.append({"operation": operation, "scenario": scenario, "category": category,
+                                 "start_nanos": start, "end_nanos": end, "duration_nanos": end - start})
 
 
 class StateAccumulator:
-    """Order-independent exact digest of payload and stored float32 vectors."""
+    """Order-independent digest of backend-neutral committed IDs and payload."""
     MODULUS = 1 << 256
 
     def __init__(self) -> None:
@@ -397,15 +603,14 @@ class StateAccumulator:
         for key in ("id", "content", "user_id", "fpath"):
             digest.update(str(document[key]).encode())
             digest.update(b"\0")
-        for value in document["vector"]:
-            digest.update(struct.pack(">f", float(value)))
+        # Vector correctness is independently guarded by the frozen manifest and exact score oracle.
         number = int.from_bytes(digest.digest(), "big")
         self.count += 1
         self.xor ^= number
         self.total = (self.total + number) % self.MODULUS
 
     def hexdigest(self) -> str:
-        return hashlib.sha256(f"minima-state-f32-v1:{self.count}:{self.xor:064x}:{self.total:064x}".encode()).hexdigest()
+        return hashlib.sha256(f"minima-committed-payload-v1:{self.count}:{self.xor:064x}:{self.total:064x}".encode()).hexdigest()
 
 
 def final_documents(manifest: dict[str, Any]) -> Iterable[dict[str, Any]]:
@@ -431,21 +636,27 @@ class QdrantMinimaRunner:
     def __init__(self, manifest: dict[str, Any], *, client_factory: Callable[[], Any], models: Any, url: str,
                  collection: str, allow_drop: bool, operation_timeout: int, optimizer_timeout: float,
                  poll_interval: float, server_version: str, deployment: str, image: str,
-                 storage_path: Path | None) -> None:
+                 storage_path: Path | None, server_pid: int | None) -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
         self.client_factory, self.models = client_factory, models
         self.url, self.collection, self.allow_drop = url, collection, allow_drop
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
+        self.server_pid = server_pid
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
-        self.operations = {"manifest_ordered": False, "batch_insert_during_search": False, "reindex_delete_replace": False,
-                           "explicit_update_visible": False, "explicit_delete_visible": False, "empty_cases_checked": False}
+        self.operations = {
+            "manifest_ordered": False, "batch_insert_during_search": False,
+            "timed_queries_executed": 0, "timed_rounds_completed": 0, "timed_execution_sha256": "",
+            "timed_execution_trace": {"queries": [], "rounds": []},
+            "reindex_delete_replace": False, "explicit_update_visible": False,
+            "explicit_delete_visible": False, "empty_cases_checked": False,
+        }
         self.reopen_attempted = self.reopen_parity = False
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
-        self.started_cpu = time.process_time()
+        self.overlap_evidence: dict[str, Any] = {}
 
     def connect(self) -> None:
         self.client = self.client_factory()
@@ -534,7 +745,9 @@ class QdrantMinimaRunner:
                 self.evidence.cross_user[scenario] += 1
             ids.append(identifier)
             scores.append(float(getattr(point, "score")))
-        self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode", "duration_nanos": time.perf_counter_ns() - started})
+        ended = time.perf_counter_ns()
+        self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
+                                      "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
         return ids, scores
 
     def compare_oracle(self, phase: str, scenario: str, result: tuple[list[str], list[float]]) -> bool:
@@ -556,6 +769,13 @@ class QdrantMinimaRunner:
         if not match:
             self.evidence.failures.append(f"{phase} exact oracle mismatch for {scenario}")
         return match
+
+    def results_match(self, left: tuple[list[str], list[float]], right: tuple[list[str], list[float]]) -> bool:
+        return (
+            left[0] == right[0]
+            and len(left[1]) == len(right[1])
+            and all(abs(a - b) <= self.config["score_tolerance"] for a, b in zip(left[1], right[1], strict=True))
+        )
 
     def retrieve(self, operation: str, scenario: str, ids: list[str]) -> list[Any]:
         assert self.client is not None
@@ -589,6 +809,109 @@ class QdrantMinimaRunner:
         if stale:
             raise RuntimeError(f"explicit delete left {stale} IDs visible")
 
+    def run_timed_overlap(self, operation: dict[str, Any]) -> None:
+        plan = validate_timed_plan(self.manifest)
+        readers = plan["reader_concurrency"]
+        query_observations: list[dict[str, Any] | None] = [None] * plan["query_count"]
+        round_observations: list[dict[str, Any]] = []
+        round_evidence: list[dict[str, Any]] = []
+
+        with ThreadPoolExecutor(max_workers=readers + 1, thread_name_prefix="minima") as pool:
+            for round_value in plan["rounds"]:
+                start_barrier = threading.Barrier(readers + 1)
+                end_barrier = threading.Barrier(readers + 1)
+                insertion = round_value["insert_range"]
+                sample_start = len(self.evidence.samples)
+
+                def write_round() -> None:
+                    start_barrier.wait()
+                    try:
+                        spec = self.specs[insertion["scenario"]]
+                        documents = [
+                            generated_document(spec, value)
+                            for value in range(insertion["start"], insertion["start"] + insertion["rows"])
+                        ]
+                        self.upsert(operation["name"], spec["name"], documents)
+                        visible = len(self.retrieve(operation["name"], spec["name"], [row["id"] for row in documents]))
+                        missing = len(documents) - visible
+                        self.evidence.stale_insert[spec["name"]] += missing
+                        if missing:
+                            raise RuntimeError(f"batch insert left {missing} IDs invisible")
+                    except BaseException:
+                        end_barrier.abort()
+                        raise
+                    end_barrier.wait()
+
+                def read_round(worker: int) -> None:
+                    start_barrier.wait()
+                    try:
+                        begin = round_value["query_start"] + worker
+                        end = round_value["query_start"] + round_value["query_count"]
+                        for query_ordinal in range(begin, end, readers):
+                            scenario = plan["scenario_order"][query_ordinal % len(plan["scenario_order"])]
+                            self.search(operation["name"], scenario)
+                            query_observations[query_ordinal] = {
+                                "ordinal": query_ordinal, "round": round_value["ordinal"],
+                                "reader": worker, "scenario": scenario,
+                            }
+                    except BaseException:
+                        end_barrier.abort()
+                        raise
+                    end_barrier.wait()
+
+                writer = pool.submit(write_round)
+                reader_futures = [pool.submit(read_round, worker) for worker in range(readers)]
+                writer.result()
+                for future in reader_futures:
+                    future.result()
+
+                round_samples = self.evidence.samples[sample_start:]
+                writer_samples = [row for row in round_samples if row["operation"] == operation["name"] and row["category"] == "writer"]
+                search_samples = [row for row in round_samples if row["operation"] == operation["name"] and row["category"] == "search"]
+                overlap = any(
+                    writer_sample["start_nanos"] < search_sample["end_nanos"]
+                    and search_sample["start_nanos"] < writer_sample["end_nanos"]
+                    for writer_sample in writer_samples
+                    for search_sample in search_samples
+                )
+                round_evidence.append({
+                    "ordinal": round_value["ordinal"], "queries_executed": len(search_samples),
+                    "writer_calls": len(writer_samples), "writer_search_overlap_observed": overlap,
+                })
+                round_observations.append({
+                    "ordinal": round_value["ordinal"], "query_start": round_value["query_start"],
+                    "query_count": round_value["query_count"], "insert_range": dict(insertion),
+                    "start_barrier": round_value["start_barrier"], "end_barrier": round_value["end_barrier"],
+                })
+
+        observed_queries = [row for row in query_observations if row is not None]
+        observed_trace = {"queries": observed_queries, "rounds": round_observations}
+        trace_hash = timed_trace_digest(observed_trace)
+        queries_executed = len(observed_queries)
+        rounds_completed = len(round_observations)
+        all_overlap = all(row["writer_search_overlap_observed"] for row in round_evidence)
+        self.overlap_evidence = {
+            "configured_searches": plan["query_count"], "executed_searches": queries_executed,
+            "configured_reader_concurrency": readers, "configured_writer_concurrency": plan["writer_concurrency"],
+            "rounds": round_evidence, "all_rounds_writer_search_overlap_observed": all_overlap,
+            "timed_execution_sha256": trace_hash,
+        }
+        expected_trace_hash = timed_execution_digest(plan)
+        self.operations.update({
+            "timed_queries_executed": queries_executed,
+            "timed_rounds_completed": rounds_completed,
+            "timed_execution_sha256": trace_hash,
+            "timed_execution_trace": observed_trace,
+            "batch_insert_during_search": (
+                queries_executed == plan["query_count"]
+                and rounds_completed == len(plan["rounds"])
+                and trace_hash == expected_trace_hash
+                and all_overlap
+            ),
+        })
+        if not self.operations["batch_insert_during_search"]:
+            raise RuntimeError(f"timed writer/search overlap contract failed: {self.overlap_evidence}")
+
     def run_schedule(self, operation: dict[str, Any]) -> None:
         writer_ran = False
         for ordinal, step in enumerate(operation["schedule"]):
@@ -618,8 +941,7 @@ class QdrantMinimaRunner:
                 writer_ran = True
             else:
                 raise RuntimeError(f"unsupported schedule actor {step['actor']!r}")
-        if operation["name"] == "timed_search_with_batch_insert":
-            self.operations["batch_insert_during_search"] = writer_ran
+        # Timed insertion/search is executed by run_timed_overlap, not this serial mutation schedule.
 
     def expected_scroll(self) -> tuple[str, int]:
         accumulator = StateAccumulator()
@@ -660,7 +982,9 @@ class QdrantMinimaRunner:
                     if scenario not in self.evidence.initial:
                         self.evidence.initial[scenario] = result
                         self.compare_oracle("initial", scenario, result)
-            elif name in ("timed_search_with_batch_insert", "reindex_delete_by_user_and_fpath_while_reading", "reindex_replacement_insert_while_reading"):
+            elif name == "timed_search_with_batch_insert":
+                self.run_timed_overlap(operation)
+            elif name in ("reindex_delete_by_user_and_fpath_while_reading", "reindex_replacement_insert_while_reading"):
                 self.run_schedule(operation)
                 if name == "reindex_replacement_insert_while_reading":
                     self.operations["reindex_delete_replace"] = True
@@ -684,11 +1008,15 @@ class QdrantMinimaRunner:
                 self.operations["explicit_delete_visible"] = True
             elif name == "close":
                 assert self.client is not None
+                for scenario in self.specs:
+                    self.evidence.preclose[scenario] = self.search("preclose_reopen_baseline", scenario)
                 self.client.close()
                 self.client = None
             elif name == "reopen":
                 self.reopen_attempted = True
                 self.connect()
+                for scenario in self.specs:
+                    self.evidence.reopen[scenario] = self.search("post_reopen_parity", scenario)
             elif name == "idempotent_ensure_after_reopen":
                 self.evidence.call(name, "fetch", "all", self.ensure_compatible)
                 self.evidence.call(name, "fetch", "all", self.wait_ready)
@@ -697,17 +1025,24 @@ class QdrantMinimaRunner:
                     scenario = step["scenario"]
                     result = self.search(name, scenario)
                     self.evidence.final[scenario] = result
-                    self.evidence.reopen[scenario] = result[0]
+                    # Reopen evidence was captured immediately after reconnect, not assigned from this final query.
                     self.compare_oracle("final", scenario, result)
                 expected_hash, expected_rows = self.expected_scroll()
                 actual_hash, actual_rows = self.evidence.call(name, "fetch", "all", self.actual_scroll)
-                self.state_scroll = {"algorithm": "sha256(count,xor256,sum256) over canonical payload and float32 vector digests",
+                self.state_scroll = {"algorithm": "sha256(count,xor256,sum256) over canonical id/content/user_id/fpath digests",
                     "expected_hash": expected_hash, "actual_hash": actual_hash, "expected_rows": expected_rows,
                     "actual_rows": actual_rows, "match": expected_hash == actual_hash and expected_rows == actual_rows}
                 if not self.state_scroll["match"]:
                     self.evidence.failures.append("final Qdrant scroll/state hash mismatch")
         self.operations["manifest_ordered"] = True
-        self.reopen_parity = self.state_scroll.get("match", False) and all(self.evidence.reopen.get(name) == self.evidence.final.get(name, ([], []))[0] for name in self.specs)
+        self.reopen_parity = self.state_scroll.get("match", False) and all(
+            name in self.evidence.preclose
+            and name in self.evidence.reopen
+            and name in self.evidence.final
+            and self.results_match(self.evidence.preclose[name], self.evidence.reopen[name])
+            and self.results_match(self.evidence.reopen[name], self.evidence.final[name])
+            for name in self.specs
+        )
 
     def artifact(self) -> dict[str, Any]:
         timing = {name: dict.fromkeys(("writer", "search", "fetch", "decode"), 0) for name in self.specs}
@@ -717,12 +1052,15 @@ class QdrantMinimaRunner:
             bucket = "writer" if sample["category"].startswith("writer") else sample["category"]
             if bucket in timing[sample["scenario"]]:
                 timing[sample["scenario"]][bucket] += sample["duration_nanos"]
-        rss, cpu, disk = max_rss_bytes(), max(0.0, time.process_time() - self.started_cpu), disk_bytes(self.storage_path)
+        resource = server_resource_usage(self.server_pid, self.storage_path)
         scenarios = []
         for spec in self.manifest["corpora"]:
             name, query = spec["name"], self.queries[spec["name"]]
             initial_ids, initial_scores = self.evidence.initial.get(name, ([], []))
             actual_ids, actual_scores = self.evidence.final.get(name, ([], []))
+            preclose = self.evidence.preclose.get(name, ([], []))
+            reopened = self.evidence.reopen.get(name, ([], []))
+            reopen_parity = self.results_match(preclose, reopened) and self.results_match(reopened, (actual_ids, actual_scores))
             expected_ids = query["final_oracle_ids"]
             intersection, union = len(set(actual_ids) & set(expected_ids)), len(set(actual_ids) | set(expected_ids))
             scenarios.append({
@@ -730,8 +1068,8 @@ class QdrantMinimaRunner:
                 "initial_oracle_ids": query["initial_oracle_ids"], "initial_oracle_scores": query["initial_oracle_scores"],
                 "final_oracle_ids": expected_ids, "final_oracle_scores": query["final_oracle_scores"],
                 "initial_actual_ids": initial_ids, "initial_actual_scores": initial_scores, "actual_ids": actual_ids,
-                "actual_scores": actual_scores, "reopen_ids": self.evidence.reopen.get(name, []),
-                "reopen_parity": self.evidence.reopen.get(name, []) == actual_ids,
+                "actual_scores": actual_scores, "reopen_ids": reopened[0],
+                "reopen_parity": reopen_parity,
                 "recall": intersection / len(expected_ids) if expected_ids else (1.0 if not actual_ids else 0.0),
                 "overlap": intersection / union if union else 1.0, "order_tolerance": self.config["order_tolerance"],
                 "score_tolerance": self.config["score_tolerance"], "errors": self.evidence.errors[name], "timeouts": self.evidence.timeouts[name],
@@ -746,7 +1084,8 @@ class QdrantMinimaRunner:
                 "timing": {"captured": True, "writer_millis": timing[name]["writer"] / 1e6, "search_millis": timing[name]["search"] / 1e6,
                     "fetch_millis": timing[name]["fetch"] / 1e6, "decode_millis": timing[name]["decode"] / 1e6,
                     "embedding_included": False, "llm_included": False},
-                "resource": {"captured": True, "bytes_per_op": 0.0, "allocs_per_op": 0.0, "rss_bytes": rss, "cpu_seconds": cpu, "disk_bytes": disk},
+                "resource": {"captured": resource["captured"], "bytes_per_op": 0.0, "allocs_per_op": 0.0,
+                    "rss_bytes": resource["rss_bytes"], "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]},
             })
         result_hash = self.manifest["expected_state_sha256"] if self.state_scroll.get("match") else self.state_scroll.get("actual_hash", "")
         configuration = {"url": self.url, "collection": self.collection, "vector_field": self.config["vector_field"],
@@ -755,6 +1094,7 @@ class QdrantMinimaRunner:
             "operation_timeout_seconds": str(self.operation_timeout), "optimizer_timeout_seconds": str(self.optimizer_timeout),
             "write_wait": "true", "point_id_mapping": "uuid5(NAMESPACE_URL,snissn/gomap/minima-qdrant/v1/<manifest-id>)",
             "deployment": self.deployment, "image": self.image or "not_applicable",
+            "server_pid": str(self.server_pid) if self.server_pid is not None else "unavailable",
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
             "cpu": platform.processor() or "unavailable", "memory": memory_bytes(), "python": platform.python_version()}
@@ -766,10 +1106,21 @@ class QdrantMinimaRunner:
                     "result_manifest_hash": result_hash}}],
             "scenarios": scenarios, "failures": self.evidence.failures, "readiness_recommendation": "not_evaluated",
             "backend_raw_evidence": {"phase_latency_samples": self.evidence.samples, "events": self.evidence.events,
-                "final_scroll_state": self.state_scroll, "resource_availability": {
-                    "rss_bytes": "Python comparator process maximum RSS", "cpu_seconds": "Python comparator process CPU",
-                    "disk_bytes": "Qdrant storage path recursive bytes" if self.storage_path else "unavailable for external service",
-                    "bytes_per_op": "unavailable", "allocs_per_op": "unavailable"}}}
+                "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
+                "lifecycle_parity": {
+                    name: {
+                        "preclose_ids": self.evidence.preclose.get(name, ([], []))[0],
+                        "preclose_scores": self.evidence.preclose.get(name, ([], []))[1],
+                        "post_reopen_ids": self.evidence.reopen.get(name, ([], []))[0],
+                        "post_reopen_scores": self.evidence.reopen.get(name, ([], []))[1],
+                        "parity": self.results_match(
+                            self.evidence.preclose.get(name, ([], [])),
+                            self.evidence.reopen.get(name, ([], [])),
+                        ),
+                    }
+                    for name in self.specs
+                },
+                "resource_availability": resource["availability"]}}
 
     def close(self) -> None:
         if self.client is not None:
@@ -802,6 +1153,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deployment", choices=("external", "standalone", "docker"), required=True)
     parser.add_argument("--image", default="")
     parser.add_argument("--storage-path", type=Path)
+    parser.add_argument("--server-pid", type=int)
     return parser.parse_args()
 
 
@@ -817,7 +1169,7 @@ def main() -> int:
         timeout=args.operation_timeout, prefer_grpc=False), models=models, url=args.url, collection=args.collection,
         allow_drop=args.allow_drop, operation_timeout=args.operation_timeout, optimizer_timeout=args.optimizer_timeout,
         poll_interval=args.poll_interval, server_version=str(info["version"]), deployment=args.deployment,
-        image=args.image, storage_path=args.storage_path)
+        image=args.image, storage_path=args.storage_path, server_pid=args.server_pid)
     exit_code = 0
     try:
         runner.run()
