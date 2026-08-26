@@ -150,14 +150,20 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	if len(definitions) == 0 {
 		return nil, nil
 	}
-	jsonDocument, err := materializer.StoredDocumentJSON(document)
-	if err != nil {
-		return nil, err
+	scalarDocument := document
+	documentFormat := normalizedDocumentFormat(materializer.DocumentFormat())
+	if documentFormat != DocumentFormatBSON {
+		var err error
+		scalarDocument, err = materializer.StoredDocumentJSON(document)
+		if err != nil {
+			return nil, err
+		}
+		documentFormat = DocumentFormatJSON
 	}
 	if len(runtimes) != len(definitions) {
 		return nil, errors.New("collections: native scalar runtimes are unavailable")
 	}
-	state, err := orderedIndexStateForDocument(jsonDocument, runtimes, collectionOptions{documentFormat: DocumentFormatJSON})
+	state, err := orderedIndexStateForDocument(scalarDocument, runtimes, collectionOptions{documentFormat: documentFormat})
 	if err != nil {
 		return nil, err
 	}

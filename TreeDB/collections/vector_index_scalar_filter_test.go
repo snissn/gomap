@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestNativeScalarColumnsNormalizeTypesMissingAndLiveMutations(t *testing.T) {
@@ -82,6 +83,52 @@ func TestNativeScalarColumnsNormalizeTypesMissingAndLiveMutations(t *testing.T) 
 	}
 	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "active_idx", Value: true}, 3); len(got.Results) != 0 {
 		t.Fatalf("deleted id survived scalar search: %+v", got.Results)
+	}
+}
+
+func TestNativeScalarBSONNumericTypesPreservedAcrossBuildAndMutation(t *testing.T) {
+	d, col, def := newNativeScalarTestCollectionWithFormat(t, DocumentFormatBSON, []IndexDefinition{
+		{Name: "sequence_idx", Field: "sequence", ValueType: IndexValueInt64},
+		{Name: "weight_idx", Field: "weight", ValueType: IndexValueDouble},
+	})
+	defer func() { _ = d.Close() }()
+	const sequence = int64(9007199254740993)
+	document := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "doc"},
+		{Key: "embedding", Value: bson.A{1.0, 0.0}},
+		{Key: "sequence", Value: sequence},
+		{Key: "weight", Value: 1.5},
+	})
+	if _, err := col.InsertBatch([][]byte{[]byte("doc")}, [][]byte{document}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "sequence_idx", Value: sequence}, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "doc" {
+		t.Fatalf("BSON int64 build results=%+v", got.Results)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "weight_idx", Value: 1.5}, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "doc" {
+		t.Fatalf("BSON double build results=%+v", got.Results)
+	}
+
+	replacement := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "doc"},
+		{Key: "embedding", Value: bson.A{0.9, 0.1}},
+		{Key: "sequence", Value: sequence + 1},
+		{Key: "weight", Value: 2.5},
+	})
+	if replaced, err := col.Replace([]byte("doc"), replacement); err != nil || !replaced {
+		t.Fatalf("replace=%v err=%v", replaced, err)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "sequence_idx", Value: sequence}, 1); len(got.Results) != 0 {
+		t.Fatalf("old BSON int64 survived mutation: %+v", got.Results)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "sequence_idx", Value: sequence + 1}, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "doc" {
+		t.Fatalf("updated BSON int64 results=%+v", got.Results)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "weight_idx", Value: 2.5}, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "doc" {
+		t.Fatalf("updated BSON double results=%+v", got.Results)
 	}
 }
 
@@ -804,6 +851,10 @@ func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, graphRows i
 }
 
 func newNativeScalarTestCollection(tb testing.TB, indexes []IndexDefinition) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	return newNativeScalarTestCollectionWithFormat(tb, DocumentFormatJSON, indexes)
+}
+
+func newNativeScalarTestCollectionWithFormat(tb testing.TB, documentFormat DocumentFormat, indexes []IndexDefinition) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
@@ -811,7 +862,7 @@ func newNativeScalarTestCollection(tb testing.TB, indexes []IndexDefinition) (*b
 	}
 	def := VectorIndexDefinition{Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 8, EfSearch: 64, Strategy: VectorIndexStrategyNativeRuntime}
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, AllowArrayValuesInIndex: true}, Indexes: indexes, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: documentFormat, AllowArrayValuesInIndex: true}, Indexes: indexes, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
 		_ = d.Close()
 		tb.Fatal(err)
 	}

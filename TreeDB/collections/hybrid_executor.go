@@ -702,6 +702,9 @@ func (c *Collection) hybridVectorQueryUsesNativeRuntime(query *HybridVectorQuery
 	if c.db == nil {
 		return false, errCollectionDBNil
 	}
+	if def, found, current := c.cachedVectorIndexDefinitionForCurrentState(query.IndexName); found && current {
+		return vectorIndexDefinitionUsesNativeRuntime(def), nil
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return false, backenddb.ErrClosed
