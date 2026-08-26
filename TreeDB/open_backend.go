@@ -81,3 +81,20 @@ func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {
 	}
 	return database.backend, database.Close, nil
 }
+
+// OpenBackendWithCachedLeafLogStats is OpenBackendWithCachedLeafLog with a
+// read-only snapshot of the public cached DB statistics. Raw-backend callers
+// can keep using OpenBackendWithCachedLeafLog; operator diagnostics may retain
+// only this narrow callback. The callback is live-only: callers must stop
+// invoking it before calling cleanup.
+func OpenBackendWithCachedLeafLogStats(opts Options) (*db.DB, func() error, func() map[string]string, error) {
+	database, err := Open(opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if database.backend == nil {
+		_ = database.Close()
+		return nil, nil, nil, db.ErrClosed
+	}
+	return database.backend, database.Close, database.Stats, nil
+}
