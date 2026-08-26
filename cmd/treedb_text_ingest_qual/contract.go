@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	contractVersion                            = "treedb_text_ingest_qualification/v6"
+	contractVersion                            = "treedb_text_ingest_qualification/v7"
 	qualificationAnalyzer                      = "simple"
 	qualificationFieldWeights                  = "title=3,body=1"
 	qualificationProbeQuery                    = "refund"
@@ -71,6 +71,7 @@ type manifest struct {
 	ImplementationPath             string                  `json:"implementation_path"`
 	ImplementationBlobOID          string                  `json:"implementation_blob_oid"`
 	ReportPayloadSHA256            string                  `json:"report_payload_sha256"`
+	RawRowsSHA256                  map[string]string       `json:"raw_rows_sha256"`
 	Host                           string                  `json:"host"`
 	CacheState                     string                  `json:"cache_state"`
 	Durability                     string                  `json:"durability"`
@@ -309,6 +310,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 	if m.FixtureSHA256 != wantFixtureSHA || m.IDsSHA256 != wantIDsSHA {
 		return fmt.Errorf("manifest fixture identity does not match qualification generator")
 	}
+	if err := validateRawRowDigestSyntax(m.RawRowsSHA256); err != nil {
+		return err
+	}
 	if r.ManifestSHA256 != manifestSHA {
 		return fmt.Errorf("manifest_sha256 does not match manifest bytes")
 	}
@@ -351,6 +355,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 				return fmt.Errorf("retained %s requires exactly repetitions 1,2,3", key)
 			}
 		}
+	}
+	if err := validateRawRowDigestInventory(m.RawRowsSHA256, r.Rows); err != nil {
+		return err
 	}
 	if err := validateExpectedProbeIdentities(groups); err != nil {
 		return err
@@ -420,6 +427,49 @@ func expectedQualificationAcceptance() qualificationAcceptance {
 		MinimumSourceDocsPerSecondMultiple:    sourceChunkMinimumThroughputMultiple,
 		MaximumPhysicalTotalWALExcludedBytes:  sourceChunkPhysicalCeilingBytes,
 	}}
+}
+func rawRowRelativePath(r row) (string, error) {
+	var scale string
+	switch r.Scale {
+	case 10_000:
+		scale = "10k"
+	case 100_000:
+		scale = "100k"
+	case 1_000_000:
+		scale = "1m"
+	default:
+		return "", fmt.Errorf("unsupported raw-row scale %d", r.Scale)
+	}
+	return fmt.Sprintf("smoke-%s-r%d/%s.raw.json", scale, r.Repetition, r.Mode), nil
+}
+
+func validateRawRowDigestSyntax(digests map[string]string) error {
+	if len(digests) == 0 {
+		return fmt.Errorf("manifest raw_rows_sha256 is required")
+	}
+	for path, digest := range digests {
+		if strings.TrimSpace(path) == "" || !isLowerHex(digest, sha256.Size*2) {
+			return fmt.Errorf("manifest raw_rows_sha256 contains an invalid path or digest")
+		}
+	}
+	return nil
+}
+
+func validateRawRowDigestInventory(digests map[string]string, rows []row) error {
+	if len(digests) != len(rows) {
+		return fmt.Errorf("manifest raw_rows_sha256 must contain exactly one digest per report row")
+	}
+	for _, candidate := range rows {
+		path, err := rawRowRelativePath(candidate)
+		if err != nil {
+			return err
+		}
+		digest, ok := digests[path]
+		if !ok || !isLowerHex(digest, sha256.Size*2) {
+			return fmt.Errorf("manifest raw_rows_sha256 lacks a valid digest for %s", path)
+		}
+	}
+	return nil
 }
 
 func validateExpectedProbeIdentities(groups map[string]map[int]row) error {

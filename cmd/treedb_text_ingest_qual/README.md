@@ -21,10 +21,12 @@ supplied manifest bytes must also hash to the exact manifest blob committed at
 candidate `HEAD`; artifact-only descendants remain valid only while that blob
 is unchanged.
 
-Use schema `treedb_text_ingest_qualification/v6` for both `manifest.json` and
+Use schema `treedb_text_ingest_qualification/v7` for both `manifest.json` and
 `report.json`. The manifest authenticates the canonical report payload (with
-`manifest_sha256` blank) through `report_payload_sha256`; the report separately
-binds the SHA-256 of the exact manifest bytes. Rows must cover the complete mode
+`manifest_sha256` blank) through `report_payload_sha256`, binds every current
+raw measurement file through `raw_rows_sha256`, and is itself anchored to the
+candidate `HEAD` blob. The report separately binds the SHA-256 of the exact
+manifest bytes. Rows must cover the complete mode
 × scale matrix: `indexed_insert`, `post_load_backfill`, `source_chunk`, and
 `maintenance` at each of 10k, 100k,
 and 1M. Each 10k group has exactly smoke repetition 1; each retained 100k/1M
@@ -54,9 +56,11 @@ probe; the subsequent close is outside that stage. Reopen success requires
 parity for live rows, generation, text storage statistics, and deterministic
 probe results. The validator also pins the expected result count and digest for
 every deterministic mode/scale fixture, so a consistently wrong result cannot
-pass through reopen parity alone. It rejects count drift, zero-document-probe
-violations, failed or non-parity reopen, dirty/vector product identity,
-incomplete accounting, and ambiguous retained rows.
+pass through reopen parity alone. It reads every current raw row, verifies its
+manifest-anchored digest, and requires its decoded value to equal the report
+row. It rejects count drift, missing or substituted raw evidence,
+zero-document-probe violations, failed or non-parity reopen, dirty/vector
+product identity, incomplete accounting, and ambiguous retained rows.
 
 Physical storage is observed only after checkpoint and close by walking the DB
 directory. `physical_index_page_bytes`, `physical_value_log_bytes`,

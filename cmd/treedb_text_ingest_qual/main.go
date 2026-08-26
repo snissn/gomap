@@ -12,6 +12,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
 	"strings"
 )
 
@@ -74,6 +76,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact: %v\n", err)
 		os.Exit(1)
 	}
+	if err := verifyRawRows(manifest, report, filepath.Dir(manifestPath)); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid qualification raw evidence: %v\n", err)
+		os.Exit(1)
+	}
 	if err := verifyGitProvenance(manifest, gitBlobOID(manifestBytes), resolveLocalGit); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact Git provenance: %v\n", err)
 		os.Exit(1)
@@ -107,6 +113,31 @@ func resolveLocalGit(args ...string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func verifyRawRows(m manifest, r report, artifactDir string) error {
+	for _, candidate := range r.Rows {
+		relativePath, err := rawRowRelativePath(candidate)
+		if err != nil {
+			return err
+		}
+		raw, err := os.ReadFile(filepath.Join(artifactDir, filepath.FromSlash(relativePath)))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", relativePath, err)
+		}
+		sum := sha256.Sum256(raw)
+		if got := hex.EncodeToString(sum[:]); got != m.RawRowsSHA256[relativePath] {
+			return fmt.Errorf("%s digest does not match anchored manifest", relativePath)
+		}
+		var decoded row
+		if err := decodeStrictJSON(raw, &decoded); err != nil {
+			return fmt.Errorf("decode %s: %w", relativePath, err)
+		}
+		if !reflect.DeepEqual(decoded, candidate) {
+			return fmt.Errorf("%s does not match its report row", relativePath)
+		}
+	}
+	return nil
 }
 
 func gitBlobOID(data []byte) string {

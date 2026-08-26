@@ -283,6 +283,45 @@ func TestValidateRejectsUnauthenticatedReportPayload(t *testing.T) {
 	}
 }
 
+func TestVerifyRawRowsRejectsTampering(t *testing.T) {
+	m := validManifest()
+	r := validReportPayload()
+	dir := t.TempDir()
+	for _, candidate := range r.Rows {
+		path, err := rawRowRelativePath(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.MarshalIndent(candidate, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, '\n')
+		fullPath := filepath.Join(dir, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.RawRowsSHA256[path] = hex.EncodeToString(sum[:])
+	}
+	if err := verifyRawRows(m, r, dir); err != nil {
+		t.Fatal(err)
+	}
+	firstPath, err := rawRowRelativePath(r.Rows[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(firstPath)), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRawRows(m, r, dir); err == nil || !strings.Contains(err.Error(), "digest does not match") {
+		t.Fatalf("tampered raw row error=%v", err)
+	}
+}
+
 func TestValidateRejectsContractFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -296,6 +335,13 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"missing TreeDB subtree", func(m *manifest, _ *report) { m.TreeDBSubtreeOID = "" }, "treedb_subtree_oid is required"},
 		{"missing harness subtree", func(m *manifest, _ *report) { m.QualificationHarnessSubtreeOID = "" }, "qualification_harness_subtree_oid is required"},
 		{"missing report payload digest", func(m *manifest, _ *report) { m.ReportPayloadSHA256 = "" }, "report_payload_sha256 is required"},
+		{"missing raw-row digest inventory", func(m *manifest, _ *report) { m.RawRowsSHA256 = nil }, "is required"},
+		{"invalid raw-row digest", func(m *manifest, _ *report) {
+			for path := range m.RawRowsSHA256 {
+				m.RawRowsSHA256[path] = "invalid"
+				break
+			}
+		}, "invalid path or digest"},
 		{"invalid commit syntax", func(m *manifest, _ *report) {
 			m.Commit = strings.Repeat("A", 40)
 			m.Observed.Commit = m.Commit
@@ -483,8 +529,16 @@ func TestObserveStorageClassifiesSyntheticTree(t *testing.T) {
 func validManifest() manifest {
 	fixtureSHA, idsSHA := qualificationManifestIdentity()
 	commit := strings.Repeat("a", 40)
-	m := manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0, vectorIndexesPresent: true, vectorsEnabledPresent: true}, Acceptance: expectedQualificationAcceptance()}
-	payloadSHA, err := qualificationReportPayloadSHA256(validReportPayload())
+	m := manifest{SchemaVersion: contractVersion, FixtureSHA256: fixtureSHA, Analyzer: qualificationAnalyzer, FieldWeights: qualificationFieldWeights, IDsSHA256: idsSHA, Command: "go run", Commit: commit, CommitURL: "https://github.com/snissn/gomap/commit/" + commit, TreeOID: strings.Repeat("b", 40), TreeDBSubtreeOID: strings.Repeat("c", 40), QualificationHarnessSubtreeOID: strings.Repeat("d", 40), ImplementationPath: qualificationImplementationPath, ImplementationBlobOID: strings.Repeat("e", 40), Host: "test", CacheState: "cold", Durability: "wal_on", TimedBoundary: "insert through checkpoint", Observed: observedIdentity{VCSClean: true, Commit: commit, Durability: "wal_on", VectorIndexes: 0, vectorIndexesPresent: true, vectorsEnabledPresent: true}, Acceptance: expectedQualificationAcceptance(), RawRowsSHA256: map[string]string{}}
+	payloadReport := validReportPayload()
+	for _, candidate := range payloadReport.Rows {
+		path, err := rawRowRelativePath(candidate)
+		if err != nil {
+			panic(err)
+		}
+		m.RawRowsSHA256[path] = strings.Repeat("f", 64)
+	}
+	payloadSHA, err := qualificationReportPayloadSHA256(payloadReport)
 	if err != nil {
 		panic(err)
 	}
