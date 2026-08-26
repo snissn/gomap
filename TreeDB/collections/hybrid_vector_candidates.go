@@ -426,6 +426,7 @@ func hybridVectorCandidateStatsFromSearch(requested int, vectorStats VectorIndex
 	stats.ScalarFilterVisited = vectorStats.ScalarFilterVisited
 	stats.ScalarFilterMatched = vectorStats.ScalarFilterAdmitted
 	stats.ScalarFilterUnderfill = vectorStats.ScalarFilterUnderfill
+	stats.ScalarFilterExactScoring = vectorStats.ScalarFilterExactScoring
 	if vectorStats.CandidateRows > returned64 {
 		stats.Truncated = vectorStats.CandidateRows - returned64
 	}

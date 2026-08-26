@@ -1031,6 +1031,7 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.ScalarFilterProbeTruncated += src.ScalarFilterProbeTruncated
 	dst.ScalarFilterVisited += src.ScalarFilterVisited
 	dst.ScalarFilterUnderfill += src.ScalarFilterUnderfill
+	dst.ScalarFilterExactScoring += src.ScalarFilterExactScoring
 	if src.ScalarFilterSelectivityPPM != 0 {
 		dst.ScalarFilterSelectivityPPM = src.ScalarFilterSelectivityPPM
 	}

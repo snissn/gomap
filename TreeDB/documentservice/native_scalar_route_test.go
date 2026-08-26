@@ -54,7 +54,10 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if hybrid.Stats.ScalarFilterPlan != dense.ScalarFilterPlan || len(hybrid.Documents) != len(dense.Documents) {
+	if hybrid.Stats.ScalarFilterPlan != dense.ScalarFilterPlan ||
+		hybrid.Stats.ScalarFilterExactScoring != 1 ||
+		!dense.ScalarFilterExactScoring ||
+		len(hybrid.Documents) != len(dense.Documents) {
 		t.Fatalf("dense=%+v hybrid=%+v", dense, hybrid)
 	}
 	for i := range dense.Documents {
@@ -67,5 +70,29 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 		Filter: &Filter{Operator: "OR", Conditions: []Filter{{Field: "meta.user_id", Operator: "==", Value: "alpha"}, {Field: "meta.user_id", Operator: "==", Value: "beta"}}},
 	}); ErrorCodeOf(err) != CodeUnsupported {
 		t.Fatalf("unsupported OR err=%v code=%s", err, ErrorCodeOf(err))
+	}
+	malformed := []*Filter{
+		{
+			Operator: "AND",
+			Field:    "meta.user_id",
+			Conditions: []Filter{
+				{Field: "meta.user_id", Operator: "==", Value: "alpha"},
+			},
+		},
+		{
+			Field:    "meta.user_id",
+			Operator: "==",
+			Value:    "alpha",
+			Conditions: []Filter{
+				{Field: "meta.fpath", Operator: "==", Value: "a"},
+			},
+		},
+	}
+	for _, invalid := range malformed {
+		if _, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{
+			QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn, Filter: invalid,
+		}); ErrorCodeOf(err) != CodeInvalidRequest {
+			t.Fatalf("malformed native ANN filter=%+v err=%v code=%s", invalid, err, ErrorCodeOf(err))
+		}
 	}
 }

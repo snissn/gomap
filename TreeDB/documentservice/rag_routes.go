@@ -199,6 +199,11 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 }
 
 func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	if req.Filter != nil {
+		if err := req.Filter.Validate(); err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+	}
 	scalarFilter, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields))
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
