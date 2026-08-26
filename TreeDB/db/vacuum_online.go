@@ -165,6 +165,14 @@ func (db *DB) vacuumOnlineStatsSnapshot() VacuumOnlineStats {
 	return *stats
 }
 
+func vacuumDurableResourceSummary(resources *rootpublication.StableResourceSet) (descriptors, bytes uint64) {
+	for _, descriptor := range resources.Descriptors() {
+		descriptors++
+		bytes += descriptor.Frontier().Bytes
+	}
+	return descriptors, bytes
+}
+
 // VacuumOnlineStats returns an owned snapshot of the most recently completed
 // online-vacuum attempt. It is safe to call while a vacuum is running.
 func (db *DB) VacuumOnlineStats() VacuumOnlineStats { return db.vacuumOnlineStatsSnapshot() }
@@ -601,7 +609,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 		runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
 		runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
-		runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueExternalSegments
+		runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 		runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
 		rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
 		rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
@@ -981,7 +989,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 					runStats.OlderRootDurableResourceBytes += resourceWork.Bytes
 					runStats.OlderRootExactCandidateScans += resourceWork.ExactCandidateScans
 					runStats.OlderRootReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
-					runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueExternalSegments
+					runStats.OlderRootUniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 					runStats.OlderRootRebuiltPages += uint64(len(recordingAlloc.pages))
 					rebuilt.meta.LastCommitHeight = olderRecord.LastCommitHeight
 					rebuilt.pages = append([]uint64(nil), recordingAlloc.pages...)
@@ -1158,11 +1166,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			return err
 		}
 		runStats.DurableResourceCaptures++
-		runStats.DurableResourceDescriptors += resourceWork.Descriptors
-		runStats.DurableResourceBytes += resourceWork.Bytes
 		runStats.ExactCandidateScan = resourceWork.ExactCandidateScan
 		runStats.ReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
-		runStats.UniqueExternalSegments += resourceWork.UniqueExternalSegments
+		runStats.UniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
 		runStats.ReplacementPagerPages = nextMeta.TotalPages
 		// The gate keeps all ordinary writers outside the old-generation
 		// mutation critical section while dependency, replacement-index, and
@@ -1170,6 +1176,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		recordWriterHold()
 		cutoverLocked = false
 		db.writeMu.Unlock()
+		descriptors, bytes := vacuumDurableResourceSummary(durableResources)
+		runStats.DurableResourceDescriptors += descriptors
+		runStats.DurableResourceBytes += bytes
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
@@ -1421,12 +1430,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 }
 
 type rebuiltRecoverableRootWorkV1 struct {
-	CaptureDuration              time.Duration
-	Descriptors                  uint64
-	Bytes                        uint64
-	ExactCandidateScans          uint64
-	ReusedNonValueLogDescriptors uint64
-	UniqueExternalSegments       uint64
+	CaptureDuration               time.Duration
+	Descriptors                   uint64
+	Bytes                         uint64
+	ExactCandidateScans           uint64
+	ReusedNonValueLogDescriptors  uint64
+	UniqueScannedExternalSegments uint64
 }
 
 func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator) (rebuiltDurableRootV1, rebuiltRecoverableRootWorkV1, error) {
@@ -1508,13 +1517,12 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 	if err != nil {
 		return rebuiltDurableRootV1{}, work, err
 	}
-	work.Descriptors = resourceWork.Descriptors
-	work.Bytes = resourceWork.Bytes
+	work.Descriptors, work.Bytes = vacuumDurableResourceSummary(resources)
 	if resourceWork.ExactCandidateScan {
 		work.ExactCandidateScans = 1
 	}
 	work.ReusedNonValueLogDescriptors = resourceWork.ReusedNonValueLogDescriptors
-	work.UniqueExternalSegments = resourceWork.UniqueExternalSegments
+	work.UniqueScannedExternalSegments = resourceWork.UniqueScannedExternalSegments
 	return rebuiltDurableRootV1{meta: meta, resources: resources}, work, nil
 }
 

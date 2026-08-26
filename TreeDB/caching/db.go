@@ -24402,7 +24402,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				if err := db.cleanupCommandWALCheckpoint(true); err != nil {
+				if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
 					return err
 				}
 			}
@@ -24634,11 +24634,7 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		if err := func() error {
-			commandWALCleanupStart := time.Now()
-			defer recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
-			return db.cleanupCommandWALCheckpoint(true)
-		}(); err != nil {
+		if err := db.cleanupCommandWALCheckpointTimed(true); err != nil {
 			return err
 		}
 	}
@@ -24705,6 +24701,12 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 	recordCheckpointStageSince(&db.checkpointStagePostMaintenance, postMaintenanceStart)
 
 	return nil
+}
+
+func (db *DB) cleanupCommandWALCheckpointTimed(sync bool) error {
+	commandWALCleanupStart := time.Now()
+	defer recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
+	return db.cleanupCommandWALCheckpoint(sync)
 }
 
 func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []backenddb.CommandWALLSNRange) (bool, error) {

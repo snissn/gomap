@@ -986,11 +986,11 @@ func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta pag
 // leaves: the shared leaf-reference scanner exposes segment IDs but not a
 // stable outer-leaf record identity.
 type rebuiltDurableResourceWorkV1 struct {
-	ExactCandidateScan           bool
-	ReusedNonValueLogDescriptors uint64
-	UniqueExternalSegments       uint64
-	Descriptors                  uint64
-	Bytes                        uint64
+	ExactCandidateScan            bool
+	ReusedNonValueLogDescriptors  uint64
+	UniqueScannedExternalSegments uint64
+	Descriptors                   uint64
+	Bytes                         uint64
 }
 
 func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
@@ -1025,7 +1025,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 	for fileID := range exactPackedFileIDs {
 		delete(references, fileID)
 	}
-	work.UniqueExternalSegments = uint64(len(references))
+	work.UniqueScannedExternalSegments = uint64(len(references))
 
 	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
 		source,
@@ -1067,10 +1067,6 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 	if resources.Len() == 0 {
 		resources.Release()
 		return nil, work, nil
-	}
-	for _, descriptor := range resources.Descriptors() {
-		work.Descriptors++
-		work.Bytes += descriptor.Frontier().Bytes
 	}
 	return resources, work, nil
 }
