@@ -106,6 +106,49 @@ func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *te
 	}
 }
 
+func TestNativeScalarExplicitPostfilterPreservesCandidateLimit(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch([][]byte{[]byte("alpha-far"), []byte("beta-near")}, [][]byte{
+		[]byte(`{"embedding":[0,1],"tenant":"alpha"}`),
+		[]byte(`{"embedding":[1,0],"tenant":"beta"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	filter := &HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}
+	vector := &HybridVectorQuery{
+		IndexName: def.Name, Query: []float32{1, 0}, CandidateLimit: 1, EfSearch: 16, QueryMode: VectorIndexQueryModeExact,
+	}
+	postfiltered, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 1, Vector: vector, ScalarFilter: filter,
+		ScalarFilterStrategy: HybridScalarFilterStrategyPostfilter,
+		ResultMode:           HybridResultModeScoreOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(postfiltered.Results) != 0 ||
+		postfiltered.Stats.ScalarPostfilterChecks != 1 ||
+		postfiltered.Stats.ScalarFilterMatched != 0 ||
+		postfiltered.Stats.ScalarFilterRejected != 1 {
+		t.Fatalf("postfilter response=%+v", postfiltered)
+	}
+	prefiltered, err := col.SearchHybrid(HybridSearchOptions{
+		TopK: 1, Vector: vector, ScalarFilter: filter, ResultMode: HybridResultModeScoreOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prefiltered.Results) != 1 ||
+		string(prefiltered.Results[0].ID) != "alpha-far" ||
+		prefiltered.Stats.ScalarFilterPlan != NativeScalarFilterPlanCompleteExact {
+		t.Fatalf("native prefilter response=%+v", prefiltered)
+	}
+}
+
 func TestNativeScalarPlannerOverLimitMixedFiniteAndTenantIsolation(t *testing.T) {
 	indexes := []IndexDefinition{
 		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},

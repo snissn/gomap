@@ -38,6 +38,7 @@ type hybridSearchExecutionPlan struct {
 	vectorCandidateAllowSetBudget int
 	scalarFilter                  *HybridScalarFilter
 	scalarFilterStrategy          HybridScalarFilterStrategy
+	nativeVectorRuntime           bool
 	nativeVectorScalar            bool
 	fusion                        HybridFusionOptions
 	resultMode                    HybridResultMode
@@ -90,12 +91,15 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var allowSet hybridScalarAllowSet
 	var scalarStats HybridSearchStats
-	nativeVectorScalarShape := plan.scalarFilter != nil && plan.text == nil && plan.vector != nil
-	if nativeVectorScalarShape {
-		plan.nativeVectorScalar, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
+	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
+	if nativeVectorOnlyShape {
+		plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
 		if err != nil {
 			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, err)
 		}
+		plan.nativeVectorScalar = plan.nativeVectorRuntime &&
+			plan.scalarFilter != nil &&
+			plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter
 	}
 	if !plan.nativeVectorScalar {
 		allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
@@ -722,8 +726,12 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
 	searchVector := func() (HybridCandidateResponse, error) {
-		if plan.nativeVectorScalar {
-			return c.searchHybridVectorCandidatesNativeScalar(*plan.vector, plan.scalarFilter)
+		if plan.nativeVectorRuntime {
+			var filter *HybridScalarFilter
+			if plan.nativeVectorScalar {
+				filter = plan.scalarFilter
+			}
+			return c.searchHybridVectorCandidatesNativeScalar(*plan.vector, filter)
 		}
 		return c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
 	}
