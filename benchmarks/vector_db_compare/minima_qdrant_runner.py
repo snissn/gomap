@@ -39,10 +39,11 @@ MANIFEST_FLOAT_TOLERANCE = 1e-15
 FROZEN_HASHES = {
     "corpus_sha256": "856df3d20b5177e0b7354aeac41b9d052e5f1075e00cec686ff823b110916ccc",
     "query_sha256": "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a",
-    "operation_sha256": "dd90d0dffe3478dfcee1dfc5371e665cb1cf22394ec4d513fc151e089d0565ff",
+    "operation_sha256": "f2d85501ae55255784749f042892836078335a99e7603ac254bd1a88eafa9179",
     "expected_state_sha256": "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f",
 }
-TIMED_EXECUTION_SHA256 = "1ad0f1c42629b4145e4b264db179e7e5515b47ea08ea474ad571f0e45f433ea5"
+TIMED_EXECUTION_SHA256 = "2ccd4e9badc7644e15cd4a5e4eeb68f59005c2e040506d5f9e4d5935e23f6fdd"
+REINDEX_EXECUTION_SHA256 = "9ec2d96b41783bf9ac323f522244940b023c4d27efd759714c149e0ae4568ee0"
 OPERATION_NAMES = [
     "ensure_compatible_collection", "initial_batch_insert", "warmup_search",
     "timed_search_with_batch_insert", "reindex_delete_by_user_and_fpath_while_reading",
@@ -65,7 +66,7 @@ QUERY_KEYS = [
     "scenario", "vector", "initial_oracle_ids", "initial_oracle_scores", "final_oracle_ids", "final_oracle_scores",
 ]
 DOCUMENT_KEYS = ["id", "content", "vector", "user_id", "fpath"]
-OPERATION_KEYS = ["ordinal", "name", "target", "timed", "effect", "insert_ranges", "filter", "ids", "documents", "schedule", "timed_reader_plan"]
+OPERATION_KEYS = ["ordinal", "name", "target", "timed", "effect", "insert_ranges", "filter", "ids", "documents", "schedule", "timed_reader_plan", "concurrent_mutation_plan"]
 
 
 def require_object(value: Any, keys: list[str], label: str, optional: set[str] = frozenset()) -> dict[str, Any]:
@@ -120,6 +121,16 @@ def canonical_operation(value: dict[str, Any]) -> dict[str, Any]:
             for row in plan["rounds"]
         ]
         out["timed_reader_plan"] = plan
+    if "concurrent_mutation_plan" in out:
+        plan = out["concurrent_mutation_plan"]
+        out["concurrent_mutation_plan"] = {
+            **ordered(plan, ["mutation", "reader_concurrency"]),
+            "reader_assignments": [
+                ordered(row, ["reader", "query_ordinal", "scenario"])
+                for row in plan["reader_assignments"]
+            ],
+            **ordered(plan, ["start_barrier", "end_barrier"]),
+        }
     return out
 
 
@@ -181,9 +192,11 @@ def generated_document(spec: dict[str, Any], ordinal: int) -> dict[str, Any]:
     if spec["filter"] == "user_id" and spec["eligible_start"] <= ordinal < spec["eligible_start"] + spec["eligible_rows"]:
         user_id = spec["user_id"]
     if spec["filter"] == "user_id+fpath":
-        if spec["broad_start"] <= ordinal < spec["broad_start"] + spec["broad_rows"]:
+        broad_start, broad_rows = spec.get("broad_start", 0), spec.get("broad_rows", 0)
+        narrow_start, narrow_rows = spec.get("narrow_start", 0), spec.get("narrow_rows", 0)
+        if broad_start <= ordinal < broad_start + broad_rows:
             user_id = spec["user_id"]
-        if spec["narrow_start"] <= ordinal < spec["narrow_start"] + spec["narrow_rows"]:
+        if narrow_start <= ordinal < narrow_start + narrow_rows:
             fpath = spec["fpath"]
     score, vector = 0.9 - ordinal * 0.000003, [0.0] * 8
     vector[0], vector[1] = score, math.sqrt(1 - score * score)
@@ -304,7 +317,8 @@ def expected_state_hash(manifest: dict[str, Any]) -> str:
 
 def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
     lines = [
-        f"query|ordinal={row['ordinal']}|round={row['round']}|reader={row['reader']}|scenario={row['scenario']}\n"
+        f"query|ordinal={row['ordinal']}|round={row['round']}|reader={row['reader']}|scenario={row['scenario']}|"
+        f"writer_in_flight={str(row['writer_in_flight']).lower()}\n"
         for row in trace["queries"]
     ]
     for row in trace["rounds"]:
@@ -327,8 +341,41 @@ def timed_execution_digest(plan: dict[str, Any]) -> str:
                 "ordinal": ordinal, "round": round_value["ordinal"],
                 "reader": ordinal % plan["reader_concurrency"],
                 "scenario": plan["scenario_order"][ordinal % len(plan["scenario_order"])],
+                "writer_in_flight": True,
             })
     return timed_trace_digest({"queries": queries, "rounds": plan["rounds"]})
+
+
+def reindex_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
+    lines = []
+    for operation in trace["operations"]:
+        lines.append(
+            f"reindex|operation={operation['operation_ordinal']}|mutation={operation['mutation']}|"
+            f"start={operation['start_barrier']}|end={operation['end_barrier']}\n"
+        )
+        for query in operation["reader_queries"]:
+            lines.append(
+                f"reindex_query|operation={operation['operation_ordinal']}|reader={query['reader']}|"
+                f"query_ordinal={query['query_ordinal']}|scenario={query['scenario']}|"
+                f"mutation_in_flight={str(query['mutation_in_flight']).lower()}\n"
+            )
+    return hashlib.sha256("".join(lines).encode()).hexdigest()
+
+def expected_reindex_execution(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    operations = []
+    for operation in manifest["operations"]:
+        plan = operation.get("concurrent_mutation_plan")
+        if plan is None:
+            continue
+        operations.append({
+            "operation_ordinal": operation["ordinal"], "mutation": plan["mutation"],
+            "start_barrier": plan["start_barrier"], "end_barrier": plan["end_barrier"],
+            "reader_queries": [
+                {**assignment, "mutation_in_flight": True}
+                for assignment in plan["reader_assignments"]
+            ],
+        })
+    return {"operations": operations}
 
 
 
@@ -372,6 +419,42 @@ def validate_timed_plan(manifest: dict[str, Any]) -> dict[str, Any]:
         ):
             raise ValueError(f"timed_reader_plan round {ordinal} is not frozen")
     return plan
+
+
+def validate_concurrent_mutation_plans(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    expected = {4: "delete_by_user_id_and_fpath", 5: "replacement_insert"}
+    plans = []
+    for ordinal, mutation in expected.items():
+        operation = manifest["operations"][ordinal]
+        if operation.get("schedule"):
+            raise ValueError(f"concurrent mutation operation {ordinal} must not use a serial schedule")
+        plan = require_object(operation.get("concurrent_mutation_plan"), [
+            "mutation", "reader_concurrency", "reader_assignments", "start_barrier", "end_barrier",
+        ], f"operation {ordinal} concurrent_mutation_plan")
+        assignments = plan["reader_assignments"]
+        if (
+            plan["mutation"] != mutation
+            or plan["reader_concurrency"] != manifest["config"]["reader_concurrency"]
+            or not isinstance(assignments, list)
+            or len(assignments) != plan["reader_concurrency"]
+            or plan["start_barrier"] != "reindex_start_all_readers_and_writer"
+            or plan["end_barrier"] != "reindex_end_all_readers_and_mutation_complete"
+        ):
+            raise ValueError(f"concurrent mutation operation {ordinal} does not match the frozen plan")
+        for reader, assignment in enumerate(assignments):
+            require_object(assignment, ["reader", "query_ordinal", "scenario"],
+                           f"operation {ordinal} reader assignment {reader}")
+            if (
+                assignment["reader"] != reader
+                or assignment["query_ordinal"] != reader
+                or assignment["scenario"] != operation["target"]
+            ):
+                raise ValueError(f"concurrent mutation operation {ordinal} reader {reader} does not match the frozen plan")
+        plans.append(plan)
+    for operation in manifest["operations"]:
+        if operation["ordinal"] not in expected and operation.get("concurrent_mutation_plan") is not None:
+            raise ValueError(f"unexpected concurrent mutation plan at operation {operation['ordinal']}")
+    return plans
 
 
 def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) -> dict[str, Any]:
@@ -436,7 +519,8 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
                 raise ValueError(f"exact {label} mismatch for {spec['name']}")
     if len(manifest["operations"]) != len(OPERATION_NAMES):
         raise ValueError("operation count mismatch")
-    operation_optional = {"timed", "insert_ranges", "filter", "ids", "documents", "schedule", "timed_reader_plan"}
+    operation_optional = {"timed", "insert_ranges", "filter", "ids", "documents", "schedule",
+                          "timed_reader_plan", "concurrent_mutation_plan"}
     for ordinal, operation in enumerate(manifest["operations"]):
         require_object(operation, OPERATION_KEYS, f"operations[{ordinal}]", operation_optional)
         if operation.get("ordinal") != ordinal or operation.get("name") != OPERATION_NAMES[ordinal]:
@@ -446,8 +530,11 @@ def validate_manifest(manifest: dict[str, Any], *, require_frozen: bool = True) 
         for document in operation.get("documents", []):
             require_object(document, DOCUMENT_KEYS, f"operation {ordinal} document")
     timed_plan = validate_timed_plan(manifest)
+    validate_concurrent_mutation_plans(manifest)
     if require_frozen and timed_execution_digest(timed_plan) != TIMED_EXECUTION_SHA256:
         raise ValueError("frozen timed execution digest mismatch")
+    if require_frozen and reindex_trace_digest(expected_reindex_execution(manifest)) != REINDEX_EXECUTION_SHA256:
+        raise ValueError("frozen reindex execution digest mismatch")
     for key, actual in manifest_hashes(manifest).items():
         if manifest[key] != actual:
             raise ValueError(f"manifest {key} mismatch: got {manifest[key]} recomputed {actual}")
@@ -558,6 +645,22 @@ def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[st
     }
 
 
+def latency_distribution(values: list[int]) -> dict[str, int]:
+    values = sorted(values)
+    if not values:
+        return {"count": 0, "total_nanos": 0, "minimum_nanos": 0, "p50_nanos": 0,
+                "p95_nanos": 0, "p99_nanos": 0, "maximum_nanos": 0}
+
+    def percentile(fraction: float) -> int:
+        return values[math.ceil(fraction * len(values)) - 1]
+
+    return {
+        "count": len(values), "total_nanos": sum(values), "minimum_nanos": values[0],
+        "p50_nanos": percentile(0.50), "p95_nanos": percentile(0.95),
+        "p99_nanos": percentile(0.99), "maximum_nanos": values[-1],
+    }
+
+
 class Evidence:
     def __init__(self, manifest: dict[str, Any]) -> None:
         names = [row["name"] for row in manifest["corpora"]]
@@ -650,8 +753,9 @@ class QdrantMinimaRunner:
             "manifest_ordered": False, "batch_insert_during_search": False,
             "timed_queries_executed": 0, "timed_rounds_completed": 0, "timed_execution_sha256": "",
             "timed_execution_trace": {"queries": [], "rounds": []},
-            "reindex_delete_replace": False, "explicit_update_visible": False,
-            "explicit_delete_visible": False, "empty_cases_checked": False,
+            "reindex_delete_replace": False, "reindex_operations_executed": 0,
+            "reindex_execution_sha256": "", "reindex_execution_trace": {"operations": []},
+            "explicit_update_visible": False, "explicit_delete_visible": False, "empty_cases_checked": False,
         }
         self.reopen_attempted = self.reopen_parity = False
         self.state_scroll: dict[str, Any] = {}
@@ -821,9 +925,11 @@ class QdrantMinimaRunner:
                 start_barrier = threading.Barrier(readers + 1)
                 end_barrier = threading.Barrier(readers + 1)
                 insertion = round_value["insert_range"]
+                writer_in_flight = threading.Event()
                 sample_start = len(self.evidence.samples)
 
                 def write_round() -> None:
+                    writer_in_flight.set()
                     start_barrier.wait()
                     try:
                         spec = self.specs[insertion["scenario"]]
@@ -840,7 +946,11 @@ class QdrantMinimaRunner:
                     except BaseException:
                         end_barrier.abort()
                         raise
-                    end_barrier.wait()
+                    finally:
+                        try:
+                            end_barrier.wait()
+                        finally:
+                            writer_in_flight.clear()
 
                 def read_round(worker: int) -> None:
                     start_barrier.wait()
@@ -849,10 +959,12 @@ class QdrantMinimaRunner:
                         end = round_value["query_start"] + round_value["query_count"]
                         for query_ordinal in range(begin, end, readers):
                             scenario = plan["scenario_order"][query_ordinal % len(plan["scenario_order"])]
+                            active_before = writer_in_flight.is_set()
                             self.search(operation["name"], scenario)
                             query_observations[query_ordinal] = {
                                 "ordinal": query_ordinal, "round": round_value["ordinal"],
                                 "reader": worker, "scenario": scenario,
+                                "writer_in_flight": active_before and writer_in_flight.is_set(),
                             }
                     except BaseException:
                         end_barrier.abort()
@@ -889,7 +1001,10 @@ class QdrantMinimaRunner:
         trace_hash = timed_trace_digest(observed_trace)
         queries_executed = len(observed_queries)
         rounds_completed = len(round_observations)
-        all_overlap = all(row["writer_search_overlap_observed"] for row in round_evidence)
+        all_overlap = (
+            all(row["writer_search_overlap_observed"] for row in round_evidence)
+            and all(row["writer_in_flight"] for row in observed_queries)
+        )
         self.overlap_evidence = {
             "configured_searches": plan["query_count"], "executed_searches": queries_executed,
             "configured_reader_concurrency": readers, "configured_writer_concurrency": plan["writer_concurrency"],
@@ -912,36 +1027,80 @@ class QdrantMinimaRunner:
         if not self.operations["batch_insert_during_search"]:
             raise RuntimeError(f"timed writer/search overlap contract failed: {self.overlap_evidence}")
 
-    def run_schedule(self, operation: dict[str, Any]) -> None:
-        writer_ran = False
-        for ordinal, step in enumerate(operation["schedule"]):
-            if step["ordinal"] != ordinal:
-                raise RuntimeError(f"operation {operation['ordinal']} schedule is out of order")
-            if step["actor"] in ("reader", "reader_before", "reader_after"):
-                self.search(operation["name"], step["scenario"])
-            elif step["actor"] == "writer_batch":
-                spec = self.specs[step["scenario"]]
-                documents = [generated_document(spec, value) for value in range(step["insert_start"], step["insert_start"] + step["insert_rows"])]
-                self.upsert(operation["name"], spec["name"], documents)
-                missing = len(documents) - len(self.retrieve(operation["name"], spec["name"], [row["id"] for row in documents]))
-                self.evidence.stale_insert[spec["name"]] += missing
-                if missing:
-                    raise RuntimeError(f"batch insert left {missing} IDs invisible")
-                writer_ran = True
-            elif step["actor"] == "writer_mutation":
+    def run_concurrent_mutation(self, operation: dict[str, Any]) -> None:
+        plan = operation["concurrent_mutation_plan"]
+        readers = plan["reader_concurrency"]
+        start_barrier = threading.Barrier(readers + 1)
+        end_barrier = threading.Barrier(readers + 1)
+        mutation_in_flight = threading.Event()
+        observations: list[dict[str, Any] | None] = [None] * readers
+
+        def mutate() -> None:
+            mutation_in_flight.set()
+            start_barrier.wait()
+            try:
                 if operation["effect"] == "delete":
                     self.delete_filter(operation)
                 elif operation["effect"] == "insert":
                     self.upsert(operation["name"], operation["target"], operation["documents"])
-                    visible = len(self.retrieve(operation["name"], operation["target"], [row["id"] for row in operation["documents"]]))
+                    visible = len(self.retrieve(operation["name"], operation["target"],
+                                                [row["id"] for row in operation["documents"]]))
                     if visible != len(operation["documents"]):
                         raise RuntimeError("replacement insert did not become visible")
                 else:
-                    raise RuntimeError(f"unsupported scheduled mutation {operation['effect']}")
-                writer_ran = True
-            else:
-                raise RuntimeError(f"unsupported schedule actor {step['actor']!r}")
-        # Timed insertion/search is executed by run_timed_overlap, not this serial mutation schedule.
+                    raise RuntimeError(f"unsupported concurrent mutation {operation['effect']}")
+            except BaseException:
+                end_barrier.abort()
+                raise
+            finally:
+                try:
+                    end_barrier.wait()
+                finally:
+                    mutation_in_flight.clear()
+
+        def read_during_mutation(assignment: dict[str, Any]) -> None:
+            start_barrier.wait()
+            try:
+                active_before = mutation_in_flight.is_set()
+                self.search(operation["name"], assignment["scenario"])
+                observations[assignment["reader"]] = {
+                    **assignment,
+                    "mutation_in_flight": active_before and mutation_in_flight.is_set(),
+                }
+            except BaseException:
+                end_barrier.abort()
+                raise
+            end_barrier.wait()
+
+        with ThreadPoolExecutor(max_workers=readers + 1, thread_name_prefix="minima-reindex") as pool:
+            writer = pool.submit(mutate)
+            reader_futures = [
+                pool.submit(read_during_mutation, assignment)
+                for assignment in plan["reader_assignments"]
+            ]
+            writer.result()
+            for future in reader_futures:
+                future.result()
+
+        reader_queries = [row for row in observations if row is not None]
+        observed = {
+            "operation_ordinal": operation["ordinal"], "mutation": plan["mutation"],
+            "start_barrier": plan["start_barrier"], "end_barrier": plan["end_barrier"],
+            "reader_queries": reader_queries,
+        }
+        if len(reader_queries) != readers or not all(row["mutation_in_flight"] for row in reader_queries):
+            raise RuntimeError(f"concurrent mutation overlap contract failed for operation {operation['ordinal']}")
+        self.operations["reindex_execution_trace"]["operations"].append(observed)
+        trace = self.operations["reindex_execution_trace"]
+        digest = reindex_trace_digest(trace)
+        self.operations["reindex_operations_executed"] = len(trace["operations"])
+        self.operations["reindex_execution_sha256"] = digest
+        self.operations["reindex_delete_replace"] = (
+            len(trace["operations"]) == 2
+            and all(row["mutation_in_flight"] for item in trace["operations"] for row in item["reader_queries"])
+            and digest == reindex_trace_digest(expected_reindex_execution(self.manifest))
+        )
+
 
     def expected_scroll(self) -> tuple[str, int]:
         accumulator = StateAccumulator()
@@ -985,9 +1144,7 @@ class QdrantMinimaRunner:
             elif name == "timed_search_with_batch_insert":
                 self.run_timed_overlap(operation)
             elif name in ("reindex_delete_by_user_and_fpath_while_reading", "reindex_replacement_insert_while_reading"):
-                self.run_schedule(operation)
-                if name == "reindex_replacement_insert_while_reading":
-                    self.operations["reindex_delete_replace"] = True
+                self.run_concurrent_mutation(operation)
             elif name in ("reindex_visibility_probe", "update_visibility_probe", "delete_visibility_probe", "empty_user_and_file_probes"):
                 for step in operation["schedule"]:
                     ids, _ = self.search(name, step["scenario"])
@@ -1046,12 +1203,14 @@ class QdrantMinimaRunner:
 
     def artifact(self) -> dict[str, Any]:
         timing = {name: dict.fromkeys(("writer", "search", "fetch", "decode"), 0) for name in self.specs}
+        latency_values: dict[str, list[int]] = {name: [] for name in ("writer", "search", "fetch", "decode")}
         for sample in self.evidence.samples:
-            if sample["scenario"] not in timing:
-                continue
             bucket = "writer" if sample["category"].startswith("writer") else sample["category"]
-            if bucket in timing[sample["scenario"]]:
+            if bucket in latency_values:
+                latency_values[bucket].append(sample["duration_nanos"])
+            if sample["scenario"] in timing and bucket in timing[sample["scenario"]]:
                 timing[sample["scenario"]][bucket] += sample["duration_nanos"]
+        latency_distributions = {name: latency_distribution(values) for name, values in latency_values.items()}
         resource = server_resource_usage(self.server_pid, self.storage_path)
         scenarios = []
         for spec in self.manifest["corpora"]:
@@ -1105,22 +1264,11 @@ class QdrantMinimaRunner:
                 "operations": self.operations, "reopen": {"attempted": self.reopen_attempted, "committed_parity": self.reopen_parity,
                     "result_manifest_hash": result_hash}}],
             "scenarios": scenarios, "failures": self.evidence.failures, "readiness_recommendation": "not_evaluated",
-            "backend_raw_evidence": {"phase_latency_samples": self.evidence.samples, "events": self.evidence.events,
+            "backend_raw_evidence": {
+                "phase_latency_distributions": latency_distributions, "events": self.evidence.events,
                 "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
-                "lifecycle_parity": {
-                    name: {
-                        "preclose_ids": self.evidence.preclose.get(name, ([], []))[0],
-                        "preclose_scores": self.evidence.preclose.get(name, ([], []))[1],
-                        "post_reopen_ids": self.evidence.reopen.get(name, ([], []))[0],
-                        "post_reopen_scores": self.evidence.reopen.get(name, ([], []))[1],
-                        "parity": self.results_match(
-                            self.evidence.preclose.get(name, ([], [])),
-                            self.evidence.reopen.get(name, ([], [])),
-                        ),
-                    }
-                    for name in self.specs
-                },
-                "resource_availability": resource["availability"]}}
+                "resource_availability": resource["availability"],
+            }}
 
     def close(self) -> None:
         if self.client is not None:

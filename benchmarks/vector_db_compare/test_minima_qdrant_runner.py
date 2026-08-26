@@ -109,15 +109,16 @@ class FakeClient:
             return [self.shared.points[value] for value in ids if value in self.shared.points]
 
     def delete(self, *, points_selector: Model, **_: object) -> None:
-        if hasattr(points_selector, "must"):
-            doomed = [key for key, point in self.shared.points.items() if self._matches(point, points_selector)]
-        else:
-            doomed = list(points_selector.points)
-        for key in doomed:
-            self.shared.points.pop(key, None)
-
+        with self.shared.lock:
+            if hasattr(points_selector, "must"):
+                doomed = [key for key, point in self.shared.points.items() if self._matches(point, points_selector)]
+            else:
+                doomed = list(points_selector.points)
+            for key in doomed:
+                self.shared.points.pop(key, None)
     def count(self, *, count_filter: Model, **_: object) -> Model:
-        return Model(count=sum(self._matches(point, count_filter) for point in self.shared.points.values()))
+        with self.shared.lock:
+            return Model(count=sum(self._matches(point, count_filter) for point in self.shared.points.values()))
 
     def scroll(self, *, limit: int, offset: str | None, **_: object) -> tuple[list[Model], str | None]:
         keys = sorted(self.shared.points)
@@ -154,8 +155,11 @@ def tiny_manifest() -> dict[str, object]:
             "selectivity": eligible / rows, "generator": runner.GENERATOR,
         }
         if filter_name == "user_id+fpath":
-            value.update({"broad_start": broad_start, "broad_rows": broad_rows, "narrow_start": narrow_start,
-                          "narrow_rows": narrow_rows, "fpath": fpath})
+            value["fpath"] = fpath
+            for key, field_value in (("broad_start", broad_start), ("broad_rows", broad_rows),
+                                     ("narrow_start", narrow_start), ("narrow_rows", narrow_rows)):
+                if field_value:
+                    value[key] = field_value
         corpora.append(value)
     config = {
         "collection": "minima", "vector_field": "embedding", "content_field": "content", "dimension": 8,
@@ -193,11 +197,13 @@ def tiny_manifest() -> dict[str, object]:
             for ordinal, insertion in enumerate(concurrent_ranges)
         ],
     }
-    mutation_schedule = lambda: [
-        {"ordinal": 0, "actor": "reader_before", "scenario": "mixed_broad_narrow"},
-        {"ordinal": 1, "actor": "writer_mutation", "scenario": "mixed_broad_narrow"},
-        {"ordinal": 2, "actor": "reader_after", "scenario": "mixed_broad_narrow", "query_ordinal": 1},
-    ]
+    def mutation_plan(mutation: str) -> dict[str, object]:
+        return {
+            "mutation": mutation, "reader_concurrency": config["reader_concurrency"],
+            "reader_assignments": [{"reader": 0, "query_ordinal": 0, "scenario": "mixed_broad_narrow"}],
+            "start_barrier": "reindex_start_all_readers_and_writer",
+            "end_barrier": "reindex_end_all_readers_and_mutation_complete",
+        }
     operations = [
         {"ordinal": 0, "name": runner.OPERATION_NAMES[0], "target": "all", "effect": "none"},
         {"ordinal": 1, "name": runner.OPERATION_NAMES[1], "target": "all", "effect": "insert", "insert_ranges": initial_ranges},
@@ -205,8 +211,10 @@ def tiny_manifest() -> dict[str, object]:
         {"ordinal": 3, "name": runner.OPERATION_NAMES[3], "target": "all", "timed": True, "effect": "insert",
          "insert_ranges": concurrent_ranges, "timed_reader_plan": timed_plan},
         {"ordinal": 4, "name": runner.OPERATION_NAMES[4], "target": "mixed_broad_narrow", "effect": "delete",
-         "filter": {"user_id": "mixed-user", "fpath": "/mixed/target.txt"}, "ids": mixed_ids, "schedule": mutation_schedule()},
-        {"ordinal": 5, "name": runner.OPERATION_NAMES[5], "target": "mixed_broad_narrow", "effect": "insert", "documents": replacements, "schedule": mutation_schedule()},
+         "filter": {"user_id": "mixed-user", "fpath": "/mixed/target.txt"}, "ids": mixed_ids,
+         "concurrent_mutation_plan": mutation_plan("delete_by_user_id_and_fpath")},
+        {"ordinal": 5, "name": runner.OPERATION_NAMES[5], "target": "mixed_broad_narrow", "effect": "insert",
+         "documents": replacements, "concurrent_mutation_plan": mutation_plan("replacement_insert")},
         {"ordinal": 6, "name": runner.OPERATION_NAMES[6], "target": "mixed_broad_narrow", "effect": "none", "schedule": reader_schedule(["mixed_broad_narrow"])},
         {"ordinal": 7, "name": runner.OPERATION_NAMES[7], "target": "small", "effect": "update", "documents": [updated]},
         {"ordinal": 8, "name": runner.OPERATION_NAMES[8], "target": "small", "effect": "none", "schedule": reader_schedule(["small"])},
@@ -256,6 +264,15 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         changed["operations"][7]["documents"][0]["content"] = "doctored"
         with self.assertRaisesRegex(ValueError, "operation_sha256 mismatch"):
             runner.validate_manifest(changed, require_frozen=False)
+
+    def test_go_omitempty_scenario_fields_are_supported(self) -> None:
+        manifest = tiny_manifest()
+        empty_file = next(row for row in manifest["corpora"] if row["name"] == "empty_file")
+        self.assertNotIn("narrow_start", empty_file)
+        self.assertNotIn("narrow_rows", empty_file)
+        document = runner.generated_document(empty_file, 0)
+        self.assertEqual(document["user_id"], "empty-file-user")
+        self.assertNotEqual(document["fpath"], empty_file["fpath"])
 
     def test_go_python_oracle_score_rounding_tolerance(self) -> None:
         manifest = tiny_manifest()
@@ -349,6 +366,18 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(operations["timed_queries_executed"], manifest["config"]["timed_queries"])
         self.assertEqual(operations["timed_rounds_completed"], len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
         self.assertEqual(len(trace["queries"]), manifest["config"]["timed_queries"])
+        self.assertTrue(all(row["writer_in_flight"] for row in trace["queries"]))
+        reindex_trace = operations["reindex_execution_trace"]
+        self.assertEqual(operations["reindex_operations_executed"], 2)
+        self.assertEqual(operations["reindex_execution_sha256"], runner.reindex_trace_digest(reindex_trace))
+        self.assertTrue(all(
+            row["mutation_in_flight"]
+            for operation in reindex_trace["operations"]
+            for row in operation["reader_queries"]
+        ))
+        self.assertTrue(operations["reindex_delete_replace"])
+        self.assertNotIn("phase_latency_samples", artifact["backend_raw_evidence"])
+        self.assertGreater(artifact["backend_raw_evidence"]["phase_latency_distributions"]["search"]["count"], 0)
         self.assertEqual(len(trace["rounds"]), len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
         self.assertEqual(operations["timed_execution_sha256"], runner.timed_trace_digest(trace))
         self.assertTrue(operations["batch_insert_during_search"])

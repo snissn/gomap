@@ -87,6 +87,7 @@ else
 		-p "127.0.0.1:${QDRANT_PORT}:6333" \
 		-v "$QDRANT_STORAGE_PATH:/qdrant/storage" \
 		"$QDRANT_IMAGE" >/dev/null
+	QDRANT_SERVER_PID=$(docker inspect --format '{{.State.Pid}}' "$QDRANT_CONTAINER")
 fi
 
 QDRANT_API_KEY="$QDRANT_API_KEY" "$VENV/bin/python" - "$QDRANT_URL" "$QDRANT_READY_TIMEOUT" <<'PY'
