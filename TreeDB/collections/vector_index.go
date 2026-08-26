@@ -261,8 +261,12 @@ type VectorIndexSearchOptions struct {
 	FetchMultiplier           int
 	Filter                    func(DocumentRecord) (bool, error)
 	IndexRangeFilter          *VectorIndexRangeFilter
-	ExactFilterMaxDocs        int
-	DisableExactFallback      bool
+	// DeclaredScalarFilter is the bounded equality/range AND grammar backed by
+	// declared scalar indexes. It is supported only by native_runtime buffered
+	// search and is intentionally distinct from the legacy callback filters.
+	DeclaredScalarFilter *HybridScalarFilter
+	ExactFilterMaxDocs   int
+	DisableExactFallback bool
 	// IncludeDocuments materializes documents after column_graph top-k selection.
 	IncludeDocuments bool
 	// DocumentFetchOptions controls optional projected final-fetch materialization.
@@ -365,6 +369,8 @@ type VectorIndex struct {
 	trackSearchViewDirty bool
 	frozenPrefixBatches  uint64
 	liveDelta            *VectorIndex
+	scalarDefinitions    []IndexDefinition
+	scalarColumns        map[string]vectorIndexScalarColumn
 	liveDeltaEnabled     atomic.Bool
 	liveDeltaCutovers    uint64
 	// constructionWorkers is a private benchmark seam; zero preserves the
@@ -621,7 +627,14 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 		if !ok {
 			return true, nil
 		}
+		scalarRow, err := index.nativeScalarRow(materializer, record.Document)
+		if err != nil {
+			return false, fmt.Errorf("collections: native scalar fields in document %q: %w", record.ID, err)
+		}
 		if err := index.insertVectorLocked(record.ID, vector); err != nil {
+			return false, err
+		}
+		if err := index.appendNativeScalarRowLocked(scalarRow); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -783,6 +796,10 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	if c != nil {
 		nativeRootName = collectionVectorIndexRootName(c.collectionName(), opts.Name)
 	}
+	var scalarDefinitions []IndexDefinition
+	if c != nil {
+		scalarDefinitions = nativeScalarDefinitions(c.meta)
+	}
 	return &VectorIndex{
 		collection:          c,
 		name:                opts.Name,
@@ -797,7 +814,8 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		efSearch:            efSearch,
 		rebuildDeletedRatio: rebuildRatio,
 		schemaGeneration:    opts.schemaGeneration,
-		currentNode:         make(map[string]int),
+		scalarDefinitions:   scalarDefinitions,
+		scalarColumns:       newNativeScalarColumns(scalarDefinitions),
 		entry:               -1,
 		maxLevel:            -1,
 	}, nil
@@ -1751,6 +1769,7 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 		return idx.insertStoredDocumentUnpublished(materializer, documentIDs[0], documents[0])
 	}
 	vectors := make([][]float32, len(documents))
+	scalarRows := make([]map[string][]byte, len(documents))
 	hasVector := true
 	for i, document := range documents {
 		if len(documentIDs[i]) == 0 {
@@ -1769,10 +1788,15 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 			continue
 		}
 		vectors[i] = vector
+		scalarRow, err := idx.nativeScalarRow(materializer, document)
+		if err != nil {
+			return fmt.Errorf("collections: native scalar fields in document %q: %w", documentIDs[i], err)
+		}
+		scalarRows[i] = scalarRow
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if hasVector {
+	if hasVector && len(idx.scalarDefinitions) == 0 {
 		if idx.liveDeltaActiveLocked() {
 			return idx.insertLiveVectorBatchLocked(documentIDs, vectors)
 		}
@@ -1788,13 +1812,7 @@ func (idx *VectorIndex) insertStoredDocumentsUnpublished(materializer *StoredDoc
 			}
 			continue
 		}
-		var err error
-		if liveDelta {
-			err = idx.insertLiveVectorBatchLocked(documentIDs[i:i+1], vectors[i:i+1])
-		} else {
-			err = idx.insertVectorLocked(documentIDs[i], vectors[i])
-		}
-		if err != nil {
+		if err := idx.insertVectorWithNativeScalarLocked(documentIDs[i], vectors[i], scalarRows[i]); err != nil {
 			return err
 		}
 	}
@@ -1840,14 +1858,14 @@ func (idx *VectorIndex) insertStoredDocumentWithPublication(materializer *Stored
 		idx.mu.Unlock()
 		return nil
 	}
+	scalarRow, err := idx.nativeScalarRow(materializer, document)
+	if err != nil {
+		return fmt.Errorf("collections: native scalar fields in document %q: %w", documentID, err)
+	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	beforeMutation := idx.mutationSeq
-	if idx.liveDeltaActiveLocked() {
-		err = idx.insertLiveVectorBatchLocked([][]byte{documentID}, [][]float32{vector})
-	} else {
-		err = idx.insertVectorLocked(documentID, vector)
-	}
+	err = idx.insertVectorWithNativeScalarLocked(documentID, vector, scalarRow)
 	if err != nil {
 		return err
 	}

@@ -747,6 +747,9 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}
+	if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
+		return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
+	}
 	status.RootID = rootID
 	index.recordLoadedSnapshot(rootID, bytesDisk)
 	installed, err := c.installNativeVectorIndexCandidate(index, rootID, nil, 0)

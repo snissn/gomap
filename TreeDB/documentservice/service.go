@@ -507,8 +507,8 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 }
 
 // SearchDenseVector scores QueryEmbedding over the index. Route=ann uses a
-// compatible native_runtime or column_graph vector index (the default when one
-// exists and no filter is supplied); route=exact keeps the bounded filtered
+// compatible native_runtime or column_graph vector index; declared scalar
+// filters are supported by native_runtime. Route=exact keeps the bounded
 // document scan. Route selection is deterministic and echoed in the response;
 // there is no silent downgrade.
 func (s *Service) SearchDenseVector(ctx context.Context, index string, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
@@ -581,23 +581,21 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 
 // resolveDenseSearchRoute applies the deterministic route defaulting rules:
 // explicit route values are validated; an omitted route selects ann when the
-// index declares a compatible no-document vector route and no filter is
-// present, and exact otherwise.
+// index declares a compatible no-document vector route, including declared
+// scalar filters on native_runtime, and exact otherwise.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
 	case "":
-		if req.Filter != nil {
-			return RouteExact, nil
-		}
-		if info.Capabilities.NoDocumentVectorSearch {
+		if info.Capabilities.NoDocumentVectorSearch &&
+			(req.Filter == nil || info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime) {
 			return RouteAnn, nil
 		}
 		return RouteExact, nil
 	case RouteExact:
 		return RouteExact, nil
 	case RouteAnn:
-		if req.Filter != nil {
-			return "", serviceError(CodeInvalidRequest, "dense route \"ann\" cannot apply metadata filters; use route \"exact\" for filtered dense retrieval")
+		if req.Filter != nil && info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime {
+			return "", serviceError(CodeInvalidRequest, "dense route \"ann\" metadata filters require a native_runtime vector index")
 		}
 		return RouteAnn, nil
 	default:

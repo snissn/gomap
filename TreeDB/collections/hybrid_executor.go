@@ -87,14 +87,19 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search current snapshot unavailable", ErrHybridSearchIndexUnavailable))
 	}
 
-	allowSet, scalarStats, err := c.hybridScalarAllowSet(plan)
-	hybridMergeStats(&response.Stats, scalarStats)
-	if err != nil {
-		reason := HybridFailClosedReasonScalarFilterUnbounded
-		if errors.Is(err, ErrHybridSearchStaleIndex) {
-			reason = HybridFailClosedReasonSnapshotMismatch
+	var allowSet hybridScalarAllowSet
+	var scalarStats HybridSearchStats
+	nativeVectorScalar := plan.scalarFilter != nil && plan.text == nil && plan.vector != nil
+	if !nativeVectorScalar {
+		allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
+		hybridMergeStats(&response.Stats, scalarStats)
+		if err != nil {
+			reason := HybridFailClosedReasonScalarFilterUnbounded
+			if errors.Is(err, ErrHybridSearchStaleIndex) {
+				reason = HybridFailClosedReasonSnapshotMismatch
+			}
+			return hybridSearchFailClosed(response, reason, err)
 		}
-		return hybridSearchFailClosed(response, reason, err)
 	}
 	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
@@ -537,7 +542,7 @@ func (c *Collection) hybridScalarAllowSet(plan hybridSearchExecutionPlan) (hybri
 	return allowSet, stats, nil
 }
 
-func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+func (view *hybridScalarLookupView) leafProbe(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
 	if err := ValidateIndexName(filter.IndexName); err != nil {
 		return nil, 0, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
@@ -601,12 +606,20 @@ func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limi
 	if err != nil {
 		return nil, inputIDs, false, fmt.Errorf("%w: hybrid scalar filter index %q lookup failed: %v", ErrHybridSearchIndexUnavailable, filter.IndexName, err)
 	}
-	if truncated {
-		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
-	}
 	set := make(hybridScalarAllowSet, len(ids))
 	for _, id := range ids {
 		set[string(id)] = struct{}{}
+	}
+	return set, inputIDs, truncated, nil
+}
+
+func (view *hybridScalarLookupView) leafAllowSet(filter HybridScalarFilter, limit int) (hybridScalarAllowSet, uint64, bool, error) {
+	set, inputIDs, truncated, err := view.leafProbe(filter, limit)
+	if err != nil {
+		return nil, inputIDs, false, err
+	}
+	if truncated {
+		return nil, inputIDs, true, fmt.Errorf("%w: hybrid scalar filter index %q exceeded bounded lookup limit %d", ErrHybridSearchIndexUnavailable, filter.IndexName, limit)
 	}
 	return set, inputIDs, false, nil
 }
@@ -675,6 +688,12 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var stats HybridSearchStats
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
+	searchVector := func() (HybridCandidateResponse, error) {
+		if plan.scalarFilter != nil && plan.text == nil {
+			return c.searchHybridVectorCandidatesNativeScalar(*plan.vector, plan.scalarFilter)
+		}
+		return c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+	}
 
 	// Explicit source-order strategies retain sequential short-circuit
 	// semantics. Other strategies can overlap independent candidate reads.
@@ -684,11 +703,11 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
 		}
 		if textErr == nil && plan.vector != nil {
-			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+			vectorResponse, vectorErr = searchVector()
 		}
 	case HybridScalarFilterStrategyVectorFirst:
 		if plan.vector != nil {
-			vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+			vectorResponse, vectorErr = searchVector()
 		}
 		if vectorErr == nil && plan.text != nil {
 			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
@@ -699,7 +718,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+				vectorResponse, vectorErr = searchVector()
 			}()
 			textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
 			wg.Wait()
@@ -708,7 +727,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				textResponse, textErr = c.searchHybridTextCandidatesWithScanBudget(*plan.text, allowSet, plan.textCandidateScanBudget)
 			}
 			if plan.vector != nil {
-				vectorResponse, vectorErr = c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
+				vectorResponse, vectorErr = searchVector()
 			}
 		}
 	}
@@ -973,6 +992,12 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.ScalarPostfilterChecks += src.ScalarPostfilterChecks
 	dst.ScalarFilterMatched += src.ScalarFilterMatched
 	dst.ScalarFilterRejected += src.ScalarFilterRejected
+	if src.ScalarFilterPlan != "" && src.ScalarFilterPlan != NativeScalarFilterPlanNone {
+		dst.ScalarFilterPlan = src.ScalarFilterPlan
+	}
+	dst.ScalarFilterProbeTruncated += src.ScalarFilterProbeTruncated
+	dst.ScalarFilterVisited += src.ScalarFilterVisited
+	dst.ScalarFilterUnderfill += src.ScalarFilterUnderfill
 	if src.ScalarFilterSelectivityPPM != 0 {
 		dst.ScalarFilterSelectivityPPM = src.ScalarFilterSelectivityPPM
 	}

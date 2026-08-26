@@ -208,8 +208,8 @@ type FilterDocumentsResponse struct {
 
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route
 // selects ann (compatible native_runtime or column_graph traversal; the default
-// when one exists) or exact (bounded filtered scan). Filter requires the exact
-// route; ann with a filter fails closed.
+// when one exists) or exact (bounded filtered scan). Declared scalar filters use
+// native_runtime ANN; unsupported fields and shapes fail closed.
 type DenseVectorSearchRequest struct {
 	ExpectedGeneration uint64    `json:"expected_generation,omitempty"`
 	QueryEmbedding     []float32 `json:"query_embedding"`
@@ -221,12 +221,17 @@ type DenseVectorSearchRequest struct {
 }
 
 type DenseVectorSearchResponse struct {
-	Index      IndexInfo  `json:"index"`
-	Documents  []Document `json:"documents"`
-	Metric     Metric     `json:"metric"`
-	Route      Route      `json:"route,omitempty"`
-	Exact      bool       `json:"exact"`
-	Candidates int        `json:"candidates"`
+	Index                      IndexInfo                          `json:"index"`
+	Documents                  []Document                         `json:"documents"`
+	Metric                     Metric                             `json:"metric"`
+	Route                      Route                              `json:"route,omitempty"`
+	Exact                      bool                               `json:"exact"`
+	Candidates                 int                                `json:"candidates"`
+	ScalarFilterPlan           collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs       uint64                             `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated uint64                             `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterVisited        uint64                             `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterUnderfill      bool                               `json:"scalar_filter_underfill,omitempty"`
 }
 
 // Route selects the dense search execution path.

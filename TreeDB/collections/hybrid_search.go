@@ -321,6 +321,11 @@ type HybridSearchStats struct {
 	ScalarFilterMatched            uint64                          `json:"scalar_filter_matched,omitempty"`
 	ScalarFilterRejected           uint64                          `json:"scalar_filter_rejected,omitempty"`
 	ScalarFilterSelectivityPPM     uint64                          `json:"scalar_filter_selectivity_ppm,omitempty"`
+	ScalarFilterPlan               NativeScalarFilterPlan          `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeTruncated     uint64                          `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterVisited            uint64                          `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterUnderfill          uint64                          `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring       uint64                          `json:"scalar_filter_exact_scoring,omitempty"`
 	CandidatesFused                uint64                          `json:"candidates_fused,omitempty"`
 	CandidatesAfterFusion          uint64                          `json:"candidates_after_fusion,omitempty"`
 	FusionTextOnly                 uint64                          `json:"fusion_text_only,omitempty"`

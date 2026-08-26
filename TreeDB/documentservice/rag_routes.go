@@ -199,6 +199,10 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 }
 
 func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	scalarFilter, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields))
+	if err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
 	s.benchmarkSearchCacheMu.RLock()
 	if s.closed {
 		s.benchmarkSearchCacheMu.RUnlock()
@@ -215,12 +219,13 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 			return DenseVectorSearchResponse{}, err
 		}
 		search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
-			IndexName: defaultVectorIndexName,
-			Query:     req.QueryEmbedding,
-			QueryMode: collections.VectorIndexQueryModeExact,
-			TopK:      req.TopK,
-			EfSearch:  req.EfSearch,
-			StatsMode: collections.VectorIndexSearchStatsModeProduction,
+			IndexName:            defaultVectorIndexName,
+			Query:                req.QueryEmbedding,
+			QueryMode:            collections.VectorIndexQueryModeExact,
+			TopK:                 req.TopK,
+			EfSearch:             req.EfSearch,
+			StatsMode:            collections.VectorIndexSearchStatsModeProduction,
+			DeclaredScalarFilter: scalarFilter,
 		}, buffer)
 		if err != nil {
 			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
@@ -280,12 +285,17 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 			docs = append(docs, doc)
 		}
 		return DenseVectorSearchResponse{
-			Index:      info,
-			Documents:  docs,
-			Metric:     info.Metric,
-			Route:      RouteAnn,
-			Exact:      false,
-			Candidates: len(search.Results),
+			Index:                      info,
+			Documents:                  docs,
+			Metric:                     info.Metric,
+			Route:                      RouteAnn,
+			Exact:                      false,
+			Candidates:                 len(search.Results),
+			ScalarFilterPlan:           search.Stats.ScalarFilterPlan,
+			ScalarFilterProbeIDs:       search.Stats.ScalarFilterProbeIDs,
+			ScalarFilterProbeTruncated: search.Stats.ScalarFilterProbeTruncated,
+			ScalarFilterVisited:        search.Stats.ScalarFilterVisited,
+			ScalarFilterUnderfill:      search.Stats.ScalarFilterUnderfill > 0,
 		}, nil
 	}
 	return DenseVectorSearchResponse{}, mapVectorIndexSearchError(
