@@ -1875,7 +1875,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 					currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 
 					if err := currentBuilder.AddInternalChildRef(childKey, child.Ref); err != nil {
-						return 0, nil, metrics, err // Should fit in empty node
+						return 0, nil, metrics, fmt.Errorf("zipper: root split retry page=%d key_len=%d ref=%+v: %w", pid, len(childKey), child.Ref, err)
 					}
 					recordZipperInternalChildRef(&metrics, child.Ref)
 				} else if err != nil {
@@ -2000,7 +2000,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 	}
 	data, err := z.pager.Get(ref.Page)
 	if err != nil {
-		return node.Node{}, false, nil, false, zipperNodeLoadPager, err
+		return node.Node{}, false, nil, false, zipperNodeLoadPager, fmt.Errorf("zipper: load page=%d page_count=%d: %w", ref.Page, z.pager.PageCount(), err)
 	}
 	return node.NewNodeView(data), true, nil, false, zipperNodeLoadPager, nil
 }
@@ -2319,7 +2319,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 	}
 	b.SetInternalFenceBoundsBorrowed(key, nil)
 	if err := b.AddInternalChildRef(key, ref); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("zipper: root wrapper page=%d key_len=%d ref=%+v: %w", rootID, len(key), ref, err)
 	}
 	recordZipperInternalChildRef(metrics, ref)
 	b.FinishNoNode()
@@ -2373,7 +2373,11 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 				}
 			}()
 			builder.SetPageID(0)
-			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cacheOwnedOuterLeafPages, cfg)
+			newRef, splits, err := z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cacheOwnedOuterLeafPages, cfg)
+			if err != nil {
+				return page.ChildRef{}, nil, fmt.Errorf("zipper: merge leaf ref=%+v count=%d ops=%d low_len=%d high_len=%d: %w", ref, oldNode.Count(), len(ops), len(low), len(high), err)
+			}
+			return newRef, splits, nil
 		}
 
 		// Pager-backed leaf.
@@ -2406,7 +2410,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		builder.SetInternalFenceBoundsBorrowed(low, high)
 		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, ranges, maintenance, budget, metrics, retired, low, high, scratch, cfg)
 		if err != nil {
-			return page.ChildRef{}, nil, err
+			return page.ChildRef{}, nil, fmt.Errorf("zipper: merge internal ref=%+v new_page=%d count=%d ops=%d low_len=%d high_len=%d: %w", ref, newPageID, oldNode.Count(), len(ops), len(low), len(high), err)
 		}
 		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
@@ -2766,7 +2770,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			entrySize, prefixLen, suffixLen = leafEntrySizeWithRevision(target, key, val, flags, revision)
 			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 			if err != nil {
-				return page.ChildRef{}, nil, err
+				return page.ChildRef{}, nil, fmt.Errorf("zipper: leaf split retry key_len=%d val_len=%d flags=%d entry_size=%d free=%d: %w", len(key), len(val), flags, entrySize, target.FreeSpace(), err)
 			}
 		} else if err != nil {
 			return page.ChildRef{}, nil, err
@@ -4403,7 +4407,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 
 	// Retry insert
 	if err := sb.AddInternalChildRef(key, val); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("zipper: internal split retry page=%d key_len=%d ref=%+v: %w", sid, len(key), val, err)
 	}
 	recordZipperInternalChildRef(metrics, val)
 

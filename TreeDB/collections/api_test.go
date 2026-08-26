@@ -770,6 +770,73 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	}
 }
 
+func TestCollectionOversizedTextIndexValueUsesValueLogPointer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:             t.TempDir(),
+		ResolvedProfile: backenddb.ProfileCommandWALDurable,
+		CommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:    "lexical",
+			Version: TextIndexVersionV2,
+			Fields:  []TextIndexField{{Field: "body"}},
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	const documents = int(textV2DefaultDocMapBlockSize)
+	ids := make([][]byte, documents)
+	values := make([][]byte, documents)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d-%s", i, strings.Repeat("x", 56)))
+		values[i] = []byte(`{"kind":"test","body":"pointerize this text index block"}`)
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		t.Fatalf("insert oversized text block: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionTextV2DocMapRootName("docs", "lexical")
+	rootID := catalog.rootID(rootName)
+	key := encodeTextV2BlockKey(1)
+	entry, err := snap.GetEntryAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("get docmap entry: %v", err)
+	}
+	value, err := snap.GetAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("read docmap value: %v", err)
+	}
+	maxInline := page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize - len(key)
+	if len(value) <= maxInline {
+		t.Fatalf("docmap value len=%d unexpectedly fits one leaf entry with max=%d", len(value), maxInline)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("docmap entry flags=%#x ptr=%+v want value-log pointer", entry.Flags, entry.ValuePtr)
+	}
+}
+
 func TestCollectionFastJSONBufferedIndexedLargeDocumentsUseValueLogPointers(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -9861,6 +9928,10 @@ func TestCollectionLockAndValidateInsertBatchPlanRefreshesVacuumedSnapshot(t *te
 		_ = snap.Close()
 		t.Fatalf("vacuum: %v", err)
 	}
+	if err := col.validateMutationRootDescriptors(oldPager, snapshotUserRoot(snap), snapshotSystemRoot(snap), snapshotCommitSeq(snap)); !errors.Is(err, ErrConcurrentMutation) {
+		_ = snap.Close()
+		t.Fatalf("pre-vacuum mutation preflight err=%v want ErrConcurrentMutation", err)
+	}
 	mutationUnlock := col.lockMutation()
 	mutationLocked := true
 	var unlockMutation collectionMutationUnlock
@@ -9876,6 +9947,98 @@ func TestCollectionLockAndValidateInsertBatchPlanRefreshesVacuumedSnapshot(t *te
 	for i, rootName := range rootNames {
 		if got, want := baseRootIDs[i], currentCatalog.rootID(rootName); got != want {
 			t.Fatalf("base root %q=%d want current %d", rootName, got, want)
+		}
+	}
+}
+
+func TestCollectionBufferedIndexedRootsRebaseAfterOnlineVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"city":"seed"}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"a"}`)}); err != nil {
+		t.Fatalf("buffer first row: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare buffered publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare buffered publish returned no work")
+	}
+	before := d.AcquireSnapshot()
+	if before == nil {
+		t.Fatal("missing pre-vacuum snapshot")
+	}
+	beforePager := before.Pager()
+	_ = before.Close()
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	after := d.AcquireSnapshot()
+	if after == nil {
+		t.Fatal("missing post-vacuum snapshot")
+	}
+	if after.Pager() == beforePager {
+		_ = after.Close()
+		t.Fatal("vacuum did not replace the index pager")
+	}
+	if err := col.publishPreparedIndexedFlush(work); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("publish prepared work after vacuum err=%v want ErrConcurrentMutation", err)
+	}
+	freshCatalog, err := loadCollectionCatalog(after, "users")
+	_ = after.Close()
+	if err != nil {
+		t.Fatalf("load post-vacuum catalog: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{[]byte(`{"city":"b"}`)}); err != nil {
+		t.Fatalf("buffer second row after vacuum: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	for rootName, baseRoot := range col.writeDomain.rootBaseIDs {
+		if want := freshCatalog.rootID(rootName); baseRoot != want {
+			col.writeDomain.mu.RUnlock()
+			t.Fatalf("rebased root %q=%d want %d", rootName, baseRoot, want)
+		}
+	}
+	col.writeDomain.mu.RUnlock()
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush rebased rows: %v", err)
+	}
+	for id, want := range map[string]string{
+		"seed": `{"city":"seed"}`,
+		"u1":   `{"city":"a"}`,
+		"u2":   `{"city":"b"}`,
+	} {
+		got, err := col.Get([]byte(id))
+		if err != nil || string(got) != want {
+			t.Fatalf("Get(%q)=(%q,%v) want %q", id, got, err, want)
 		}
 	}
 }

@@ -1623,26 +1623,30 @@ func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (Ve
 }
 
 func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
+	currentPager := c.db.Pager()
 	c.catalogMu.RLock()
 	catalog := c.catalog
 	current := catalog != nil &&
+		catalog.pager == currentPager &&
 		state.SystemRootPageID != 0 &&
 		c.catalogSystemRoot == state.SystemRootPageID &&
 		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
 	c.catalogMu.RUnlock()
 	if !current && catalog != nil && c.nativeVectorIndexMutationActive() && c.writeDomain != nil {
 		if c.writeDomain.mu.TryRLock() {
-			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil {
+			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil && currentCatalog.pager == currentPager {
 				catalog, current = currentCatalog, true
 			}
 			c.writeDomain.mu.RUnlock()
-		} else if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
-			return def, catalog.rootID(rootName), true, true
+		} else if catalog.pager == currentPager {
+			if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+				return def, catalog.rootID(rootName), true, true
+			}
 		}
 	}
 	if !current {
 		catalog = cachedWriteDomainCatalogForState(c.writeDomain, state.SystemRootPageID, state.CommitSeq)
-		if catalog == nil {
+		if catalog == nil || catalog.pager != currentPager {
 			return VectorIndexDefinition{}, 0, false, false
 		}
 		c.catalogMu.Lock()
@@ -1654,6 +1658,9 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 		c.catalogMu.Unlock()
 	}
 	if catalog == nil {
+		return VectorIndexDefinition{}, 0, false, false
+	}
+	if c.db.Pager() != currentPager {
 		return VectorIndexDefinition{}, 0, false, false
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
