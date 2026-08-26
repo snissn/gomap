@@ -17,7 +17,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 	if got, want := manifest.QuerySHA256, "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a"; got != want {
 		t.Fatalf("query hash=%s want %s", got, want)
 	}
-	if got, want := manifest.OperationSHA256, "dd90d0dffe3478dfcee1dfc5371e665cb1cf22394ec4d513fc151e089d0565ff"; got != want {
+	if got, want := manifest.OperationSHA256, "f2d85501ae55255784749f042892836078335a99e7603ac254bd1a88eafa9179"; got != want {
 		t.Fatalf("operation hash=%s want %s", got, want)
 	}
 	if got, want := manifest.ExpectedStateSHA256, "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f"; got != want {
@@ -28,7 +28,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
 		t.Fatalf("timed repeat plan drifted: %+v", timed)
 	}
-	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "1ad0f1c42629b4145e4b264db179e7e5515b47ea08ea474ad571f0e45f433ea5"; got != want {
+	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "566493d1888714c6631a515c64ee8424dfb58614a392ddc6bf604f564ac75e6e"; got != want {
 		t.Fatalf("timed execution hash=%s want %s", got, want)
 	}
 	for i, round := range timed.Rounds {
@@ -37,6 +37,17 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 			round.EndBarrier != "round_end_queries_and_insert_complete" {
 			t.Fatalf("timed round %d drifted: %+v", i, round)
 		}
+	}
+	for _, ordinal := range []int{4, 5} {
+		plan := manifest.Operations[ordinal].ConcurrentPlan
+		if plan == nil || plan.ReaderConcurrency != 4 || len(plan.ReaderAssignments) != 4 ||
+			plan.StartBarrier != "reindex_start_all_readers_and_writer" ||
+			plan.EndBarrier != "reindex_end_all_readers_and_mutation_complete" {
+			t.Fatalf("concurrent reindex operation %d drifted: %+v", ordinal, plan)
+		}
+	}
+	if got, want := minimaReindexExecutionDigest(minimaExpectedReindexExecution(&manifest)), "9ec2d96b41783bf9ac323f522244940b023c4d27efd759714c149e0ae4568ee0"; got != want {
+		t.Fatalf("reindex execution hash=%s want %s", got, want)
 	}
 
 	scenarios := minimaScenarioMap(&manifest)
@@ -188,6 +199,18 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			a.Manifest.Operations[3].TimedPlan.Rounds[0].StartBarrier = "writer_first"
 			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
 		}},
+		{"missing concurrent delete plan", func(a *minimaArtifact) {
+			a.Manifest.Operations[4].ConcurrentPlan = nil
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"concurrent replacement reader assignment mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[5].ConcurrentPlan.ReaderAssignments[3].Reader = 2
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"concurrent replacement barrier mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[5].ConcurrentPlan.EndBarrier = "mutation_finished_before_readers"
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
 		{"replacement payload mismatch", func(a *minimaArtifact) {
 			a.Manifest.Operations[5].Documents[0].Content = "doctored"
 			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
@@ -279,6 +302,29 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"correct assertions with fake raw assignment", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Operations.TimedExecutionTrace.Queries[0].Scenario = "fake"
 		}},
+		{"timed reader did not overlap writer", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			for i := range operations.TimedExecutionTrace.Queries {
+				query := &operations.TimedExecutionTrace.Queries[i]
+				if query.Round == 0 && query.Reader == 3 {
+					query.WriterInFlight = false
+				}
+			}
+			operations.TimedExecutionSHA256 = minimaTimedExecutionDigest(operations.TimedExecutionTrace)
+		}},
+		{"correct assertions with incomplete raw reindex trace", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.ReindexExecutionTrace.Operations[0].ReaderQueries =
+				operations.ReindexExecutionTrace.Operations[0].ReaderQueries[:3]
+		}},
+		{"reindex reader did not overlap mutation", func(a *minimaArtifact) {
+			operations := &minimaTestBackend(a, "treedb").Operations
+			operations.ReindexExecutionTrace.Operations[1].ReaderQueries[2].MutationInFlight = false
+			operations.ReindexExecutionSHA256 = minimaReindexExecutionDigest(operations.ReindexExecutionTrace)
+		}},
+		{"wrong reindex execution hash", func(a *minimaArtifact) {
+			minimaTestBackend(a, "treedb").Operations.ReindexExecutionSHA256 = "wrong"
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -308,12 +354,15 @@ func validMinimaArtifact() minimaArtifact {
 	manifest := buildMinimaManifest()
 	hashes := minimaManifestHashes{CorpusSHA256: manifest.CorpusSHA256, QuerySHA256: manifest.QuerySHA256, OperationSHA256: manifest.OperationSHA256}
 	timed := manifest.Operations[3].TimedPlan
-	trace := minimaExpectedTimedExecution(timed)
+	timedTrace := minimaExpectedTimedExecution(timed)
+	reindexTrace := minimaExpectedReindexExecution(&manifest)
 	operations := minimaOperationEvidence{
 		ManifestOrdered: true, BatchInsertDuringSearch: true, ReindexDeleteReplace: true,
 		ExplicitUpdateVisible: true, ExplicitDeleteVisible: true, EmptyCasesChecked: true,
 		TimedQueriesExecuted: timed.QueryCount, TimedRoundsCompleted: len(timed.Rounds),
-		TimedExecutionSHA256: minimaTimedExecutionDigest(trace), TimedExecutionTrace: trace,
+		TimedExecutionSHA256: minimaTimedExecutionDigest(timedTrace), TimedExecutionTrace: timedTrace,
+		ReindexOperationsExecuted: len(reindexTrace.Operations),
+		ReindexExecutionSHA256:    minimaReindexExecutionDigest(reindexTrace), ReindexExecutionTrace: reindexTrace,
 	}
 	backends := []minimaBackendEvidence{
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
