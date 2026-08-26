@@ -2588,6 +2588,34 @@ func TestPublicCommandWALNoopCheckpointRunsPublishHook(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALCheckpointSeparatesCleanupStage(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOnRelaxed, CommandWAL: true, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	db.cached.SetCommandWALCheckpointPublishHook(func(bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		return 1, []backenddb.CommandWALLSNRange{{First: 1, Last: 1}}, nil
+	})
+	db.cached.SetCommandWALCheckpointCleanupHook(func(bool) error {
+		time.Sleep(time.Millisecond)
+		return nil
+	})
+	if err := db.Set([]byte("cleanup-stage"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := db.cached.Stats()
+	if got := stats["treedb.cache.checkpoint.stage.command_wal_cleanup.samples"]; got != "1" {
+		t.Fatalf("cleanup samples=%q want 1", got)
+	}
+	if got := stats["treedb.cache.checkpoint.stage.command_wal_cleanup.last_ns"]; got == "0" || got == "" {
+		t.Fatalf("cleanup duration=%q want nonzero independently timed stage", got)
+	}
+}
+
 func publicCommandWALSegmentNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(backenddb.WALDirPath(dir))

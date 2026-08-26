@@ -112,6 +112,14 @@ type bgIndexVacuumWorker struct {
 	runs                         atomic.Uint64
 	probes                       atomic.Uint64
 	vacuums                      atomic.Uint64
+	vacuumAttempts               atomic.Uint64
+	probeDurationTotalNs         atomic.Uint64
+	probeDurationMaxNs           atomic.Uint64
+	probeDurationLastNs          atomic.Uint64
+	vacuumDurationTotalNs        atomic.Uint64
+	vacuumDurationMaxNs          atomic.Uint64
+	vacuumDurationLastNs         atomic.Uint64
+	vacuumWorkCompleted          atomic.Uint64
 	lastRunUnix                  atomic.Int64
 	lastVacuumUnix               atomic.Int64
 	lastSpanRatio                atomic.Uint64
@@ -429,8 +437,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		return
 	}
 
+	probeStarted := time.Now()
 	rep, err := backgroundIndexVacuumTriggerReport(db, ctx)
 	w.probes.Add(1)
+	w.recordProbeDuration(time.Since(probeStarted))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			w.retryProbe = false
@@ -469,7 +479,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		return
 	}
 
+	w.vacuumAttempts.Add(1)
+	vacuumStarted := time.Now()
 	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
+		w.recordVacuumDuration(time.Since(vacuumStarted))
 		w.recordOnlineVacuum(db)
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
@@ -481,7 +494,11 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		}
 		return
 	}
+	w.recordVacuumDuration(time.Since(vacuumStarted))
 	w.recordOnlineVacuum(db)
+	if last := w.lastOnlineVacuum.Load(); last != nil && last.WorkCompleted {
+		w.vacuumWorkCompleted.Add(1)
+	}
 
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
@@ -498,6 +515,25 @@ func (w *bgIndexVacuumWorker) recordOnlineVacuum(db *DB) {
 	}
 	stats := db.backend.VacuumOnlineStats()
 	w.lastOnlineVacuum.Store(&stats)
+}
+
+func (w *bgIndexVacuumWorker) recordProbeDuration(d time.Duration) {
+	ns := uint64(d)
+	w.probeDurationLastNs.Store(ns)
+	w.probeDurationTotalNs.Add(ns)
+	updateBGVacuumMax(&w.probeDurationMaxNs, ns)
+}
+
+func (w *bgIndexVacuumWorker) recordVacuumDuration(d time.Duration) {
+	ns := uint64(d)
+	w.vacuumDurationLastNs.Store(ns)
+	w.vacuumDurationTotalNs.Add(ns)
+	updateBGVacuumMax(&w.vacuumDurationMaxNs, ns)
+}
+
+func updateBGVacuumMax(dst *atomic.Uint64, value uint64) {
+	for current := dst.Load(); current < value && !dst.CompareAndSwap(current, value); current = dst.Load() {
+	}
 }
 
 func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
@@ -655,9 +691,17 @@ type bgIndexVacuumStats struct {
 	CollectionRootSpanRatioPPM uint32
 	CollectionRootPages        uint64
 
-	Runs    uint64
-	Probes  uint64
-	Vacuums uint64
+	Runs                  uint64
+	Probes                uint64
+	Vacuums               uint64
+	VacuumAttempts        uint64
+	ProbeDurationTotalNs  uint64
+	ProbeDurationMaxNs    uint64
+	ProbeDurationLastNs   uint64
+	VacuumDurationTotalNs uint64
+	VacuumDurationMaxNs   uint64
+	VacuumDurationLastNs  uint64
+	VacuumWorkCompleted   uint64
 
 	BacklogConsecutiveSkips    uint64
 	BacklogSkips               uint64
@@ -704,6 +748,14 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 		Runs:                         w.runs.Load(),
 		Probes:                       w.probes.Load(),
 		Vacuums:                      w.vacuums.Load(),
+		VacuumAttempts:               w.vacuumAttempts.Load(),
+		ProbeDurationTotalNs:         w.probeDurationTotalNs.Load(),
+		ProbeDurationMaxNs:           w.probeDurationMaxNs.Load(),
+		ProbeDurationLastNs:          w.probeDurationLastNs.Load(),
+		VacuumDurationTotalNs:        w.vacuumDurationTotalNs.Load(),
+		VacuumDurationMaxNs:          w.vacuumDurationMaxNs.Load(),
+		VacuumDurationLastNs:         w.vacuumDurationLastNs.Load(),
+		VacuumWorkCompleted:          w.vacuumWorkCompleted.Load(),
 		BacklogConsecutiveSkips:      w.backlogConsecutiveSkips.Load(),
 		BacklogSkips:                 w.backlogSkips.Load(),
 		BacklogForcedRuns:            w.backlogForcedRuns.Load(),
@@ -766,6 +818,14 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.runs"] = fmt.Sprintf("%d", stats.Runs)
 	out["treedb.bg_vacuum.trigger_probes"] = fmt.Sprintf("%d", stats.Probes)
 	out["treedb.bg_vacuum.vacuums"] = fmt.Sprintf("%d", stats.Vacuums)
+	out["treedb.bg_vacuum.vacuum_attempts"] = fmt.Sprintf("%d", stats.VacuumAttempts)
+	out["treedb.bg_vacuum.probe_duration_ns_total"] = fmt.Sprintf("%d", stats.ProbeDurationTotalNs)
+	out["treedb.bg_vacuum.probe_duration_ns_max"] = fmt.Sprintf("%d", stats.ProbeDurationMaxNs)
+	out["treedb.bg_vacuum.probe_duration_ns_last"] = fmt.Sprintf("%d", stats.ProbeDurationLastNs)
+	out["treedb.bg_vacuum.vacuum_duration_ns_total"] = fmt.Sprintf("%d", stats.VacuumDurationTotalNs)
+	out["treedb.bg_vacuum.vacuum_duration_ns_max"] = fmt.Sprintf("%d", stats.VacuumDurationMaxNs)
+	out["treedb.bg_vacuum.vacuum_duration_ns_last"] = fmt.Sprintf("%d", stats.VacuumDurationLastNs)
+	out["treedb.bg_vacuum.vacuum_work_completed"] = fmt.Sprintf("%d", stats.VacuumWorkCompleted)
 	out["treedb.bg_vacuum.retry_concurrent_mutation_total"] = fmt.Sprintf("%d", stats.RetryConcurrentMutationTotal)
 	out["treedb.bg_vacuum.retry_recoverable_root_set_total"] = fmt.Sprintf("%d", stats.RetryRecoverableRootSetTotal)
 	out["treedb.bg_vacuum.retry_checkpoint_cleanup_total"] = fmt.Sprintf("%d", stats.RetryCheckpointCleanupTotal)
@@ -795,11 +855,20 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.last_online.recoverable_set_recaptures"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetRecaptures)
 	out["treedb.bg_vacuum.last_online.recoverable_roots"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableRoots)
 	out["treedb.bg_vacuum.last_online.older_root_rebuild_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuildDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.older_root_rebuilds"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuilds)
+	out["treedb.bg_vacuum.last_online.older_root_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceCaptureDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.older_root_capture_count"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceCaptures)
+	out["treedb.bg_vacuum.last_online.older_root_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceDescriptors)
+	out["treedb.bg_vacuum.last_online.older_root_bytes"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceBytes)
+	out["treedb.bg_vacuum.last_online.older_root_rebuilt_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuiltPages)
 	out["treedb.bg_vacuum.last_online.durable_resource_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceCaptureDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.durable_resource_capture_count"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceCaptures)
 	out["treedb.bg_vacuum.last_online.durable_resource_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceDescriptors)
 	out["treedb.bg_vacuum.last_online.durable_resource_bytes"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceBytes)
-	out["treedb.bg_vacuum.last_online.closure_exact"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.ClosureExact)
-	out["treedb.bg_vacuum.last_online.closure_fallback_reason"] = stats.LastOnlineVacuum.ClosureFallbackReason
+	out["treedb.bg_vacuum.last_online.current_root_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.CurrentRootPages)
+	out["treedb.bg_vacuum.last_online.exact_candidate_scan"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.ExactCandidateScan)
+	out["treedb.bg_vacuum.last_online.reused_non_value_log_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.ReusedNonValueLogDescriptors)
+	out["treedb.bg_vacuum.last_online.unique_external_segments"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.UniqueExternalSegments)
 	out["treedb.bg_vacuum.last_online.work_completed"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.WorkCompleted)
 	out["treedb.bg_vacuum.last_online.canceled"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.Canceled)
 	if stats.LastErr != "" {

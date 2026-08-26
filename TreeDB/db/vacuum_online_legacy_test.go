@@ -50,7 +50,7 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	if !stats.WorkCompleted || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
 		t.Fatalf("vacuum stats=%+v want completed production recoverable-root snapshot", stats)
 	}
-	if stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.DurableResourceCaptures != 1 || !stats.ClosureExact || stats.ClosureFallbackReason != "none" {
+	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
 	}
 }

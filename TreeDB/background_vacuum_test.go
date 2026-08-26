@@ -46,6 +46,24 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	}
 }
 
+func TestBackgroundIndexVacuumDurationStatsAccumulateMonotonically(t *testing.T) {
+	var w bgIndexVacuumWorker
+	w.recordProbeDuration(3 * time.Nanosecond)
+	w.recordProbeDuration(7 * time.Nanosecond)
+	w.vacuumAttempts.Add(2)
+	w.recordVacuumDuration(5 * time.Nanosecond)
+	w.recordVacuumDuration(11 * time.Nanosecond)
+	w.vacuumWorkCompleted.Add(1)
+
+	stats := w.Stats()
+	if stats.ProbeDurationTotalNs != 10 || stats.ProbeDurationMaxNs != 7 || stats.ProbeDurationLastNs != 7 {
+		t.Fatalf("probe durations=%+v want total=10 max=7 last=7", stats)
+	}
+	if stats.VacuumAttempts != 2 || stats.VacuumDurationTotalNs != 16 || stats.VacuumDurationMaxNs != 11 || stats.VacuumDurationLastNs != 11 || stats.VacuumWorkCompleted != 1 {
+		t.Fatalf("vacuum durations=%+v want attempts=2 total=16 max=11 last=11 completed=1", stats)
+	}
+}
+
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
 	dir := t.TempDir()
 

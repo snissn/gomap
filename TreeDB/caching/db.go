@@ -24634,12 +24634,13 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
-		commandWALCleanupStart := time.Now()
-		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
-			recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
+		if err := func() error {
+			commandWALCleanupStart := time.Now()
+			defer recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
+			return db.cleanupCommandWALCheckpoint(true)
+		}(); err != nil {
 			return err
 		}
-		recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
 	}
 
 	walCleanupStart := time.Now()
