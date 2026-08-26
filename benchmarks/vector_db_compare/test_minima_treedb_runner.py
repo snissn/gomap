@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import socket
 import sys
@@ -244,6 +245,15 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.collection = "owned"
         workload.config = {"dimension": 8, "metric": "cosine"}
         workload.ef_search = 64
+        workload.effective_collection = {
+            "dimension": 8,
+            "metric": "cosine",
+            "scalar_fields": [
+                {"field": "meta.user_id", "value_type": "string"},
+                {"field": "meta.fpath", "value_type": "string"},
+            ],
+            "vector_strategy": "native_runtime",
+        }
         workload.route_evidence = {"small": SimpleNamespace(
             native_base_plus_live_delta=True,
             full_document_scan_fallbacks=0,
@@ -266,6 +276,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         base_artifact = {"backends": [{}], "scenarios": [{"scenario": "small"}], "backend_raw_evidence": {"qdrant": {}}}
         with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
             artifact = workload.artifact()
+        configuration = artifact["backends"][0]["configuration"]
+        self.assertEqual(configuration["scalar_fields"], "meta.user_id,meta.fpath")
+        self.assertEqual(json.loads(configuration["effective_collection"]), workload.effective_collection)
         raw = artifact["backend_raw_evidence"]["treedb"]
         self.assertEqual(raw["resource_measurement"], resource)
         self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
