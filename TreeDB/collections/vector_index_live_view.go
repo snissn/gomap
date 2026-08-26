@@ -131,7 +131,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.deltaNodes = deltaNodes
 	next.scalarColumns = nil
 	if idx.validateNativeScalarColumnLengthsLocked() == nil {
-		if previous != nil && len(previousNodes) == len(idx.nodes) {
+		if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
 			next.scalarColumns = previous.scalarColumns
 		} else {
 			next.scalarColumns = cloneVectorIndexScalarColumns(idx.scalarColumns)
@@ -139,20 +139,20 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	}
 	next.deltaScalarColumns = nil
 	if idx.liveDelta != nil && idx.liveDelta.validateNativeScalarColumnLengthsLocked() == nil {
-		if previous != nil && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
+		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
 			next.deltaScalarColumns = previous.deltaScalarColumns
 		} else {
 			next.deltaScalarColumns = cloneVectorIndexScalarColumns(idx.liveDelta.scalarColumns)
 		}
 	}
-	if previous != nil && len(previousNodes) == len(idx.nodes) {
+	if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
 		next.currentNode = previous.currentNode
 	} else {
 		next.currentNode = vectorIndexNodeOrdinalMap(idx.nodes)
 	}
 	next.deltaCurrentNode = nil
 	if idx.liveDelta != nil {
-		if previous != nil && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
+		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
 			next.deltaCurrentNode = previous.deltaCurrentNode
 		} else {
 			next.deltaCurrentNode = vectorIndexNodeOrdinalMap(idx.liveDelta.nodes)

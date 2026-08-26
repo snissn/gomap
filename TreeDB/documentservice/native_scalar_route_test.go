@@ -60,7 +60,7 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 	if _, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{
 		QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteAnn,
 		Filter: &Filter{Operator: "OR", Conditions: []Filter{{Field: "meta.user_id", Operator: "==", Value: "alpha"}, {Field: "meta.user_id", Operator: "==", Value: "beta"}}},
-	}); ErrorCodeOf(err) != CodeInvalidRequest {
+	}); ErrorCodeOf(err) != CodeUnsupported {
 		t.Fatalf("unsupported OR err=%v code=%s", err, ErrorCodeOf(err))
 	}
 }
