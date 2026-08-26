@@ -185,7 +185,7 @@ func TestNativeScalarVectorIndexRebuildSwapsAlignedColumns(t *testing.T) {
 		t.Fatal("rebuilt search view is unavailable")
 	}
 	column, ok := view.scalarColumns["tenant_idx"]
-	rows, nodes, deltaNodes := len(column.offsets)-1, len(view.nodes), len(view.deltaNodes)
+	rows, nodes, deltaNodes := column.rows, len(view.nodes), len(view.deltaNodes)
 	aligned := ok && rows == nodes && nodes == 2 && deltaNodes == 0
 	runtime.releaseSearchView(view)
 	if !aligned {
@@ -645,7 +645,7 @@ func TestNativeScalarAppendFailureLeavesGraphAndColumnsUnchanged(t *testing.T) {
 	oldNodeID := idx.currentNode["doc"]
 	oldNodes := len(idx.nodes)
 	tenantColumn := idx.scalarColumns["tenant_idx"]
-	oldTenantOffsets := len(tenantColumn.offsets)
+	oldTenantOffsets := tenantColumn.rows
 	delete(idx.scalarColumns, "sequence_idx")
 
 	err = idx.insertVectorWithNativeScalarLocked(
@@ -660,8 +660,66 @@ func TestNativeScalarAppendFailureLeavesGraphAndColumnsUnchanged(t *testing.T) {
 	if len(idx.nodes) != oldNodes ||
 		idx.currentNode["doc"] != oldNodeID ||
 		idx.nodes[oldNodeID].deleted ||
-		len(tenantColumn.offsets) != oldTenantOffsets {
-		t.Fatalf("failed insert mutated state: nodes=%d/%d current=%d/%d deleted=%v tenant_offsets=%d/%d", len(idx.nodes), oldNodes, idx.currentNode["doc"], oldNodeID, idx.nodes[oldNodeID].deleted, len(tenantColumn.offsets), oldTenantOffsets)
+		tenantColumn.rows != oldTenantOffsets {
+		t.Fatalf("failed insert mutated state: nodes=%d/%d current=%d/%d deleted=%v tenant_rows=%d/%d", len(idx.nodes), oldNodes, idx.currentNode["doc"], oldNodeID, idx.nodes[oldNodeID].deleted, tenantColumn.rows, oldTenantOffsets)
+	}
+}
+
+func TestNativeScalarPublicationSnapshotsOnlyMutableTail(t *testing.T) {
+	column := newVectorIndexScalarColumn(IndexValueString)
+	columns := map[string]vectorIndexScalarColumn{"tenant_idx": column}
+	for row := 0; row < nativeScalarColumnChunkRows+44; row++ {
+		column = columns["tenant_idx"]
+		column.appendPrevalidated([]byte(fmt.Sprintf("tenant-%03d", row)), true)
+		columns["tenant_idx"] = column
+	}
+	held := snapshotVectorIndexScalarColumns(columns)["tenant_idx"]
+	column = columns["tenant_idx"]
+	column.appendPrevalidated([]byte("tenant-new"), true)
+	columns["tenant_idx"] = column
+	current := snapshotVectorIndexScalarColumns(columns)["tenant_idx"]
+
+	if held.rows != nativeScalarColumnChunkRows+44 || current.rows != held.rows+1 {
+		t.Fatalf("published rows held=%d current=%d", held.rows, current.rows)
+	}
+	if value, ok := held.value(held.rows - 1); !ok || string(value) != fmt.Sprintf("tenant-%03d", held.rows-1) {
+		t.Fatalf("held tail changed after append: value=%q present=%v", value, ok)
+	}
+	if _, ok := held.value(held.rows); ok {
+		t.Fatal("held publication exposed a later row")
+	}
+	if len(held.fullChunks) != 1 || len(current.fullChunks) != 1 ||
+		&held.fullChunks[0].data[0] != &current.fullChunks[0].data[0] {
+		t.Fatal("immutable full scalar chunk was recopied instead of shared")
+	}
+	if &held.tail.data[0] == &current.tail.data[0] {
+		t.Fatal("mutable scalar tail was shared across publications")
+	}
+}
+
+func TestNativeScalarANNReusesSearchBufferScratch(t *testing.T) {
+	idx, query := newNativeScalarExecutorBenchmarkIndex(t, 2, 8192)
+	view := idx.searchView.Load()
+	plan := &nativeScalarFilterExecution{
+		identity:         NativeScalarFilterPlanVectorAligned,
+		sourceGeneration: view.sourceDocumentGeneration,
+	}
+	var buffer VectorIndexSearchBuffer
+	if results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer); err != nil || len(results) != 10 {
+		t.Fatalf("warm filtered ANN results=%d err=%v", len(results), err)
+	}
+	visited := &buffer.nativeSearchScratch.visitedEpochs[0]
+	allocs := testing.AllocsPerRun(100, func() {
+		results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
+		if err != nil || len(results) != 10 {
+			panic(fmt.Sprintf("filtered ANN results=%d err=%v", len(results), err))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("filtered ANN steady-state allocs=%v want 0", allocs)
+	}
+	if &buffer.nativeSearchScratch.visitedEpochs[0] != visited {
+		t.Fatal("filtered ANN replaced warmed visited scratch")
 	}
 }
 
@@ -696,6 +754,48 @@ func BenchmarkNativeScalarRowCachedRuntimes(b *testing.B) {
 		b.Fatal("native scalar runtime cache was replaced during document extraction")
 	}
 	b.ReportMetric(1, "runtime_builds/setup")
+}
+
+func BenchmarkNativeScalarSingleRowPublicationSnapshot(b *testing.B) {
+	column := newVectorIndexScalarColumn(IndexValueString)
+	columns := map[string]vectorIndexScalarColumn{"tenant_idx": column}
+	value := []byte("alpha")
+	for range 8192 {
+		column = columns["tenant_idx"]
+		column.appendPrevalidated(value, true)
+		columns["tenant_idx"] = column
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		column = columns["tenant_idx"]
+		column.appendPrevalidated(value, true)
+		columns["tenant_idx"] = column
+		published := snapshotVectorIndexScalarColumns(columns)
+		if published["tenant_idx"].rows != column.rows {
+			b.Fatal("published scalar row count mismatch")
+		}
+	}
+}
+
+func BenchmarkNativeScalarANNBufferReuse(b *testing.B) {
+	idx, query := newNativeScalarExecutorBenchmarkIndex(b, 2, 8192)
+	view := idx.searchView.Load()
+	plan := &nativeScalarFilterExecution{
+		identity:         NativeScalarFilterPlanVectorAligned,
+		sourceGeneration: view.sourceDocumentGeneration,
+	}
+	var buffer VectorIndexSearchBuffer
+	if results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer); err != nil || len(results) != 10 {
+		b.Fatalf("warm filtered ANN results=%d err=%v", len(results), err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
+		if err != nil || len(results) != 10 {
+			b.Fatalf("filtered ANN results=%d err=%v", len(results), err)
+		}
+	}
 }
 
 func BenchmarkNativeScalarFilterPlanCrossover(b *testing.B) {
@@ -822,14 +922,14 @@ func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
 	}
 }
 
-func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, graphRows int) (*VectorIndex, []float32) {
-	b.Helper()
+func newNativeScalarExecutorBenchmarkIndex(tb testing.TB, dimensions, graphRows int) (*VectorIndex, []float32) {
+	tb.Helper()
 	idx, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "native_scalar_crossover", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: dimensions, M: 8, EfConstruction: 64, EfSearch: 64,
 	})
 	if err != nil {
-		b.Fatal(err)
+		tb.Fatal(err)
 	}
 	query := make([]float32, dimensions)
 	query[0] = 1
@@ -841,7 +941,7 @@ func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, graphRows i
 		vector[0] = 1
 		vector[1] = float32(i+1) / float32(graphRows*4)
 		if err := idx.insertVectorLocked(id, vector); err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 	}
 	idx.sourceDocumentGeneration = 1

@@ -29,39 +29,72 @@ const (
 	NativeScalarFilterPlanVectorAligned  NativeScalarFilterPlan = "vector_aligned_ann"
 )
 
+const nativeScalarColumnChunkRows = 256
+
+type vectorIndexScalarColumnChunk struct {
+	offsets []uint32
+	data    []byte
+	present []uint64
+}
+
 type vectorIndexScalarColumn struct {
-	valueType IndexValueType
-	offsets   []uint32
-	data      []byte
-	present   []uint64
+	valueType  IndexValueType
+	fullChunks []vectorIndexScalarColumnChunk
+	tail       vectorIndexScalarColumnChunk
+	rows       int
+	dataBytes  uint64
 }
 
 func newVectorIndexScalarColumn(valueType IndexValueType) vectorIndexScalarColumn {
-	return vectorIndexScalarColumn{valueType: valueType, offsets: []uint32{0}}
+	return vectorIndexScalarColumn{
+		valueType: valueType,
+		tail:      vectorIndexScalarColumnChunk{offsets: []uint32{0}},
+	}
 }
 
 func (c *vectorIndexScalarColumn) appendPrevalidated(value []byte, present bool) {
-	row := len(c.offsets) - 1
+	if c.rows > 0 && c.rows%nativeScalarColumnChunkRows == 0 {
+		c.fullChunks = append(c.fullChunks, c.tail)
+		c.tail = vectorIndexScalarColumnChunk{offsets: []uint32{0}}
+	}
+	row := c.rows % nativeScalarColumnChunkRows
 	if present {
 		word := row / 64
-		for len(c.present) <= word {
-			c.present = append(c.present, 0)
+		for len(c.tail.present) <= word {
+			c.tail.present = append(c.tail.present, 0)
 		}
-		c.present[word] |= uint64(1) << uint(row%64)
-		c.data = append(c.data, value...)
+		c.tail.present[word] |= uint64(1) << uint(row%64)
+		c.tail.data = append(c.tail.data, value...)
+		c.dataBytes += uint64(len(value))
 	}
-	c.offsets = append(c.offsets, uint32(len(c.data)))
+	c.tail.offsets = append(c.tail.offsets, uint32(len(c.tail.data)))
+	c.rows++
 }
 
 func (c vectorIndexScalarColumn) value(row int) ([]byte, bool) {
-	if row < 0 || row+1 >= len(c.offsets) || row/64 >= len(c.present) || c.present[row/64]&(uint64(1)<<uint(row%64)) == 0 {
+	if row < 0 || row >= c.rows {
 		return nil, false
 	}
-	start, end := c.offsets[row], c.offsets[row+1]
-	if start > end || int(end) > len(c.data) {
+	chunkID, chunkRow := row/nativeScalarColumnChunkRows, row%nativeScalarColumnChunkRows
+	chunk := c.tail
+	if chunkID < len(c.fullChunks) {
+		chunk = c.fullChunks[chunkID]
+	}
+	if chunkRow/64 >= len(chunk.present) || chunk.present[chunkRow/64]&(uint64(1)<<uint(chunkRow%64)) == 0 {
 		return nil, false
 	}
-	return c.data[start:end], true
+	start, end := chunk.offsets[chunkRow], chunk.offsets[chunkRow+1]
+	if start > end || int(end) > len(chunk.data) {
+		return nil, false
+	}
+	return chunk.data[start:end], true
+}
+
+func cloneVectorIndexScalarColumnChunk(chunk vectorIndexScalarColumnChunk) vectorIndexScalarColumnChunk {
+	chunk.offsets = append([]uint32(nil), chunk.offsets...)
+	chunk.data = append([]byte(nil), chunk.data...)
+	chunk.present = append([]uint64(nil), chunk.present...)
+	return chunk
 }
 
 func cloneVectorIndexScalarColumns(in map[string]vectorIndexScalarColumn) map[string]vectorIndexScalarColumn {
@@ -70,9 +103,23 @@ func cloneVectorIndexScalarColumns(in map[string]vectorIndexScalarColumn) map[st
 	}
 	out := make(map[string]vectorIndexScalarColumn, len(in))
 	for name, column := range in {
-		column.offsets = append([]uint32(nil), column.offsets...)
-		column.data = append([]byte(nil), column.data...)
-		column.present = append([]uint64(nil), column.present...)
+		column.fullChunks = append([]vectorIndexScalarColumnChunk(nil), column.fullChunks...)
+		for i := range column.fullChunks {
+			column.fullChunks[i] = cloneVectorIndexScalarColumnChunk(column.fullChunks[i])
+		}
+		column.tail = cloneVectorIndexScalarColumnChunk(column.tail)
+		out[name] = column
+	}
+	return out
+}
+
+func snapshotVectorIndexScalarColumns(in map[string]vectorIndexScalarColumn) map[string]vectorIndexScalarColumn {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]vectorIndexScalarColumn, len(in))
+	for name, column := range in {
+		column.tail = cloneVectorIndexScalarColumnChunk(column.tail)
 		out[name] = column
 	}
 	return out
@@ -186,7 +233,7 @@ func (idx *VectorIndex) validateNativeScalarRowsAppendLocked(rows ...map[string]
 		if !ok {
 			return fmt.Errorf("collections: native scalar column %q is unavailable", def.Name)
 		}
-		dataBytes := uint64(len(column.data))
+		dataBytes := column.dataBytes
 		for _, row := range rows {
 			value, present := row[def.Name]
 			if present {
@@ -227,8 +274,8 @@ func (idx *VectorIndex) appendNativeScalarRowLocked(row map[string][]byte) error
 func (idx *VectorIndex) validateNativeScalarColumnLengthsLocked() error {
 	for _, def := range idx.scalarDefinitions {
 		column, ok := idx.scalarColumns[def.Name]
-		if !ok || len(column.offsets) != len(idx.nodes)+1 {
-			return fmt.Errorf("collections: native scalar column %q row count mismatch: rows=%d nodes=%d", def.Name, len(column.offsets)-1, len(idx.nodes))
+		if !ok || column.rows != len(idx.nodes) {
+			return fmt.Errorf("collections: native scalar column %q row count mismatch: rows=%d nodes=%d", def.Name, column.rows, len(idx.nodes))
 		}
 	}
 	return nil
@@ -362,7 +409,7 @@ func (p *nativeScalarFilterExecution) matches(columns map[string]vectorIndexScal
 	}
 	for _, clause := range p.clauses {
 		column, ok := columns[clause.indexName]
-		if !ok || len(column.offsets) <= row+1 {
+		if !ok || column.rows <= row {
 			return false
 		}
 		if !clause.matches(column.value(row)) {
@@ -617,12 +664,12 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView) {
 func (view *vectorIndexSearchView) validateNativeScalarColumns(plan *nativeScalarFilterExecution) error {
 	for _, clause := range plan.clauses {
 		column, ok := view.scalarColumns[clause.indexName]
-		if !ok || len(column.offsets) != len(view.nodes)+1 {
+		if !ok || column.rows != len(view.nodes) {
 			return fmt.Errorf("%w: native scalar base column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, clause.indexName)
 		}
 		if len(view.deltaNodes) > 0 {
 			delta, ok := view.deltaScalarColumns[clause.indexName]
-			if !ok || len(delta.offsets) != len(view.deltaNodes)+1 {
+			if !ok || delta.rows != len(view.deltaNodes) {
 				return fmt.Errorf("%w: native scalar delta column %q is missing or misaligned", ErrVectorIndexSearchUnavailable, clause.indexName)
 			}
 		}
@@ -646,16 +693,15 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 	if preparedCosine {
 		prepared = &preparedQuery
 	}
-	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact())
+	if len(view.deltaNodes) == 0 {
+		results, work, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+		return results, work, err
+	}
+	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
-	if len(view.deltaNodes) == 0 {
-		results, err := copyNativeScalarResultsToBuffer(base, buffer)
-		baseWork.underfill = len(results) < topK
-		return results, baseWork, err
-	}
-	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaScalarColumns, view.deltaCurrentNode, plan, view, plan.exact())
+	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaScalarColumns, view.deltaCurrentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
@@ -664,7 +710,7 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 	return merged, work, err
 }
 
-func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
+func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, resultIDBytes *[]byte) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
 	runtimeIndex := VectorIndex{metric: view.metric, encoding: view.encoding, dimensions: view.dimensions, m: view.m, efSearch: view.efSearch, nodes: nodes, entry: entry, maxLevel: maxLevel}
 	var candidates []vectorIndexCandidate
 	work := nativeScalarSearchWork{}
@@ -674,7 +720,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		candidates = make([]vectorIndexCandidate, 0, minInt(topK, len(ids)))
+		candidates = scratch.out[:0]
 		for _, id := range ids {
 			nodeID, ok := currentNode[id]
 			if !ok || nodeID < 0 || nodeID >= len(nodes) {
@@ -699,29 +745,53 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		if len(candidates) > topK {
 			candidates = candidates[:topK]
 		}
+		scratch.out = candidates
 	} else {
 		var err error
-		candidates, work.visited, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan)
+		candidates, work.visited, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, scratch)
 		if err != nil {
 			return nil, work, err
 		}
 	}
-	results := make([]VectorIndexSearchResult, 0, len(candidates))
+	matched, idBytes := 0, 0
 	for _, candidate := range candidates {
 		node := nodes[candidate.nodeID]
 		if node.deleted || !plan.matches(columns, candidate.nodeID, node.documentID) {
 			continue
 		}
-		results = append(results, VectorIndexSearchResult{ID: node.documentID, Score: 1 - float64(candidate.distance)})
+		var err error
+		idBytes, err = addVectorIndexSearchByteTotal(idBytes, len(node.documentID), math.MaxInt, "result id")
+		if err != nil {
+			return nil, work, err
+		}
+		matched++
 	}
-	work.admitted = len(results)
-	work.underfill = len(results) < topK
-	return results, work, nil
+	*results = resizeVectorIndexSearchResultBuffer(*results, matched)
+	*resultIDBytes = resizeVectorIndexSearchByteBuffer(*resultIDBytes, idBytes)
+	resultRow, offset := 0, 0
+	for _, candidate := range candidates {
+		node := nodes[candidate.nodeID]
+		if node.deleted || !plan.matches(columns, candidate.nodeID, node.documentID) {
+			continue
+		}
+		next := offset + len(node.documentID)
+		id := (*resultIDBytes)[offset:next:next]
+		copy(id, node.documentID)
+		(*results)[resultRow] = VectorIndexSearchResult{ID: id, Score: 1 - float64(candidate.distance)}
+		resultRow++
+		offset = next
+	}
+	work.admitted = len(*results)
+	work.underfill = len(*results) < topK
+	return *results, work, nil
 }
 
-func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution) ([]vectorIndexCandidate, int, error) {
+func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, error) {
 	if idx.entry < 0 || len(idx.nodes) == 0 || topK <= 0 {
 		return nil, 0, nil
+	}
+	if scratch == nil {
+		return nil, 0, errors.New("collections: native scalar search scratch is nil")
 	}
 	limit := efSearch
 	if limit <= 0 {
@@ -740,7 +810,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 	if math.IsInf(float64(entryDistance), 1) {
 		return nil, 0, nil
 	}
-	scratch := &vectorIndexSearchScratch{}
+	scratch.explorationLimit = explorationLimit
 	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
 	visited[entryPoint] = mark
 	queue := scratch.queue[:0]
@@ -784,29 +854,13 @@ search:
 			}
 		}
 	}
-	out := append([]vectorIndexCandidate(nil), eligible...)
+	scratch.explored = scored
+	scratch.queue = queue[:0]
+	scratch.best = navigation[:0]
+	scratch.liveBest = eligible[:0]
+	out := scratch.out[:0]
+	out = append(out, eligible...)
+	scratch.out = out
 	sortVectorIndexCandidates(out)
 	return out, scored, nil
-}
-
-func copyNativeScalarResultsToBuffer(results []VectorIndexSearchResult, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
-	idBytes := 0
-	for _, result := range results {
-		var err error
-		idBytes, err = addVectorIndexSearchByteTotal(idBytes, len(result.ID), math.MaxInt, "result id")
-		if err != nil {
-			return nil, err
-		}
-	}
-	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
-	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idBytes)
-	offset := 0
-	for i, result := range results {
-		next := offset + len(result.ID)
-		id := buffer.idBytes[offset:next:next]
-		copy(id, result.ID)
-		buffer.results[i] = VectorIndexSearchResult{ID: id, Score: result.Score}
-		offset = next
-	}
-	return buffer.results, nil
 }

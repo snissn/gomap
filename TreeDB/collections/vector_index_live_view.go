@@ -134,7 +134,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
 			next.scalarColumns = previous.scalarColumns
 		} else {
-			next.scalarColumns = cloneVectorIndexScalarColumns(idx.scalarColumns)
+			next.scalarColumns = snapshotVectorIndexScalarColumns(idx.scalarColumns)
 		}
 	}
 	next.deltaScalarColumns = nil
@@ -142,7 +142,7 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
 			next.deltaScalarColumns = previous.deltaScalarColumns
 		} else {
-			next.deltaScalarColumns = cloneVectorIndexScalarColumns(idx.liveDelta.scalarColumns)
+			next.deltaScalarColumns = snapshotVectorIndexScalarColumns(idx.liveDelta.scalarColumns)
 		}
 	}
 	if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
