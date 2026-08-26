@@ -725,6 +725,14 @@ func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	d.bgVac.lastOnlineVacuum.Store(&backenddb.VacuumOnlineStats{
+		DirtyDescriptors:         11,
+		UserTailMutations:        12,
+		UserTailPointMutations:   13,
+		UserTailRangeMutations:   14,
+		DeferredCutovers:         15,
+		ConcurrentMutationAborts: 16,
+	})
 
 	stats := d.Stats()
 	if got := stats["treedb.bg_vacuum.enabled"]; got != "true" {
@@ -732,6 +740,18 @@ func TestBackgroundIndexVacuumStartsWhenConfigured(t *testing.T) {
 	}
 	if got := stats["treedb.bg_vacuum.vacuums"]; got != "0" {
 		t.Fatalf("background vacuum runs=%q want 0 before first tick", got)
+	}
+	for key, want := range map[string]string{
+		"treedb.bg_vacuum.last_online.dirty_descriptors":          "11",
+		"treedb.bg_vacuum.last_online.user_tail_mutations":        "12",
+		"treedb.bg_vacuum.last_online.user_tail_point_mutations":  "13",
+		"treedb.bg_vacuum.last_online.user_tail_range_mutations":  "14",
+		"treedb.bg_vacuum.last_online.deferred_cutovers":          "15",
+		"treedb.bg_vacuum.last_online.concurrent_mutation_aborts": "16",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("%s=%q want %q", key, got, want)
+		}
 	}
 
 	if err := d.Close(); err != nil {
