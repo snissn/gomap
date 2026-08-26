@@ -1227,7 +1227,6 @@ func TestServiceDenseNativeRuntimeCloseWaitsForPooledSearch(t *testing.T) {
 		t.Fatalf("post-close native dense search err=%v code=%s", err, ErrorCodeOf(err))
 	}
 }
-
 func TestServiceBenchmarkNativeRuntimeCompatibleCreateAfterEmptyReopen(t *testing.T) {
 	dir := t.TempDir()
 	open := func() (*Service, *backenddb.DB) {
