@@ -816,6 +816,7 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		schemaGeneration:    opts.schemaGeneration,
 		scalarDefinitions:   scalarDefinitions,
 		scalarColumns:       newNativeScalarColumns(scalarDefinitions),
+		currentNode:         make(map[string]int),
 		entry:               -1,
 		maxLevel:            -1,
 	}, nil
