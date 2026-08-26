@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,58 +51,110 @@ func main() {
 	if *mutexProfileFraction > 0 {
 		runtime.SetMutexProfileFraction(*mutexProfileFraction)
 	}
-	if handler := optionalPprofHandler(*pprofAddr); handler != nil {
-		listener, err := net.Listen("tcp", *pprofAddr)
+	database, cleanup, databaseStats, err := treedb.OpenBackendWithCachedLeafLogStats(opts)
+	if err != nil {
+		log.Fatalf("Failed to open TreeDB: %v", err)
+	}
+	manager := collections.NewCollectionManager(database)
+	service := documentservice.New(manager)
+	appServer := &http.Server{Addr: *addr, Handler: documentservice.NewHandler(service), ReadHeaderTimeout: 5 * time.Second}
+	var diagnosticsServer *http.Server
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = shutdownDocumentService(ctx, appServer, diagnosticsServer, service, cleanup)
+		})
+	}
+	defer shutdown()
+	var diagnosticsHandler http.Handler
+	if *pprofAddr != "" {
+		diagnosticsHandler = service.DiagnosticsHandler(databaseStats)
+	}
+	if handler, err := optionalPprofHandler(*pprofAddr, diagnosticsHandler); err != nil {
+		log.Print(err)
+		exitCode = 1
+		return
+	} else if handler != nil {
+		diagnosticsListener, err := net.Listen("tcp", *pprofAddr)
 		if err != nil {
-			log.Fatalf("Failed to listen for pprof on %s: %v", *pprofAddr, err)
+			log.Printf("Failed to listen for pprof on %s: %v", *pprofAddr, err)
+			exitCode = 1
+			return
 		}
+		diagnosticsServer = &http.Server{Addr: *pprofAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 		go func() {
 			log.Printf("TreeDB Document Service pprof listening on http://%s/debug/pprof/", *pprofAddr)
-			if err := http.Serve(listener, handler); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := diagnosticsServer.Serve(diagnosticsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("pprof server error: %v", err)
 			}
 		}()
 	}
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", *addr, err)
+		log.Printf("Failed to listen on %s: %v", *addr, err)
+		exitCode = 1
+		return
 	}
-	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
-	if err != nil {
-		log.Fatalf("Failed to open TreeDB: %v", err)
-	}
-	defer func() { _ = cleanup() }()
-
-	manager := collections.NewCollectionManager(database)
-	service := documentservice.New(manager)
-	defer func() { _ = service.Close() }()
-	handler := documentservice.NewHandler(service)
-	server := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		shutdown()
 	}()
 
 	fmt.Printf("TreeDB Document Service listening on http://%s\n", *addr)
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := appServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("Server error: %v", err)
 		exitCode = 1
 		return
 	}
 }
 
-func optionalPprofHandler(addr string) http.Handler {
-	if addr == "" {
-		return nil
+// shutdownDocumentService preserves callback lifetime: stop request admission,
+// drain diagnostics, then release service state and its database.
+func shutdownDocumentService(ctx context.Context, appServer, diagnosticsServer *http.Server, service *documentservice.Service, cleanup func() error) error {
+	var err error
+	if appServer != nil {
+		err = errors.Join(err, appServer.Shutdown(ctx))
 	}
-	return http.DefaultServeMux
+	if diagnosticsServer != nil {
+		err = errors.Join(err, diagnosticsServer.Shutdown(ctx))
+	}
+	if service != nil {
+		err = errors.Join(err, service.Close())
+	}
+	if cleanup != nil {
+		err = errors.Join(err, cleanup())
+	}
+	return err
+}
+
+func optionalPprofHandler(addr string, diagnostics http.Handler) (http.Handler, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pprof listen address %q: %w", addr, err)
+	}
+	if host != "localhost" {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return nil, fmt.Errorf("pprof diagnostics address %q must be loopback", addr)
+		}
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if diagnostics != nil && r.URL.Path == "/debug/treedb/stats" {
+			diagnostics.ServeHTTP(w, r)
+			return
+		}
+		http.DefaultServeMux.ServeHTTP(w, r)
+	}), nil
 }
 
 func parsePublicProfileFlag(raw string) (treedb.Profile, error) {

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -31,6 +32,8 @@ type Service struct {
 	benchmarkSearchBufferPool    sync.Pool
 	denseVectorNativeAfterSearch func(int, collections.VectorIndexSearchResponse) error
 	vectorPartitionOperations    *vectorpartition.OperationsV1
+	diagnosticsEnabled           atomic.Bool
+	diagnosticsActive            atomic.Pointer[diagnosticsActiveIndex]
 	closed                       bool
 }
 
@@ -1134,6 +1137,7 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 		if expectedGeneration != 0 && expectedGeneration != info.Generation {
 			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 		}
+		s.noteDiagnosticsIndex(name, info, col)
 		return col, info, nil
 	}
 	s.benchmarkSearchCacheMu.RUnlock()
@@ -1148,7 +1152,14 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if expectedGeneration != 0 && expectedGeneration != info.Generation {
 		return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 	}
+	s.noteDiagnosticsIndex(name, info, col)
 	return col, info, nil
+}
+
+func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo, col *collections.Collection) {
+	if s != nil && s.diagnosticsEnabled.Load() {
+		s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, col: col})
+	}
 }
 
 func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
