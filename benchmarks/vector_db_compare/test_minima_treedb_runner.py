@@ -25,6 +25,45 @@ class FakeClient:
         return self.response
 
 
+def write_health_service(binary: Path) -> None:
+    binary.write_text(f"""#!{sys.executable}
+import argparse
+import json
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-addr", required=True)
+parser.add_argument("-dir", required=True)
+parser.add_argument("-profile")
+args = parser.parse_args()
+data_dir = Path(args.dir)
+data_dir.mkdir(parents=True, exist_ok=True)
+(data_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        contract = "{runner.SERVICE_CONTRACT}" if (data_dir / "compatible").exists() else "wrong"
+        body = json.dumps({{"ok": True, "contract_version": contract}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+class Server(HTTPServer):
+    allow_reuse_address = True
+
+host, port = args.addr.rsplit(":", 1)
+Server((host, int(port)), Handler).serve_forever()
+""", encoding="utf-8")
+    binary.chmod(0o755)
+
+
 
 
 class MinimaTreeDBRunnerTest(unittest.TestCase):
@@ -91,46 +130,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertTrue(evidence["tail"].endswith("root cause\n"))
 
     def test_start_timeout_cleans_live_child_and_can_retry_same_port(self) -> None:
-        service_source = f"""#!{sys.executable}
-import argparse
-import json
-import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
-
-parser = argparse.ArgumentParser()
-parser.add_argument("-addr", required=True)
-parser.add_argument("-dir", required=True)
-parser.add_argument("-profile")
-args = parser.parse_args()
-data_dir = Path(args.dir)
-data_dir.mkdir(parents=True, exist_ok=True)
-(data_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        contract = "{runner.SERVICE_CONTRACT}" if (data_dir / "compatible").exists() else "wrong"
-        body = json.dumps({{"ok": True, "contract_version": contract}}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, *_args):
-        pass
-
-class Server(HTTPServer):
-    allow_reuse_address = True
-
-host, port = args.addr.rsplit(":", 1)
-Server((host, int(port)), Handler).serve_forever()
-"""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             binary = root / "never-ready-service"
-            binary.write_text(service_source, encoding="utf-8")
-            binary.chmod(0o755)
+            write_health_service(binary)
             with socket.socket() as listener:
                 listener.bind(("127.0.0.1", 0))
                 port = listener.getsockname()[1]
@@ -162,6 +165,59 @@ Server((host, int(port)), Handler).serve_forever()
                 controller.stop()
             self.assertIsNone(controller.process)
             self.assertIsNone(controller.log_file)
+
+    def test_main_unwritable_output_cleans_child_and_preserves_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "service"
+            write_health_service(binary)
+            with socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                port = listener.getsockname()[1]
+            data_dir = root / "data"
+            data_dir.mkdir()
+            (data_dir / "compatible").touch()
+            output = root / "output-directory"
+            output.mkdir()
+            args = SimpleNamespace(
+                manifest=root / "manifest.json", output=output, service_bin=binary,
+                url=f"http://127.0.0.1:{port}", data_dir=data_dir, profile="test",
+                startup_timeout=2, collection="owned", operation_timeout=1, ef_search=1, small=False,
+            )
+            controllers: list[runner.ServiceController] = []
+
+            class FakeRunner:
+                def __init__(self, _manifest: object, *, controller: runner.ServiceController, **_kwargs: object) -> None:
+                    self.controller = controller
+                    self.evidence = SimpleNamespace(failures=[])
+                    controller.start()
+                    controllers.append(controller)
+
+                def run(self) -> None:
+                    pass
+
+                def artifact(self) -> dict[str, object]:
+                    return {}
+
+                def close(self) -> None:
+                    raise RuntimeError("cleanup noise")
+
+            with mock.patch.object(runner, "parse_args", return_value=args), \
+                 mock.patch.object(common, "load_manifest", return_value={}), \
+                 mock.patch.object(runner, "TreeDBMinimaRunner", FakeRunner):
+                with self.assertRaises(IsADirectoryError):
+                    runner.main()
+            controller = controllers[0]
+            child_pid = int((data_dir / "pid").read_text(encoding="utf-8"))
+            self.assertIsNone(controller.process)
+            self.assertIsNone(controller.log_file)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+            try:
+                controller.start()
+                self.assertIsNotNone(controller.pid)
+            finally:
+                controller.stop()
 
     def test_artifact_uses_shared_segment_delta_resource_semantics(self) -> None:
         baseline = {

@@ -427,10 +427,26 @@ def main() -> int:
         runner.evidence.failures.append(f"{type(exc).__name__}: {exc}")
         exit_code = 1
     finally:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
-        runner.close()
-        controller.stop()
+        artifact_error: BaseException | None = None
+        try:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(runner.artifact(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        except BaseException as exc:
+            artifact_error = exc
+        cleanup_error: BaseException | None = None
+        try:
+            runner.close()
+        except BaseException as exc:
+            cleanup_error = exc
+        try:
+            controller.stop()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+        if artifact_error is not None:
+            raise artifact_error
+        if cleanup_error is not None:
+            raise cleanup_error
     return exit_code
 
 
