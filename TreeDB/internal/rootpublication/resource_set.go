@@ -233,12 +233,28 @@ func (view stableLogicalObligationView) appendCertified(values []StableLogicalOb
 		view = newStableLogicalObligationView(view.slice())
 	}
 	index := view.index
-	for _, obligation := range values {
-		var err error
-		index, err = insertStableLogicalObligationIndex(index, obligation, work)
+	var added []StableLogicalObligation
+	for i, obligation := range values {
+		nextIndex, err := insertStableLogicalObligationIndex(index, obligation, work)
 		if err != nil {
 			return stableLogicalObligationView{}, err
 		}
+		if nextIndex == index {
+			if added == nil {
+				added = append(make([]StableLogicalObligation, 0, len(values)-1), values[:i]...)
+			}
+			continue
+		}
+		index = nextIndex
+		if added != nil {
+			added = append(added, obligation)
+		}
+	}
+	if added != nil {
+		values = added
+	}
+	if len(values) == 0 {
+		return view, nil
 	}
 	commitments := cloneStableLogicalObligationCommitments(view.commitments)
 	if commitments == nil {
@@ -326,16 +342,19 @@ func insertStableLogicalObligationIndex(root *stableLogicalObligationIndexNode, 
 		if root.obligation != obligation {
 			return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
 		}
-		return nil, fmt.Errorf("%w: append-only mutation repeats logical obligation %+v", ErrResourceConflict, key)
-	}
-	next := *root
-	if work != nil {
-		work.RetainedIndexNodeCopies++
+		return root, nil
 	}
 	if stableLogicalObligationIndexLess(key, root.key) {
 		child, err := insertStableLogicalObligationIndex(root.left, obligation, work)
 		if err != nil {
 			return nil, err
+		}
+		if child == root.left {
+			return root, nil
+		}
+		next := *root
+		if work != nil {
+			work.RetainedIndexNodeCopies++
 		}
 		next.left = child
 		result := &next
@@ -350,6 +369,13 @@ func insertStableLogicalObligationIndex(root *stableLogicalObligationIndexNode, 
 	child, err := insertStableLogicalObligationIndex(root.right, obligation, work)
 	if err != nil {
 		return nil, err
+	}
+	if child == root.right {
+		return root, nil
+	}
+	next := *root
+	if work != nil {
+		work.RetainedIndexNodeCopies++
 	}
 	next.right = child
 	result := &next
@@ -1672,6 +1698,7 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 	certified := true
 	rangeStableResourceKindViews(incoming, func(child *stableResourceEntry) bool {
 		view, hadKind := nextViews[child.token.kind]
+		replacedLogicalCommitments := false
 		if !hadKind {
 			view.reachability = make(map[ReachabilityField]struct{})
 		}
@@ -1732,6 +1759,24 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			if preflightErr != nil {
 				return false
 			}
+			if view.logicalObligationCount < existing.logicalObligations.count {
+				preflightErr = ErrUnresolvedResource
+				return false
+			}
+			commitments := cloneStableLogicalObligationCommitments(view.logicalCommitments)
+			for field, old := range existing.logicalObligations.commitments {
+				commitment, ok := commitments[field]
+				if !ok || commitment.count < old.count {
+					preflightErr = ErrUnresolvedResource
+					return false
+				}
+				commitment.count -= old.count
+				subtractStableLogicalObligationDigest(&commitment.sum, old.sum)
+				commitments[field] = commitment
+			}
+			view.logicalCommitments = addStableLogicalObligationCommitments(commitments, nextEntry.logicalObligations.commitments)
+			view.logicalObligationCount += nextEntry.logicalObligations.count - existing.logicalObligations.count
+			replacedLogicalCommitments = true
 			nextEntry.frontier = maxFrontier(nextEntry.frontier, child.frontier)
 			mergeStableResourceDescriptorIdentity(&nextEntry, child.logicalLane, child.resourceID, child.diagnosticPath)
 			for field := range child.reachability {
@@ -1745,8 +1790,10 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			return false
 		}
 		view.reachability = cloneReachabilityUnion(view.reachability, child.reachability)
-		view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, child.logicalObligations.commitments)
-		view.logicalObligationCount += child.logicalObligations.count
+		if !replacedLogicalCommitments {
+			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, child.logicalObligations.commitments)
+			view.logicalObligationCount += child.logicalObligations.count
+		}
 		nextViews[child.token.kind] = view
 		return true
 	})

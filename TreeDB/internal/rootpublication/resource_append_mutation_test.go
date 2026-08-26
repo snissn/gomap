@@ -139,6 +139,33 @@ func TestStableLogicalObligationAppendPreservesImmutableCommitments(t *testing.T
 	}
 }
 
+func TestStableLogicalObligationAppendIsExactSetUnion(t *testing.T) {
+	retained := appendMutationTestObligation(1)
+	added := appendMutationTestObligation(2)
+	base := newStableLogicalObligationView([]StableLogicalObligation{retained})
+	var work StableResourceClosureWork
+	same, err := base.appendCertified([]StableLogicalObligation{retained}, &work)
+	if err != nil || same.index != base.index || same.tail != base.tail || work.RetainedIndexNodeCopies != 0 || work.LogicalIndexNodesAdmitted != 0 {
+		t.Fatalf("idempotent append view=%+v work=%+v err=%v", same, work, err)
+	}
+
+	next, err := base.appendCertified([]StableLogicalObligation{retained, added, retained}, &work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next.slice(); !slices.Equal(got, []StableLogicalObligation{retained, added}) {
+		t.Fatalf("set union=%+v want retained+added", got)
+	}
+	if next.count != 2 || next.commitments[retained.Reachability] != stableLogicalObligationCommitments([]StableLogicalObligation{retained, added})[retained.Reachability] {
+		t.Fatalf("set union count=%d commitments=%+v", next.count, next.commitments)
+	}
+	conflict := retained
+	conflict.Digest = sha256.Sum256([]byte("conflict"))
+	if _, err := base.appendCertified([]StableLogicalObligation{conflict}, nil); !errors.Is(err, ErrResourceConflict) {
+		t.Fatalf("conflicting duplicate error=%v want %v", err, ErrResourceConflict)
+	}
+}
+
 func TestAppendOnlyPhysicalClosureCloneIsMutationLocal(t *testing.T) {
 	// The certified append-only path must retain the immutable physical closure
 	// itself. Re-cloning every retained entry makes repeated root publication
@@ -488,12 +515,12 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	const retained = 4096
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "asset.bin", "x")
-	newToken := func(obligation StableLogicalObligation) *StableResourceToken {
+	newToken := func(obligations ...StableLogicalObligation) *StableResourceToken {
 		token, err := NewStableResourceToken(StableResourceSpec{
 			Kind: ResourceColumnAsset, LogicalLane: "columns", ResourceID: "asset", Generation: 1,
 			DiagnosticPath: "columns/asset.bin", File: file, Frontier: DurableFrontier{Bytes: 1},
 			Digest: sha256.Sum256([]byte("asset")), Reachability: ReachabilityColumnManifest,
-			LogicalObligations: []StableLogicalObligation{obligation}, ContentSynced: true,
+			LogicalObligations: obligations, ContentSynced: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -516,7 +543,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	}
 	defer parent.Release()
 	producerBuilder := NewStableResourceSetBuilder()
-	if err := producerBuilder.Add(newToken(added)); err != nil {
+	if err := producerBuilder.Add(newToken(baseObligation, added)); err != nil {
 		t.Fatal(err)
 	}
 	producer, err := producerBuilder.Freeze()
@@ -529,7 +556,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 		t.Fatal(err)
 	}
 	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
-		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{added},
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{baseObligation, added},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -547,6 +574,11 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	defer merged.Release()
 	if merged.Len() != retained {
 		t.Fatalf("merged entries=%d want %d (coalesced producer must not remain visible)", merged.Len(), retained)
+	}
+	view := merged.kindViews[ResourceColumnAsset]
+	wantCommitment := stableLogicalObligationCommitments([]StableLogicalObligation{baseObligation, added})
+	if view.logicalObligationCount != 2 || view.logicalCommitments[ReachabilityColumnManifest] != wantCommitment[ReachabilityColumnManifest] {
+		t.Fatalf("coalesced aggregate count=%d commitments=%+v want exact set union", view.logicalObligationCount, view.logicalCommitments)
 	}
 	var got []StableLogicalObligation
 	merged.rangeEntries(func(entry *stableResourceEntry) bool {

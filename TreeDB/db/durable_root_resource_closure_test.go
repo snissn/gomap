@@ -235,6 +235,51 @@ func TestCaptureDurableRootAppendRequirementsProducerMismatchFallsBack4366(t *te
 	}
 }
 
+func TestCaptureDurableRootAppendRequirementAlreadyRetainedIsIdempotent4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	retained := durableRootClosureObligation3928(1)
+	base := durableRootClosureSet3928(t, path, retained)
+	defer base.Release()
+	producer := durableRootClosureSet3928(t, path, retained)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{retained},
+	}
+	fallbackCalls := 0
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			fallbackCalls++
+			return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, errors.New("unexpected exact requirements fallback")
+		}, false, &timing,
+	)
+	if err != nil {
+		producer.Release()
+		t.Fatal(err)
+	}
+	work := timing.FinalizeCandidateResourceWork
+	if fallbackCalls != 0 || work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FullClosureValidations != 0 {
+		candidate.Release()
+		t.Fatalf("retained addition fallback=%d work=%+v want certified set union", fallbackCalls, work)
+	}
+	if producer.Owner() != rootpublication.ResourceOwnerTransferred || base.Owner() != rootpublication.ResourceOwnerBuilder {
+		candidate.Release()
+		t.Fatalf("ownership producer=%v base=%v", producer.Owner(), base.Owner())
+	}
+	descriptors := candidate.Descriptors()
+	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{retained}) {
+		candidate.Release()
+		t.Fatalf("retained addition closure=%+v want exact set union", descriptors)
+	}
+	candidate.Release()
+	producer.Release()
+	if base.Owner() != rootpublication.ResourceOwnerBuilder || len(base.Descriptors()) != 1 {
+		t.Fatalf("candidate release changed visible base: owner=%v descriptors=%d", base.Owner(), len(base.Descriptors()))
+	}
+}
+
 func durableRootClosureObligation3928(partID uint64) rootpublication.StableLogicalObligation {
 	obligation := rootpublication.StableLogicalObligation{
 		Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
