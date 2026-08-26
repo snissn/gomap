@@ -251,6 +251,78 @@ func TestNonNativeVectorIndexesSkipScalarRuntimeAndRetainBatchPath(t *testing.T)
 	}
 }
 
+func TestCreateNativeVectorIndexAfterScalarIndexPublishesFilteredRuntime(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewCollectionManager(d)
+	if _, err := manager.CreateCollection(&CollectionMeta{
+		Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	def := VectorIndexDefinition{
+		Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 8, EfSearch: 64, Strategy: VectorIndexStrategyNativeRuntime,
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	runtime := col.registeredVectorIndex(def.Name)
+	if runtime == nil {
+		_ = d.Close()
+		t.Fatal("created native runtime is unavailable")
+	}
+	if len(runtime.scalarDefinitions) != 1 || len(runtime.scalarColumns) != 1 {
+		_ = d.Close()
+		t.Fatalf("created native runtime scalar state defs=%d columns=%d", len(runtime.scalarDefinitions), len(runtime.scalarColumns))
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("alpha"), []byte("beta")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0],"tenant":"alpha"}`),
+			[]byte(`{"embedding":[0.99,0.01],"tenant":"beta"}`),
+		},
+	); err != nil {
+		_ = d.Close()
+		t.Fatal(err)
+	}
+	filter := HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}
+	if got := searchNativeScalarTest(t, col, def, filter, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "alpha" {
+		_ = d.Close()
+		t.Fatalf("created runtime filtered results=%+v", got.Results)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCollection, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchNativeScalarTest(t, reopenedCollection, def, filter, 1); len(got.Results) != 1 || string(got.Results[0].ID) != "alpha" {
+		t.Fatalf("reopened created runtime filtered results=%+v", got.Results)
+	}
+}
+
 func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()

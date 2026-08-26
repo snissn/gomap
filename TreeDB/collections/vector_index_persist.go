@@ -1452,6 +1452,7 @@ func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOpti
 		EfSearch:         def.EfSearch,
 		Encoding:         def.Encoding,
 		schemaGeneration: def.SchemaGeneration,
+		nativeRuntime:    vectorIndexDefinitionUsesNativeRuntime(def),
 	}
 }
 

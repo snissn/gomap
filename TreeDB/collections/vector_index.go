@@ -210,6 +210,7 @@ type VectorIndexOptions struct {
 	RebuildDeletedRatio float64
 	Encoding            VectorIndexEncoding
 	schemaGeneration    uint64
+	nativeRuntime       bool
 }
 
 // VectorIndexQueryMode selects the score plane used by column_graph search.
@@ -798,10 +799,14 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		nativeRootName = collectionVectorIndexRootName(c.collectionName(), opts.Name)
 	}
 	var scalarDefinitions []IndexDefinition
-	if c != nil {
-		if def, ok := findVectorIndex(c.meta.VectorIndexes, opts.Name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
-			scalarDefinitions = nativeScalarDefinitions(c.meta)
+	nativeRuntime := opts.nativeRuntime
+	if c != nil && !nativeRuntime {
+		if def, ok := findVectorIndex(c.meta.VectorIndexes, opts.Name); ok {
+			nativeRuntime = vectorIndexDefinitionUsesNativeRuntime(def)
 		}
+	}
+	if c != nil && nativeRuntime {
+		scalarDefinitions = nativeScalarDefinitions(c.meta)
 	}
 	scalarRuntimes, err := nativeScalarRuntimes(scalarDefinitions)
 	if err != nil {
