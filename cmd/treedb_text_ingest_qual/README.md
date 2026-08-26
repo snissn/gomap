@@ -19,7 +19,7 @@ commit and requires candidate `HEAD` to have byte-identical
 an additional narrow check, not the candidate-equivalence boundary; later
 artifact-only commits outside those subtrees may differ.
 
-Use schema `treedb_text_ingest_qualification/v4` for both `manifest.json` and
+Use schema `treedb_text_ingest_qualification/v5` for both `manifest.json` and
 `report.json`. The manifest authenticates the canonical report payload (with
 `manifest_sha256` blank) through `report_payload_sha256`; the report separately
 binds the SHA-256 of the exact manifest bytes. Rows must cover the complete mode
@@ -46,11 +46,15 @@ a reason; zero is not used as a made-up measurement. The manifest binds clean
 VCS and
 vectors-disabled/zero-vector-index state as observed product identity. Every
 row records stage timing, physical storage, logical text-v2 component bytes,
-tombstone debt, and pre-close plus reopened score-only probe evidence. Reopen
-success requires parity for live rows, generation, text storage statistics,
-and deterministic probe results. The validator rejects count drift,
-zero-document-probe violations, failed or non-parity reopen, dirty/vector
-product identity, incomplete accounting, and ambiguous retained rows.
+tombstone debt, and pre-close plus reopened score-only probe evidence.
+`reopen_validation` measures reopen, collection/stat recovery, and the score-only
+probe; the subsequent close is outside that stage. Reopen success requires
+parity for live rows, generation, text storage statistics, and deterministic
+probe results. The validator also pins the expected result count and digest for
+every deterministic mode/scale fixture, so a consistently wrong result cannot
+pass through reopen parity alone. It rejects count drift, zero-document-probe
+violations, failed or non-parity reopen, dirty/vector product identity,
+incomplete accounting, and ambiguous retained rows.
 
 Physical storage is observed only after checkpoint and close by walking the DB
 directory. `physical_index_page_bytes`, `physical_value_log_bytes`,

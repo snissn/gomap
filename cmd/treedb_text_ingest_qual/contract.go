@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	contractVersion                            = "treedb_text_ingest_qualification/v4"
+	contractVersion                            = "treedb_text_ingest_qualification/v5"
 	qualificationAnalyzer                      = "simple"
 	qualificationFieldWeights                  = "title=3,body=1"
 	qualificationProbeQuery                    = "refund"
@@ -34,6 +34,26 @@ const (
 
 var requiredModes = []string{"indexed_insert", "post_load_backfill", "source_chunk", "maintenance"}
 var requiredScales = []int{10_000, 100_000, 1_000_000}
+
+type expectedProbeIdentity struct {
+	results int
+	sha256  string
+}
+
+var expectedQualificationProbes = map[string]expectedProbeIdentity{
+	"indexed_insert/10000":       {10, "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb"},
+	"indexed_insert/100000":      {10, "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78"},
+	"indexed_insert/1000000":     {10, "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c"},
+	"post_load_backfill/10000":   {10, "acdb95e3af5f6b1dddb0148b3bf8cd16aa7d912defe9169e15c90c744c00e7cb"},
+	"post_load_backfill/100000":  {10, "6d4f4cb35c967dd9f25802d5e048c7a00f2d474f0ba457790680cc700699ee78"},
+	"post_load_backfill/1000000": {10, "e531d1c8ee5c9354d4d7ac5d08497ddf7eb94eed0091e17b47243a702b07532c"},
+	"source_chunk/10000":         {10, "b6d6c5e1650b45362415717d429a9688bf76692037c78cc7a658807ac575f1bf"},
+	"source_chunk/100000":        {10, "34c8a2943692069c5a0f4898d3e4f1b03e48dd809854954c90ea3f114b33e7ec"},
+	"source_chunk/1000000":       {10, "fe761fd9fbbc58e73648a1162639235d18becbaad85bb7747b8f08dab0089a89"},
+	"maintenance/10000":          {10, "a3dd6a3146a0ad8dd85fe172a7a1d4fd133eb0fbe7a14313b57221aa124753af"},
+	"maintenance/100000":         {10, "32525aebf4f2c79f97c4610e5ce4f371c9e824518091c8528d1f872c716441cd"},
+	"maintenance/1000000":        {10, "681e128ac8cd3ea14cdd5a08247d019e1505627075a1f5638a79c89405a50f4a"},
+}
 
 type manifest struct {
 	SchemaVersion                  string                  `json:"schema_version"`
@@ -331,6 +351,9 @@ func validate(m manifest, r report, manifestSHA string) error {
 			}
 		}
 	}
+	if err := validateExpectedProbeIdentities(groups); err != nil {
+		return err
+	}
 	if err := validateQualificationThresholds(m.Acceptance.SourceChunk10K, groups); err != nil {
 		return err
 	}
@@ -396,6 +419,21 @@ func expectedQualificationAcceptance() qualificationAcceptance {
 		MinimumSourceDocsPerSecondMultiple:    sourceChunkMinimumThroughputMultiple,
 		MaximumPhysicalTotalWALExcludedBytes:  sourceChunkPhysicalCeilingBytes,
 	}}
+}
+
+func validateExpectedProbeIdentities(groups map[string]map[int]row) error {
+	for key, repetitions := range groups {
+		expected, ok := expectedQualificationProbes[key]
+		if !ok {
+			return fmt.Errorf("expected probe identity is not pinned for %s", key)
+		}
+		for repetition, candidate := range repetitions {
+			if candidate.Probe.Results != expected.results || candidate.Probe.ResultsSHA256 != expected.sha256 {
+				return fmt.Errorf("%s repetition %d score-only probe does not match the pinned fixture result", key, repetition)
+			}
+		}
+	}
+	return nil
 }
 
 func validateQualificationThresholds(a sourceChunkAcceptance, groups map[string]map[int]row) error {
@@ -506,7 +544,7 @@ func validateRow(r row) error {
 	if !same(r.SourceDocsPerSec, float64(r.SourceDocuments)/r.WallSeconds) || !same(r.ChunksPerSec, float64(r.GeneratedChunks)/r.WallSeconds) || !same(r.IndexedRowsPerSec, float64(r.IndexedLiveRows)/r.WallSeconds) {
 		return fmt.Errorf("throughput does not recompute from counts and wall time")
 	}
-	for _, name := range []string{"analyzer", "posting_builder", "root_mutation", "value_log", "checkpoint", "reopen"} {
+	for _, name := range []string{"analyzer", "posting_builder", "root_mutation", "value_log", "checkpoint", "reopen_validation"} {
 		v, ok := r.Stages[name]
 		if !ok {
 			return fmt.Errorf("missing %s stage", name)

@@ -228,7 +228,7 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		return row{}, fmt.Errorf("close after checkpoint: %w", err)
 	}
 
-	reopenStart := time.Now()
+	reopenValidationStart := time.Now()
 	d2, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		return row{}, fmt.Errorf("reopen: %w", err)
@@ -257,7 +257,7 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		}
 		return row{}, err
 	}
-	reopen := time.Since(reopenStart).Seconds()
+	reopenValidation := time.Since(reopenValidationStart).Seconds()
 	if err = d2.Close(); err != nil {
 		return row{}, fmt.Errorf("close after reopen probe: %w", err)
 	}
@@ -298,12 +298,12 @@ func produceMode(dir, mode string, scale, repetition int) (row, error) {
 		CumulativeAllocs: metric{State: "observed", Value: float64(after.Mallocs - before.Mallocs)},
 		PeakRSSBytes:     rssMetric,
 		Stages: map[string]metric{
-			"analyzer":        {State: "unavailable", Reason: "collection API does not separately expose analyzer time"},
-			"posting_builder": {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"},
-			"root_mutation":   {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"},
-			"value_log":       {State: "unavailable", Reason: "collection API does not separately expose value-log time"},
-			"checkpoint":      {State: "observed", Value: checkpoint},
-			"reopen":          {State: "observed", Value: reopen},
+			"analyzer":          {State: "unavailable", Reason: "collection API does not separately expose analyzer time"},
+			"posting_builder":   {State: "unavailable", Reason: "collection API does not separately expose posting-builder time"},
+			"root_mutation":     {State: "unavailable", Reason: "collection API does not separately expose root-mutation time"},
+			"value_log":         {State: "unavailable", Reason: "collection API does not separately expose value-log time"},
+			"checkpoint":        {State: "observed", Value: checkpoint},
+			"reopen_validation": {State: "observed", Value: reopenValidation},
 		},
 		Storage:      withLogicalPayloadBytes(physical, logicalPayloadBytes),
 		TextV2:       textV2Evidence(stats),

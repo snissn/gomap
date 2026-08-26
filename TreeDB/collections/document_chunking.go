@@ -384,6 +384,11 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	defer lifecycleLocks.releaseAll()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	if len(c.vectorIndexes) > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -449,7 +454,6 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 		insertDocs = append(insertDocs, plan.parent)
 	}
 
-	var deleteIDs [][]byte
 	var replaced []int
 	hookCalled := false
 
@@ -474,7 +478,6 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 				hookCalled = true
 				hooks.afterBatchScan()
 			}
-			deleteIDs = attemptDeleteIDs
 			return attemptDeleteIDs, nil
 		}
 		plan, err := c.buildSourceReplacementPlan(nil, insertIDs, insertDocs, deletePlanner, nil, nil)
@@ -494,28 +497,8 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
-		published := publishErr == nil || backenddb.CommitPublicationAccepted(publishErr) || errors.Is(publishErr, ErrCommitAmbiguous)
-		if !published {
+		if publishErr != nil {
 			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", publishErr)
-		}
-		reconcileIDs := make([][]byte, 0, len(deleteIDs)+len(insertIDs))
-		seen := make(map[string]struct{}, len(deleteIDs)+len(insertIDs))
-		for _, ids := range [][][]byte{deleteIDs, insertIDs} {
-			for _, id := range ids {
-				if _, ok := seen[string(id)]; ok {
-					continue
-				}
-				seen[string(id)] = struct{}{}
-				reconcileIDs = append(reconcileIDs, id)
-			}
-		}
-		notifyErr := c.reconcileVectorIndexes(reconcileIDs)
-		if notifyErr != nil {
-			c.invalidateRegisteredVectorIndexDocumentCoverage()
-			notifyErr = commitAmbiguousError("atomic source replacement vector maintenance", notifyErr)
-		}
-		if publishErr != nil || notifyErr != nil {
-			return nil, fmt.Errorf("collections: publish atomic chunked ingest batch: %w", errors.Join(publishErr, notifyErr))
 		}
 		return replaced, nil
 	}

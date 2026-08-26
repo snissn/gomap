@@ -829,6 +829,8 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	c.vectorIndexesMu.Lock()
+	defer c.vectorIndexesMu.Unlock()
 	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
 		index.publishSearchView()
 	}
@@ -846,8 +848,6 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		}
 	}
 	index.setNativePersistent(false)
-	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}

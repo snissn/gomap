@@ -486,6 +486,66 @@ func TestIngestChunkedDocumentsRejectsVectorIndexedCollection(t *testing.T) {
 	}
 }
 
+func TestIngestChunkedDocumentsRejectsRegisteredVectorIndex(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	col.RegisterVectorIndex(index)
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("registered-vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("registered vector index error=%v, want text-only rejection", err)
+	}
+	if got, err := col.Get([]byte("registered-vector-source")); err != nil || got != nil {
+		t.Fatalf("registered vector source mutated before rejection: %s err=%v", got, err)
+	}
+}
+
+func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *testing.T) {
+	_, _, col := openChunkingTestCollection(t)
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create ad-hoc vector index: %v", err)
+	}
+	attempted := make(chan struct{})
+	registered := make(chan struct{})
+	hooks := &chunkedIngestHooks{afterBatchScan: func() {
+		go func() {
+			close(attempted)
+			col.RegisterVectorIndex(index)
+			close(registered)
+		}()
+		<-attempted
+		select {
+		case <-registered:
+			t.Fatal("vector registration completed before chunk publication")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}}
+	if _, err := col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("registration-race"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{hooks: hooks},
+	); err != nil {
+		t.Fatalf("chunk ingest: %v", err)
+	}
+	select {
+	case <-registered:
+	case <-time.After(time.Second):
+		t.Fatal("vector registration remained blocked after chunk publication")
+	}
+}
+
 func TestIngestChunkedDocumentsRejectsVectorIndexAddedAfterScan(t *testing.T) {
 	_, d, first := openChunkingTestCollection(t)
 	second, err := NewCollectionManager(d).OpenCollection("docs")

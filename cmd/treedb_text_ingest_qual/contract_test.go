@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,6 +308,10 @@ func TestValidateRejectsContractFailures(t *testing.T) {
 		{"duplicate retained repetition", func(_ *manifest, r *report) { r.Rows = append(r.Rows, r.Rows[12]) }, "duplicate repetition"},
 		{"copied summary", func(_ *manifest, r *report) { r.Summaries[0].MedianWallSeconds = 2 }, "summary does not recompute"},
 		{"zero stage placeholder", func(_ *manifest, r *report) { r.Rows[0].Stages["value_log"] = metric{State: "observed"} }, "zero placeholder"},
+		{"wrong pinned probe identity", func(_ *manifest, r *report) {
+			r.Rows[0].Probe.ResultsSHA256 = strings.Repeat("e", 64)
+			r.Rows[0].Reopen.Probe.ResultsSHA256 = strings.Repeat("e", 64)
+		}, "pinned fixture result"},
 		{"zero resource placeholder", func(_ *manifest, r *report) { r.Rows[0].PeakRSSBytes.Value = 0 }, "resource metric must be positive"},
 		{"missing fresh RSS process scope", func(_ *manifest, r *report) { r.Rows[0].PeakRSSScope = "" }, "fresh process"},
 		{"partial indexed live rows", func(_ *manifest, r *report) { r.Rows[0].IndexedLiveRows-- }, "every source document"},
@@ -568,23 +573,24 @@ func validRow(mode string, scale, rep int) row {
 		Stages: map[string]metric{
 			"analyzer": {State: "observed", Value: 1}, "posting_builder": {State: "observed", Value: 1},
 			"root_mutation": {State: "observed", Value: 1}, "value_log": {State: "unavailable", Reason: "not separately instrumented"},
-			"checkpoint": {State: "observed", Value: 1}, "reopen": {State: "observed", Value: 1},
+			"checkpoint": {State: "observed", Value: 1}, "reopen_validation": {State: "observed", Value: 1},
 		},
 		Storage:      storage{PhysicalIndexPageBytes: 1, PhysicalValueLogBytes: 1, PhysicalWALBytes: 1, PhysicalOtherBytes: 1, PhysicalTotalBytes: 4, PhysicalTotalWALExcludedBytes: 3, LogicalPrimaryPayloadBytes: 1, LogicalTextV2Overlap: "logical_text_v2_components_overlap_physical_storage_non_additive"},
 		TextV2:       textV2{DocIDBytes: 1, DocMapBytes: 1, PostingBytes: 1, NormBytes: 1, TermBytes: 1, StatusBytes: 1},
 		CheckpointOK: true, CloseOK: true, ReopenOK: true,
-		Probe: validProbe(),
+		Probe: validProbe(mode, scale),
 	}
 	if mode == "source_chunk" {
 		r.Generations = uint64(r.ChunkBatchCount + 1)
 	}
-	r.Reopen = reopenEvidence{IndexedLiveRows: r.IndexedLiveRows, Postings: r.Postings, Terms: r.Terms, Blocks: r.Blocks, Generations: r.Generations, TombstoneDebt: r.TombstoneDebt, TextV2: r.TextV2, Probe: validProbe()}
+	r.Reopen = reopenEvidence{IndexedLiveRows: r.IndexedLiveRows, Postings: r.Postings, Terms: r.Terms, Blocks: r.Blocks, Generations: r.Generations, TombstoneDebt: r.TombstoneDebt, TextV2: r.TextV2, Probe: validProbe(mode, scale)}
 	r.FixtureSHA256, r.IDsSHA256 = qualificationIdentity(scale)
 	return r
 }
 
-func validProbe() scoreOnlyProbe {
-	return scoreOnlyProbe{Query: qualificationProbeQuery, Results: 1, ResultsSHA256: strings.Repeat("f", 64), documentsFetchedPresent: true, failClosedPresent: true}
+func validProbe(mode string, scale int) scoreOnlyProbe {
+	expected := expectedQualificationProbes[fmt.Sprintf("%s/%d", mode, scale)]
+	return scoreOnlyProbe{Query: qualificationProbeQuery, Results: expected.results, ResultsSHA256: expected.sha256, documentsFetchedPresent: true, failClosedPresent: true}
 }
 func summaryFor(mode string, scale, n int) modeScaleSummary {
 	rate := validRow(mode, scale, 1).IndexedRowsPerSec
