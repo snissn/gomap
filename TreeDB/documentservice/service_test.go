@@ -1645,6 +1645,12 @@ func TestServiceFilterDocumentsCursorPagesWithoutRescanningPrefix(t *testing.T) 
 	if err != nil || !sparse.Exhausted || len(sparse.Documents) != 1 || sparse.Documents[0].ID != "e" {
 		t.Fatalf("last sparse cursor page=%+v err=%v", sparse, err)
 	}
+	huge, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{
+		Limit: int(^uint(0) >> 1), CursorPage: true,
+	})
+	if err != nil || !huge.Exhausted || len(huge.Documents) != len(docs) {
+		t.Fatalf("huge-limit cursor page=%+v err=%v", huge, err)
+	}
 }
 func testBackendOptions(dir string) backenddb.Options {
 	return backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true}

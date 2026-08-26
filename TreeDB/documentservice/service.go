@@ -502,7 +502,7 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 		if req.Offset != 0 || req.Limit <= 0 {
 			return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "cursor_page requires a positive limit and zero offset")
 		}
-		docs := make([]Document, 0, req.Limit)
+		docs := make([]Document, 0, min(req.Limit, 256))
 		lastScanned, nextAfterID := "", ""
 		pageFull := false
 		scanBudget := req.Limit
