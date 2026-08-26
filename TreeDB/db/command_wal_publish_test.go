@@ -1938,6 +1938,100 @@ func TestCommandWALCleanupRetainsSegmentsRotatedAfterScan(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupConvergesUnderSustainedRotatingWrites(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(dir), commitlog.CommandJournalOptions{
+		Lane:       0,
+		SegmentSeq: 2,
+		InitialLSN: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer func() { _ = journal.Close() }()
+
+	type writerResult struct {
+		lsn uint64
+		err error
+	}
+	requests := make(chan chan<- writerResult)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for response := range requests {
+			lsn, appendErr := journal.AppendCommand(commitlog.CommandEnvelope{
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+			})
+			if appendErr == nil {
+				appendErr = journal.RotateActiveSegment(true)
+			}
+			response <- writerResult{lsn: lsn, err: appendErr}
+		}
+	}()
+	writerStopped := false
+	stopWriter := func() {
+		if writerStopped {
+			return
+		}
+		close(requests)
+		<-writerDone
+		writerStopped = true
+	}
+	defer stopWriter()
+
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
+	appliedLSN := uint64(1)
+	for round := range 8 {
+		installCommandWALCleanupRootRuntimeForTest(db, uint64(round+1), appliedLSN)
+		beforeRemoved := db.commandWALCleanupRemoved.Load()
+		var result writerResult
+		db.testCommandWALCleanupAfterScanHook = func() {
+			response := make(chan writerResult, 1)
+			requests <- response
+			result = <-response
+		}
+
+		if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+			t.Fatalf("cleanup round %d: %v", round, err)
+		}
+		if result.err != nil {
+			t.Fatalf("writer round %d: %v", round, result.err)
+		}
+		select {
+		case <-writerDone:
+			t.Fatalf("writer exited during cleanup round %d", round)
+		default:
+		}
+		if result.lsn != appliedLSN+1 {
+			t.Fatalf("writer round %d LSN=%d, want %d", round, result.lsn, appliedLSN+1)
+		}
+		if got := db.commandWALCleanupRemoved.Load(); got != beforeRemoved+1 {
+			t.Fatalf("cleanup round %d removed=%d, want %d", round, got, beforeRemoved+1)
+		}
+		if got := db.commandWALCleanupRetries.Load(); got != 0 {
+			t.Fatalf("cleanup round %d retries=%d, want zero", round, got)
+		}
+		segments, err := listWALSegments(dir)
+		if err != nil {
+			t.Fatalf("listWALSegments round %d: %v", round, err)
+		}
+		commandSegments := 0
+		for _, segment := range segments {
+			if !segment.valueLog && isCommandWALLaneSegment(segment) {
+				commandSegments++
+			}
+		}
+		if commandSegments > 2 {
+			t.Fatalf("cleanup round %d command WAL segments=%d, want bounded at <=2", round, commandSegments)
+		}
+		appliedLSN = result.lsn
+	}
+	stopWriter()
+}
+
 func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
