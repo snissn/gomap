@@ -499,9 +499,10 @@ func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocu
 		return minimaGeneratedDocument{}, fmt.Errorf("minima document ordinal %d outside [0,%d)", ordinal, spec.CorpusRows)
 	}
 	userID, fpath := minimaDocumentScalarsAt(spec, ordinal)
-	score := 0.9 - float64(ordinal)*0.000003
+	// FMA fixes the fixture's rounding across architectures and compiler optimizations.
+	score := math.FMA(-float64(ordinal), 0.000003, 0.9)
 	vector := make([]float64, minimaDimension)
-	vector[0], vector[1] = score, math.Sqrt(1-score*score)
+	vector[0], vector[1] = score, math.Sqrt(math.FMA(-score, score, 1))
 	return minimaGeneratedDocument{
 		ID: fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal), Content: fmt.Sprintf("minima:%s:%d", spec.Name, ordinal),
 		Vector: vector, UserID: userID, FPath: fpath,
