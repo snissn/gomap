@@ -829,27 +829,35 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	coord := c.collectionSchemaCoordinator()
+	if !sharedNative && coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
 		index.publishSearchView()
 	}
 	index.collection = c
-	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+	if sharedNative {
 		index.recordNativeDefinition(def)
-		if c.writeDomain != nil {
-			c.writeDomain.nativeVectorIndexesMu.Lock()
-			if c.writeDomain.nativeVectorIndexes == nil {
-				c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
-			}
-			c.writeDomain.nativeVectorIndexes[index.name] = index
-			c.writeDomain.nativeVectorIndexesMu.Unlock()
-			return
+		c.writeDomain.nativeVectorIndexesMu.Lock()
+		if c.writeDomain.nativeVectorIndexes == nil {
+			c.writeDomain.nativeVectorIndexes = make(map[string]*VectorIndex)
 		}
+		c.writeDomain.nativeVectorIndexes[index.name] = index
+		c.writeDomain.nativeVectorIndexesMu.Unlock()
+		return
 	}
 	index.setNativePersistent(false)
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
+	}
+	if _, exists := c.vectorIndexes[index.name]; !exists && coord != nil {
+		coord.adHocVectorIndexes.Add(1)
 	}
 	c.vectorIndexes[index.name] = index
 }
@@ -923,8 +931,14 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 		c.writeDomain.nativeVectorIndexesMu.Unlock()
 	}
 	c.vectorIndexesMu.Lock()
+	_, removedAdHoc := c.vectorIndexes[name]
 	delete(c.vectorIndexes, name)
 	c.vectorIndexesMu.Unlock()
+	if removedAdHoc {
+		if coord := c.collectionSchemaCoordinator(); coord != nil {
+			coord.adHocVectorIndexes.Add(-1)
+		}
+	}
 	if !c.hasNativePersistentVectorIndex() && c.manager != nil && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionQueryReadyGenerationCache() {
 		c.manager.unregisterCollectionHandle(c)
 	}

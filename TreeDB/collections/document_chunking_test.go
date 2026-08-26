@@ -495,6 +495,9 @@ func TestIngestChunkedDocumentsRejectsRegisteredVectorIndex(t *testing.T) {
 		t.Fatalf("create ad-hoc vector index: %v", err)
 	}
 	col.RegisterVectorIndex(index)
+	flushCalled := false
+	restoreFlushHook := setCollectionSchemaMutationFlushHookForTest(func() { flushCalled = true })
+	defer restoreFlushHook()
 
 	_, err = col.IngestChunkedDocuments(
 		[]SourceDocument{{ID: []byte("registered-vector-source"), Fields: map[string]any{"body": "text only"}}},
@@ -504,14 +507,55 @@ func TestIngestChunkedDocumentsRejectsRegisteredVectorIndex(t *testing.T) {
 	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
 		t.Fatalf("registered vector index error=%v, want text-only rejection", err)
 	}
+	if flushCalled {
+		t.Fatal("registered vector rejection flushed collection write domains")
+	}
 	if got, err := col.Get([]byte("registered-vector-source")); err != nil || got != nil {
 		t.Fatalf("registered vector source mutated before rejection: %s err=%v", got, err)
 	}
 }
 
+func TestIngestChunkedDocumentsRejectsVectorIndexOnPeerHandle(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("create peer ad-hoc vector index: %v", err)
+	}
+	peer.RegisterVectorIndex(index)
+	if got := col.registeredAdHocVectorIndexCount(); got != 1 {
+		t.Fatalf("collection-wide ad-hoc vector count=%d want 1", got)
+	}
+
+	_, err = col.IngestChunkedDocuments(
+		[]SourceDocument{{ID: []byte("peer-vector-source"), Fields: map[string]any{"body": "text only"}}},
+		fixedWindowCfg(8, 1),
+		ChunkedIngestOptions{},
+	)
+	if !errors.Is(err, errBatchChunkIngestVectorIndexed) {
+		t.Fatalf("peer vector index error=%v, want text-only rejection", err)
+	}
+	if got, err := col.Get([]byte("peer-vector-source")); err != nil || got != nil {
+		t.Fatalf("peer vector source mutated before rejection: %s err=%v", got, err)
+	}
+	peer.UnregisterVectorIndex("embedding")
+	if got := col.registeredAdHocVectorIndexCount(); got != 0 {
+		t.Fatalf("collection-wide ad-hoc vector count after unregister=%d want 0", got)
+	}
+}
+
 func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *testing.T) {
-	_, _, col := openChunkingTestCollection(t)
-	index, err := newVectorIndex(col, VectorIndexOptions{
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	index, err := newVectorIndex(peer, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2,
 	})
 	if err != nil {
@@ -522,7 +566,7 @@ func TestIngestChunkedDocumentsBlocksVectorRegistrationThroughPublication(t *tes
 	hooks := &chunkedIngestHooks{afterBatchScan: func() {
 		go func() {
 			close(attempted)
-			col.RegisterVectorIndex(index)
+			peer.RegisterVectorIndex(index)
 			close(registered)
 		}()
 		<-attempted

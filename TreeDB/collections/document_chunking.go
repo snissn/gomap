@@ -384,6 +384,9 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	defer lifecycleLocks.releaseAll()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	if c.registeredAdHocVectorIndexCount() > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -434,6 +437,11 @@ func (c *Collection) replaceChunkedDocumentBatchLocked(plans []chunkedDocumentBa
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	unlockAdHocVectorAdmission := c.lockAdHocVectorAdmissionRead()
+	defer unlockAdHocVectorAdmission()
+	if c.registeredAdHocVectorIndexCount() > 0 {
+		return nil, errBatchChunkIngestVectorIndexed
+	}
 	c.vectorIndexesMu.RLock()
 	defer c.vectorIndexesMu.RUnlock()
 	if len(c.vectorIndexes) > 0 {
