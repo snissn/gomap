@@ -253,14 +253,14 @@ func backgroundIndexVacuumTriggerReport(db *DB, ctx context.Context) (backenddb.
 	return db.backend.IndexVacuumTriggerReportContext(ctx)
 }
 
-func backgroundIndexVacuumRun(db *DB, ctx context.Context) error {
+func backgroundIndexVacuumRun(db *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
 	bgIndexVacuumRunHook.mu.RLock()
 	hook := bgIndexVacuumRunHook.fn
 	bgIndexVacuumRunHook.mu.RUnlock()
 	if hook != nil {
-		return hook(db, ctx)
+		return backenddb.VacuumOnlineStats{}, hook(db, ctx)
 	}
-	return db.VacuumIndexOnline(ctx)
+	return db.vacuumIndexOnlineStats(ctx)
 }
 
 func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
@@ -481,10 +481,12 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 
 	w.vacuumAttempts.Add(1)
 	vacuumStarted := time.Now()
-	beforeAttemptID := db.backend.VacuumOnlineStats().AttemptID
-	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
+	onlineStats, err := backgroundIndexVacuumRun(db, ctx)
+	if err != nil {
 		w.recordVacuumDuration(time.Since(vacuumStarted))
-		w.recordOnlineVacuumIfAdvanced(db, beforeAttemptID)
+		if onlineStats.AttemptID != 0 {
+			w.lastOnlineVacuum.Store(&onlineStats)
+		}
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
@@ -496,7 +498,9 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		return
 	}
 	w.recordVacuumDuration(time.Since(vacuumStarted))
-	w.recordOnlineVacuum(db)
+	if onlineStats.AttemptID != 0 {
+		w.lastOnlineVacuum.Store(&onlineStats)
+	}
 	w.vacuumWorkCompleted.Add(1)
 
 	w.retryProbe = false

@@ -1195,7 +1195,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.ExactCandidateScan = resourceWork.ExactCandidateScan
 		runStats.ReusedNonValueLogDescriptors += resourceWork.ReusedNonValueLogDescriptors
 		runStats.UniqueExternalSegments += resourceWork.UniqueScannedExternalSegments
-		runStats.ReplacementPagerPages = nextMeta.TotalPages
 		// The gate keeps all ordinary writers outside the old-generation
 		// mutation critical section while dependency, replacement-index, and
 		// durable-meta sync run with no DB write lock held.
@@ -1242,6 +1241,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			return fmt.Errorf("vacuum: enable replacement COW freelist: %w", err)
 		}
 		nextMeta.TotalPages = selected.Record.TotalPages
+		runStats.ReplacementPagerPages = selected.Record.TotalPages
 		replacementSelection = &selected
 		replacementGen = newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
 		replacementRuntime, err = newRootPublicationRuntimeV1(
