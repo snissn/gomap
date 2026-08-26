@@ -239,6 +239,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
 		s.benchmarkSearchCacheMu.RUnlock()
 		if cached {
+			s.noteDiagnosticsIndex(req.Name, info)
 			return info, nil
 		}
 		col, _, err := s.openIndex(ctx, req.Name, 0)
@@ -280,6 +281,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			}
 		}
 	}
+	s.noteDiagnosticsIndex(req.Name, info)
 	return info, nil
 }
 
@@ -353,7 +355,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 			// between the read preflight and InsertBatch, fall back per item to
 			// replace-or-insert semantics instead of leaking ErrDocumentExists.
 			for _, doc := range inserts {
-				wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, true)
+				wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, true, func() {
+					s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+				})
 				if err != nil {
 					return UpsertDocumentsResponse{}, err
 				}
@@ -369,7 +373,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}
 	for _, doc := range updates {
-		wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, false)
+		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
+			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+		})
 		if err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -1415,6 +1421,10 @@ func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
+	return upsertPreparedDocumentWithInsertCallback(ctx, col, doc, preferInsert, nil)
+}
+
+func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool, afterInsert func()) (inserted bool, updated bool, err error) {
 	const maxAttempts = 4
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctxErr(ctx); err != nil {
@@ -1422,6 +1432,9 @@ func upsertPreparedDocument(ctx context.Context, col *collections.Collection, do
 		}
 		if preferInsert {
 			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
+				if afterInsert != nil {
+					afterInsert()
+				}
 				return true, false, nil
 			} else if !collections.IsDuplicateKeyError(err) {
 				return false, false, wrapServiceError(CodeInternal, "insert document failed", err)

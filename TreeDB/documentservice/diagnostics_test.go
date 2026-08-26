@@ -191,6 +191,56 @@ func TestDiagnosticsSnapshotOpenDoesNotPublishStaleCompletedInsert(t *testing.T)
 	}
 }
 
+func TestDiagnosticsSnapshotPublishesFallbackSingletonInsert(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	svc.DiagnosticsHandler(nil)
+	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "docs", Dimension: 2})
+	if err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	col, _, err := svc.openIndex(ctx, "docs", 0)
+	if err != nil {
+		t.Fatalf("openIndex: %v", err)
+	}
+	doc, err := prepareDocumentsForWrite([]Document{{ID: "fallback", Embedding: []float32{1, 0}}}, info)
+	if err != nil {
+		t.Fatalf("prepareDocumentsForWrite: %v", err)
+	}
+	inserted, updated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc[0], true, func() {
+		svc.publishDiagnosticsInsert(info.Name, info, col.LastInsertStats())
+	})
+	if err != nil || !inserted || updated {
+		t.Fatalf("fallback singleton insert inserted=%v updated=%v err=%v", inserted, updated, err)
+	}
+	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Name != "docs" || got.Insert.Documents != 1 {
+		t.Fatalf("fallback singleton insert was not published: %+v", got)
+	}
+}
+
+func TestDiagnosticsSnapshotCachedNativeCreateIsLastOpened(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	svc.DiagnosticsHandler(nil)
+	request := func(name string) CreateIndexRequest {
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+	}
+	if _, err := svc.CreateIndex(ctx, request("a")); err != nil {
+		t.Fatalf("CreateIndex a: %v", err)
+	}
+	if _, err := svc.CreateIndex(ctx, request("b")); err != nil {
+		t.Fatalf("CreateIndex b: %v", err)
+	}
+	if _, err := svc.CreateIndex(ctx, request("a")); err != nil {
+		t.Fatalf("compatible cached CreateIndex a: %v", err)
+	}
+	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Name != "a" {
+		t.Fatalf("cached CreateIndex did not become last opened: %+v", got)
+	}
+}
+
 func BenchmarkDiagnosticsOpenIndex(b *testing.B) {
 	for _, diagnostics := range []bool{false, true} {
 		b.Run(map[bool]string{false: "off", true: "on"}[diagnostics], func(b *testing.B) {
