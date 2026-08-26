@@ -123,9 +123,12 @@ func (idx *VectorIndex) foldLiveDeltaLocked() error {
 		return err
 	}
 	for _, row := range scalarRows {
-		if err := idx.appendNativeScalarRowLocked(row); err != nil {
+		if err := idx.appendNativeScalarRowValuesLocked(row); err != nil {
 			return err
 		}
+	}
+	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
+		return err
 	}
 	idx.liveDelta = nil
 	idx.liveDeltaCutovers++

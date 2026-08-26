@@ -162,7 +162,7 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	return row, nil
 }
 
-func (idx *VectorIndex) appendNativeScalarRowLocked(row map[string][]byte) error {
+func (idx *VectorIndex) appendNativeScalarRowValuesLocked(row map[string][]byte) error {
 	for _, def := range idx.scalarDefinitions {
 		column, ok := idx.scalarColumns[def.Name]
 		if !ok {
@@ -173,6 +173,13 @@ func (idx *VectorIndex) appendNativeScalarRowLocked(row map[string][]byte) error
 			return err
 		}
 		idx.scalarColumns[def.Name] = column
+	}
+	return nil
+}
+
+func (idx *VectorIndex) appendNativeScalarRowLocked(row map[string][]byte) error {
+	if err := idx.appendNativeScalarRowValuesLocked(row); err != nil {
+		return err
 	}
 	return idx.validateNativeScalarColumnLengthsLocked()
 }
@@ -483,9 +490,17 @@ func populateNativeScalarColumnsFromSecondaryIndexes(idx *VectorIndex, snap *bac
 	defer idx.mu.Unlock()
 	idx.scalarColumns = newNativeScalarColumns(idx.scalarDefinitions)
 	for nodeID := range idx.nodes {
-		if err := idx.appendNativeScalarRowLocked(rows[string(idx.nodes[nodeID].documentID)]); err != nil {
+		documentID := string(idx.nodes[nodeID].documentID)
+		var row map[string][]byte
+		if idx.currentNode[documentID] == nodeID {
+			row = rows[documentID]
+		}
+		if err := idx.appendNativeScalarRowValuesLocked(row); err != nil {
 			return err
 		}
+	}
+	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
+		return err
 	}
 	idx.publishSearchViewLocked(true)
 	return nil
