@@ -9085,6 +9085,7 @@ type DB struct {
 	checkpointStageWALRotate                                     checkpointStageStats
 	checkpointStageValueLogFlush                                 checkpointStageStats
 	checkpointStageCommandWALPublish                             checkpointStageStats
+	checkpointStageCommandWALCleanup                             checkpointStageStats
 	checkpointStageFlushAll                                      checkpointStageStats
 	checkpointStageLeafValueLogSync                              checkpointStageStats
 	checkpointStageReducerPublish                                checkpointStageStats
@@ -24633,9 +24634,12 @@ func (db *DB) checkpointContext(ctx context.Context) error {
 		return commitErr
 	}
 	if commandWALAppliedLSN != 0 || commandWALPublishCovered {
+		commandWALCleanupStart := time.Now()
 		if err := db.cleanupCommandWALCheckpoint(true); err != nil {
+			recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
 			return err
 		}
+		recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, commandWALCleanupStart)
 	}
 
 	walCleanupStart := time.Now()
@@ -30731,6 +30735,7 @@ func (db *DB) Stats() map[string]string {
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
 	appendCheckpointStageStats(stats, "value_log_flush", &db.checkpointStageValueLogFlush)
 	appendCheckpointStageStats(stats, "command_wal_publish", &db.checkpointStageCommandWALPublish)
+	appendCheckpointStageStats(stats, "command_wal_cleanup", &db.checkpointStageCommandWALCleanup)
 	appendCheckpointStageStats(stats, "flush_all", &db.checkpointStageFlushAll)
 	appendCheckpointStageStats(stats, "leaf_value_log_sync", &db.checkpointStageLeafValueLogSync)
 	appendCheckpointStageStats(stats, "reducer_publish", &db.checkpointStageReducerPublish)

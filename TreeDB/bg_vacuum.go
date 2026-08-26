@@ -139,6 +139,7 @@ type bgIndexVacuumWorker struct {
 	lastCollectionRootPages      atomic.Uint64
 	lastCollectionRootSpanRatio  atomic.Uint64
 	lastDebtReason               atomic.Value // string
+	lastOnlineVacuum             atomic.Pointer[backenddb.VacuumOnlineStats]
 
 	lastProbeCommitSeq              uint64
 	lastProbeFreelistReclaimable    uint64
@@ -469,6 +470,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	}
 
 	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
+		w.recordOnlineVacuum(db)
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
@@ -479,6 +481,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 		}
 		return
 	}
+	w.recordOnlineVacuum(db)
 
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
@@ -487,6 +490,14 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	w.vacuums.Add(1)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
+}
+
+func (w *bgIndexVacuumWorker) recordOnlineVacuum(db *DB) {
+	if w == nil || db == nil || db.backend == nil {
+		return
+	}
+	stats := db.backend.VacuumOnlineStats()
+	w.lastOnlineVacuum.Store(&stats)
 }
 
 func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
@@ -676,6 +687,7 @@ type bgIndexVacuumStats struct {
 	LastCollectionRootPages      uint64
 	LastCollectionRootSpanRatio  uint64
 	LastDebtReason               string
+	LastOnlineVacuum             backenddb.VacuumOnlineStats
 }
 
 // Stats returns a snapshot of background index vacuum state and recent run info.
@@ -735,6 +747,9 @@ func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
 	if out.LastOutcome == "" {
 		out.LastOutcome = backgroundIndexVacuumOutcomeNone
 	}
+	if last := w.lastOnlineVacuum.Load(); last != nil {
+		out.LastOnlineVacuum = *last
+	}
 	return out
 }
 
@@ -775,6 +790,18 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.last_collection_roots_pages"] = fmt.Sprintf("%d", stats.LastCollectionRootPages)
 	out["treedb.bg_vacuum.last_collection_roots_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastCollectionRootSpanRatio)
 	out["treedb.bg_vacuum.last_debt_reason"] = stats.LastDebtReason
+	out["treedb.bg_vacuum.last_online.total_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.TotalDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.recoverable_set_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptureDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.recoverable_set_recaptures"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetRecaptures)
+	out["treedb.bg_vacuum.last_online.recoverable_roots"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableRoots)
+	out["treedb.bg_vacuum.last_online.older_root_rebuild_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuildDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.durable_resource_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceCaptureDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.durable_resource_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceDescriptors)
+	out["treedb.bg_vacuum.last_online.durable_resource_bytes"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceBytes)
+	out["treedb.bg_vacuum.last_online.closure_exact"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.ClosureExact)
+	out["treedb.bg_vacuum.last_online.closure_fallback_reason"] = stats.LastOnlineVacuum.ClosureFallbackReason
+	out["treedb.bg_vacuum.last_online.work_completed"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.WorkCompleted)
+	out["treedb.bg_vacuum.last_online.canceled"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.Canceled)
 	if stats.LastErr != "" {
 		out["treedb.bg_vacuum.last_err"] = stats.LastErr
 	}

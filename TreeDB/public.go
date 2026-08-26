@@ -2600,6 +2600,15 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	return nil
 }
 
+// VacuumOnlineStats returns an owned snapshot of the latest backend online
+// vacuum attempt. The snapshot is diagnostic only and never retains payloads.
+func (db *DB) VacuumOnlineStats() VacuumOnlineStats {
+	if db == nil || db.backend == nil {
+		return VacuumOnlineStats{}
+	}
+	return db.backend.VacuumOnlineStats()
+}
+
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.
 // This is intended to reclaim space and restore locality after long churn.
 //

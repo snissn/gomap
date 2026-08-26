@@ -69,6 +69,8 @@ func TestCheckpointWaitProductivityStatsNoopCheckpoint(t *testing.T) {
 		"treedb.cache.checkpoint.flush_all.background_drain_units_last",
 		"treedb.cache.checkpoint.flush_all.background_drain_ops_last",
 		"treedb.cache.checkpoint.flush_all.background_drain_bytes_last",
+		"treedb.cache.checkpoint.stage.command_wal_cleanup.samples",
+		"treedb.cache.checkpoint.stage.command_wal_cleanup.last_ns",
 	} {
 		if got := requireStatUint64(t, stats, key); got != 0 {
 			t.Fatalf("%s=%d want 0", key, got)

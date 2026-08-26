@@ -62,25 +62,39 @@ const (
 )
 
 type VacuumOnlineStats struct {
-	TotalDuration              time.Duration
-	UserTreeDuration           time.Duration
-	SystemReserveDuration      time.Duration
-	CollectionBasisDuration    time.Duration
-	PreflushDuration           time.Duration
-	CutoverDuration            time.Duration
-	SystemTreeDuration         time.Duration
-	FinalPagerSyncDuration     time.Duration
-	SwapPublishDuration        time.Duration
-	MaxWriterPause             time.Duration
-	PrecloneTraversalPages     uint64
-	RecloneTraversalPages      uint64
-	CutoverCloneTraversalPages uint64
-	DirtyDescriptors           uint64
-	UserTailMutations          uint64
-	UserTailPointMutations     uint64
-	UserTailRangeMutations     uint64
-	DeferredCutovers           uint64
-	ConcurrentMutationAborts   uint64
+	TotalDuration                  time.Duration
+	UserTreeDuration               time.Duration
+	SystemReserveDuration          time.Duration
+	CollectionBasisDuration        time.Duration
+	PreflushDuration               time.Duration
+	CutoverDuration                time.Duration
+	SystemTreeDuration             time.Duration
+	FinalPagerSyncDuration         time.Duration
+	SwapPublishDuration            time.Duration
+	MaxWriterPause                 time.Duration
+	PrecloneTraversalPages         uint64
+	RecloneTraversalPages          uint64
+	CutoverCloneTraversalPages     uint64
+	DirtyDescriptors               uint64
+	UserTailMutations              uint64
+	UserTailPointMutations         uint64
+	UserTailRangeMutations         uint64
+	DeferredCutovers               uint64
+	ConcurrentMutationAborts       uint64
+	RecoverableSetCaptureDuration  time.Duration
+	RecoverableSetCaptures         uint64
+	RecoverableSetRecaptures       uint64
+	RecoverableRoots               uint64
+	OlderRootRebuildDuration       time.Duration
+	OlderRootRebuilds              uint64
+	DurableResourceCaptureDuration time.Duration
+	DurableResourceCaptures        uint64
+	DurableResourceDescriptors     uint64
+	DurableResourceBytes           uint64
+	ClosureExact                   bool
+	ClosureFallbackReason          string
+	WorkCompleted                  bool
+	Canceled                       bool
 }
 
 // vacuumReservedAllocator keeps the final system-tree writes in pages reserved
@@ -137,6 +151,10 @@ func (db *DB) vacuumOnlineStatsSnapshot() VacuumOnlineStats {
 	}
 	return *stats
 }
+
+// VacuumOnlineStats returns an owned snapshot of the most recently completed
+// online-vacuum attempt. It is safe to call while a vacuum is running.
+func (db *DB) VacuumOnlineStats() VacuumOnlineStats { return db.vacuumOnlineStatsSnapshot() }
 
 type vacuumRecorder struct {
 	active atomic.Bool
@@ -347,11 +365,13 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
+	captureStarted := time.Now()
 	roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
 	if err != nil {
 		return err
 	}
-	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots)
+	seed := VacuumOnlineStats{RecoverableSetCaptureDuration: time.Since(captureStarted), RecoverableSetCaptures: 1, RecoverableRoots: uint64(len(roots.Roots())), ClosureFallbackReason: "none"}
+	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots, &seed)
 }
 
 // vacuumIndexOnlineLegacyV1 retains the pre-root-publication rebuild algorithm
@@ -362,10 +382,10 @@ func (db *DB) vacuumIndexOnlineLegacyV1(ctx context.Context, lockMaintenance boo
 	if capability == nil {
 		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 	}
-	return db.vacuumIndexOnlineRebuildV1(ctx, lockMaintenance, capability, nil)
+	return db.vacuumIndexOnlineRebuildV1(ctx, lockMaintenance, capability, nil, nil)
 }
 
-func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet) (retErr error) {
+func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats) (retErr error) {
 	if capability == nil && (recoverableRoots == nil || recoverableRoots.db != db || recoverableRoots.released.Load()) {
 		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 	}
@@ -379,9 +399,14 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		return ErrClosed
 	}
 	runStarted := time.Now()
-	runStats := &VacuumOnlineStats{}
+	runStats := &VacuumOnlineStats{ClosureFallbackReason: "none"}
+	if seed != nil {
+		*runStats = *seed
+	}
 	defer func() {
 		runStats.TotalDuration = time.Since(runStarted)
+		runStats.Canceled = errors.Is(retErr, context.Canceled)
+		runStats.WorkCompleted = retErr == nil
 		published := *runStats
 		db.vacuumOnlineLast.Store(&published)
 	}()
@@ -529,7 +554,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			MaxEntryRevision: olderRecord.MaxEntryRevision, Durable: true,
 		}
 		recordingAlloc := newVacuumRecordingAllocator(newAlloc)
+		rebuildStarted := time.Now()
 		rebuilt, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+		runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
+		runStats.OlderRootRebuilds++
 		if rebuildErr != nil {
 			cleanupNewPager()
 			return rebuildErr
@@ -871,12 +899,17 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			runStats.DeferredCutovers++
 			if recoverableRoots != nil {
 				recoverableRoots.Release()
+				captureStarted := time.Now()
 				recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+				runStats.RecoverableSetCaptureDuration += time.Since(captureStarted)
+				runStats.RecoverableSetCaptures++
+				runStats.RecoverableSetRecaptures++
 				if err != nil {
 					_ = successor.Close()
 					cleanupNewPager()
 					return err
 				}
+				runStats.RecoverableRoots = uint64(len(recoverableRoots.Roots()))
 				olderRecord := recoverableRoots.durable.slotRecord[recoverableRoots.durable.slot^1]
 				if olderRecord.CommitSeq == 0 {
 					_ = successor.Close()
@@ -890,7 +923,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 						MaxEntryRevision: olderRecord.MaxEntryRevision, Durable: true,
 					}
 					recordingAlloc := newVacuumRecordingAllocator(newAlloc)
+					rebuildStarted := time.Now()
 					rebuilt, rebuildErr := db.rebuildRecoverableRootV1(ctx, recoverableRoots, olderRoot, newPager, recordingAlloc)
+					runStats.OlderRootRebuildDuration += time.Since(rebuildStarted)
+					runStats.OlderRootRebuilds++
 					if rebuildErr != nil {
 						_ = successor.Close()
 						cleanupNewPager()
@@ -1062,12 +1098,20 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		} else {
 			sourceResources = db.durableRoot.slotResources[db.durableRoot.slot]
 		}
+		durableCaptureStarted := time.Now()
 		durableResources, err := db.captureRebuiltIndexDurableResourcesFromV1(newPager, nextMeta, sourceResources)
+		runStats.DurableResourceCaptureDuration += time.Since(durableCaptureStarted)
+		runStats.DurableResourceCaptures++
 		if err != nil {
 			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
+		for _, descriptor := range durableResources.Descriptors() {
+			runStats.DurableResourceDescriptors++
+			runStats.DurableResourceBytes += descriptor.Frontier().Bytes
+		}
+		runStats.ClosureExact = true
 		// The gate keeps all ordinary writers outside the old-generation
 		// mutation critical section while dependency, replacement-index, and
 		// durable-meta sync run with no DB write lock held.
