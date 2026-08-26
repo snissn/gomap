@@ -1016,6 +1016,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 		return nil, work, errors.Join(scanErr, closeErr)
 	}
 	work.ExactCandidateScan = true
+	work.UniqueScannedExternalSegments = uint64(len(references))
 	exactPackedFileIDs := make(map[uint32]struct{})
 	for _, descriptor := range source.Descriptors() {
 		if descriptor.Kind() == rootpublication.ResourceOuterLeafPack && descriptor.Generation() <= uint64(^uint32(0)) {
@@ -1025,8 +1026,6 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 	for fileID := range exactPackedFileIDs {
 		delete(references, fileID)
 	}
-	work.UniqueScannedExternalSegments = uint64(len(references))
-
 	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
 		source,
 		rootpublication.ResourceValueLog,

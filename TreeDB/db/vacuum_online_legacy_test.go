@@ -55,6 +55,12 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	}
 }
 
+func TestVacuumDurableResourceSummaryNil(t *testing.T) {
+	if descriptors, bytes := vacuumDurableResourceSummary(nil); descriptors != 0 || bytes != 0 {
+		t.Fatalf("nil resource summary=(%d,%d), want (0,0)", descriptors, bytes)
+	}
+}
+
 func TestVacuumIndexOnlineInitialCaptureFailureRecordsAttempt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
