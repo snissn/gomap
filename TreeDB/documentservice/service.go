@@ -447,6 +447,9 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 		return CountDocumentsResponse{}, err
 	}
 	if req.Filter == nil {
+		if err := ctxErr(ctx); err != nil {
+			return CountDocumentsResponse{}, err
+		}
 		count := 0
 		_, err = col.ScanDocumentIDsFunc(maxServiceScanDocuments, func([]byte) (bool, error) {
 			if err := ctxErr(ctx); err != nil {
@@ -457,6 +460,9 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 		})
 		if err != nil {
 			return CountDocumentsResponse{}, mapDocumentScanError(err)
+		}
+		if err := ctxErr(ctx); err != nil {
+			return CountDocumentsResponse{}, err
 		}
 		return CountDocumentsResponse{Index: info, Count: count}, nil
 	}
