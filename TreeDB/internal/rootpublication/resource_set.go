@@ -3728,21 +3728,28 @@ func stableLogicalObligationCommitmentsEqual(left, right map[ReachabilityField]s
 	return true
 }
 
-func appendStableLogicalMembershipEvidenceCandidates(target map[ResourceKind][]stableLogicalMembershipEvidence, set *StableResourceSet) {
+func appendStableLogicalMembershipEvidenceCandidates(target map[ResourceKind][]stableLogicalMembershipEvidence, set *StableResourceSet) map[ResourceKind][]stableLogicalMembershipEvidence {
 	if set.kindViews != nil {
 		for kind, view := range set.kindViews {
 			evidence := stableLogicalMembershipEvidenceFromKindView(view)
-			if stableLogicalMembershipEvidenceComplete(evidence) {
+			if evidence.logicalObligationCount != 0 && stableLogicalMembershipEvidenceComplete(evidence) {
+				if target == nil {
+					target = make(map[ResourceKind][]stableLogicalMembershipEvidence)
+				}
 				target[kind] = append(target[kind], evidence)
 			}
 		}
-		return
+		return target
 	}
 	for kind, evidence := range set.logicalMembershipEvidence {
-		if stableLogicalMembershipEvidenceComplete(evidence) {
+		if evidence.logicalObligationCount != 0 && stableLogicalMembershipEvidenceComplete(evidence) {
+			if target == nil {
+				target = make(map[ResourceKind][]stableLogicalMembershipEvidence)
+			}
 			target[kind] = append(target[kind], evidence)
 		}
 	}
+	return target
 }
 
 func stableUnionLogicalMembershipEvidence(entries []stableResourceEntry, candidates map[ResourceKind][]stableLogicalMembershipEvidence) map[ResourceKind]stableLogicalMembershipEvidence {
@@ -3781,13 +3788,13 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 	view := &StableResourceSet{createdAt: time.Now()}
 	view.owner.Store(uint32(ResourceOwnerView))
 	lookup := stableResourceEntryLookup{}
-	evidenceCandidates := make(map[ResourceKind][]stableLogicalMembershipEvidence)
+	var evidenceCandidates map[ResourceKind][]stableLogicalMembershipEvidence
 	for _, set := range sets {
 		if set == nil {
 			continue
 		}
 		set.mu.Lock()
-		appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
+		evidenceCandidates = appendStableLogicalMembershipEvidenceCandidates(evidenceCandidates, set)
 		var mergeErr error
 		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 			var err error
@@ -3811,7 +3818,9 @@ func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, er
 		}
 	}
 	sortStableResourceEntries(view.entries)
-	view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+	if len(evidenceCandidates) != 0 {
+		view.logicalMembershipEvidence = stableUnionLogicalMembershipEvidence(view.entries, evidenceCandidates)
+	}
 	view.pinHighWater = stableResourcePinCounts(view.entries)
 	return view, nil
 }
