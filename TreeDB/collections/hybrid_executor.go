@@ -38,6 +38,7 @@ type hybridSearchExecutionPlan struct {
 	vectorCandidateAllowSetBudget int
 	scalarFilter                  *HybridScalarFilter
 	scalarFilterStrategy          HybridScalarFilterStrategy
+	nativeVectorScalar            bool
 	fusion                        HybridFusionOptions
 	resultMode                    HybridResultMode
 	maxChunksPerParent            int
@@ -89,8 +90,14 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var allowSet hybridScalarAllowSet
 	var scalarStats HybridSearchStats
-	nativeVectorScalar := plan.scalarFilter != nil && plan.text == nil && plan.vector != nil
-	if !nativeVectorScalar {
+	nativeVectorScalarShape := plan.scalarFilter != nil && plan.text == nil && plan.vector != nil
+	if nativeVectorScalarShape {
+		plan.nativeVectorScalar, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
+		if err != nil {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, err)
+		}
+	}
+	if !plan.nativeVectorScalar {
 		allowSet, scalarStats, err = c.hybridScalarAllowSet(plan)
 		hybridMergeStats(&response.Stats, scalarStats)
 		if err != nil {
@@ -680,6 +687,32 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 	_, ok := findIndex(catalog.meta.Indexes, indexName)
 	return ok, nil
 }
+
+func (c *Collection) hybridVectorQueryUsesNativeRuntime(query *HybridVectorQuery) (bool, error) {
+	if query == nil {
+		return false, nil
+	}
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, query.IndexName)
+	return ok && vectorIndexDefinitionUsesNativeRuntime(def), nil
+}
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	if capHint := hybridSearchCandidatePreallocHint(plan); capHint > 0 {
@@ -689,7 +722,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var textResponse, vectorResponse HybridCandidateResponse
 	var textErr, vectorErr error
 	searchVector := func() (HybridCandidateResponse, error) {
-		if plan.scalarFilter != nil && plan.text == nil {
+		if plan.nativeVectorScalar {
 			return c.searchHybridVectorCandidatesNativeScalar(*plan.vector, plan.scalarFilter)
 		}
 		return c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)

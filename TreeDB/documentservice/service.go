@@ -877,19 +877,12 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if !hasText && !hasVector {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "hybrid search requires query, query_embedding, or both")
 	}
-	switch {
-	case hasText && hasVector:
-		if !info.Capabilities.HybridSearch {
-			return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
-		}
-	case hasText:
-		if !info.Capabilities.KeywordSearch {
-			return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid text-only search requires a content text index")
-		}
-	case hasVector:
-		if !info.Capabilities.NoDocumentVectorSearch {
-			return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid vector-only search requires a cosine column_graph or native_runtime vector index")
-		}
+	nativeVectorOnly := !hasText &&
+		hasVector &&
+		info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime &&
+		info.Capabilities.NoDocumentVectorSearch
+	if !nativeVectorOnly && !info.Capabilities.HybridSearch {
+		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
 	}
 	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.EfSearch < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits and ef_search must be non-negative")
@@ -907,7 +900,6 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if err != nil {
 		return HybridSearchResponse{}, err
 	}
-
 
 	opts := collections.HybridSearchOptions{
 		TopK:                 req.TopK,
