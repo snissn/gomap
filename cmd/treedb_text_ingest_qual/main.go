@@ -80,6 +80,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "invalid qualification raw evidence: %v\n", err)
 		os.Exit(1)
 	}
+	if err := verifyFrozenBaseline(manifest, filepath.Dir(manifestPath)); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid frozen baseline evidence: %v\n", err)
+		os.Exit(1)
+	}
 	if err := verifyGitProvenance(manifest, gitBlobOID(manifestBytes), resolveLocalGit); err != nil {
 		fmt.Fprintf(os.Stderr, "invalid qualification artifact Git provenance: %v\n", err)
 		os.Exit(1)
@@ -136,6 +140,39 @@ func verifyRawRows(m manifest, r report, artifactDir string) error {
 		if !reflect.DeepEqual(decoded, candidate) {
 			return fmt.Errorf("%s does not match its report row", relativePath)
 		}
+	}
+	return nil
+}
+
+func verifyFrozenBaseline(m manifest, artifactDir string) error {
+	const relativePath = "smoke-10k-r3/source_chunk.raw.json"
+	raw, err := os.ReadFile(filepath.Join(artifactDir, filepath.FromSlash(relativePath)))
+	if err != nil {
+		return fmt.Errorf("read %s: %w", relativePath, err)
+	}
+	sum := sha256.Sum256(raw)
+	acceptance := m.Acceptance.SourceChunk10K
+	if got := hex.EncodeToString(sum[:]); got != acceptance.FrozenBaselineRowSHA256 {
+		return fmt.Errorf("%s digest does not match acceptance baseline", relativePath)
+	}
+	var baseline struct {
+		Mode                  string  `json:"mode"`
+		SourceDocuments       int     `json:"source_documents"`
+		WallSeconds           float64 `json:"wall_seconds"`
+		PeakRSSBytes          metric  `json:"peak_rss_bytes"`
+		CumulativeAllocations metric  `json:"cumulative_allocations"`
+		Storage               storage `json:"storage"`
+	}
+	if err := json.Unmarshal(raw, &baseline); err != nil {
+		return fmt.Errorf("decode %s: %w", relativePath, err)
+	}
+	if baseline.Mode != "source_chunk" ||
+		baseline.SourceDocuments != acceptance.BaselineSourceDocuments ||
+		baseline.WallSeconds != acceptance.BaselineWallSeconds ||
+		baseline.PeakRSSBytes.State != "observed" || int64(baseline.PeakRSSBytes.Value) != acceptance.BaselinePeakRSSBytes ||
+		baseline.CumulativeAllocations.State != "observed" || int64(baseline.CumulativeAllocations.Value) != acceptance.BaselineCumulativeAllocations ||
+		baseline.Storage.PhysicalTotalWALExcludedBytes != acceptance.BaselinePhysicalTotalWALExcludedBytes {
+		return fmt.Errorf("%s measurements do not match acceptance baseline", relativePath)
 	}
 	return nil
 }

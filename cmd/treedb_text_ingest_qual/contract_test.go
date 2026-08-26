@@ -322,6 +322,45 @@ func TestVerifyRawRowsRejectsTampering(t *testing.T) {
 	}
 }
 
+func TestVerifyFrozenBaselineAuthenticatesDigestAndMeasurements(t *testing.T) {
+	m := validManifest()
+	a := m.Acceptance.SourceChunk10K
+	baseline := map[string]any{
+		"mode":                   "source_chunk",
+		"source_documents":       a.BaselineSourceDocuments,
+		"wall_seconds":           a.BaselineWallSeconds,
+		"peak_rss_bytes":         metric{State: "observed", Value: float64(a.BaselinePeakRSSBytes)},
+		"cumulative_allocations": metric{State: "observed", Value: float64(a.BaselineCumulativeAllocations)},
+		"storage":                storage{PhysicalTotalWALExcludedBytes: a.BaselinePhysicalTotalWALExcludedBytes},
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "smoke-10k-r3", "source_chunk.raw.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBaseline := func() {
+		raw, err := json.MarshalIndent(baseline, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, '\n')
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(raw)
+		m.Acceptance.SourceChunk10K.FrozenBaselineRowSHA256 = hex.EncodeToString(sum[:])
+	}
+	writeBaseline()
+	if err := verifyFrozenBaseline(m, dir); err != nil {
+		t.Fatal(err)
+	}
+	baseline["wall_seconds"] = a.BaselineWallSeconds + 1
+	writeBaseline()
+	if err := verifyFrozenBaseline(m, dir); err == nil || !strings.Contains(err.Error(), "measurements do not match") {
+		t.Fatalf("typed baseline mismatch error=%v", err)
+	}
+}
+
 func TestValidateRejectsContractFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
