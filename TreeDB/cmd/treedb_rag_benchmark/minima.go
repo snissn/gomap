@@ -85,6 +85,23 @@ type minimaInterleaveStep struct {
 	InsertStart  int    `json:"insert_start,omitempty"`
 	InsertRows   int    `json:"insert_rows,omitempty"`
 }
+type minimaTimedRound struct {
+	Ordinal      int               `json:"ordinal"`
+	QueryStart   int               `json:"query_start"`
+	QueryCount   int               `json:"query_count"`
+	InsertRange  minimaInsertRange `json:"insert_range"`
+	StartBarrier string            `json:"start_barrier"`
+	EndBarrier   string            `json:"end_barrier"`
+}
+
+type minimaTimedReaderPlan struct {
+	QueryCount        int                `json:"query_count"`
+	ScenarioOrder     []string           `json:"scenario_order"`
+	ReaderConcurrency int                `json:"reader_concurrency"`
+	WriterConcurrency int                `json:"writer_concurrency"`
+	Assignment        string             `json:"assignment"`
+	Rounds            []minimaTimedRound `json:"rounds"`
+}
 
 type minimaOperationSpec struct {
 	Ordinal      int                       `json:"ordinal"`
@@ -97,6 +114,7 @@ type minimaOperationSpec struct {
 	IDs          []string                  `json:"ids,omitempty"`
 	Documents    []minimaGeneratedDocument `json:"documents,omitempty"`
 	Schedule     []minimaInterleaveStep    `json:"schedule,omitempty"`
+	TimedPlan    *minimaTimedReaderPlan    `json:"timed_reader_plan,omitempty"`
 }
 
 type minimaManifest struct {
@@ -145,7 +163,7 @@ func buildMinimaManifest() minimaManifest {
 	}
 	for i := range corpora {
 		corpora[i].Selectivity = float64(corpora[i].EligibleRows) / float64(corpora[i].CorpusRows)
-		corpora[i].Generator = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+		corpora[i].Generator = "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
 	}
 	queries := make([]minimaQuerySpec, 0, len(corpora))
 	for _, corpus := range corpora {
@@ -171,7 +189,7 @@ func buildMinimaManifest() minimaManifest {
 		{Ordinal: 0, Name: "ensure_compatible_collection", Target: "all", Effect: "none"},
 		{Ordinal: 1, Name: "initial_batch_insert", Target: "all", Effect: "insert", InsertRanges: initialRanges},
 		{Ordinal: 2, Name: "warmup_search", Target: "all", Effect: "none", Schedule: minimaReaderSchedule(corpora, defaultMinimaWorkloadConfig().WarmupQueries)},
-		{Ordinal: 3, Name: "timed_search_with_batch_insert", Target: "all", Timed: true, Effect: "insert", InsertRanges: concurrentRanges, Schedule: minimaInsertSchedule(concurrentRanges)},
+		{Ordinal: 3, Name: "timed_search_with_batch_insert", Target: "all", Timed: true, Effect: "insert", InsertRanges: concurrentRanges, TimedPlan: minimaTimedPlan(corpora, concurrentRanges, defaultMinimaWorkloadConfig())},
 		{Ordinal: 4, Name: "reindex_delete_by_user_and_fpath_while_reading", Target: mixed.Name, Effect: "delete", Filter: filter, IDs: mixedIDs, Schedule: minimaMutationSchedule(mixed.Name)},
 		{Ordinal: 5, Name: "reindex_replacement_insert_while_reading", Target: mixed.Name, Effect: "insert", Documents: replacements, Schedule: minimaMutationSchedule(mixed.Name)},
 		{Ordinal: 6, Name: "reindex_visibility_probe", Target: mixed.Name, Effect: "none", Schedule: minimaReaderSchedule([]minimaScenarioSpec{mixed}, 1)},
@@ -215,16 +233,22 @@ func minimaReaderSchedule(corpora []minimaScenarioSpec, count int) []minimaInter
 	return steps
 }
 
-func minimaInsertSchedule(ranges []minimaInsertRange) []minimaInterleaveStep {
-	steps := make([]minimaInterleaveStep, 0, len(ranges)*3)
-	for i, insertion := range ranges {
-		steps = append(steps,
-			minimaInterleaveStep{Ordinal: len(steps), Actor: "reader_before", Scenario: insertion.Scenario, QueryOrdinal: i * 2},
-			minimaInterleaveStep{Ordinal: len(steps) + 1, Actor: "writer_batch", Scenario: insertion.Scenario, InsertStart: insertion.Start, InsertRows: insertion.Rows},
-			minimaInterleaveStep{Ordinal: len(steps) + 2, Actor: "reader_after", Scenario: insertion.Scenario, QueryOrdinal: i*2 + 1},
-		)
+func minimaTimedPlan(corpora []minimaScenarioSpec, ranges []minimaInsertRange, config minimaWorkloadConfig) *minimaTimedReaderPlan {
+	perRound := config.TimedQueries / len(ranges)
+	plan := &minimaTimedReaderPlan{
+		QueryCount: config.TimedQueries, ReaderConcurrency: config.ReaderConcurrency, WriterConcurrency: config.WriterConcurrency,
+		Assignment: fmt.Sprintf("round=ordinal/%d;reader=ordinal%%%d;scenario=scenario_order[ordinal%%%d]", perRound, config.ReaderConcurrency, len(corpora)),
 	}
-	return steps
+	for _, corpus := range corpora {
+		plan.ScenarioOrder = append(plan.ScenarioOrder, corpus.Name)
+	}
+	for i, insertion := range ranges {
+		plan.Rounds = append(plan.Rounds, minimaTimedRound{
+			Ordinal: i, QueryStart: i * perRound, QueryCount: perRound, InsertRange: insertion,
+			StartBarrier: "round_start_readers_and_writer", EndBarrier: "round_end_queries_and_insert_complete",
+		})
+	}
+	return plan
 }
 
 func minimaMutationSchedule(scenario string) []minimaInterleaveStep {
@@ -235,19 +259,26 @@ func minimaMutationSchedule(scenario string) []minimaInterleaveStep {
 	}
 }
 
+type minimaStateDocument struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	UserID  string `json:"user_id"`
+	FPath   string `json:"fpath"`
+}
+
 type minimaStateMutation struct {
-	Ordinal      int                       `json:"ordinal"`
-	Effect       string                    `json:"effect"`
-	Target       string                    `json:"target"`
-	InsertRanges []minimaInsertRange       `json:"insert_ranges,omitempty"`
-	IDs          []string                  `json:"ids,omitempty"`
-	Documents    []minimaGeneratedDocument `json:"documents,omitempty"`
+	Ordinal      int                   `json:"ordinal"`
+	Effect       string                `json:"effect"`
+	Target       string                `json:"target"`
+	InsertRanges []minimaInsertRange   `json:"insert_ranges,omitempty"`
+	IDs          []string              `json:"ids,omitempty"`
+	Documents    []minimaStateDocument `json:"documents,omitempty"`
 }
 
 type minimaPostOperationState struct {
-	BaseCorpusSHA256 string                `json:"base_corpus_sha256"`
-	LiveRows         map[string]int        `json:"live_rows"`
-	Mutations        []minimaStateMutation `json:"mutations"`
+	BasePayloadSHA256 string                `json:"base_payload_sha256"`
+	LiveRows          map[string]int        `json:"live_rows"`
+	Mutations         []minimaStateMutation `json:"mutations"`
 }
 
 type minimaAppliedState struct {
@@ -258,7 +289,7 @@ type minimaAppliedState struct {
 
 func minimaApplyOperations(manifest *minimaManifest) (minimaAppliedState, error) {
 	applied := minimaAppliedState{
-		Summary: minimaPostOperationState{BaseCorpusSHA256: manifest.CorpusSHA256, LiveRows: map[string]int{}},
+		Summary: minimaPostOperationState{BasePayloadSHA256: minimaPayloadCorpusDigest(manifest.Corpora), LiveRows: map[string]int{}},
 		Deleted: map[string]map[string]bool{}, Documents: map[string]map[string]minimaGeneratedDocument{},
 	}
 	specs := minimaScenarioMap(manifest)
@@ -309,7 +340,7 @@ func minimaApplyOperations(manifest *minimaManifest) (minimaAppliedState, error)
 		}
 		applied.Summary.Mutations = append(applied.Summary.Mutations, minimaStateMutation{
 			Ordinal: operation.Ordinal, Effect: operation.Effect, Target: operation.Target,
-			InsertRanges: operation.InsertRanges, IDs: operation.IDs, Documents: operation.Documents,
+			InsertRanges: operation.InsertRanges, IDs: operation.IDs, Documents: minimaStateDocuments(operation.Documents),
 		})
 	}
 	for name, spec := range specs {
@@ -330,6 +361,46 @@ func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
 		return "", err
 	}
 	return minimaDigest(applied.Summary), nil
+}
+
+type minimaPayloadCorpusSpec struct {
+	Name             string  `json:"name"`
+	Shape            string  `json:"shape"`
+	CorpusRows       int     `json:"corpus_rows"`
+	EligibleStart    int     `json:"eligible_start"`
+	EligibleRows     int     `json:"eligible_rows"`
+	BroadStart       int     `json:"broad_start,omitempty"`
+	BroadRows        int     `json:"broad_rows,omitempty"`
+	NarrowStart      int     `json:"narrow_start,omitempty"`
+	NarrowRows       int     `json:"narrow_rows,omitempty"`
+	Filter           string  `json:"filter"`
+	UserID           string  `json:"user_id,omitempty"`
+	FPath            string  `json:"fpath,omitempty"`
+	Selectivity      float64 `json:"selectivity"`
+	PayloadGenerator string  `json:"payload_generator"`
+}
+
+func minimaPayloadCorpusDigest(corpora []minimaScenarioSpec) string {
+	payload := make([]minimaPayloadCorpusSpec, len(corpora))
+	for i, corpus := range corpora {
+		payload[i] = minimaPayloadCorpusSpec{
+			Name: corpus.Name, Shape: corpus.Shape, CorpusRows: corpus.CorpusRows,
+			EligibleStart: corpus.EligibleStart, EligibleRows: corpus.EligibleRows,
+			BroadStart: corpus.BroadStart, BroadRows: corpus.BroadRows,
+			NarrowStart: corpus.NarrowStart, NarrowRows: corpus.NarrowRows,
+			Filter: corpus.Filter, UserID: corpus.UserID, FPath: corpus.FPath, Selectivity: corpus.Selectivity,
+			PayloadGenerator: "id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)",
+		}
+	}
+	return minimaDigest(payload)
+}
+
+func minimaStateDocuments(documents []minimaGeneratedDocument) []minimaStateDocument {
+	out := make([]minimaStateDocument, len(documents))
+	for i, document := range documents {
+		out[i] = minimaStateDocument{ID: document.ID, Content: document.Content, UserID: document.UserID, FPath: document.FPath}
+	}
+	return out
 }
 
 func minimaDigest(value any) string {
@@ -391,12 +462,13 @@ func minimaDocumentMatches(spec minimaScenarioSpec, document minimaGeneratedDocu
 func minimaDocumentScore(document minimaGeneratedDocument) float64 {
 	var squared float64
 	for _, value := range document.Vector {
-		squared += value * value
+		stored := float32(value)
+		squared += float64(stored) * float64(stored)
 	}
 	if squared == 0 {
 		return math.Inf(-1)
 	}
-	return document.Vector[0] / math.Sqrt(squared)
+	return float64(float32(document.Vector[0])) / math.Sqrt(squared)
 }
 
 func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocument, error) {
@@ -416,10 +488,9 @@ func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocu
 			fpath = spec.FPath
 		}
 	}
-	x := float64(ordinal+1) / 1000000
-	norm := math.Hypot(1, x)
+	score := 0.9 - float64(ordinal)*0.000003
 	vector := make([]float64, minimaDimension)
-	vector[0], vector[1] = 1/norm, x/norm
+	vector[0], vector[1] = score, math.Sqrt(1-score*score)
 	return minimaGeneratedDocument{
 		ID: fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal), Content: fmt.Sprintf("minima:%s:%d", spec.Name, ordinal),
 		Vector: vector, UserID: userID, FPath: fpath,
@@ -431,10 +502,8 @@ func minimaOracle(spec minimaScenarioSpec) ([]string, []float64) {
 	ids := make([]string, count)
 	scores := make([]float64, count)
 	for i := range count {
-		ordinal := spec.EligibleStart + i
-		x := float64(ordinal+1) / 1000000
-		ids[i] = fmt.Sprintf("minima/%s/%06d", spec.Name, ordinal)
-		scores[i] = 1 / math.Hypot(1, x)
+		document, _ := minimaDocumentAt(spec, spec.EligibleStart+i)
+		ids[i], scores[i] = document.ID, minimaDocumentScore(document)
 	}
 	return ids, scores
 }
@@ -445,6 +514,9 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	}
 	if manifest.CorpusSHA256 != minimaDigest(manifest.Corpora) || manifest.QuerySHA256 != minimaDigest(manifest.Queries) || manifest.OperationSHA256 != minimaDigest(manifest.Operations) {
 		return fmt.Errorf("minima manifest: corpus/query/operation hash mismatch")
+	}
+	if err := validateMinimaTimedPlan(manifest); err != nil {
+		return err
 	}
 	stateHash, err := minimaExpectedStateHash(manifest)
 	if err != nil || manifest.ExpectedStateSHA256 != stateHash {
@@ -495,6 +567,50 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	mixed := byName["mixed_broad_narrow"]
 	if mixed.BroadRows <= minimaLookupLimit || mixed.NarrowRows != mixed.EligibleRows || mixed.EligibleRows != 5 {
 		return fmt.Errorf("minima manifest: mixed cardinality mismatch")
+	}
+	return nil
+}
+func validateMinimaTimedPlan(manifest *minimaManifest) error {
+	var timed *minimaOperationSpec
+	for i := range manifest.Operations {
+		if manifest.Operations[i].Timed {
+			if timed != nil {
+				return fmt.Errorf("minima manifest: multiple timed operations")
+			}
+			timed = &manifest.Operations[i]
+		}
+	}
+	if timed == nil || timed.Name != "timed_search_with_batch_insert" || timed.TimedPlan == nil || len(timed.Schedule) != 0 {
+		return fmt.Errorf("minima manifest: missing unambiguous timed reader plan")
+	}
+	plan := timed.TimedPlan
+	config := manifest.Config
+	if plan.QueryCount != config.TimedQueries ||
+		plan.ReaderConcurrency != config.ReaderConcurrency ||
+		plan.WriterConcurrency != config.WriterConcurrency ||
+		len(plan.ScenarioOrder) != len(manifest.Corpora) ||
+		len(plan.Rounds) == 0 ||
+		len(plan.Rounds) != len(timed.InsertRanges) ||
+		plan.QueryCount%len(plan.Rounds) != 0 {
+		return fmt.Errorf("minima manifest: timed reader counts/concurrency mismatch")
+	}
+	for i, corpus := range manifest.Corpora {
+		if plan.ScenarioOrder[i] != corpus.Name {
+			return fmt.Errorf("minima manifest: timed scenario order mismatch")
+		}
+	}
+	perRound := plan.QueryCount / len(plan.Rounds)
+	assignment := fmt.Sprintf("round=ordinal/%d;reader=ordinal%%%d;scenario=scenario_order[ordinal%%%d]", perRound, config.ReaderConcurrency, len(manifest.Corpora))
+	if plan.Assignment != assignment {
+		return fmt.Errorf("minima manifest: timed assignment mismatch")
+	}
+	for i, round := range plan.Rounds {
+		if round.Ordinal != i || round.QueryStart != i*perRound || round.QueryCount != perRound ||
+			round.InsertRange != timed.InsertRanges[i] ||
+			round.StartBarrier != "round_start_readers_and_writer" ||
+			round.EndBarrier != "round_end_queries_and_insert_complete" {
+			return fmt.Errorf("minima manifest: timed round %d mismatch", i)
+		}
 	}
 	return nil
 }

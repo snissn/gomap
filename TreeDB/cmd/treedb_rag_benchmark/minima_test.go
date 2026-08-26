@@ -11,17 +11,29 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 	if err := validateMinimaManifest(&manifest); err != nil {
 		t.Fatalf("validate Minima manifest: %v", err)
 	}
-	if got, want := manifest.CorpusSHA256, "8cec31c8c9f1b63dcc697e0036375bc9852ff00adc6c5656f88a94f7b7da45d8"; got != want {
+	if got, want := manifest.CorpusSHA256, "856df3d20b5177e0b7354aeac41b9d052e5f1075e00cec686ff823b110916ccc"; got != want {
 		t.Fatalf("corpus hash=%s want %s", got, want)
 	}
-	if got, want := manifest.QuerySHA256, "e94fd70c183407f238bf6e2905efaef62c90fa9b6f74e4f722e4cb925a18a1e7"; got != want {
+	if got, want := manifest.QuerySHA256, "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a"; got != want {
 		t.Fatalf("query hash=%s want %s", got, want)
 	}
-	if got, want := manifest.OperationSHA256, "745fec08d42ef88884155d34531fdc1367ea8599687df1534a6171fec97617aa"; got != want {
+	if got, want := manifest.OperationSHA256, "dd90d0dffe3478dfcee1dfc5371e665cb1cf22394ec4d513fc151e089d0565ff"; got != want {
 		t.Fatalf("operation hash=%s want %s", got, want)
 	}
-	if got, want := manifest.ExpectedStateSHA256, "1d8341ec8931db5cb552a81f29f11866a513a5f8251cd82289b9abb684ceddd5"; got != want {
+	if got, want := manifest.ExpectedStateSHA256, "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f"; got != want {
 		t.Fatalf("state hash=%s want %s", got, want)
+	}
+	timed := manifest.Operations[3].TimedPlan
+	if timed == nil || timed.QueryCount != 1024 || timed.ReaderConcurrency != 4 || timed.WriterConcurrency != 1 || len(timed.Rounds) != 8 ||
+		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
+		t.Fatalf("timed repeat plan drifted: %+v", timed)
+	}
+	for i, round := range timed.Rounds {
+		if round.QueryStart != i*128 || round.QueryCount != 128 ||
+			round.StartBarrier != "round_start_readers_and_writer" ||
+			round.EndBarrier != "round_end_queries_and_insert_complete" {
+			t.Fatalf("timed round %d drifted: %+v", i, round)
+		}
 	}
 
 	scenarios := minimaScenarioMap(&manifest)
@@ -76,7 +88,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 	manifest := buildMinimaManifest()
 	scenarios := minimaScenarioMap(&manifest)
-	const descriptor = "ordinal-v1:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=unit(1,(ordinal+1)/1000000);defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+	const descriptor = "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;oracle=cosine(float32(vector),float32([1,0x7]));defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
 	for _, scenario := range manifest.Corpora {
 		if scenario.Generator != descriptor {
 			t.Fatalf("%s generator=%q", scenario.Name, scenario.Generator)
@@ -87,10 +99,10 @@ func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 		ordinal  int
 		want     string
 	}{
-		{"all_match", 0, "f81213ad9e527715db1a23f266e6481c92eecab98bc347af6885199327bd301d"},
-		{"over_limit_4097", 999, "8f7cd25b7d266fd68e52391bf217f20a683e28408670e0abc9ef84df4e85effc"},
-		{"over_limit_4097", 1000, "f6fc74c883efb204ea705a2f71ec23ff0b2c7510943b0ba5790a5e0d195ae2c3"},
-		{"mixed_broad_narrow", 10020, "acaa0537c20dcc8905c2551233aecc83d4e5fd2957577759c60b1364c6ad2bbb"},
+		{"all_match", 0, "49c93c317d874812cff7048ea4900f3aed46ca87c0f263d112e5c90637c5d7f1"},
+		{"over_limit_4097", 999, "dd794a8cfbe7cc12516c387f2ac55f409627d2ed1a6ed8e9fc6d0565a470e1d9"},
+		{"over_limit_4097", 1000, "66beec1714f2f5f5e6bea1cb055d8e88e92652a12ba3719d6a3d0807d2363dda"},
+		{"mixed_broad_narrow", 10020, "c55992ec81d614872e34bd00c69f3a52adf195feb8f48b08d5ad0e03a6b9bf3e"},
 	} {
 		document, err := minimaDocumentAt(scenarios[test.scenario], test.ordinal)
 		if err != nil {
@@ -99,6 +111,52 @@ func TestMinimaGeneratorRowsAreFrozen(t *testing.T) {
 		if got := minimaDigest(document); got != test.want {
 			t.Errorf("%s/%d row hash=%s want %s", test.scenario, test.ordinal, got, test.want)
 		}
+	}
+}
+func TestMinimaOracleScoresRemainSeparatedAfterFloat32Normalization(t *testing.T) {
+	manifest := buildMinimaManifest()
+	for _, query := range manifest.Queries {
+		for phase, scores := range map[string][]float64{
+			"initial": query.InitialOracleScores,
+			"final":   query.FinalOracleScores,
+		} {
+			for i := 1; i < len(scores); i++ {
+				if gap := scores[i-1] - scores[i]; gap <= minimaScoreTolerance {
+					t.Fatalf("%s/%s oracle score gap[%d]=%.9g <= tolerance %.9g", query.Scenario, phase, i, gap, minimaScoreTolerance)
+				}
+			}
+		}
+	}
+}
+
+func TestMinimaPayloadStateHashExcludesVectorsButOraclesDoNot(t *testing.T) {
+	manifest := buildMinimaManifest()
+	baselineState := manifest.ExpectedStateSHA256
+	baselineQuery := minimaQueryMap(&manifest)["small"]
+
+	mutated := manifest
+	mutated.Operations[7].Documents[0].Vector = make([]float64, minimaDimension)
+	mutated.Operations[7].Documents[0].Vector[1] = 1
+	mutated.OperationSHA256 = minimaDigest(mutated.Operations)
+	stateHash, err := minimaExpectedStateHash(&mutated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateHash != baselineState {
+		t.Fatalf("payload-only state hash changed for vector mutation: %s != %s", stateHash, baselineState)
+	}
+
+	applied, err := minimaApplyOperations(&mutated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalIDs, finalScores := minimaFinalOracleFromState(minimaScenarioMap(&mutated)["small"], applied)
+	if minimaDigest(finalIDs) == minimaDigest(baselineQuery.FinalOracleIDs) && minimaDigest(finalScores) == minimaDigest(baselineQuery.FinalOracleScores) {
+		t.Fatal("vector mutation escaped final retrieval oracle")
+	}
+	mutated.ExpectedStateSHA256 = stateHash
+	if err := validateMinimaManifest(&mutated); err == nil {
+		t.Fatal("strict manifest validator accepted vector-only mutation")
 	}
 }
 
@@ -115,8 +173,16 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			a.Manifest.Operations[1].InsertRanges[0].Rows--
 			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
 		}},
-		{"interleaving schedule mismatch", func(a *minimaArtifact) {
-			a.Manifest.Operations[3].Schedule[0].Actor = "writer_first"
+		{"missing timed reader plan", func(a *minimaArtifact) {
+			a.Manifest.Operations[3].TimedPlan = nil
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"truncated timed query plan", func(a *minimaArtifact) {
+			a.Manifest.Operations[3].TimedPlan.QueryCount = 16
+			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
+		}},
+		{"timed barrier mismatch", func(a *minimaArtifact) {
+			a.Manifest.Operations[3].TimedPlan.Rounds[0].StartBarrier = "writer_first"
 			a.Manifest.OperationSHA256 = minimaDigest(a.Manifest.Operations)
 		}},
 		{"replacement payload mismatch", func(a *minimaArtifact) {
