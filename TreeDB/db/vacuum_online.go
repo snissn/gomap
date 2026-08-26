@@ -460,6 +460,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	if seed != nil {
 		*runStats = *seed
 	}
+	if runStats.AttemptID == 0 {
+		runStats.AttemptID = db.vacuumOnlineAttemptID.Add(1)
+	}
 	defer func() {
 		runStats.TotalDuration = time.Since(runStarted)
 		runStats.Canceled = errors.Is(retErr, context.Canceled)
