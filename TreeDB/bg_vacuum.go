@@ -175,7 +175,7 @@ var bgIndexVacuumFreelistDebtSnapshotHook struct {
 
 var bgIndexVacuumRunHook struct {
 	mu sync.RWMutex
-	fn func(*DB, context.Context) error
+	fn func(*DB, context.Context) (backenddb.VacuumOnlineStats, error)
 }
 
 var bgIndexVacuumTriggerReportHook struct {
@@ -219,7 +219,7 @@ func setBackgroundIndexVacuumFreelistDebtSnapshotHookForTest(fn func(*DB) (backe
 	}
 }
 
-func setBackgroundIndexVacuumRunHookForTest(fn func(*DB, context.Context) error) func() {
+func setBackgroundIndexVacuumRunHookForTest(fn func(*DB, context.Context) (backenddb.VacuumOnlineStats, error)) func() {
 	bgIndexVacuumRunHook.mu.Lock()
 	prev := bgIndexVacuumRunHook.fn
 	bgIndexVacuumRunHook.fn = fn
@@ -258,7 +258,7 @@ func backgroundIndexVacuumRun(db *DB, ctx context.Context) (backenddb.VacuumOnli
 	hook := bgIndexVacuumRunHook.fn
 	bgIndexVacuumRunHook.mu.RUnlock()
 	if hook != nil {
-		return backenddb.VacuumOnlineStats{}, hook(db, ctx)
+		return hook(db, ctx)
 	}
 	return db.vacuumIndexOnlineStats(ctx)
 }

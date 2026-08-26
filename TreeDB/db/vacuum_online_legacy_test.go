@@ -53,6 +53,9 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 1 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
 	}
+	if stats.ReplacementPagerPages == 0 || stats.ReplacementPagerPages != newIndex.pager.PageCount() {
+		t.Fatalf("replacement pager pages=%d want final selected pager page count=%d", stats.ReplacementPagerPages, newIndex.pager.PageCount())
+	}
 }
 
 func TestVacuumDurableResourceSummaryNil(t *testing.T) {

@@ -75,8 +75,8 @@ func TestBackgroundIndexVacuumFailedRunDoesNotRepublishStaleOnlineSnapshot(t *te
 	d.bgVac.collectionRootPages = ^uint64(0)
 	stale := backenddb.VacuumOnlineStats{WorkCompleted: true, TotalDuration: time.Nanosecond}
 	d.bgVac.lastOnlineVacuum.Store(&stale)
-	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
-		return errors.New("cached checkpoint admission failed before backend vacuum")
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
+		return backenddb.VacuumOnlineStats{}, errors.New("cached checkpoint admission failed before backend vacuum")
 	})
 	defer restore()
 
@@ -90,6 +90,42 @@ func TestBackgroundIndexVacuumFailedRunDoesNotRepublishStaleOnlineSnapshot(t *te
 	}
 	if stats.VacuumWorkCompleted != 0 {
 		t.Fatalf("completed work=%d want 0 for failed pre-backend attempt", stats.VacuumWorkCompleted)
+	}
+}
+
+func TestBackgroundIndexVacuumUsesReturnedOnlineAttemptSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+
+	if err := d.backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("seed backend vacuum: %v", err)
+	}
+	attemptA := d.backend.VacuumOnlineStats()
+	if attemptA.AttemptID == 0 {
+		t.Fatalf("seed backend snapshot=%+v want attempt ID", attemptA)
+	}
+	restore := setBackgroundIndexVacuumRunHookForTest(func(db *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
+		if err := db.backend.VacuumIndexOnline(ctx); err != nil {
+			return backenddb.VacuumOnlineStats{}, err
+		}
+		return attemptA, nil
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	global := d.backend.VacuumOnlineStats()
+	if global.AttemptID <= attemptA.AttemptID {
+		t.Fatalf("global backend snapshot=%+v want newer than returned attempt=%+v", global, attemptA)
+	}
+	stats := d.bgVac.Stats()
+	if stats.LastOnlineVacuum != attemptA {
+		t.Fatalf("worker last online snapshot=%+v want hook-returned attempt=%+v", stats.LastOnlineVacuum, attemptA)
 	}
 }
 
@@ -416,9 +452,9 @@ func TestBackgroundIndexVacuumNativeRootWriteQuietTransitionRunsEligibleVacuum(t
 	})
 	defer restoreProbe()
 	var vacuums atomic.Uint64
-	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 		vacuums.Add(1)
-		return nil
+		return backenddb.VacuumOnlineStats{}, nil
 	})
 	defer restoreVacuum()
 
@@ -803,9 +839,9 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			d.bgVac.collectionRootPages = ^uint64(0)
 
 			var calls atomic.Int64
-			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+			restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 				calls.Add(1)
-				return tc.err
+				return backenddb.VacuumOnlineStats{}, tc.err
 			})
 			defer restore()
 
@@ -962,10 +998,10 @@ func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
 	}
 
 	started := make(chan struct{})
-	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) error {
+	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) (backenddb.VacuumOnlineStats, error) {
 		close(started)
 		<-ctx.Done()
-		return ctx.Err()
+		return backenddb.VacuumOnlineStats{}, ctx.Err()
 	})
 	defer restore()
 
