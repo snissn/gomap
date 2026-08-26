@@ -1280,6 +1280,44 @@ func TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366(
 	}
 }
 
+func TestStableLogicalObligationAppendCertificationSkipsExcludedProducerKind4366(t *testing.T) {
+	dir := t.TempDir()
+	columnFile := writeStableResourceFixture(t, dir, "column.pack", "column")
+	vlogFile := writeStableResourceFixture(t, dir, "value.vlog", "value")
+	retained := appendMutationTestObligation(1)
+	added := appendMutationTestObligation(2)
+	freeze := func(tokens ...*StableResourceToken) *StableResourceSet {
+		t.Helper()
+		builder := NewStableResourceSetBuilder()
+		for _, token := range tokens {
+			if err := builder.Add(token); err != nil {
+				builder.Abandon()
+				t.Fatal(err)
+			}
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		return set
+	}
+	base := freeze(appendMutationResourceToken(t, columnFile, ResourceColumnAsset, "column", 4, ReachabilityColumnManifest, retained))
+	defer base.Release()
+	producer := freeze(
+		appendMutationResourceToken(t, columnFile, ResourceColumnAsset, "column", 4, ReachabilityColumnManifest, added),
+		appendMutationResourceToken(t, vlogFile, ResourceValueLog, "value", 4, ReachabilityValueLogPointer),
+	)
+	defer producer.Release()
+	mutation := StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Added:        []StableLogicalObligation{added},
+	}
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation, ResourceValueLog); err != nil || !certified {
+		t.Fatalf("excluded value-log kind certified=%t err=%v", certified, err)
+	}
+}
+
 func TestStableLogicalObligationAppendCertificationDeclinesDistinctResourceDuplicate4366(t *testing.T) {
 	dir := t.TempDir()
 	baseFile := writeStableResourceFixture(t, dir, "base.pack", "base")

@@ -2635,7 +2635,7 @@ func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, prod
 			return false
 		}
 		if _, skip := excludedKinds[producerToken.kind]; skip {
-			return false
+			return true
 		}
 		view, ok := source.kindViews[producerToken.kind]
 		if !ok {
