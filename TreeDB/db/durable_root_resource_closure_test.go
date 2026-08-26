@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -280,6 +281,58 @@ func TestCaptureDurableRootAppendRequirementAlreadyRetainedIsIdempotent4366(t *t
 	}
 }
 
+func TestCaptureDurableRootAppendRequirementDistinctResourceDuplicateFallsBack4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	producerPath := filepath.Join(t.TempDir(), "distinct-column-segment.bin")
+	if err := os.WriteFile(producerPath, make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	retained := durableRootClosureObligation3928(1)
+	var baseReleases, producerReleases atomic.Uint64
+	base := durableRootClosureSetWithResource3928(t, path, "base-segment", func() { baseReleases.Add(1) }, retained)
+	producer := durableRootClosureSetWithResource3928(t, producerPath, "producer-segment", func() { producerReleases.Add(1) }, retained)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{retained},
+	}
+	fallbackCalls := 0
+	var timing CommandWALPublishTiming
+	_, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			fallbackCalls++
+			return durableRootClosureRequirements3928(t, retained), rootpublication.StableResourceClosureWork{}, nil
+		}, false, &timing,
+	)
+	if !errors.Is(err, rootpublication.ErrResourceConflict) {
+		base.Release()
+		producer.Release()
+		t.Fatalf("capture error=%v want %v", err, rootpublication.ErrResourceConflict)
+	}
+	work := timing.FinalizeCandidateResourceWork
+	if fallbackCalls != 1 || work.FinalRequirementProofFastPath != 0 || work.FinalRequirementProofFallbacks != 1 || work.FullClosureValidations != 1 {
+		base.Release()
+		producer.Release()
+		t.Fatalf("distinct duplicate fallback=%d work=%+v", fallbackCalls, work)
+	}
+	if base.Owner() != rootpublication.ResourceOwnerBuilder || producer.Owner() != rootpublication.ResourceOwnerTransferred {
+		base.Release()
+		producer.Release()
+		t.Fatalf("ownership base=%v producer=%v", base.Owner(), producer.Owner())
+	}
+	if baseReleases.Load() != 0 || producerReleases.Load() != 1 {
+		base.Release()
+		producer.Release()
+		t.Fatalf("pre-release callbacks base=%d producer=%d", baseReleases.Load(), producerReleases.Load())
+	}
+	base.Release()
+	producer.Release()
+	if baseReleases.Load() != 1 || producerReleases.Load() != 1 {
+		t.Fatalf("final release callbacks base=%d producer=%d want 1 each", baseReleases.Load(), producerReleases.Load())
+	}
+}
+
 func durableRootClosureObligation3928(partID uint64) rootpublication.StableLogicalObligation {
 	obligation := rootpublication.StableLogicalObligation{
 		Class: "column-asset-ref-v1", Kind: "tcs1_part_image", Namespace: "columns",
@@ -303,6 +356,10 @@ func durableRootClosureRequirements3928(t *testing.T, obligations ...rootpublica
 }
 
 func durableRootClosureSet3928(t *testing.T, path string, obligations ...rootpublication.StableLogicalObligation) *rootpublication.StableResourceSet {
+	return durableRootClosureSetWithResource3928(t, path, "shared-segment", nil, obligations...)
+}
+
+func durableRootClosureSetWithResource3928(t *testing.T, path, resourceID string, onRelease func(), obligations ...rootpublication.StableLogicalObligation) *rootpublication.StableResourceSet {
 	t.Helper()
 	file, err := os.Open(path)
 	if err != nil {
@@ -310,10 +367,10 @@ func durableRootClosureSet3928(t *testing.T, path string, obligations ...rootpub
 	}
 	t.Cleanup(func() { _ = file.Close() })
 	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
-		Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: "shared-segment",
+		Kind: rootpublication.ResourceColumnAsset, LogicalLane: "columns", ResourceID: resourceID,
 		Generation: 1, DiagnosticPath: filepath.Base(path), File: file, Frontier: rootpublication.DurableFrontier{Bytes: 4096},
 		Digest: sha256.Sum256([]byte("stable-shared-column-segment")), Reachability: rootpublication.ReachabilityColumnManifest,
-		LogicalObligations: obligations, ContentSynced: true,
+		LogicalObligations: obligations, ContentSynced: true, OnRelease: onRelease,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -2552,12 +2552,14 @@ func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResou
 
 // CertifyStableLogicalObligationAppendMutation binds an exact append mutation
 // to the capture-time source and producer commitments without materializing the
-// retained obligation history. A false result requires the caller's exact
-// requirements fallback before either set changes ownership.
+// retained obligation history. Certification is limited to producer entries
+// that extend the same logical and physical source resource; every other shape
+// requires the caller's exact requirements fallback before ownership changes.
 func CertifyStableLogicalObligationAppendMutation(source, producer *StableResourceSet, mutation StableLogicalObligationMutation, excluded ...ResourceKind) (StableResourceClosureWork, bool, error) {
 	var normalized StableLogicalObligationMutation
 	var work StableResourceClosureWork
 	var err error
+	var producerViews map[ResourceKind]stableResourceKindView
 	if producer == nil {
 		normalized, work, err = validateAppendOnlyProducerViews(nil, mutation)
 	} else {
@@ -2568,10 +2570,15 @@ func CertifyStableLogicalObligationAppendMutation(source, producer *StableResour
 			return work, false, ErrResourceOwnership
 		}
 		normalized, work, err = validateAppendOnlyProducerViews(producer.kindViews, mutation)
+		producerViews = producer.kindViews
 		producer.mu.Unlock()
 	}
 	if err != nil || len(normalized.ScopedFields) == 0 || len(normalized.Removed) != 0 {
 		return work, false, nil
+	}
+	matches, matchErr := stableAppendProducerHasPhysicalPredecessors(source, producerViews, excluded...)
+	if matchErr != nil || !matches {
+		return work, false, matchErr
 	}
 	baseCommitments, complete, err := stableResourceSetLogicalObligationCommitments(source, normalized.ScopedFields, excluded...)
 	if err != nil || !complete {
@@ -2590,6 +2597,62 @@ func CertifyStableLogicalObligationAppendMutation(source, producer *StableResour
 		}
 	}
 	return work, true, nil
+}
+
+func stableAppendProducerHasPhysicalPredecessors(source *StableResourceSet, producer map[ResourceKind]stableResourceKindView, excluded ...ResourceKind) (bool, error) {
+	if stableResourceKindViewCount(producer) == 0 {
+		return true, nil
+	}
+	if source == nil {
+		return false, nil
+	}
+	excludedKinds := make(map[ResourceKind]struct{}, len(excluded))
+	for _, kind := range excluded {
+		if kind != "" {
+			excludedKinds[kind] = struct{}{}
+		}
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	owner := ResourceOwnerState(source.owner.Load())
+	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		return false, ErrResourceOwnership
+	}
+	if source.kindViews == nil {
+		for _, entry := range source.entries {
+			token := activeEntryToken(entry)
+			if token == nil || token.released.Load() {
+				return false, ErrResourceOwnership
+			}
+		}
+		return false, nil
+	}
+	var matchErr error
+	matches := rangeStableResourceKindViews(producer, func(entry *stableResourceEntry) bool {
+		producerToken := activeEntryToken(*entry)
+		if producerToken == nil || producerToken.released.Load() {
+			matchErr = ErrResourceOwnership
+			return false
+		}
+		if _, skip := excludedKinds[producerToken.kind]; skip {
+			return false
+		}
+		view, ok := source.kindViews[producerToken.kind]
+		if !ok {
+			return false
+		}
+		predecessor := findStableResourceLogical(view.logical, producerToken.logicalKey())
+		if predecessor == nil {
+			return false
+		}
+		predecessorToken := activeEntryToken(*predecessor)
+		if predecessorToken == nil || predecessorToken.released.Load() {
+			matchErr = ErrResourceOwnership
+			return false
+		}
+		return predecessorToken.physicalIdentityKey() == producerToken.physicalIdentityKey()
+	})
+	return matches, matchErr
 }
 
 func stableResourceSetLogicalObligationCommitments(source *StableResourceSet, fields []ReachabilityField, excluded ...ResourceKind) (map[ReachabilityField]stableLogicalObligationCommitment, bool, error) {

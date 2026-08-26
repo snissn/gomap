@@ -1280,6 +1280,49 @@ func TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366(
 	}
 }
 
+func TestStableLogicalObligationAppendCertificationDeclinesDistinctResourceDuplicate4366(t *testing.T) {
+	dir := t.TempDir()
+	baseFile := writeStableResourceFixture(t, dir, "base.pack", "base")
+	producerFile := writeStableResourceFixture(t, dir, "producer.pack", "producer")
+	retained := appendMutationTestObligation(1)
+	freeze := func(token *StableResourceToken) *StableResourceSet {
+		t.Helper()
+		builder := NewStableResourceSetBuilder()
+		if err := builder.Add(token); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		return set
+	}
+	var baseReleases, producerReleases atomic.Uint64
+	baseToken := appendMutationResourceToken(t, baseFile, ResourceColumnAsset, "base", 4, ReachabilityColumnManifest, retained)
+	baseToken.onRelease = func() { baseReleases.Add(1) }
+	base := freeze(baseToken)
+	producerToken := appendMutationResourceToken(t, producerFile, ResourceColumnAsset, "producer", 4, ReachabilityColumnManifest, retained)
+	producerToken.onRelease = func() { producerReleases.Add(1) }
+	producer := freeze(producerToken)
+	mutation := StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Added:        []StableLogicalObligation{retained},
+	}
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation); err != nil || certified {
+		t.Fatalf("distinct-resource duplicate certified=%t err=%v", certified, err)
+	}
+	if base.Owner() != ResourceOwnerBuilder || producer.Owner() != ResourceOwnerBuilder {
+		t.Fatalf("certification changed ownership base=%v producer=%v", base.Owner(), producer.Owner())
+	}
+	base.Release()
+	producer.Release()
+	if baseReleases.Load() != 1 || producerReleases.Load() != 1 {
+		t.Fatalf("release callbacks base=%d producer=%d want 1 each", baseReleases.Load(), producerReleases.Load())
+	}
+}
+
 func TestStableLogicalObligationAppendCertificationRequiresLiveViewPin4366(t *testing.T) {
 	dir := t.TempDir()
 	file := writeStableResourceFixture(t, dir, "released.pack", "released")
@@ -1312,9 +1355,9 @@ func TestStableLogicalObligationAppendCertificationRequiresLiveViewPin4366(t *te
 		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
 		Added:        []StableLogicalObligation{added},
 	}
-	if _, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation); err != nil || !certified {
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation); err != nil || certified {
 		pinned.Release()
-		t.Fatalf("live fallback pin certified=%t err=%v", certified, err)
+		t.Fatalf("entries-only source certified=%t err=%v want safe decline", certified, err)
 	}
 	pinned.Release()
 	_, certified, err := CertifyStableLogicalObligationAppendMutation(view, producer, mutation)
