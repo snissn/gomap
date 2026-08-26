@@ -78,10 +78,10 @@ func (c *Collection) replaceSourceDocumentsAtomic(parentID []byte, deleteIDs, in
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return 0, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {

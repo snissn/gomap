@@ -3992,6 +3992,8 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	unlockSchema := c.lockCollectionSchemaWrite()
+	defer unlockSchema()
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := c.lockMutation()

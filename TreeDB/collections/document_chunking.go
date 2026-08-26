@@ -382,12 +382,12 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 		return nil, err
 	}
 	defer lifecycleLocks.releaseAll()
-	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
-	defer unlockNativeAdmission()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
 	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
 	defer unlockAdHocAdmission()
+	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
+	defer unlockNativeAdmission()
 	if c.registeredAdHocVectorIndexCount() > 0 {
 		return nil, errBatchChunkIngestVectorIndexed
 	}
