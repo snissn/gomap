@@ -366,22 +366,12 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	if db == nil {
 		return ErrClosed
 	}
-	attemptID := db.vacuumOnlineAttemptID.Add(1)
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
-	if lockMaintenance {
-		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
-			if err := publication.coordinator.Drain(ctx); err != nil {
-				return publicRootPublicationErrorV1(err)
-			}
-		}
-		db.maintenanceMu.Lock()
-		defer db.maintenanceMu.Unlock()
-	}
+	attemptID := db.vacuumOnlineAttemptID.Add(1)
 	attemptStarted := time.Now()
-	captureStarted := attemptStarted
-	seed := VacuumOnlineStats{AttemptID: attemptID, RecoverableSetCaptureAttempts: 1}
+	seed := VacuumOnlineStats{AttemptID: attemptID}
 	rebuildStarted := false
 	defer func() {
 		if retErr == nil || rebuildStarted {
@@ -392,6 +382,17 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		published := seed
 		db.vacuumOnlineLast.Store(&published)
 	}()
+	if lockMaintenance {
+		if publication := db.rootPublication; publication != nil && publication.coordinator != nil {
+			if err := publication.coordinator.Drain(ctx); err != nil {
+				return publicRootPublicationErrorV1(err)
+			}
+		}
+		db.maintenanceMu.Lock()
+		defer db.maintenanceMu.Unlock()
+	}
+	captureStarted := time.Now()
+	seed.RecoverableSetCaptureAttempts = 1
 	roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
 	seed.RecoverableSetCaptureDuration = time.Since(captureStarted)
 	if err != nil {

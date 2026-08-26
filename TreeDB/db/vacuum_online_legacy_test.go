@@ -64,13 +64,12 @@ func TestVacuumIndexOnlineInitialCaptureFailureRecordsAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = database.Close() }()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := database.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+	database.readOnly = true
+	if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("VacuumIndexOnline error=%v, want ErrReadOnly", err)
 	}
 	stats := database.VacuumOnlineStats()
-	if stats.AttemptID == 0 || !stats.Canceled || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 0 || stats.RecoverableSetRecaptureAttempts != 0 || stats.RecoverableSetCaptureDuration <= 0 {
+	if stats.AttemptID == 0 || stats.Canceled || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 0 || stats.RecoverableSetRecaptureAttempts != 0 || stats.RecoverableSetCaptureDuration <= 0 {
 		t.Fatalf("capture-failure stats=%+v want one attempted and zero completed capture", stats)
 	}
 }
