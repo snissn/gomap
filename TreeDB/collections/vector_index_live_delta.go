@@ -25,6 +25,9 @@ func (idx *VectorIndex) ensureLiveDeltaLocked() (*VectorIndex, error) {
 	if err != nil {
 		return nil, err
 	}
+	delta.scalarDefinitions = idx.scalarDefinitions
+	delta.scalarRuntimes = cloneNativeScalarRuntimes(idx.scalarRuntimes)
+	delta.scalarColumns = newNativeScalarColumns(delta.scalarDefinitions)
 	delta.parallelReciprocalLinks = idx.parallelReciprocalLinks
 	delta.constructionWorkers = idx.constructionWorkers
 	delta.nativePersistent = true
@@ -99,6 +102,7 @@ func (idx *VectorIndex) foldLiveDeltaLocked() error {
 		return nil
 	}
 	documentIDs := make([][]byte, 0, len(delta.currentNode))
+	scalarRows := make([]map[string][]byte, 0, len(delta.currentNode))
 	vectors := make([][]float32, 0, len(delta.currentNode))
 	for nodeID := range delta.nodes {
 		node := &delta.nodes[nodeID]
@@ -113,9 +117,22 @@ func (idx *VectorIndex) foldLiveDeltaLocked() error {
 				vector[dimension] = node.vectorValueAt(dimension)
 			}
 		}
+		scalarRows = append(scalarRows, delta.nativeScalarRowAtLocked(nodeID))
 		vectors = append(vectors, vector)
 	}
+	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
+		return err
+	}
+	if err := idx.validateNativeScalarRowsAppendLocked(scalarRows...); err != nil {
+		return err
+	}
 	if err := idx.insertVectorBatchLocked(documentIDs, vectors); err != nil {
+		return err
+	}
+	for _, row := range scalarRows {
+		idx.appendNativeScalarRowValuesPrevalidatedLocked(row)
+	}
+	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
 		return err
 	}
 	idx.liveDelta = nil

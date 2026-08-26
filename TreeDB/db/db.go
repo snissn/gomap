@@ -3337,7 +3337,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	if db.durableRoot.pending == nil {
-		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.valueLogPublicationLocked, opts.publishTiming)
+		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}

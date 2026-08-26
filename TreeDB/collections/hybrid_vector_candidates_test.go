@@ -142,6 +142,26 @@ func TestSearchHybridVectorCandidatesUnsupportedShapesFailClosed2503(t *testing.
 	}
 }
 
+func TestNativeScalarHybridVectorValidationPreservesFailureStats(t *testing.T) {
+	query := HybridVectorQuery{
+		IndexName:      "embedding_native",
+		Query:          []float32{1, 0},
+		CandidateLimit: 3,
+		EfSearch:       -1,
+	}
+	got, err := (&Collection{}).searchHybridVectorCandidatesNativeScalar(query, nil)
+	if !errors.Is(err, ErrHybridSearchUnsupported) {
+		t.Fatalf("searchHybridVectorCandidatesNativeScalar err=%v want ErrHybridSearchUnsupported", err)
+	}
+	if len(got.Candidates) != 0 ||
+		got.Stats.VectorCandidatesRequested != uint64(query.CandidateLimit) ||
+		got.Stats.VectorCandidateBudgetEffective != uint64(query.CandidateLimit) ||
+		got.Stats.FailClosed != 1 ||
+		got.Stats.FailClosedReason != HybridFailClosedReasonUnsupported {
+		t.Fatalf("response=%+v want requested budget and unsupported fail-closed diagnostics", got)
+	}
+}
+
 func TestSearchHybridVectorCandidatesMissingIndexFailsClosed2503(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
