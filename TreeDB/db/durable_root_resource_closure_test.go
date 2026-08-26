@@ -368,10 +368,19 @@ func TestCommandWALAppendRequirementRegistrationStaysSeparate4366(t *testing.T) 
 	registeredFallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
 		return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, nil
 	}
-	if err := ctx.RegisterDurableLogicalObligationAppendMutation(rootpublication.StableLogicalObligationMutation{
+	validMutation := rootpublication.StableLogicalObligationMutation{
 		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
 		Added:        []rootpublication.StableLogicalObligation{added},
-	}, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, registeredFallback); err != nil {
+	}
+	removedMutation := validMutation
+	removedMutation.Removed = []rootpublication.StableLogicalObligation{added}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(removedMutation, rootpublication.StableResourceClosureWork{}, registeredFallback); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("removal registration error=%v want %v", err, rootpublication.ErrResourceConflict)
+	}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(validMutation, rootpublication.StableResourceClosureWork{}, nil); !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("nil fallback registration error=%v want %v", err, rootpublication.ErrResourceOwnership)
+	}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(validMutation, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, registeredFallback); err != nil {
 		t.Fatal(err)
 	}
 	if len(genericMutation.ScopedFields) != 0 || len(appendMutation.Added) != 1 || fallback == nil || work.FinalRequirementRecordsDecoded != 1 {

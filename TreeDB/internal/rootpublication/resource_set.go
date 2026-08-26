@@ -2628,7 +2628,11 @@ func stableResourceSetLogicalObligationCommitments(source *StableResourceSet, fi
 	}
 	for i := range source.entries {
 		entry := &source.entries[i]
-		if _, skip := excludedKinds[entry.token.kind]; skip {
+		token := activeEntryToken(*entry)
+		if token == nil || token.released.Load() {
+			return nil, false, ErrResourceOwnership
+		}
+		if _, skip := excludedKinds[token.kind]; skip {
 			continue
 		}
 		count, ok := stableLogicalObligationCommitmentCount(entry.logicalObligations.commitments)
