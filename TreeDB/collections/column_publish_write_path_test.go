@@ -48,14 +48,28 @@ func TestRecordColumnPublishTimingMirrorsPhysicalEntryLookupWork(t *testing.T) {
 	stats := &CollectionInsertStats{}
 	recordColumnPublishTiming(stats, backenddb.CommandWALPublishTiming{
 		FinalizeCandidateResourceWork: rootpublication.StableResourceClosureWork{
-			PhysicalEntryLookupProbes:      11,
-			PhysicalEntryLookupComparisons: 7,
-			PhysicalEntryLookupAdmissions:  5,
+			PhysicalEntryLookupProbes:               11,
+			PhysicalEntryLookupComparisons:          7,
+			PhysicalEntryLookupAdmissions:           5,
+			AggregateMembershipProbes:               19,
+			AggregateMembershipNodeVisits:           23,
+			AggregateMembershipNodeCopies:           29,
+			AggregateMembershipAdmissions:           31,
+			FinalRequirementProofFastPath:           3,
+			FinalRequirementProofFallbacks:          2,
+			FinalRequirementRecordsDecoded:          13,
+			FinalRequirementObligationsMaterialized: 17,
 		},
 	})
 	got := stats.ColumnPublishFinalizeCandidateResourceWork
 	if got.PhysicalEntryLookupProbes != 11 || got.PhysicalEntryLookupComparisons != 7 || got.PhysicalEntryLookupAdmissions != 5 {
 		t.Fatalf("physical lookup work=%+v, want probes=11 comparisons=7 admissions=5", got)
+	}
+	if got.AggregateMembershipProbes != 19 || got.AggregateMembershipNodeVisits != 23 || got.AggregateMembershipNodeCopies != 29 || got.AggregateMembershipAdmissions != 31 {
+		t.Fatalf("aggregate membership work=%+v", got)
+	}
+	if got.FinalRequirementProofFastPath != 3 || got.FinalRequirementProofFallbacks != 2 || got.FinalRequirementRecordsDecoded != 13 || got.FinalRequirementObligationsMaterialized != 17 {
+		t.Fatalf("final requirement work=%+v", got)
 	}
 }
 

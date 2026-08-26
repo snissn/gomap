@@ -591,6 +591,25 @@ type VectorIndexSearchStats struct {
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
 	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
+	// ScalarFilterPlan identifies the native declared-scalar execution plan.
+	ScalarFilterPlan           NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs       uint64                 `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidateIDs   uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterVisited        uint64                 `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterAdmitted       uint64                 `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill      uint64                 `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring   uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+}
+
+type vectorIndexSearchVisibility struct {
+	runtime                  *VectorIndex
+	collectionName           string
+	indexName                string
+	strategy                 VectorIndexStrategy
+	schemaGeneration         uint64
+	mutationSeq              uint64
+	sourceDocumentGeneration uint64
 }
 
 // VectorIndexSearchResponse is returned by public vector-index search APIs.
@@ -609,7 +628,8 @@ type VectorIndexSearchResponse struct {
 	// SearchVectorIndex return response-owned slices; SearchWithBuffer and
 	// SearchVectorIndexWithBuffer return slices owned by the caller's
 	// VectorIndexSearchBuffer.
-	Results []VectorIndexSearchResult `json:"results,omitempty"`
+	Results    []VectorIndexSearchResult `json:"results,omitempty"`
+	visibility vectorIndexSearchVisibility
 }
 
 // VectorIndexSearchRouteKind is a compact route summary derived from public
@@ -705,6 +725,14 @@ type VectorIndexSearchDiagnostics struct {
 	HNSWSearchPackCacheWaits      uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
 	HNSWSearchPackCacheBuilds     uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
 	LiveANN                       VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
+	ScalarFilterPlan              NativeScalarFilterPlan                `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs          uint64                                `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated    uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidateIDs      uint64                                `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterVisited           uint64                                `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterAdmitted          uint64                                `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill         bool                                  `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring      bool                                  `json:"scalar_filter_exact_scoring,omitempty"`
 }
 
 // VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
@@ -739,6 +767,14 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		HNSWSearchPackCacheMisses:     s.HNSWSearchPackCacheMisses,
 		HNSWSearchPackCacheWaits:      s.HNSWSearchPackCacheWaits,
 		HNSWSearchPackCacheBuilds:     s.HNSWSearchPackCacheBuilds,
+		ScalarFilterPlan:              s.ScalarFilterPlan,
+		ScalarFilterProbeIDs:          s.ScalarFilterProbeIDs,
+		ScalarFilterProbeTruncated:    s.ScalarFilterProbeTruncated,
+		ScalarFilterCandidateIDs:      s.ScalarFilterCandidateIDs,
+		ScalarFilterVisited:           s.ScalarFilterVisited,
+		ScalarFilterAdmitted:          s.ScalarFilterAdmitted,
+		ScalarFilterUnderfill:         s.ScalarFilterUnderfill > 0,
+		ScalarFilterExactScoring:      s.ScalarFilterExactScoring > 0,
 		LiveANN: VectorIndexSearchLiveANNDiagnostics{
 			Enabled:      s.SearchRouteNativeRuntime > 0,
 			FullRebuilds: s.NativeRuntimeFullRebuilds,
@@ -1066,9 +1102,14 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // split search/fetch shape can run a no-document search first, then use
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
+// DeclaredScalarFilter is native-runtime buffered-only; this convenience path
+// fails closed rather than forwarding it to an unfiltered owned/one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
+	}
+	if opts.DeclaredScalarFilter != nil {
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support DeclaredScalarFilter; use SearchVectorIndexWithBuffer for native_runtime declared scalar filtering", ErrVectorIndexSearchUnavailable)
 	}
 	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
 		response, err := c.searchVectorIndexPreparedNoDocumentOwned(opts)
@@ -1230,6 +1271,9 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // Returned Results and result IDs alias buffer and remain valid only until buffer is reused or
 // Reset is called. The same buffer must not be reused concurrently; parallel
 // callers should use independent buffers.
+// Native-runtime responses also carry an opaque process-local publication
+// identity consumed by OpenCollectionReadViewForVectorIndexSearch; it is not
+// serialized or exposed as a public token.
 //
 // This method supports exact/zero QueryMode through the exact
 // hnsw_search_pack_v1 route, and explicit quantized_only / quantized_rerank
@@ -1283,6 +1327,10 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	}
 	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
 		return c.searchNativeRuntimeVectorIndexWithBuffer(def, opts, buffer)
+	}
+	if opts.DeclaredScalarFilter != nil {
+		buffer.Reset()
+		return VectorIndexSearchResponse{}, collectionVectorIndexWithBufferUnsupportedOptionError("DeclaredScalarFilter", "declared scalar filters require a native_runtime vector index")
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
@@ -1408,6 +1456,14 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			response.Status.ExactFallbackReason = load.ExactFallbackReason
 			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
 		}
+		var scalarPlan *nativeScalarFilterExecution
+		if opts.DeclaredScalarFilter != nil {
+			scalarPlan, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter)
+			if err != nil {
+				buffer.Reset()
+				return response, err
+			}
+		}
 		publicationMu := index.nativePublicationLock()
 		publicationMu.RLock()
 		if c.registeredVectorIndex(def.Name) != index {
@@ -1415,7 +1471,17 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			continue
 		}
 		var searchState vectorIndexNativeSearchState
-		response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		var scalarWork nativeScalarSearchWork
+		if scalarPlan == nil {
+			response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
+		} else {
+			response.Results, searchState, scalarWork, err = index.searchGraphOnlyWithNativeScalarFilterBuffer(opts.Query, opts.TopK, opts.EfSearch, scalarPlan, buffer)
+			if errors.Is(err, ErrHybridSearchStaleIndex) {
+				publicationMu.RUnlock()
+				buffer.Reset()
+				continue
+			}
+		}
 		if err == nil {
 			response.Status.Loaded = true
 			response.Status.Registered = true
@@ -1427,6 +1493,29 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			response.Stats.SearchRouteNativeRuntime = 1
 			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
 			response.Stats.CandidateRows = uint64(searchState.liveDocs)
+			if scalarPlan != nil {
+				response.Stats.ScalarFilterPlan = scalarPlan.identity
+				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
+				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
+				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
+				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
+				if scalarWork.underfill {
+					response.Stats.ScalarFilterUnderfill = 1
+				}
+				if scalarPlan.exact() {
+					response.Stats.ScalarFilterExactScoring = 1
+				}
+			}
+			response.visibility = vectorIndexSearchVisibility{
+				runtime:                  index,
+				collectionName:           c.collectionName(),
+				indexName:                def.Name,
+				strategy:                 def.Strategy,
+				schemaGeneration:         def.SchemaGeneration,
+				mutationSeq:              searchState.mutationSeq,
+				sourceDocumentGeneration: searchState.sourceDocumentGeneration,
+			}
 		} else if !index.hasValidSourceDocumentRoots() {
 			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}

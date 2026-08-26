@@ -435,6 +435,45 @@ func TestHTTPDenseAnnRouteParityWithExactRoute(t *testing.T) {
 	}
 }
 
+func TestHTTPDenseNativeRuntimeDefaultAndExplicitAnnWireParity(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	status, payload := ragParityPost(t, handler, "/v1/indexes",
+		`{"name":"native_docs","dimension":2,"metric":"cosine","vector_index_options":{"strategy":"native_runtime"}}`)
+	if status != http.StatusOK {
+		t.Fatalf("create native index status=%d body=%s", status, mustJSON(payload))
+	}
+	ragParityUpsertTenantDocs(t, handler, "native_docs", []Document{
+		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
+		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
+	})
+	for _, body := range []string{
+		`{"query_embedding":[1,0],"top_k":2,"return_embedding":true}`,
+		`{"query_embedding":[1,0],"top_k":2,"route":"ann","ef_search":8,"return_embedding":true}`,
+	} {
+		status, payload = ragParityPost(t, handler, "/v1/indexes/native_docs/search/vector", body)
+		if status != http.StatusOK || payload["route"] != "ann" || payload["exact"] != false || payload["candidates"] != float64(2) {
+			t.Fatalf("native dense status=%d body=%s", status, mustJSON(payload))
+		}
+		documents := ragParityArrayValue(t, payload["documents"], "native dense documents")
+		if len(documents) != 2 {
+			t.Fatalf("native dense documents=%s", mustJSON(documents))
+		}
+		first := ragParityObjectValue(t, documents[0], "native dense first document")
+		if ragParityStringValue(t, first["id"], "native dense first id") != "a" ||
+			math.Abs(ragParityNumberValue(t, first["score"], "native dense first score")-1) > 1e-6 {
+			t.Fatalf("native dense first document=%s", mustJSON(first))
+		}
+		if _, exists := payload["stats"]; exists {
+			t.Fatalf("native dense success schema leaked internal stats: %s", mustJSON(payload))
+		}
+		if _, exists := payload["visibility"]; exists {
+			t.Fatalf("native dense success schema leaked internal visibility: %s", mustJSON(payload))
+		}
+	}
+}
+
 func TestHTTPDenseAnnRouteValidationFailsClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

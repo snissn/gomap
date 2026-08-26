@@ -1,7 +1,10 @@
 package documentservice
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -140,11 +143,18 @@ func sortedSetStrings(set map[string]struct{}) []string {
 	return out
 }
 
-// searchDenseVectorAnn serves the dense route=ann path through the
-// column_graph vector index. It materializes each hit from the same search
-// snapshot rather than performing a later point read that could observe a
-// concurrent update or deletion.
+const denseVectorNativeSnapshotAttempts = 3
+
+// searchDenseVectorAnn serves route=ann without silent fallback. The existing
+// column_graph branch keeps one-shot snapshot materialization; native_runtime
+// uses the buffered no-document route plus a generation-validated read view.
 func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
+		if !info.Capabilities.NoDocumentVectorSearch {
+			return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense route \"ann\" requires a cosine float32 native_runtime vector index; use route \"exact\" for this index")
+		}
+		return s.searchDenseVectorNative(ctx, col, info, req)
+	}
 	if !info.Capabilities.ColumnGraphVectorSearch {
 		return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense route \"ann\" requires a cosine column_graph vector index; use route \"exact\" for this index")
 	}
@@ -186,6 +196,139 @@ func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Col
 		Exact:      false,
 		Candidates: len(search.Results),
 	}, nil
+}
+
+func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
+	if req.Filter != nil {
+		if err := req.Filter.Validate(); err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+	}
+	scalarFilter, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields))
+	if err != nil {
+		return DenseVectorSearchResponse{}, err
+	}
+	s.benchmarkSearchCacheMu.RLock()
+	if s.closed {
+		s.benchmarkSearchCacheMu.RUnlock()
+		return DenseVectorSearchResponse{}, serviceClosedError()
+	}
+	buffer := s.benchmarkSearchBufferPool.Get().(*collections.VectorIndexSearchBuffer)
+	defer func() {
+		buffer.Reset()
+		s.benchmarkSearchBufferPool.Put(buffer)
+		s.benchmarkSearchCacheMu.RUnlock()
+	}()
+	for attempt := range denseVectorNativeSnapshotAttempts {
+		if err := ctxErr(ctx); err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+		search, err := col.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
+			IndexName:            defaultVectorIndexName,
+			Query:                req.QueryEmbedding,
+			QueryMode:            collections.VectorIndexQueryModeExact,
+			TopK:                 req.TopK,
+			EfSearch:             req.EfSearch,
+			StatsMode:            collections.VectorIndexSearchStatsModeProduction,
+			DeclaredScalarFilter: scalarFilter,
+		}, buffer)
+		if err != nil {
+			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
+		}
+		if err := validateDenseNativeVectorSearchRoute(search); err != nil {
+			return DenseVectorSearchResponse{}, err
+		}
+		if s.denseVectorNativeAfterSearch != nil {
+			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
+				return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
+			}
+		}
+		view, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
+		if err != nil {
+			if errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
+				buffer.Reset()
+				continue
+			}
+			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document read view", err)
+		}
+		fetched, fetchErr := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(req.ReturnEmbedding))
+		closeErr := view.Close()
+		if fetchErr != nil {
+			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document fetch", errors.Join(fetchErr, closeErr))
+		}
+		if closeErr != nil {
+			return DenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann document read view close", closeErr)
+		}
+		if fetched.Stats.DocumentsRequested != uint64(len(search.Results)) ||
+			fetched.Stats.DocumentsFetched != uint64(len(search.Results)) ||
+			fetched.Stats.DocumentsMissing != 0 ||
+			len(fetched.Results) != len(search.Results) {
+			return DenseVectorSearchResponse{}, serviceErrorf(
+				CodeIndexUnavailable,
+				"native ann document fetch did not materialize exactly the returned candidates: candidates=%d requested=%d fetched=%d missing=%d results=%d",
+				len(search.Results),
+				fetched.Stats.DocumentsRequested,
+				fetched.Stats.DocumentsFetched,
+				fetched.Stats.DocumentsMissing,
+				len(fetched.Results),
+			)
+		}
+		docs := make([]Document, 0, len(search.Results))
+		for i, result := range search.Results {
+			materialized := fetched.Results[i]
+			if !materialized.Found || len(materialized.Document) == 0 || !bytes.Equal(materialized.ID, result.ID) {
+				return DenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann vector result %q was not materialized from the matching read view", string(result.ID))
+			}
+			doc, err := decodeStoredDocument(result.ID, materialized.Document)
+			if err != nil {
+				return DenseVectorSearchResponse{}, err
+			}
+			if !req.ReturnEmbedding {
+				doc.Embedding = nil
+			}
+			doc.Score = scorePtr(result.Score)
+			docs = append(docs, doc)
+		}
+		return DenseVectorSearchResponse{
+			Index:                      info,
+			Documents:                  docs,
+			Metric:                     info.Metric,
+			Route:                      RouteAnn,
+			Exact:                      false,
+			Candidates:                 len(search.Results),
+			ScalarFilterPlan:           search.Stats.ScalarFilterPlan,
+			ScalarFilterProbeIDs:       search.Stats.ScalarFilterProbeIDs,
+			ScalarFilterProbeTruncated: search.Stats.ScalarFilterProbeTruncated,
+			ScalarFilterCandidateIDs:   search.Stats.ScalarFilterCandidateIDs,
+			ScalarFilterVisited:        search.Stats.ScalarFilterVisited,
+			ScalarFilterAdmitted:       search.Stats.ScalarFilterAdmitted,
+			ScalarFilterExactScoring:   search.Stats.ScalarFilterExactScoring > 0,
+			ScalarFilterUnderfill:      search.Stats.ScalarFilterUnderfill > 0,
+		}, nil
+	}
+	return DenseVectorSearchResponse{}, mapVectorIndexSearchError(
+		"native ann vector search",
+		fmt.Errorf("%w after %d attempts", collections.ErrVectorIndexSnapshotMismatch, denseVectorNativeSnapshotAttempts),
+	)
+}
+
+func validateDenseNativeVectorSearchRoute(response collections.VectorIndexSearchResponse) error {
+	diagnostics := response.Diagnostics()
+	stats := response.Stats
+	if response.Strategy != collections.VectorIndexStrategyNativeRuntime ||
+		response.Path != collections.VectorIndexSearchPathNativeRuntime ||
+		diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
+		!diagnostics.LiveANN.Enabled ||
+		diagnostics.LiveANN.ExactFallbacks != 0 ||
+		diagnostics.FallbackReason != collections.VectorIndexSearchFallbackReasonNone ||
+		!diagnostics.NoDocumentGuardrailsOK ||
+		stats.SearchRouteNativeRuntime != 1 ||
+		stats.DocumentsFetched != 0 ||
+		stats.DocumentBytes != 0 ||
+		stats.DocumentOutputBytes != 0 {
+		return serviceErrorf(CodeIndexUnavailable, "native ann vector search left the buffered no-document native_runtime route: diagnostics=%+v", diagnostics)
+	}
+	return nil
 }
 
 // mappedHybridSearchError layers the executor's typed fail-closed reasons onto

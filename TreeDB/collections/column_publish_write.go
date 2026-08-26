@@ -205,13 +205,24 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		if err != nil {
 			return nil, err
 		}
-		if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
-			_ = columnDelta.Iter.Close()
-			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
-		}
-		if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
-			_ = columnDelta.Iter.Close()
-			return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
+		if plan.durableResourceRequirementsFallback != nil {
+			if err := ctx.RegisterDurableLogicalObligationAppendMutation(plan.durableResourceMutation, plan.durableResourceRequirementWork, plan.durableResourceRequirementsFallback); err != nil {
+				_ = columnDelta.Iter.Close()
+				return nil, fmt.Errorf("collections: register column publish durable append mutation: %w", err)
+			}
+		} else {
+			if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
+				_ = columnDelta.Iter.Close()
+				return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
+			}
+			if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
+				_ = columnDelta.Iter.Close()
+				return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
+			}
+			if err := ctx.RecordDurableLogicalObligationRequirementWork(plan.durableResourceRequirementWork); err != nil {
+				_ = columnDelta.Iter.Close()
+				return nil, fmt.Errorf("collections: record column publish durable requirement work: %w", err)
+			}
 		}
 		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
 			_ = columnDelta.Iter.Close()
@@ -346,19 +357,36 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
-		if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
-			if cleanupColumnDelta != nil {
-				cleanupColumnDelta()
-				cleanupColumnDelta = nil
+		if plan.durableResourceRequirementsFallback != nil {
+			if err := ctx.RegisterDurableLogicalObligationAppendMutation(plan.durableResourceMutation, plan.durableResourceRequirementWork, plan.durableResourceRequirementsFallback); err != nil {
+				if cleanupColumnDelta != nil {
+					cleanupColumnDelta()
+					cleanupColumnDelta = nil
+				}
+				return nil, fmt.Errorf("collections: register column publish durable append mutation: %w", err)
 			}
-			return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
-		}
-		if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
-			if cleanupColumnDelta != nil {
-				cleanupColumnDelta()
-				cleanupColumnDelta = nil
+		} else {
+			if err := ctx.RegisterDurableLogicalObligationRequirements(plan.durableResourceRequirements); err != nil {
+				if cleanupColumnDelta != nil {
+					cleanupColumnDelta()
+					cleanupColumnDelta = nil
+				}
+				return nil, fmt.Errorf("collections: register column publish durable requirements: %w", err)
 			}
-			return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
+			if err := ctx.RegisterDurableLogicalObligationMutation(plan.durableResourceMutation); err != nil {
+				if cleanupColumnDelta != nil {
+					cleanupColumnDelta()
+					cleanupColumnDelta = nil
+				}
+				return nil, fmt.Errorf("collections: register column publish durable mutation: %w", err)
+			}
+			if err := ctx.RecordDurableLogicalObligationRequirementWork(plan.durableResourceRequirementWork); err != nil {
+				if cleanupColumnDelta != nil {
+					cleanupColumnDelta()
+					cleanupColumnDelta = nil
+				}
+				return nil, fmt.Errorf("collections: record column publish durable requirement work: %w", err)
+			}
 		}
 		if err := ctx.RegisterDurableResources(plan.takeStableResources()); err != nil {
 			if cleanupColumnDelta != nil {
@@ -670,12 +698,16 @@ func recordColumnPublishTiming(stats *CollectionInsertStats, timing backenddb.Co
 		LogicalObligationNormalizations: work.LogicalObligationNormalizations,
 		RetainedIndexNodeVisits:         work.RetainedIndexNodeVisits, RetainedIndexNodeCopies: work.RetainedIndexNodeCopies,
 		LogicalIndexNodesAdmitted: work.LogicalIndexNodesAdmitted,
+		AggregateMembershipProbes: work.AggregateMembershipProbes, AggregateMembershipNodeVisits: work.AggregateMembershipNodeVisits,
+		AggregateMembershipNodeCopies: work.AggregateMembershipNodeCopies, AggregateMembershipAdmissions: work.AggregateMembershipAdmissions,
 		PhysicalEntryLookupProbes: work.PhysicalEntryLookupProbes, PhysicalEntryLookupComparisons: work.PhysicalEntryLookupComparisons,
 		PhysicalEntryLookupAdmissions: work.PhysicalEntryLookupAdmissions, NewlyAdmittedEntries: work.NewlyAdmittedEntries,
 		NewlyAdmittedObligations: work.NewlyAdmittedObligations, RemovedObligations: work.RemovedObligations,
 		AppendOnlyFastPath:  work.AppendOnlyFastPath,
 		AppendOnlyFallbacks: work.AppendOnlyFallbacks, DestructiveFallbacks: work.DestructiveFallbacks,
-		FullClosureValidations: work.FullClosureValidations,
+		FullClosureValidations:        work.FullClosureValidations,
+		FinalRequirementProofFastPath: work.FinalRequirementProofFastPath, FinalRequirementProofFallbacks: work.FinalRequirementProofFallbacks,
+		FinalRequirementRecordsDecoded: work.FinalRequirementRecordsDecoded, FinalRequirementObligationsMaterialized: work.FinalRequirementObligationsMaterialized,
 	})
 	stats.ColumnPublishFinalizeEnqueueActivation += timing.FinalizeEnqueueActivation
 	stats.ColumnPublishFinalizeAdmissionWait += timing.FinalizeAdmissionWait

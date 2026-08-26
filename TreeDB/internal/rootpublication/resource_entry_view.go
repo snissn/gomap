@@ -3,6 +3,7 @@ package rootpublication
 import (
 	"encoding/binary"
 	"hash/fnv"
+	"sort"
 	"sync/atomic"
 )
 
@@ -114,11 +115,66 @@ type stableResourcePhysicalIndexNode struct {
 }
 
 type stableResourceKindView struct {
-	root         *stableResourceEntryNode
-	logical      *stableResourceLogicalIndexNode
-	physical     *stableResourcePhysicalIndexNode
-	reachability map[ReachabilityField]struct{}
-	count        int
+	root                   *stableResourceEntryNode
+	logical                *stableResourceLogicalIndexNode
+	physical               *stableResourcePhysicalIndexNode
+	logicalMembership      *stableLogicalObligationIndexNode
+	reachability           map[ReachabilityField]struct{}
+	logicalCommitments     map[ReachabilityField]stableLogicalObligationCommitment
+	logicalObligationCount int
+	logicalMembershipCount int
+	count                  int
+}
+
+// stableLogicalMembershipEvidence is read-only semantic evidence. Its index
+// nodes contain obligation values only, so sharing it neither retains nor owns
+// physical resource roots.
+type stableLogicalMembershipEvidence struct {
+	root                   *stableLogicalObligationIndexNode
+	commitments            map[ReachabilityField]stableLogicalObligationCommitment
+	logicalMembershipCount int
+	logicalObligationCount int
+}
+
+func stableLogicalMembershipEvidenceComplete(evidence stableLogicalMembershipEvidence) bool {
+	return evidence.logicalMembershipCount == evidence.logicalObligationCount && (evidence.root != nil || evidence.logicalMembershipCount == 0)
+}
+
+func stableLogicalMembershipEvidenceFromKindView(view stableResourceKindView) stableLogicalMembershipEvidence {
+	return stableLogicalMembershipEvidence{
+		root:                   view.logicalMembership,
+		commitments:            view.logicalCommitments,
+		logicalMembershipCount: view.logicalMembershipCount,
+		logicalObligationCount: view.logicalObligationCount,
+	}
+}
+
+func insertFreshStableLogicalMembership(root *stableLogicalObligationIndexNode, obligation StableLogicalObligation) (*stableLogicalObligationIndexNode, bool) {
+	if _, exists := findStableLogicalObligationIndex(root, obligation, nil); exists {
+		return root, false
+	}
+	next, err := insertFreshStableLogicalObligationIndex(root, obligation, nil)
+	if err != nil {
+		return root, false
+	}
+	return next, true
+}
+
+func insertStableLogicalMembership(root *stableLogicalObligationIndexNode, obligation StableLogicalObligation, work *StableResourceClosureWork) (*stableLogicalObligationIndexNode, bool) {
+	var indexWork StableResourceClosureWork
+	next, err := insertStableLogicalObligationIndex(root, obligation, &indexWork)
+	if work != nil {
+		work.AggregateMembershipProbes++
+		work.AggregateMembershipNodeVisits += indexWork.RetainedIndexNodeVisits
+		work.AggregateMembershipNodeCopies += indexWork.RetainedIndexNodeCopies
+	}
+	if err != nil || next == root {
+		return root, false
+	}
+	if work != nil {
+		work.AggregateMembershipAdmissions++
+	}
+	return next, true
 }
 
 func stableLogicalResourceKeyLess(left, right stableLogicalResourceKey) bool {
@@ -327,6 +383,34 @@ func insertStableResourcePhysical(root *stableResourcePhysicalIndexNode, entry *
 	return result
 }
 
+// replaceStableResourcePhysical path-copies the one physical-index branch that
+// names old. Certified append-only coalescing keeps the retained rope as the
+// token-owner lineage, so its current entry view must move with the logical
+// index without rebuilding that lineage.
+func replaceStableResourcePhysical(root *stableResourcePhysicalIndexNode, old, replacement *stableResourceEntry) *stableResourcePhysicalIndexNode {
+	if root == nil {
+		return nil
+	}
+	key := old.token.physicalIdentityKey()
+	next := *root
+	if key == root.key {
+		next.entries = append([]*stableResourceEntry(nil), root.entries...)
+		for i, entry := range next.entries {
+			if entry == old {
+				next.entries[i] = replacement
+				return &next
+			}
+		}
+		return root
+	}
+	if stablePhysicalIdentityKeyLess(key, root.key) {
+		next.left = replaceStableResourcePhysical(root.left, old, replacement)
+	} else {
+		next.right = replaceStableResourcePhysical(root.right, old, replacement)
+	}
+	return &next
+}
+
 func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKind]stableResourceKindView, error) {
 	if len(entries) == 0 {
 		return nil, nil
@@ -357,6 +441,16 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 			entry := &chunk[i]
 			view.logical = insertFreshStableResourceLogical(view.logical, entry)
 			view.physical = insertFreshStableResourcePhysical(view.physical, entry)
+			entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+				var admitted bool
+				view.logicalMembership, admitted = insertFreshStableLogicalMembership(view.logicalMembership, obligation)
+				if admitted {
+					view.logicalMembershipCount++
+				}
+				return true
+			})
+			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, entry.logicalObligations.commitments)
+			view.logicalObligationCount += entry.logicalObligations.count
 			for field := range entry.reachability {
 				view.reachability[field] = struct{}{}
 			}
@@ -401,9 +495,30 @@ func stableResourceKindViewCount(views map[ResourceKind]stableResourceKindView) 
 
 func rangeStableResourceKindViews(views map[ResourceKind]stableResourceKindView, visit func(*stableResourceEntry) bool) bool {
 	for _, kind := range stableResourceKindsSorted(views) {
-		if !views[kind].root.rangeEntries(visit) {
+		if !rangeStableResourceLogicalIndex(views[kind].logical, visit) {
 			return false
 		}
+	}
+	return true
+}
+
+// rangeStableResourceLogicalIndex is the authoritative frozen-entry view.
+// Roots retain token ownership; path-copied logical entries may therefore
+// differ from the immutable rope entry after certified append-only coalescing.
+func rangeStableResourceLogicalIndex(root *stableResourceLogicalIndexNode, visit func(*stableResourceEntry) bool) bool {
+	stack := make([]*stableResourceLogicalIndexNode, 0, 8)
+	for root != nil || len(stack) != 0 {
+		for root != nil {
+			stack = append(stack, root)
+			root = root.left
+		}
+		last := len(stack) - 1
+		root = stack[last]
+		stack = stack[:last]
+		if !visit(root.entry) {
+			return false
+		}
+		root = root.right
 	}
 	return true
 }
@@ -434,10 +549,101 @@ func stableResourceViewsConflict(target map[ResourceKind]stableResourceKindView,
 	return false
 }
 
+func stableResourceViewLogicalMembershipComplete(view stableResourceKindView) bool {
+	return view.logicalMembershipCount == view.logicalObligationCount && (view.logicalMembership != nil || view.logicalMembershipCount == 0)
+}
+
+// stableResourceViewsAdmitLogicalObligations proves that entry adds no logical
+// obligation already owned by another resource. A same-physical predecessor
+// may repeat its own obligations; every kind is still probed so overlap cannot
+// hide behind a different resource kind.
+func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableResourceKindView, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool) {
+	kinds := stableResourceKindsSorted(views)
+	var predecessorKind ResourceKind
+	if predecessor != nil {
+		if token := activeEntryToken(*predecessor); token != nil {
+			predecessorKind = token.kind
+		}
+	}
+	for kind, view := range views {
+		if _, skip := excluded[kind]; !skip && !stableResourceViewLogicalMembershipComplete(view) {
+			return false, false
+		}
+	}
+	admissible := true
+	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		for _, kind := range kinds {
+			if _, skip := excluded[kind]; skip {
+				continue
+			}
+			existing, found := findStableLogicalObligationIndex(views[kind].logicalMembership, obligation, work)
+			if !found {
+				continue
+			}
+			if predecessor != nil && predecessorKind == kind {
+				owned, ownedByPredecessor := findStableLogicalObligationIndex(predecessor.logicalObligations.index, obligation, nil)
+				if ownedByPredecessor && owned == existing && existing == obligation {
+					continue
+				}
+			}
+			admissible = false
+			return false
+		}
+		return true
+	})
+	return admissible, true
+}
+
+func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogicalMembershipEvidence, sourceKinds map[ResourceKind]uint64, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool) {
+	if len(sourceKinds) == 0 {
+		return false, false
+	}
+	var predecessorKind ResourceKind
+	if predecessor != nil {
+		if token := activeEntryToken(*predecessor); token != nil {
+			predecessorKind = token.kind
+		}
+	}
+	kinds := make([]ResourceKind, 0, len(sourceKinds))
+	for kind := range sourceKinds {
+		if _, skip := excluded[kind]; skip {
+			continue
+		}
+		candidate, exists := evidence[kind]
+		if !exists {
+			return false, false
+		}
+		if !stableLogicalMembershipEvidenceComplete(candidate) {
+			return false, false
+		}
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	admissible := true
+	entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+		for _, kind := range kinds {
+			existing, found := findStableLogicalObligationIndex(evidence[kind].root, obligation, work)
+			if !found {
+				continue
+			}
+			if predecessor != nil && predecessorKind == kind {
+				owned, ownedByPredecessor := findStableLogicalObligationIndex(predecessor.logicalObligations.index, obligation, nil)
+				if ownedByPredecessor && owned == existing && existing == obligation {
+					continue
+				}
+			}
+			admissible = false
+			return false
+		}
+		return true
+	})
+	return admissible, true
+}
+
 // mergeDistinctStableResourceKindViews consumes both input root references on
 // success. It declines before ownership mutation when any logical or physical
 // identity needs the existing exact coalescing path.
-func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stableResourceKindView) (map[ResourceKind]stableResourceKindView, bool) {
+func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stableResourceKindView, work *StableResourceClosureWork) (map[ResourceKind]stableResourceKindView, bool) {
 	if len(target) == 0 {
 		return incoming, true
 	}
@@ -463,9 +669,19 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			continue
 		}
 		logical, physical := current.logical, current.physical
-		child.root.rangeEntries(func(entry *stableResourceEntry) bool {
+		logicalMembership := current.logicalMembership
+		logicalMembershipCount := current.logicalMembershipCount
+		rangeStableResourceLogicalIndex(child.logical, func(entry *stableResourceEntry) bool {
 			logical = insertStableResourceLogical(logical, entry)
 			physical = insertStableResourcePhysical(physical, entry)
+			entry.logicalObligations.rangeValues(func(obligation StableLogicalObligation) bool {
+				var admitted bool
+				logicalMembership, admitted = insertStableLogicalMembership(logicalMembership, obligation, work)
+				if admitted {
+					logicalMembershipCount++
+				}
+				return true
+			})
 			return true
 		})
 		reachability := make(map[ReachabilityField]struct{}, len(current.reachability)+len(child.reachability))
@@ -476,9 +692,15 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			reachability[field] = struct{}{}
 		}
 		next[kind] = stableResourceKindView{
-			root:    concatOwnedStableResourceEntryNodes(current.root, child.root),
-			logical: logical, physical: physical, reachability: reachability,
-			count: current.count + child.count,
+			root:                   concatOwnedStableResourceEntryNodes(current.root, child.root),
+			logical:                logical,
+			physical:               physical,
+			logicalMembership:      logicalMembership,
+			reachability:           reachability,
+			logicalCommitments:     addStableLogicalObligationCommitments(current.logicalCommitments, child.logicalCommitments),
+			logicalObligationCount: current.logicalObligationCount + child.logicalObligationCount,
+			logicalMembershipCount: logicalMembershipCount,
+			count:                  current.count + child.count,
 		}
 	}
 	return next, true

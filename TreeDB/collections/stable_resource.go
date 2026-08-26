@@ -27,6 +27,10 @@ var stableColumnDurableRequirementFields = []rootpublication.ReachabilityField{
 // binary probes for only changed keys, so append-only publication evidence is
 // proportional to the mutation set rather than the retained manifest.
 func stableColumnManifestDurableMutation(current []columnManifestRecord, mutations []columnManifestMutation, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationMutation, error) {
+	return stableColumnManifestDurableMutationWithWork(current, mutations, activeGeneration, expectedNamespace, nil)
+}
+
+func stableColumnManifestDurableMutationWithWork(current []columnManifestRecord, mutations []columnManifestMutation, activeGeneration uint64, expectedNamespace string, work *rootpublication.StableResourceClosureWork) (rootpublication.StableLogicalObligationMutation, error) {
 	result := rootpublication.StableLogicalObligationMutation{
 		ScopedFields: append([]rootpublication.ReachabilityField(nil), stableColumnDurableRequirementFields...),
 	}
@@ -34,6 +38,9 @@ func stableColumnManifestDurableMutation(current []columnManifestRecord, mutatio
 		requirements, err := stableColumnManifestDurableRequirements([]columnManifestRecord{record}, activeGeneration, expectedNamespace)
 		if err != nil {
 			return nil, err
+		}
+		if work != nil && stableColumnManifestDurableRequirementRecord(record.key) {
+			work.FinalRequirementRecordsDecoded++
 		}
 		return requirements.Obligations, nil
 	}
@@ -82,6 +89,19 @@ func stableColumnManifestDurableMutation(current []columnManifestRecord, mutatio
 // includes retained older generations as well as newly prepared assets so the
 // DB can clone only still-reachable fallback-slot pins.
 func stableColumnManifestDurableRequirements(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationRequirements, error) {
+	return stableColumnManifestDurableRequirementsWithWork(records, activeGeneration, expectedNamespace, nil)
+}
+
+func stableColumnManifestDurableRequirementRecord(key []byte) bool {
+	return bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes)
+}
+
+func stableColumnManifestDurableRequirementsWithWork(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string, work *rootpublication.StableResourceClosureWork) (rootpublication.StableLogicalObligationRequirements, error) {
 	requirements := rootpublication.StableLogicalObligationRequirements{
 		ScopedFields: append([]rootpublication.ReachabilityField(nil), stableColumnDurableRequirementFields...),
 	}
@@ -93,6 +113,9 @@ func stableColumnManifestDurableRequirements(records []columnManifestRecord, act
 			return err
 		}
 		requirements.Obligations = append(requirements.Obligations, stableColumnLogicalObligation(ref, reachability))
+		if work != nil {
+			work.FinalRequirementObligationsMaterialized++
+		}
 		return nil
 	}
 	appendClassified := func(ref ColumnAssetRef) error {
@@ -106,6 +129,9 @@ func stableColumnManifestDurableRequirements(records []columnManifestRecord, act
 		return appendRef(ref, reachability)
 	}
 	for _, record := range records {
+		if work != nil && stableColumnManifestDurableRequirementRecord(record.key) {
+			work.FinalRequirementRecordsDecoded++
+		}
 		switch {
 		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
 			part, err := decodeColumnManifestPartRecord(record.value)
@@ -170,6 +196,32 @@ func stableColumnManifestDurableRequirements(records []columnManifestRecord, act
 		}
 	}
 	return rootpublication.NormalizeStableLogicalObligationRequirements(requirements)
+}
+
+func stableColumnManifestDurablePublication(current []columnManifestRecord, delta ColumnManifestRootDelta, activeGeneration uint64, expectedNamespace string) (rootpublication.StableLogicalObligationRequirements, rootpublication.StableLogicalObligationMutation, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), rootpublication.StableResourceClosureWork, error) {
+	var work rootpublication.StableResourceClosureWork
+	var mutation rootpublication.StableLogicalObligationMutation
+	var err error
+	if delta.MutationDelta {
+		mutation, err = stableColumnManifestDurableMutationWithWork(current, delta.Mutations, activeGeneration, expectedNamespace, &work)
+		if err != nil {
+			return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, nil, work, fmt.Errorf("collections: derive durable column resource mutation: %w", err)
+		}
+		if len(mutation.Removed) == 0 {
+			records := delta.Records
+			fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+				var fallbackWork rootpublication.StableResourceClosureWork
+				requirements, fallbackErr := stableColumnManifestDurableRequirementsWithWork(records, activeGeneration, expectedNamespace, &fallbackWork)
+				return requirements, fallbackWork, fallbackErr
+			}
+			return rootpublication.StableLogicalObligationRequirements{}, mutation, fallback, work, nil
+		}
+	}
+	requirements, err := stableColumnManifestDurableRequirementsWithWork(delta.Records, activeGeneration, expectedNamespace, &work)
+	if err != nil {
+		return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, nil, work, fmt.Errorf("collections: derive durable column resource closure: %w", err)
+	}
+	return requirements, mutation, nil, work, nil
 }
 
 var syncStableColumnAssetResourceForPublish = func(file *os.File, _ rootpublication.DurableFrontier) error {

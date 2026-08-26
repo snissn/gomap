@@ -6,12 +6,12 @@ package collections
 // search/scoring path no-document (IncludeDocuments=false) and then decide to
 // materialize the returned top-k IDs outside the high-QPS search boundary.
 //
-// The fetch is bound to this CollectionReadView's snapshot, not implicitly to
-// the snapshot used by the search call that produced results. Open the read view
-// at the visibility point you want to materialize. If same-snapshot search plus
-// document materialization is required, use IncludeDocuments=true on
-// SearchVectorIndex or VectorIndexSearcher.Search instead and report those
-// document counters as part of that explicit with-documents path.
+// The fetch is bound to this CollectionReadView's snapshot. Native buffered
+// callers that require search/document consistency must open the view with
+// Collection.OpenCollectionReadViewForVectorIndexSearch; an ordinary
+// OpenCollectionReadView selects its own visibility point. Other search paths
+// can use IncludeDocuments=true on SearchVectorIndex or
+// VectorIndexSearcher.Search for one-shot materialization.
 //
 // Results returned by SearchVectorIndexWithBuffer alias the caller's
 // VectorIndexSearchBuffer; do not reuse or reset that buffer until this helper

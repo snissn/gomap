@@ -9,6 +9,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
+var denseNativeBenchmarkResultCount int
+var denseNativeBenchmarkDocument Document
+
 func TestBenchmarkVectorSearchResultsOwnsSource(t *testing.T) {
 	source := []collections.VectorIndexSearchResult{
 		{ID: []byte("first"), Ordinal: 7, Score: 0.9},
@@ -156,6 +159,114 @@ func BenchmarkServiceBenchmarkVectorSearchBufferScratch(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+}
+func BenchmarkServiceDenseNativeRuntimeVisibilityOverhead(b *testing.B) {
+	svc, db := newTestService(b)
+	defer db.Close()
+	ctx := context.Background()
+	const rows = 4096
+	docs := make([]Document, rows)
+	for i := range docs {
+		docs[i] = Document{
+			ID:        fmt.Sprintf("doc-%04d", i),
+			Content:   fmt.Sprintf("content-%04d", i),
+			Embedding: []float32{float32(i + 1), 1},
+		}
+	}
+	const indexName = "dense_native_visibility"
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      indexName,
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyNativeRuntime,
+		},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	loadBenchmarkDocsDeferred(b, svc, indexName, docs)
+	col, info, err := svc.openIndex(ctx, indexName, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	searchOptions := collections.VectorIndexSearchOptions{
+		IndexName: defaultVectorIndexName,
+		Query:     []float32{1, 1},
+		QueryMode: collections.VectorIndexQueryModeExact,
+		TopK:      10,
+		EfSearch:  100,
+		StatsMode: collections.VectorIndexSearchStatsModeProduction,
+	}
+	var searchBuffer collections.VectorIndexSearchBuffer
+	search, err := col.SearchVectorIndexWithBuffer(searchOptions, &searchBuffer)
+	if err != nil {
+		b.Fatal(err)
+	}
+	view, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
+	if err != nil {
+		b.Fatal(err)
+	}
+	fetched, err := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(false))
+	if err != nil {
+		_ = view.Close()
+		b.Fatal(err)
+	}
+	if err := view.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("direct_buffered_search", func(b *testing.B) {
+		var buffer collections.VectorIndexSearchBuffer
+		b.ReportAllocs()
+		for b.Loop() {
+			result, err := col.SearchVectorIndexWithBuffer(searchOptions, &buffer)
+			if err != nil {
+				b.Fatal(err)
+			}
+			denseNativeBenchmarkResultCount = len(result.Results)
+		}
+	})
+	b.Run("validated_topk_fetch", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			readView, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
+			if err != nil {
+				b.Fatal(err)
+			}
+			result, fetchErr := readView.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(false))
+			closeErr := readView.Close()
+			if fetchErr != nil || closeErr != nil {
+				b.Fatalf("fetch=%v close=%v", fetchErr, closeErr)
+			}
+			denseNativeBenchmarkResultCount = len(result.Results)
+		}
+	})
+	b.Run("decode_topk", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			for _, result := range fetched.Results {
+				doc, err := decodeStoredDocument(result.ID, result.Document)
+				if err != nil {
+					b.Fatal(err)
+				}
+				denseNativeBenchmarkDocument = doc
+			}
+		}
+	})
+	b.Run("service_search_fetch_decode", func(b *testing.B) {
+		req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100}
+		b.ReportAllocs()
+		for b.Loop() {
+			result, err := svc.SearchDenseVector(ctx, indexName, req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if result.Index.Generation != info.Generation {
+				b.Fatalf("generation=%d want=%d", result.Index.Generation, info.Generation)
+			}
+			denseNativeBenchmarkResultCount = len(result.Documents)
+		}
+	})
 }
 
 func TestServiceBenchmarkVectorSearchCacheInvalidatesOnLifecycleEvents(t *testing.T) {

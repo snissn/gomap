@@ -11,10 +11,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func init() {
+	setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool { return true })
+}
 
 func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	concurrentMutation := fmt.Errorf("wrapped vacuum result: %w", backenddb.ErrVacuumConcurrentMutation)
@@ -242,6 +247,173 @@ func TestBackgroundIndexVacuumBacklogClearsResetsSkipCounter(t *testing.T) {
 	}
 	if got := d.bgVac.lastBacklogBytes.Load(); got != 0 {
 		t.Fatalf("last backlog bytes=%d want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumNativeRootWriteSkipsTriggerProbe(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(db *DB) bool {
+		return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
+	})
+	defer restoreForeground()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	writeBackgroundVacuumNativeRoot(t, d)
+	if got := d.cached.QueueBacklogBytes(); got != 0 {
+		t.Fatalf("queue backlog after native root write=%d want 0", got)
+	}
+	counts, restore := installBackgroundVacuumProbeCounter()
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes after native root write=%d want 0", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 1 {
+		t.Fatalf("consecutive foreground skips=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundSkips.Load(); got != 1 {
+		t.Fatalf("total foreground skips=%d want 1", got)
+	}
+	if got := d.bgVac.backlogSkips.Load(); got != 0 {
+		t.Fatalf("backlog skips=%d want 0", got)
+	}
+	stats := d.Stats()
+	if got := stats["treedb.bg_vacuum.foreground_skips_consecutive"]; got != "1" {
+		t.Fatalf("public consecutive foreground skips=%q want 1", got)
+	}
+	if got := stats["treedb.bg_vacuum.foreground_skips_total"]; got != "1" {
+		t.Fatalf("public total foreground skips=%q want 1", got)
+	}
+	if got := stats["treedb.bg_vacuum.foreground_forced_runs"]; got != "0" {
+		t.Fatalf("public forced-after-foreground runs=%q want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumNativeRootWriteForcesProbeAfterSkipCap(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(db *DB) bool {
+		return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
+	})
+	defer restoreForeground()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	writeBackgroundVacuumNativeRoot(t, d)
+	counts, restore := installBackgroundVacuumProbeCounter()
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes before foreground skip cap=%d want 0", got)
+	}
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("forced trigger probes=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundForcedRuns.Load(); got != 1 {
+		t.Fatalf("forced-after-foreground runs=%d want 1", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("consecutive foreground skips after forced probe=%d want 0", got)
+	}
+	if got := d.bgVac.backlogForcedRuns.Load(); got != 0 {
+		t.Fatalf("forced-after-backlog runs=%d want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumBacklogSkipResetsForegroundSkipCap(t *testing.T) {
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool { return false })
+	defer restoreForeground()
+	var backlog atomic.Int64
+	restoreBacklog := setBackgroundIndexVacuumBacklogBytesHookForTest(func(*DB) int64 { return backlog.Load() })
+	defer restoreBacklog()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 1 {
+		t.Fatalf("foreground skips before backlog=%d want 1", got)
+	}
+	backlog.Store(1)
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("foreground skips after backlog=%d want 0", got)
+	}
+	backlog.Store(0)
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes before fresh foreground skip cap=%d want 0", got)
+	}
+	if got := d.bgVac.foregroundConsecutiveSkips.Load(); got != 2 {
+		t.Fatalf("foreground skips after reset=%d want 2", got)
+	}
+}
+
+func TestBackgroundIndexVacuumNativeRootWriteQuietTransitionRunsEligibleVacuum(t *testing.T) {
+	var quiet atomic.Bool
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(*DB) bool {
+		return quiet.Load()
+	})
+	defer restoreForeground()
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	d.bgVac.spanRatioPPM = 1
+	writeBackgroundVacuumNativeRoot(t, d)
+
+	restoreProbe := setBackgroundIndexVacuumTriggerReportHookForTest(func(*DB, context.Context) (backenddb.IndexVacuumTriggerReport, error) {
+		return backenddb.IndexVacuumTriggerReport{UserPages: 1, UserSpanRatioPPM: 1}, nil
+	})
+	defer restoreProbe()
+	var vacuums atomic.Uint64
+	restoreVacuum := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+		vacuums.Add(1)
+		return nil
+	})
+	defer restoreVacuum()
+
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundSkips.Load(); got != 1 {
+		t.Fatalf("foreground skips while write is hot=%d want 1", got)
+	}
+	quiet.Store(true)
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.probes.Load(); got != 1 {
+		t.Fatalf("trigger probes after quiet transition=%d want 1", got)
+	}
+	if got := vacuums.Load(); got != 1 {
+		t.Fatalf("eligible vacuums after quiet transition=%d want 1", got)
+	}
+}
+
+func writeBackgroundVacuumNativeRoot(t *testing.T, d *DB) {
+	t.Helper()
+	manager := collections.NewCollectionManager(d.backend)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "background-vacuum-native-root",
+		Options: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormatJSON,
+			DataRootStoragePolicy:   collections.RootStorageCompressed,
+			IndexStateStoragePolicy: collections.RootStorageCompressed,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	collection, err := manager.OpenCollection("background-vacuum-native-root")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := collection.InsertBatch(
+		[][]byte{[]byte("doc-1")},
+		[][]byte{[]byte(`{"_id":"doc-1","value":1}`)},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := collection.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 }
 
@@ -722,6 +894,10 @@ func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
+	restoreForeground := setBackgroundIndexVacuumForegroundWriteQuietHookForTest(func(db *DB) bool {
+		return db == nil || db.cached == nil || db.cached.BackgroundVacuumForegroundWriteQuiet()
+	})
+	defer restoreForeground()
 	d, err := Open(Options{
 		Dir:                               t.TempDir(),
 		BackgroundIndexVacuumInterval:     time.Hour,
@@ -731,6 +907,12 @@ func TestBackgroundIndexVacuumCloseCancelsActivePass(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.maxBacklogSkips = 1
+	writeBackgroundVacuumNativeRoot(t, d)
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.foregroundSkips.Load(); got != 1 {
+		t.Fatalf("foreground skips before forced close pass=%d want 1", got)
+	}
 
 	started := make(chan struct{})
 	restore := setBackgroundIndexVacuumRunHookForTest(func(_ *DB, ctx context.Context) error {

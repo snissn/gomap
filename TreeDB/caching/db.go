@@ -13274,6 +13274,12 @@ func (db *DB) foregroundWriteQuietFor(now time.Time, quietWindow time.Duration) 
 	return now.Sub(time.Unix(0, last)) >= quietWindow
 }
 
+// BackgroundVacuumForegroundWriteQuiet reports whether the standard maintenance
+// quiet window has elapsed since the last foreground write.
+func (db *DB) BackgroundVacuumForegroundWriteQuiet() bool {
+	return db.foregroundWriteQuietFor(time.Now(), vlogForegroundQuietWindow)
+}
+
 func (db *DB) foregroundReadQuietFor(now time.Time, quietWindow time.Duration) bool {
 	if db == nil {
 		return true

@@ -25,6 +25,10 @@ type vectorIndexSearchView struct {
 	reuseState               atomic.Uint32
 	nodes                    []vectorIndexNode
 	deltaNodes               []vectorIndexNode
+	scalarColumns            map[string]vectorIndexScalarColumn
+	deltaScalarColumns       map[string]vectorIndexScalarColumn
+	currentNode              map[string]int
+	deltaCurrentNode         map[string]int
 	name                     string
 	field                    string
 	metric                   VectorMetric
@@ -125,6 +129,35 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	}
 	next.nodes = nodes
 	next.deltaNodes = deltaNodes
+	next.scalarColumns = nil
+	if idx.validateNativeScalarColumnLengthsLocked() == nil {
+		if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
+			next.scalarColumns = previous.scalarColumns
+		} else {
+			next.scalarColumns = snapshotVectorIndexScalarColumns(idx.scalarColumns)
+		}
+	}
+	next.deltaScalarColumns = nil
+	if idx.liveDelta != nil && idx.liveDelta.validateNativeScalarColumnLengthsLocked() == nil {
+		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
+			next.deltaScalarColumns = previous.deltaScalarColumns
+		} else {
+			next.deltaScalarColumns = snapshotVectorIndexScalarColumns(idx.liveDelta.scalarColumns)
+		}
+	}
+	if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
+		next.currentNode = previous.currentNode
+	} else {
+		next.currentNode = vectorIndexNodeOrdinalMap(idx.nodes)
+	}
+	next.deltaCurrentNode = nil
+	if idx.liveDelta != nil {
+		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
+			next.deltaCurrentNode = previous.deltaCurrentNode
+		} else {
+			next.deltaCurrentNode = vectorIndexNodeOrdinalMap(idx.liveDelta.nodes)
+		}
+	}
 	next.name = idx.name
 	next.field = idx.field
 	next.metric = idx.metric
