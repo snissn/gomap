@@ -85,6 +85,67 @@ func TestNativeScalarColumnsNormalizeTypesMissingAndLiveMutations(t *testing.T) 
 	}
 }
 
+func TestNativeScalarVectorIndexRebuildSwapsAlignedColumns(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("keep"), []byte("move"), []byte("gone")},
+		[][]byte{
+			[]byte(`{"embedding":[0.8,0.2],"tenant":"alpha"}`),
+			[]byte(`{"embedding":[1,0],"tenant":"alpha"}`),
+			[]byte(`{"embedding":[0.9,0.1],"tenant":"alpha"}`),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 3); len(got.Results) != 3 {
+		t.Fatalf("initial results=%+v", got.Results)
+	}
+	runtime := col.registeredVectorIndex(def.Name)
+	if runtime == nil {
+		t.Fatal("registered native runtime is unavailable")
+	}
+	if replaced, err := col.Replace([]byte("move"), []byte(`{"embedding":[1,0],"tenant":"beta"}`)); err != nil || !replaced {
+		t.Fatalf("replace move=%v err=%v", replaced, err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("gone")}); err != nil || deleted != 1 {
+		t.Fatalf("delete gone=%d err=%v", deleted, err)
+	}
+	if err := runtime.Rebuild(); err != nil {
+		t.Fatal(err)
+	}
+	alpha := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 3)
+	if len(alpha.Results) != 1 ||
+		string(alpha.Results[0].ID) != "keep" ||
+		alpha.Stats.ScalarFilterCandidateIDs != 1 ||
+		alpha.Stats.ScalarFilterAdmitted != 1 ||
+		alpha.Stats.ScalarFilterExactScoring != 1 {
+		t.Fatalf("rebuilt alpha=%+v diagnostics=%+v", alpha.Results, alpha.Diagnostics())
+	}
+	beta := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "beta"}, 3)
+	if len(beta.Results) != 1 ||
+		string(beta.Results[0].ID) != "move" ||
+		beta.Stats.ScalarFilterCandidateIDs != 1 ||
+		beta.Stats.ScalarFilterAdmitted != 1 ||
+		beta.Stats.ScalarFilterExactScoring != 1 {
+		t.Fatalf("rebuilt beta=%+v diagnostics=%+v", beta.Results, beta.Diagnostics())
+	}
+	view := runtime.acquireSearchView()
+	if view == nil {
+		t.Fatal("rebuilt search view is unavailable")
+	}
+	column, ok := view.scalarColumns["tenant_idx"]
+	rows, nodes, deltaNodes := len(column.offsets)-1, len(view.nodes), len(view.deltaNodes)
+	aligned := ok && rows == nodes && nodes == 2 && deltaNodes == 0
+	runtime.releaseSearchView(view)
+	if !aligned {
+		t.Fatalf("rebuilt scalar alignment ok=%v rows=%d nodes=%d delta=%d", ok, rows, nodes, deltaNodes)
+	}
+}
+
 func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()

@@ -5164,6 +5164,11 @@ func (idx *VectorIndex) Rebuild() error {
 	rebuilt.mu.RLock()
 	nodes := cloneVectorIndexNodes(rebuilt.nodes)
 	currentNode := cloneVectorIndexCurrentNode(rebuilt.currentNode)
+	scalarDefinitions := append([]IndexDefinition(nil), rebuilt.scalarDefinitions...)
+	for i := range scalarDefinitions {
+		scalarDefinitions[i].Components = append([]IndexComponent(nil), rebuilt.scalarDefinitions[i].Components...)
+	}
+	scalarColumns := cloneVectorIndexScalarColumns(rebuilt.scalarColumns)
 	entry := rebuilt.entry
 	maxLevel := rebuilt.maxLevel
 	dimensions := rebuilt.dimensions
@@ -5177,6 +5182,8 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.liveDelta = nil
 	idx.nodes = nodes
 	idx.currentNode = currentNode
+	idx.scalarDefinitions = scalarDefinitions
+	idx.scalarColumns = scalarColumns
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
