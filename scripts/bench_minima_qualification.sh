@@ -16,6 +16,7 @@ TREEDB_URL=${TREEDB_URL:-http://127.0.0.1:17120}
 TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
+TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
 
@@ -39,6 +40,7 @@ small)
 		--data-dir "$TREEDB_DATA_DIR" \
 		--collection "$TREEDB_COLLECTION" \
 		--profile "$TREEDB_PROFILE" \
+		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 		--ef-search "$TREEDB_EF_SEARCH"
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
 	printf 'small manifest: %s\nvalidated partial TreeDB evidence: %s\n' "$MANIFEST_PATH" "$TREEDB_EVIDENCE"
@@ -57,6 +59,7 @@ go build -o "$RUN_DIR/bin/treedb-document-service" ./cmd/treedb-document-service
 go build -o "$RUN_DIR/bin/treedb-rag-benchmark" ./TreeDB/cmd/treedb_rag_benchmark
 "$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -dump-minima-manifest "$MANIFEST_PATH"
 
+treedb_status=0
 PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	benchmarks/vector_db_compare/minima_treedb_runner.py \
 	--manifest "$MANIFEST_PATH" \
@@ -66,25 +69,44 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--data-dir "$TREEDB_DATA_DIR" \
 	--collection "$TREEDB_COLLECTION" \
 	--profile "$TREEDB_PROFILE" \
-	--ef-search "$TREEDB_EF_SEARCH"
+	--ef-search "$TREEDB_EF_SEARCH" \
+	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" ||
+	treedb_status=$?
 
+qdrant_status=0
 if [[ "$(uname -s)" == "Darwin" && -z "${QDRANT_BIN:-}" && -z "${QDRANT_SERVER_PID:-}" ]]; then
 	printf '%s\n' 'Representative qualification on Darwin requires QDRANT_BIN or an external QDRANT_SERVER_PID so RSS/CPU evidence is available.' >&2
-	exit 2
+	qdrant_status=2
+else
+	RUN_DIR="$RUN_DIR/qdrant" \
+	MANIFEST_PATH="$MANIFEST_PATH" \
+	OUTPUT_PATH="$QDRANT_EVIDENCE" \
+		scripts/bench_minima_qdrant.sh ||
+		qdrant_status=$?
 fi
 
-RUN_DIR="$RUN_DIR/qdrant" \
-MANIFEST_PATH="$MANIFEST_PATH" \
-OUTPUT_PATH="$QDRANT_EVIDENCE" \
-	scripts/bench_minima_qdrant.sh
+comparator_status=0
+if [[ -f "$TREEDB_EVIDENCE" && -f "$QDRANT_EVIDENCE" ]]; then
+	"$RUN_DIR/bin/treedb-rag-benchmark" \
+		-workload=minima \
+		-minima-treedb-evidence "$TREEDB_EVIDENCE" \
+		-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
+		-minima-output "$OUTPUT_PATH" \
+		-minima-report "$REPORT_PATH" \
+		-minima-recommendation "$RECOMMENDATION" ||
+		comparator_status=$?
+else
+	comparator_status=2
+	printf 'comparator not evaluated: evidence exists TreeDB=%s Qdrant=%s\n' \
+		"$([[ -f "$TREEDB_EVIDENCE" ]] && printf true || printf false)" \
+		"$([[ -f "$QDRANT_EVIDENCE" ]] && printf true || printf false)" >&2
+fi
 
-"$RUN_DIR/bin/treedb-rag-benchmark" \
-	-workload=minima \
-	-minima-treedb-evidence "$TREEDB_EVIDENCE" \
-	-minima-qdrant-evidence "$QDRANT_EVIDENCE" \
-	-minima-output "$OUTPUT_PATH" \
-	-minima-report "$REPORT_PATH" \
-	-minima-recommendation "$RECOMMENDATION"
-
-printf 'manifest: %s\nTreeDB evidence: %s\nQdrant evidence: %s\nvalidated artifact: %s\nreport: %s\n' \
+printf 'manifest: %s\nTreeDB evidence: %s\nQdrant evidence: %s\nqualification artifact: %s\nreport: %s\n' \
 	"$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$QDRANT_EVIDENCE" "$OUTPUT_PATH" "$REPORT_PATH"
+
+if ((treedb_status != 0 || qdrant_status != 0 || comparator_status != 0)); then
+	printf 'qualification failed: TreeDB=%d Qdrant=%d comparator=%d\n' \
+		"$treedb_status" "$qdrant_status" "$comparator_status" >&2
+	exit 1
+fi
