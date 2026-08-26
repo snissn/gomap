@@ -791,6 +791,11 @@ class QdrantMinimaRunner:
                  storage_path: Path | None, server_pid: int | None) -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
+        self.mutation_vectors = {
+            document["id"]: document["vector"]
+            for operation in manifest["operations"]
+            for document in operation.get("documents", [])
+        }
         self.client_factory, self.models = client_factory, models
         self.url, self.collection, self.allow_drop = url, collection, allow_drop
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
@@ -1170,6 +1175,22 @@ class QdrantMinimaRunner:
         self.operations["reindex_delete_replace"] = len(trace["operations"]) == 2
 
 
+    def expected_vector(self, identifier: str) -> list[float]:
+        if identifier in self.mutation_vectors:
+            return normalized_f32_vector(self.mutation_vectors[identifier])
+        parts = identifier.split("/")
+        if len(parts) != 3 or parts[0] != "minima" or parts[1] not in self.specs:
+            raise ValueError(f"unknown Minima document ID {identifier!r}")
+        ordinal_text = parts[2]
+        if len(ordinal_text) != 6 or not ordinal_text.isdigit():
+            raise ValueError(f"noncanonical Minima document ID {identifier!r}")
+        ordinal = int(ordinal_text)
+        document = generated_document(self.specs[parts[1]], ordinal)
+        if document["id"] != identifier:
+            raise ValueError(f"noncanonical Minima document ID {identifier!r}")
+        return normalized_f32_vector(document["vector"])
+
+
     def expected_scroll(self) -> tuple[str, int]:
         accumulator = StateAccumulator()
         for document in final_documents(self.manifest):
@@ -1178,12 +1199,7 @@ class QdrantMinimaRunner:
 
     def actual_scroll(self) -> tuple[str, int, dict[str, Any]]:
         assert self.client is not None
-        expected_vectors = {
-            document["id"]: normalized_f32_vector(document["vector"])
-            for document in final_documents(self.manifest)
-        }
         accumulator, offset = StateAccumulator(), None
-        seen: set[str] = set()
         mismatches, maximum_delta = 0, 0.0
         while True:
             rows, offset = self.client.scroll(collection_name=self.collection, limit=self.config["batch_size"], offset=offset,
@@ -1195,29 +1211,21 @@ class QdrantMinimaRunner:
                 if set(document) != set(DOCUMENT_KEYS) or not isinstance(vector, list) or len(vector) != self.config["dimension"]:
                     raise RuntimeError("Qdrant scroll row does not match the Minima document schema")
                 accumulator.add(document)
-                identifier = document["id"]
-                expected = expected_vectors.get(identifier)
-                if expected is None or identifier in seen:
-                    mismatches += 1
-                    continue
-                seen.add(identifier)
                 try:
+                    expected = self.expected_vector(document["id"])
                     actual = normalized_f32_vector(vector)
-                except ValueError:
+                except (KeyError, TypeError, ValueError):
                     mismatches += 1
                     continue
                 deltas = [abs(left - right) for left, right in zip(actual, expected, strict=True)]
                 maximum_delta = max(maximum_delta, max(deltas, default=0.0))
                 mismatches += int(any(delta > self.config["score_tolerance"] for delta in deltas))
             if offset is None:
-                missing = len(set(expected_vectors) - seen)
-                mismatches += missing
                 return accumulator.hexdigest(), accumulator.count, {
-                    "algorithm": "per-record normalized-float32 full-vector comparison",
-                    "checked_rows": len(seen), "expected_rows": len(expected_vectors),
+                    "algorithm": "streaming per-record normalized-float32 full-vector comparison",
+                    "checked_rows": accumulator.count,
                     "mismatch_rows": mismatches, "maximum_component_delta": maximum_delta,
-                    "tolerance": self.config["score_tolerance"],
-                    "match": mismatches == 0 and len(seen) == len(expected_vectors),
+                    "tolerance": self.config["score_tolerance"], "match": mismatches == 0,
                 }
 
     def run(self) -> None:
@@ -1284,6 +1292,8 @@ class QdrantMinimaRunner:
                 expected_hash, expected_rows = self.expected_scroll()
                 actual_hash, actual_rows, vector_evidence = self.evidence.call(name, "fetch", "all", self.actual_scroll)
                 payload_match = expected_hash == actual_hash and expected_rows == actual_rows
+                vector_evidence["expected_rows"] = expected_rows
+                vector_evidence["match"] = vector_evidence["match"] and actual_rows == expected_rows
                 self.state_scroll = {
                     "algorithm": "payload digest plus normalized-float32 full-vector comparison",
                     "expected_hash": expected_hash, "actual_hash": actual_hash,

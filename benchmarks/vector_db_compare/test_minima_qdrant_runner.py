@@ -368,10 +368,17 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         corrupt_id = runner.point_id("minima/empty_file/000007")
         shared.points[corrupt_id].vector["embedding"] = [0.0, 1.0] + [0.0] * 6
         expected_payload, _ = workload.expected_scroll()
-        actual_payload, _, vector_evidence = workload.actual_scroll()
+        with mock.patch.object(runner, "final_documents", side_effect=AssertionError("corpus-sized materialization")):
+            actual_payload, _, vector_evidence = workload.actual_scroll()
         self.assertEqual(actual_payload, expected_payload)
         self.assertFalse(vector_evidence["match"])
         self.assertEqual(vector_evidence["mismatch_rows"], 1)
+        for identifier in (
+            "minima/empty_file/000007",
+            "minima/small/000000",
+            "minima/mixed_broad_narrow/replacement/000000",
+        ):
+            self.assertEqual(len(workload.expected_vector(identifier)), manifest["config"]["dimension"])
         workload.close()
         self.assertEqual(shared.index_fields, ["user_id", "fpath"])
         self.assertEqual(len(shared.clients), 2)
