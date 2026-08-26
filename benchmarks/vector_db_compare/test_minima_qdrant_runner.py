@@ -277,6 +277,10 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         document = runner.generated_document(empty_file, 0)
         self.assertEqual(document["user_id"], "empty-file-user")
         self.assertNotEqual(document["fpath"], empty_file["fpath"])
+        small = next(row for row in manifest["corpora"] if row["name"] == "small")
+        defaulted = runner.generated_document(small, 7)
+        self.assertEqual(defaulted["user_id"], "small-other-user-07")
+        self.assertEqual(defaulted["fpath"], "/small/other/07.txt")
 
     def test_go_python_oracle_score_rounding_tolerance(self) -> None:
         manifest = tiny_manifest()

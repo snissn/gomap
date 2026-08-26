@@ -30,17 +30,17 @@ MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v1"
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
 GENERATOR = (
-    "ordinal-v2:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
+    "ordinal-v3:id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
     "vector=[s,sqrt(1-s*s),0x6],s=0.9-ordinal*0.000003;"
     "oracle=cosine(float32(vector),float32([1,0x7]));"
-    "defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+    "defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
 )
 MANIFEST_FLOAT_TOLERANCE = 1e-15
 FROZEN_HASHES = {
-    "corpus_sha256": "856df3d20b5177e0b7354aeac41b9d052e5f1075e00cec686ff823b110916ccc",
+    "corpus_sha256": "0b1a213652fc97a4460f254f4d9e90f027e4b30ef6111a26807591ade10923e1",
     "query_sha256": "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a",
-    "operation_sha256": "f2d85501ae55255784749f042892836078335a99e7603ac254bd1a88eafa9179",
-    "expected_state_sha256": "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f",
+    "operation_sha256": "08f38acec8a5ad746dbffadef5ad9c198852c88d1920746229cb0733bfd9c434",
+    "expected_state_sha256": "c2986f2b44e67b33e7bb3f92f5f92b1316e60117ed2505bef73327e0b1e5687f",
 }
 TIMED_EXECUTION_SHA256 = "84b8eb10e5f86c558264d00e8cae2c6844683aff2b8bca1d76cafe6b06890ea4"
 REINDEX_EXECUTION_SHA256 = "99823f1eac0fb27dce81e21e0cf5884019c6a911c410be11b675b2315cbde534"
@@ -188,7 +188,8 @@ def generated_document(spec: dict[str, Any], ordinal: int) -> dict[str, Any]:
     rows = exact_int(spec["corpus_rows"], "corpus_rows", 1)
     if not 0 <= ordinal < rows:
         raise ValueError(f"document ordinal {ordinal} outside [0,{rows})")
-    user_id, fpath = f"other-user-{ordinal % 31:02d}", f"/other/{ordinal % 97:02d}.txt"
+    user_id = f"{spec['name']}-other-user-{ordinal % 31:02d}"
+    fpath = f"/{spec['name']}/other/{ordinal % 97:02d}.txt"
     if spec["filter"] == "user_id" and spec["eligible_start"] <= ordinal < spec["eligible_start"] + spec["eligible_rows"]:
         user_id = spec["user_id"]
     if spec["filter"] == "user_id+fpath":
@@ -273,7 +274,7 @@ def payload_corpus_digest(corpora: list[dict[str, Any]]) -> str:
         row["selectivity"] = spec["selectivity"]
         row["payload_generator"] = (
             "id=minima/<scenario>/<ordinal:06d>;content=minima:<scenario>:<ordinal>;"
-            "defaults=other-user-%02d(ordinal%31),/other/%02d.txt(ordinal%97)"
+            "defaults=<scenario>-other-user-%02d(ordinal%31),/<scenario>/other/%02d.txt(ordinal%97)"
         )
         payload.append(row)
     return go_digest(payload)
