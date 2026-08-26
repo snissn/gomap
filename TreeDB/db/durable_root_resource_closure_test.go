@@ -2,13 +2,238 @@ package db
 
 import (
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCaptureDurableRootAppendRequirementsStayMutationLocal4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	retained := make([]rootpublication.StableLogicalObligation, 4096)
+	for i := range retained {
+		retained[i] = durableRootClosureObligation3928(uint64(i + 1))
+	}
+	added := durableRootClosureObligation3928(4097)
+	base := durableRootClosureSet3928(t, path, retained...)
+	defer base.Release()
+	producer := durableRootClosureSet3928(t, path, added)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}
+	fallbackCalls := 0
+	fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+		fallbackCalls++
+		return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, fmt.Errorf("unexpected exact fallback")
+	}
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, fallback, false, &timing,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	if fallbackCalls != 0 {
+		t.Fatalf("exact fallback calls=%d want 0", fallbackCalls)
+	}
+	work := timing.FinalizeCandidateResourceWork
+	if work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FinalRequirementRecordsDecoded != 1 || work.FinalRequirementObligationsMaterialized != 0 {
+		t.Fatalf("capture work=%+v want mutation-local final requirement proof", work)
+	}
+	descriptors := candidate.Descriptors()
+	if len(descriptors) != 1 {
+		t.Fatalf("candidate descriptors=%d want 1", len(descriptors))
+	}
+	if len(descriptors[0].LogicalObligations()) != len(retained)+1 {
+		t.Fatalf("candidate obligations=%d want %d", len(descriptors[0].LogicalObligations()), len(retained)+1)
+	}
+	baseDescriptors := base.Descriptors()
+	if len(baseDescriptors) != 1 {
+		t.Fatalf("visible base descriptors=%d want 1", len(baseDescriptors))
+	}
+	if len(baseDescriptors[0].LogicalObligations()) != len(retained) {
+		t.Fatalf("visible base obligations=%d want %d", len(baseDescriptors[0].LogicalObligations()), len(retained))
+	}
+}
+
+func TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	baseObligation := durableRootClosureObligation3928(1)
+	added := durableRootClosureObligation3928(2)
+	base := durableRootClosureSet3928(t, path, baseObligation)
+	defer base.Release()
+	producer := durableRootClosureSet3928(t, path, added)
+	requirements := durableRootClosureRequirements3928(t, baseObligation, added)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}
+	fallbackCalls := 0
+	fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+		fallbackCalls++
+		return requirements, rootpublication.StableResourceClosureWork{
+			FinalRequirementRecordsDecoded:          2,
+			FinalRequirementObligationsMaterialized: 2,
+		}, nil
+	}
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		// Any generic registration makes the specialized proof non-authoritative
+		// and forces the exact oracle. Duplicate exact requirements are harmless.
+		requirements, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, fallback, false, &timing,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	if fallbackCalls != 1 {
+		t.Fatalf("exact fallback calls=%d want 1", fallbackCalls)
+	}
+	work := timing.FinalizeCandidateResourceWork
+	if work.FinalRequirementProofFastPath != 0 || work.FinalRequirementProofFallbacks != 1 || work.FinalRequirementRecordsDecoded != 3 || work.FinalRequirementObligationsMaterialized != 2 {
+		t.Fatalf("capture work=%+v want one exact fallback", work)
+	}
+}
+
+func TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesOwnership4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	baseObligation := durableRootClosureObligation3928(1)
+	added := durableRootClosureObligation3928(2)
+	base := durableRootClosureSet3928(t, path, baseObligation)
+	defer base.Release()
+	producer := durableRootClosureSet3928(t, path, added)
+	defer producer.Release()
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}
+	fallbackCalls := 0
+	fallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+		fallbackCalls++
+		return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, errors.New("decode failed")
+	}
+	_, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		durableRootClosureRequirements3928(t, baseObligation, added), rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{}, fallback, false, nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "decode failed") {
+		t.Fatalf("capture error=%v want fallback decode failure", err)
+	}
+	if fallbackCalls != 1 {
+		t.Fatalf("exact fallback calls=%d want 1", fallbackCalls)
+	}
+	if got := len(base.Descriptors()); got != 1 {
+		t.Fatalf("base ownership changed after fallback failure: descriptors=%d", got)
+	}
+	if got := len(producer.Descriptors()); got != 1 {
+		t.Fatalf("producer ownership changed after fallback failure: descriptors=%d", got)
+	}
+}
+
+func TestCaptureDurableRootAppendRequirementsUseVisiblePredecessor4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	planTime := durableRootClosureObligation3928(1)
+	queuedPredecessor := durableRootClosureObligation3928(2)
+	added := durableRootClosureObligation3928(3)
+	planBase := durableRootClosureSet3928(t, path, planTime)
+	defer planBase.Release()
+	predecessorProducer := durableRootClosureSet3928(t, path, queuedPredecessor)
+	predecessorMutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{queuedPredecessor},
+	}
+	visibleBase, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, planBase, predecessorProducer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		predecessorMutation, rootpublication.StableResourceClosureWork{}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, errors.New("unexpected predecessor fallback")
+		}, false, nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer visibleBase.Release()
+	// The second capture base now includes an obligation published after this
+	// append plan's earlier logical base. Certification must read the actual
+	// visible predecessor, including its path-copied aggregate commitment.
+	producer := durableRootClosureSet3928(t, path, added)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}
+	fallbackCalls := 0
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, visibleBase, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			fallbackCalls++
+			return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, errors.New("unexpected fallback")
+		}, false, &timing,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	if fallbackCalls != 0 || timing.FinalizeCandidateResourceWork.FinalRequirementProofFastPath != 1 {
+		t.Fatalf("visible predecessor proof fallback=%d work=%+v", fallbackCalls, timing.FinalizeCandidateResourceWork)
+	}
+	descriptors := candidate.Descriptors()
+	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{planTime, queuedPredecessor, added}) {
+		t.Fatalf("visible predecessor closure=%+v want exact queued base+addition", descriptors)
+	}
+}
+
+func TestCaptureDurableRootAppendRequirementsProducerMismatchFallsBack4366(t *testing.T) {
+	database, path := openDurableRootClosureDB3928(t)
+	baseObligation := durableRootClosureObligation3928(1)
+	announced := durableRootClosureObligation3928(2)
+	unannounced := durableRootClosureObligation3928(3)
+	base := durableRootClosureSet3928(t, path, baseObligation)
+	defer base.Release()
+	producer := durableRootClosureSet3928(t, path, announced, unannounced)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{announced},
+	}
+	fallbackCalls := 0
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			fallbackCalls++
+			return durableRootClosureRequirements3928(t, baseObligation, announced, unannounced), rootpublication.StableResourceClosureWork{
+				FinalRequirementRecordsDecoded:          3,
+				FinalRequirementObligationsMaterialized: 3,
+			}, nil
+		}, false, &timing,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	work := timing.FinalizeCandidateResourceWork
+	if fallbackCalls != 1 || work.FinalRequirementProofFastPath != 0 || work.FinalRequirementProofFallbacks != 1 || work.FullClosureValidations != 1 {
+		t.Fatalf("producer mismatch fallback=%d work=%+v", fallbackCalls, work)
+	}
+	descriptors := candidate.Descriptors()
+	if len(descriptors) != 1 || !slices.Equal(descriptors[0].LogicalObligations(), []rootpublication.StableLogicalObligation{baseObligation, announced, unannounced}) {
+		t.Fatalf("producer mismatch closure=%+v want exact fallback result", descriptors)
+	}
+}
 
 func durableRootClosureObligation3928(partID uint64) rootpublication.StableLogicalObligation {
 	obligation := rootpublication.StableLogicalObligation{
@@ -83,6 +308,35 @@ func openDurableRootClosureDB3928(t *testing.T) (*DB, string) {
 	return database, path
 }
 
+func TestCommandWALAppendRequirementRegistrationStaysSeparate4366(t *testing.T) {
+	var genericMutation rootpublication.StableLogicalObligationMutation
+	var appendMutation rootpublication.StableLogicalObligationMutation
+	var work rootpublication.StableResourceClosureWork
+	var fallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	ctx := CommandWALPublishContext{
+		durableResourceMutation:             &genericMutation,
+		durableResourceAppendMutation:       &appendMutation,
+		durableResourceRequirementWork:      &work,
+		durableResourceRequirementsFallback: &fallback,
+	}
+	added := durableRootClosureObligation3928(1)
+	registeredFallback := func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+		return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, nil
+	}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, registeredFallback); err != nil {
+		t.Fatal(err)
+	}
+	if len(genericMutation.ScopedFields) != 0 || len(appendMutation.Added) != 1 || fallback == nil || work.FinalRequirementRecordsDecoded != 1 {
+		t.Fatalf("registration generic=%+v append=%+v fallback_nil=%t work=%+v", genericMutation, appendMutation, fallback == nil, work)
+	}
+	if err := ctx.RegisterDurableLogicalObligationAppendMutation(appendMutation, rootpublication.StableResourceClosureWork{}, registeredFallback); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("duplicate specialized registration error=%v", err)
+	}
+}
+
 func TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
 	baseObligation := durableRootClosureObligation3928(1)
@@ -99,7 +353,8 @@ func TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928(t *testin
 		producer := durableRootClosureSet3928(t, path, added)
 		var timing CommandWALPublishTiming
 		candidate, err := database.captureDurableRootResourcesFromBaseV1(
-			database.idx.Load(), database.meta, nil, base, producer, requirements, mutation, false, &timing,
+			database.idx.Load(), database.meta, nil, base, producer, requirements, mutation,
+			rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, &timing,
 		)
 		if err != nil {
 			t.Fatalf("capture attempt %d: %v", attempt, err)
@@ -137,7 +392,7 @@ func TestCaptureDurableRootDestructiveMutationUsesFullFallback3928(t *testing.T)
 		rootpublication.StableLogicalObligationMutation{
 			ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
 			Removed:      []rootpublication.StableLogicalObligation{remove},
-		}, false, &timing,
+		}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, &timing,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +423,7 @@ func TestCaptureDurableRootMixedProducerFallsBackAndValidates3928(t *testing.T) 
 		rootpublication.StableLogicalObligationMutation{
 			ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
 			Added:        []rootpublication.StableLogicalObligation{announced},
-		}, false, &timing,
+		}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, &timing,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +456,7 @@ func TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928(t *testing.
 			Added:        []rootpublication.StableLogicalObligation{added},
 			// omittedRemoval is intentionally absent. The mutation must not
 			// authorize retaining a stale pin that the final requirements omit.
-		}, false, &timing,
+		}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, &timing,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +484,7 @@ func TestCaptureDurableRootEmptyMutationCannotRetainStaleObligation3928(t *testi
 		durableRootClosureRequirements3928(t, keep),
 		rootpublication.StableLogicalObligationMutation{
 			ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
-		}, false, &timing,
+		}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, &timing,
 	)
 	if err != nil {
 		t.Fatal(err)

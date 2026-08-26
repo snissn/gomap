@@ -135,6 +135,19 @@ func cloneStableLogicalObligationCommitments(source map[ReachabilityField]stable
 	return clone
 }
 
+func addStableLogicalObligationCommitments(left, right map[ReachabilityField]stableLogicalObligationCommitment) map[ReachabilityField]stableLogicalObligationCommitment {
+	result := cloneStableLogicalObligationCommitments(left)
+	if result == nil && len(right) != 0 {
+		result = make(map[ReachabilityField]stableLogicalObligationCommitment, len(right))
+	}
+	for field, other := range right {
+		commitment := result[field]
+		commitment.add(other)
+		result[field] = commitment
+	}
+	return result
+}
+
 func stableLogicalObligationCommitments(values []StableLogicalObligation) map[ReachabilityField]stableLogicalObligationCommitment {
 	if len(values) == 0 {
 		return nil
@@ -427,34 +440,38 @@ func (view stableLogicalObligationView) slice() []StableLogicalObligation {
 // physical segment can carry thousands of independently reclaimable logical
 // references.
 type StableResourceClosureWork struct {
-	CloneOperations                 uint64
-	FreezeOperations                uint64
-	RequirementFieldsInspected      uint64
-	RequirementObligationsInspected uint64
-	SourceEntriesInspected          uint64
-	SourceObligationsInspected      uint64
-	RetainedEntries                 uint64
-	RetainedObligations             uint64
-	DroppedEntries                  uint64
-	DroppedObligations              uint64
-	CopiedEntries                   uint64
-	CopiedObligations               uint64
-	PhysicalHandleCopies            uint64
-	PhysicalHandleShares            uint64
-	PhysicalRootShares              uint64
-	LogicalObligationNormalizations uint64
-	RetainedIndexNodeVisits         uint64
-	RetainedIndexNodeCopies         uint64
-	LogicalIndexNodesAdmitted       uint64
-	NewlyAdmittedEntries            uint64
-	NewlyAdmittedObligations        uint64
-	RemovedObligations              uint64
-	AppendOnlyFastPath              uint64
-	AppendOnlyCollisionFastPath     uint64
-	AppendOnlyCollisionFallbacks    uint64
-	AppendOnlyFallbacks             uint64
-	DestructiveFallbacks            uint64
-	FullClosureValidations          uint64
+	CloneOperations                         uint64
+	FreezeOperations                        uint64
+	RequirementFieldsInspected              uint64
+	RequirementObligationsInspected         uint64
+	SourceEntriesInspected                  uint64
+	SourceObligationsInspected              uint64
+	RetainedEntries                         uint64
+	RetainedObligations                     uint64
+	DroppedEntries                          uint64
+	DroppedObligations                      uint64
+	CopiedEntries                           uint64
+	CopiedObligations                       uint64
+	PhysicalHandleCopies                    uint64
+	PhysicalHandleShares                    uint64
+	PhysicalRootShares                      uint64
+	LogicalObligationNormalizations         uint64
+	RetainedIndexNodeVisits                 uint64
+	RetainedIndexNodeCopies                 uint64
+	LogicalIndexNodesAdmitted               uint64
+	NewlyAdmittedEntries                    uint64
+	NewlyAdmittedObligations                uint64
+	RemovedObligations                      uint64
+	AppendOnlyFastPath                      uint64
+	AppendOnlyCollisionFastPath             uint64
+	AppendOnlyCollisionFallbacks            uint64
+	AppendOnlyFallbacks                     uint64
+	DestructiveFallbacks                    uint64
+	FullClosureValidations                  uint64
+	FinalRequirementProofFastPath           uint64
+	FinalRequirementProofFallbacks          uint64
+	FinalRequirementRecordsDecoded          uint64
+	FinalRequirementObligationsMaterialized uint64
 	// PhysicalEntryLookup* counts only the indexed path, entered after the
 	// small <=16-entry linear fast path. They are the scale-gate witness.
 	PhysicalEntryLookupProbes      uint64
@@ -494,6 +511,10 @@ func (work *StableResourceClosureWork) Add(other StableResourceClosureWork) {
 	work.AppendOnlyFallbacks += other.AppendOnlyFallbacks
 	work.DestructiveFallbacks += other.DestructiveFallbacks
 	work.FullClosureValidations += other.FullClosureValidations
+	work.FinalRequirementProofFastPath += other.FinalRequirementProofFastPath
+	work.FinalRequirementProofFallbacks += other.FinalRequirementProofFallbacks
+	work.FinalRequirementRecordsDecoded += other.FinalRequirementRecordsDecoded
+	work.FinalRequirementObligationsMaterialized += other.FinalRequirementObligationsMaterialized
 	work.PhysicalEntryLookupProbes += other.PhysicalEntryLookupProbes
 	work.PhysicalEntryLookupComparisons += other.PhysicalEntryLookupComparisons
 	work.PhysicalEntryLookupAdmissions += other.PhysicalEntryLookupAdmissions
@@ -1724,6 +1745,8 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			return false
 		}
 		view.reachability = cloneReachabilityUnion(view.reachability, child.reachability)
+		view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, child.logicalObligations.commitments)
+		view.logicalObligationCount += child.logicalObligations.count
 		nextViews[child.token.kind] = view
 		return true
 	})
@@ -2478,6 +2501,100 @@ func CertifyStableLogicalObligationMutationFinalRequirements(source *StableResou
 		}
 	}
 	return true, nil
+}
+
+// CertifyStableLogicalObligationAppendMutation binds an exact append mutation
+// to the capture-time source and producer commitments without materializing the
+// retained obligation history. A false result requires the caller's exact
+// requirements fallback before either set changes ownership.
+func CertifyStableLogicalObligationAppendMutation(source, producer *StableResourceSet, mutation StableLogicalObligationMutation, excluded ...ResourceKind) (StableResourceClosureWork, bool, error) {
+	var normalized StableLogicalObligationMutation
+	var work StableResourceClosureWork
+	var err error
+	if producer == nil {
+		normalized, work, err = validateAppendOnlyProducerViews(nil, mutation)
+	} else {
+		producer.mu.Lock()
+		owner := ResourceOwnerState(producer.owner.Load())
+		if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+			producer.mu.Unlock()
+			return work, false, ErrResourceOwnership
+		}
+		normalized, work, err = validateAppendOnlyProducerViews(producer.kindViews, mutation)
+		producer.mu.Unlock()
+	}
+	if err != nil || len(normalized.ScopedFields) == 0 || len(normalized.Removed) != 0 {
+		return work, false, nil
+	}
+	baseCommitments, complete, err := stableResourceSetLogicalObligationCommitments(source, normalized.ScopedFields, excluded...)
+	if err != nil || !complete {
+		return work, false, err
+	}
+	producerCommitments, complete, err := stableResourceSetLogicalObligationCommitments(producer, normalized.ScopedFields)
+	if err != nil || !complete {
+		return work, false, err
+	}
+	addedCommitments := stableLogicalObligationRequirementCommitments(normalized.ScopedFields, normalized.Added)
+	expectedFinal := addStableLogicalObligationCommitments(baseCommitments, addedCommitments)
+	candidateFinal := addStableLogicalObligationCommitments(baseCommitments, producerCommitments)
+	for _, field := range normalized.ScopedFields {
+		if producerCommitments[field] != addedCommitments[field] || candidateFinal[field] != expectedFinal[field] {
+			return work, false, nil
+		}
+	}
+	return work, true, nil
+}
+
+func stableResourceSetLogicalObligationCommitments(source *StableResourceSet, fields []ReachabilityField, excluded ...ResourceKind) (map[ReachabilityField]stableLogicalObligationCommitment, bool, error) {
+	result := make(map[ReachabilityField]stableLogicalObligationCommitment, len(fields))
+	if source == nil {
+		return result, true, nil
+	}
+	excludedKinds := make(map[ResourceKind]struct{}, len(excluded))
+	for _, kind := range excluded {
+		if kind != "" {
+			excludedKinds[kind] = struct{}{}
+		}
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	owner := ResourceOwnerState(source.owner.Load())
+	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		return nil, false, ErrResourceOwnership
+	}
+	if source.kindViews != nil {
+		for kind, view := range source.kindViews {
+			if _, skip := excludedKinds[kind]; skip {
+				continue
+			}
+			count, ok := stableLogicalObligationCommitmentCount(view.logicalCommitments)
+			if !ok || count != uint64(view.logicalObligationCount) {
+				return nil, false, nil
+			}
+			for _, field := range fields {
+				commitment := result[field]
+				commitment.add(view.logicalCommitments[field])
+				result[field] = commitment
+			}
+		}
+		return result, true, nil
+	}
+	for i := range source.entries {
+		entry := &source.entries[i]
+		if _, skip := excludedKinds[entry.token.kind]; skip {
+			continue
+		}
+		count, ok := stableLogicalObligationCommitmentCount(entry.logicalObligations.commitments)
+		if !ok || count != uint64(entry.logicalObligations.count) {
+			return nil, false, nil
+		}
+		for _, field := range fields {
+			commitment := result[field]
+			commitment.add(entry.logicalObligations.commitments[field])
+			result[field] = commitment
+		}
+	}
+	return result, true, nil
 }
 
 // NormalizeStableLogicalObligationRequirements validates, de-duplicates, and
