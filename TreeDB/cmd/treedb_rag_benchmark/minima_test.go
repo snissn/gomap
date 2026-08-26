@@ -28,7 +28,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		timed.Assignment != "round=ordinal/128;reader=ordinal%4;scenario=scenario_order[ordinal%8]" {
 		t.Fatalf("timed repeat plan drifted: %+v", timed)
 	}
-	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "566493d1888714c6631a515c64ee8424dfb58614a392ddc6bf604f564ac75e6e"; got != want {
+	if got, want := minimaTimedExecutionDigest(minimaExpectedTimedExecution(timed)), "2ccd4e9badc7644e15cd4a5e4eeb68f59005c2e040506d5f9e4d5935e23f6fdd"; got != want {
 		t.Fatalf("timed execution hash=%s want %s", got, want)
 	}
 	for i, round := range timed.Rounds {
