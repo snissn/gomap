@@ -10182,9 +10182,11 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	resultIDs, err := c.insertBatch(ids, documents, false, nil)
+	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, false, nil)
 	if err == nil {
 		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
@@ -10199,9 +10201,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	resultIDs, err := c.insertBatch(ids, documents, false, encoder)
+	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, false, encoder)
 	if err == nil {
 		err = commitAmbiguousError("InsertBatchWithTemplateV1Encoder vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
@@ -10213,9 +10217,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	resultIDs, err := c.insertBatch(ids, documents, true, nil)
+	resultIDs, err := c.insertBatchSchemaLocked(ids, documents, true, nil)
 	if err == nil {
 		err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
@@ -10354,9 +10360,11 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	if commandWALIntent == nil {
 		return nil, errors.New("collections: InsertBatchWithCommandWALIntent requires command WAL intent")
 	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	resultIDs, err := c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, nil, commandWALIntent, insertBatchExecutionOptions{returnResultIDs: true})
+	resultIDs, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, nil, commandWALIntent, insertBatchExecutionOptions{returnResultIDs: true})
 	if err == nil {
 		if trustedValidBSON {
 			err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
@@ -10372,9 +10380,11 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // fast path; public callers that need returned IDs should keep using
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	_, err := c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, nil, nil, insertBatchExecutionOptions{returnResultIDs: false})
+	_, err := c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, nil, nil, insertBatchExecutionOptions{returnResultIDs: false})
 	if err == nil {
 		if trustedValidBSON {
 			err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(ids))
@@ -10389,11 +10399,21 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool,
 	return c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, templateEncoder, nil, insertBatchExecutionOptions{returnResultIDs: true})
 }
 
+func (c *Collection) insertBatchSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
+	return c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, templateEncoder, nil, insertBatchExecutionOptions{returnResultIDs: true})
+}
+
 type insertBatchExecutionOptions struct {
 	returnResultIDs bool
 }
 
 func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	return c.insertBatchWithCommandWALIntentSchemaLocked(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
+}
+
+func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -10403,8 +10423,6 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
 		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
@@ -11932,10 +11950,10 @@ func (c *Collection) deleteDocumentIf(documentID []byte, predicate func(current 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return false, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
@@ -11991,10 +12009,10 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return 0, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	for i, id := range documentIDs {
 		if len(id) == 0 {
 			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
@@ -12052,10 +12070,10 @@ func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, comma
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return 0, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	for i, id := range documentIDs {
 		if len(id) == 0 {
 			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
@@ -12713,10 +12731,10 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
@@ -12839,9 +12857,11 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // pre-commit unless explicitly documented otherwise and must expose no partial
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	results, _, err := c.updateBatch(items, updateBatchModeAny)
+	results, _, err := c.updateBatchSchemaLocked(items, updateBatchModeAny)
 	if err == nil {
 		err = commitAmbiguousError("UpdateBatch vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
@@ -12854,9 +12874,11 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
+	results, batched, err := c.updateBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexes)
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexes vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
@@ -12870,9 +12892,11 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
 	unlockCoverage := c.lockVectorIndexCoverageMutation()
 	defer unlockCoverage()
-	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	results, batched, err := c.updateBatchSchemaLocked(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
@@ -12887,8 +12911,6 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 	if commandWALIntent == nil {
 		return 0, 0, errors.New("collections: ReplaceBatchWithCommandWALIntent requires command WAL intent")
 	}
-	unlockCoverage := c.lockVectorIndexCoverageMutation()
-	defer unlockCoverage()
 	items, err := replaceBatchUpdateItems(ids, documents)
 	if err != nil {
 		return 0, 0, err
@@ -12908,6 +12930,8 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
+	unlockCoverage := c.lockVectorIndexCoverageMutation()
+	defer unlockCoverage()
 	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
 		return 0, 0, err
 	}
@@ -12960,6 +12984,12 @@ func replaceBatchUpdateItems(ids, documents [][]byte) ([]UpdateBatchItem, error)
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	return c.updateBatchSchemaLocked(items, mode)
+}
+
+func (c *Collection) updateBatchSchemaLocked(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
 	if c == nil {
 		return nil, false, errCollectionNil
 	}
@@ -12969,8 +12999,6 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
 	}
-	unlockSchema := c.lockCollectionSchemaRead()
-	defer unlockSchema()
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
 		return nil, true, nil

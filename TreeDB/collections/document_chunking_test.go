@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -654,6 +655,52 @@ func TestIngestChunkedDocumentsHoldsVectorAdmissionBeforeMutation(t *testing.T) 
 	case <-registered:
 	case <-time.After(time.Second):
 		t.Fatal("vector registration remained blocked after ingestion")
+	}
+}
+
+func TestInsertBatchAcquiresSchemaBeforeNativeVectorAdmission(t *testing.T) {
+	_, d, col := openChunkingTestCollection(t)
+	peer, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open peer collection: %v", err)
+	}
+	admission := col.nativeVectorAdmissionMutex()
+	admission.Lock()
+	admissionLocked := true
+	defer func() {
+		if admissionLocked {
+			admission.Unlock()
+		}
+	}()
+
+	inserted := make(chan error, 1)
+	go func() {
+		_, err := peer.InsertBatch(
+			[][]byte{[]byte("schema-first")},
+			[][]byte{[]byte(`{"body":"text only"}`)},
+		)
+		inserted <- err
+	}()
+
+	coord := col.collectionSchemaCoordinator()
+	deadline := time.Now().Add(time.Second)
+	for coord.schemaMu.TryLock() {
+		coord.schemaMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("InsertBatch did not acquire the schema read lock before vector admission")
+		}
+		runtime.Gosched()
+	}
+
+	admission.Unlock()
+	admissionLocked = false
+	select {
+	case err := <-inserted:
+		if err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("InsertBatch remained blocked after vector admission release")
 	}
 }
 
