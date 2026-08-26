@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parents[2] / "clients/python/treedb_client/src"))
@@ -86,6 +87,39 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             self.assertEqual(evidence["path"], str(controller.log_path))
             self.assertLessEqual(len(evidence["tail"].encode()), runner.SERVICE_LOG_TAIL_BYTES)
             self.assertTrue(evidence["tail"].endswith("root cause\n"))
+
+    def test_artifact_uses_shared_segment_delta_resource_semantics(self) -> None:
+        baseline = {
+            "captured": True, "rss_bytes": 100, "cpu_seconds": 1.0, "disk_bytes": 1000,
+            "availability": {"rss_bytes": "test", "cpu_seconds": "test", "disk_bytes": "test"},
+        }
+        end = {
+            "captured": True, "rss_bytes": 125, "cpu_seconds": 2.5, "disk_bytes": 1100,
+            "availability": {"rss_bytes": "test", "cpu_seconds": "test", "disk_bytes": "test"},
+        }
+        segment = common.resource_delta(baseline, end)
+        resource = {
+            "captured": True, "rss_bytes": 25, "cpu_seconds": 1.5, "disk_bytes": 100,
+            "semantics": common.RESOURCE_SEMANTICS, "segments": [segment],
+            "baseline": baseline, "end": end,
+        }
+        workload = object.__new__(runner.TreeDBMinimaRunner)
+        workload.resource_evidence = lambda: resource
+        workload.controller = SimpleNamespace(
+            profile="test", binary=Path("/bin/false"), log_path=Path("/tmp/service.log"),
+            log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
+        )
+        workload.url = "http://127.0.0.1:1"
+        workload.collection = "owned"
+        workload.config = {"dimension": 8, "metric": "cosine"}
+        workload.ef_search = 64
+        workload.route_evidence = {}
+        base_artifact = {"backends": [{}], "scenarios": [], "backend_raw_evidence": {"qdrant": {}}}
+        with mock.patch.object(common.QdrantMinimaRunner, "artifact", return_value=base_artifact):
+            artifact = workload.artifact()
+        raw = artifact["backend_raw_evidence"]["treedb"]
+        self.assertEqual(raw["resource_measurement"], resource)
+        self.assertEqual(raw["resource_availability"]["measurement"], common.RESOURCE_SEMANTICS)
 
 
 if __name__ == "__main__":

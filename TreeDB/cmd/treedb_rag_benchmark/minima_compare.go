@@ -6,11 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+)
+
+const (
+	minimaResourceRSSSemantics  = "sum of positive per-process end-minus-baseline RSS growth; endpoint delta, not peak RSS"
+	minimaResourceCPUSemantics  = "sum of positive per-process end-minus-baseline CPU seconds"
+	minimaResourceDiskSemantics = "sum of positive per-process-segment end-minus-baseline durable storage bytes"
 )
 
 type minimaRawTimedOverlapRound struct {
@@ -75,11 +82,28 @@ type minimaRawResourceSnapshot struct {
 	Availability map[string]string `json:"availability,omitempty"`
 }
 
+type minimaRawResourceSemantics struct {
+	RSSBytes   string `json:"rss_bytes"`
+	CPUSeconds string `json:"cpu_seconds"`
+	DiskBytes  string `json:"disk_bytes"`
+}
+
+type minimaRawResourceSegment struct {
+	Captured   bool                      `json:"captured"`
+	RSSBytes   int64                     `json:"rss_bytes"`
+	CPUSeconds float64                   `json:"cpu_seconds"`
+	DiskBytes  int64                     `json:"disk_bytes"`
+	Baseline   minimaRawResourceSnapshot `json:"baseline"`
+	End        minimaRawResourceSnapshot `json:"end"`
+}
+
 type minimaRawResourceMeasurement struct {
 	Captured   bool                       `json:"captured"`
 	RSSBytes   int64                      `json:"rss_bytes"`
 	CPUSeconds float64                    `json:"cpu_seconds"`
 	DiskBytes  int64                      `json:"disk_bytes"`
+	Semantics  minimaRawResourceSemantics `json:"semantics"`
+	Segments   []minimaRawResourceSegment `json:"segments"`
 	Baseline   *minimaRawResourceSnapshot `json:"baseline,omitempty"`
 	End        *minimaRawResourceSnapshot `json:"end,omitempty"`
 }
@@ -257,6 +281,54 @@ func combineMinimaEvidence(treedb, qdrant minimaArtifact, recommendation string)
 	}
 	return combined
 }
+func validateMinimaResourceMeasurement(backend string, resource minimaRawResourceMeasurement) error {
+	if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
+		return fmt.Errorf("minima artifact: %s raw resource evidence missing", backend)
+	}
+	if resource.Semantics.RSSBytes != minimaResourceRSSSemantics ||
+		resource.Semantics.CPUSeconds != minimaResourceCPUSemantics ||
+		resource.Semantics.DiskBytes != minimaResourceDiskSemantics {
+		return fmt.Errorf("minima artifact: %s raw resource semantics mismatch", backend)
+	}
+	if resource.Baseline == nil || resource.End == nil || len(resource.Segments) == 0 {
+		return fmt.Errorf("minima artifact: %s raw resource baseline/end segments missing", backend)
+	}
+	var rssBytes, diskBytes int64
+	var cpuSeconds float64
+	for ordinal, segment := range resource.Segments {
+		if !segment.Captured || !segment.Baseline.Captured || !segment.End.Captured ||
+			segment.Baseline.RSSBytes < 0 || segment.End.RSSBytes < 0 ||
+			!finiteNonnegative(segment.Baseline.CPUSeconds) || !finiteNonnegative(segment.End.CPUSeconds) ||
+			segment.Baseline.DiskBytes < 0 || segment.End.DiskBytes < 0 {
+			return fmt.Errorf("minima artifact: %s raw resource segment %d is incomplete", backend, ordinal)
+		}
+		wantRSS := max(int64(0), segment.End.RSSBytes-segment.Baseline.RSSBytes)
+		wantCPU := max(0, segment.End.CPUSeconds-segment.Baseline.CPUSeconds)
+		wantDisk := max(int64(0), segment.End.DiskBytes-segment.Baseline.DiskBytes)
+		if segment.RSSBytes != wantRSS || math.Abs(segment.CPUSeconds-wantCPU) > 1e-9 || segment.DiskBytes != wantDisk {
+			return fmt.Errorf("minima artifact: %s raw resource segment %d delta mismatch", backend, ordinal)
+		}
+		rssBytes += wantRSS
+		cpuSeconds += wantCPU
+		diskBytes += wantDisk
+	}
+	first, last := resource.Segments[0].Baseline, resource.Segments[len(resource.Segments)-1].End
+	if resource.Baseline.Captured != first.Captured ||
+		resource.Baseline.RSSBytes != first.RSSBytes ||
+		resource.Baseline.CPUSeconds != first.CPUSeconds ||
+		resource.Baseline.DiskBytes != first.DiskBytes ||
+		resource.End.Captured != last.Captured ||
+		resource.End.RSSBytes != last.RSSBytes ||
+		resource.End.CPUSeconds != last.CPUSeconds ||
+		resource.End.DiskBytes != last.DiskBytes {
+		return fmt.Errorf("minima artifact: %s raw resource envelope does not match its segments", backend)
+	}
+	if resource.RSSBytes != rssBytes || math.Abs(resource.CPUSeconds-cpuSeconds) > 1e-9 || resource.DiskBytes != diskBytes {
+		return fmt.Errorf("minima artifact: %s raw resource aggregate delta mismatch", backend)
+	}
+	return nil
+}
+
 func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]minimaBackendEvidence) error {
 	if len(artifact.RawEvidence) != len(backends) {
 		return fmt.Errorf("minima artifact: requires one namespaced raw evidence object per backend")
@@ -319,8 +391,8 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 		}
 		resource := raw.ResourceMeasurement
-		if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
-			return fmt.Errorf("minima artifact: %s raw resource evidence missing", name)
+		if err := validateMinimaResourceMeasurement(name, resource); err != nil {
+			return err
 		}
 		for _, row := range artifact.Scenarios {
 			if row.Backend != name {
@@ -393,5 +465,11 @@ func compareMinimaEvidence(treedbPath, qdrantPath, jsonPath, reportPath, recomme
 	if err := writeMinimaComparisonArtifacts(combined, jsonPath, reportPath); err != nil {
 		return err
 	}
-	return validationErr
+	if validationErr != nil {
+		return validationErr
+	}
+	if combined.State != "pass" || !combined.Passing {
+		return fmt.Errorf("Minima qualification is not a clean pass: state=%q passing=%t failures=%d", combined.State, combined.Passing, len(combined.Failures))
+	}
+	return nil
 }

@@ -26,6 +26,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+RESOURCE_SEMANTICS = {
+    "rss_bytes": "sum of positive per-process end-minus-baseline RSS growth; endpoint delta, not peak RSS",
+    "cpu_seconds": "sum of positive per-process end-minus-baseline CPU seconds",
+    "disk_bytes": "sum of positive per-process-segment end-minus-baseline durable storage bytes",
+}
+
 MANIFEST_SCHEMA = "treedb_rag_minima_manifest/v1"
 ARTIFACT_SCHEMA = "treedb_rag_application/minima_v4"
 SERVER_VERSION = CLIENT_VERSION = "1.19.0"
@@ -887,6 +893,8 @@ class QdrantMinimaRunner:
             "rss_bytes": sum(segment["rss_bytes"] for segment in segments) if captured else 0,
             "cpu_seconds": sum(segment["cpu_seconds"] for segment in segments) if captured else 0.0,
             "disk_bytes": sum(segment["disk_bytes"] for segment in segments) if captured else 0,
+            "semantics": RESOURCE_SEMANTICS,
+            "segments": segments,
             "baseline": segments[0]["baseline"],
             "end": segments[-1]["end"],
         }
@@ -1459,6 +1467,7 @@ class QdrantMinimaRunner:
                 "resource_measurement": resource,
                 "restart_boundary": self.restart_boundary,
                 "resource_availability": {
+                    "measurement": RESOURCE_SEMANTICS,
                     "baseline": resource["baseline"]["availability"],
                     "end": resource["end"]["availability"],
                 },

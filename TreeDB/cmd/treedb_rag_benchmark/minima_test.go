@@ -394,6 +394,16 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.ResourceMeasurement.DiskBytes = 1
 			a.RawEvidence["qdrant"] = raw
 		}},
+		{"missing resource semantics", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.ResourceMeasurement.Semantics = minimaRawResourceSemantics{}
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"inconsistent resource delta", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.ResourceMeasurement.RSSBytes++
+			a.RawEvidence["treedb"] = raw
+		}},
 		{"synthetic zero allocations marked unavailable", func(a *minimaArtifact) {
 			zero := 0.0
 			minimaTestRow(a, "qdrant", "small").Resource.BytesPerOp = &zero
@@ -464,6 +474,7 @@ func validMinimaArtifact() minimaArtifact {
 	if err != nil {
 		panic(err)
 	}
+	resource := minimaTestResourceMeasurement()
 	rawEvidence := make(map[string]minimaRawBackendEvidence, len(backends))
 	for _, backend := range backends {
 		rounds := make([]minimaRawTimedOverlapRound, len(timed.Rounds))
@@ -504,7 +515,7 @@ func validMinimaArtifact() minimaArtifact {
 				OldProcessIdentity: "old process", NewProcessIdentity: "new process",
 				PIDChanged: true, Verified: true,
 			},
-			ResourceMeasurement: minimaRawResourceMeasurement{Captured: true},
+			ResourceMeasurement: resource,
 			ResourceAvailability: map[string]map[string]string{
 				"baseline": {"rss_bytes": "test"},
 				"end":      {"rss_bytes": "test"},
@@ -559,8 +570,11 @@ func validMinimaArtifact() minimaArtifact {
 				ReopenIDs: append([]string(nil), query.FinalOracleIDs...), ReopenParity: true,
 				Recall: 1, Overlap: 1, OrderTolerance: minimaOrderTolerance, ScoreTolerance: minimaScoreTolerance,
 				Route: route, Visibility: minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry},
-				Timing:   minimaTimingEvidence{Captured: true},
-				Resource: minimaResourceEvidence{Captured: true, AllocationAvailability: "unavailable"},
+				Timing: minimaTimingEvidence{Captured: true},
+				Resource: minimaResourceEvidence{
+					Captured: true, AllocationAvailability: "unavailable",
+					RSSBytes: resource.RSSBytes, CPUSeconds: resource.CPUSeconds, DiskBytes: resource.DiskBytes,
+				},
 			})
 		}
 	}
@@ -573,6 +587,24 @@ func minimaTestInt(value int) *int {
 
 func minimaTestEnvironment() map[string]string {
 	return map[string]string{"os": "test", "arch": "test", "cpu": "test", "memory": "test"}
+}
+
+func minimaTestResourceMeasurement() minimaRawResourceMeasurement {
+	baseline := minimaRawResourceSnapshot{Captured: true, RSSBytes: 100, CPUSeconds: 1, DiskBytes: 1000}
+	end := minimaRawResourceSnapshot{Captured: true, RSSBytes: 125, CPUSeconds: 2.5, DiskBytes: 1100}
+	segment := minimaRawResourceSegment{
+		Captured: true, RSSBytes: 25, CPUSeconds: 1.5, DiskBytes: 100,
+		Baseline: baseline, End: end,
+	}
+	return minimaRawResourceMeasurement{
+		Captured: true, RSSBytes: 25, CPUSeconds: 1.5, DiskBytes: 100,
+		Semantics: minimaRawResourceSemantics{
+			RSSBytes: minimaResourceRSSSemantics, CPUSeconds: minimaResourceCPUSemantics, DiskBytes: minimaResourceDiskSemantics,
+		},
+		Segments: []minimaRawResourceSegment{segment},
+		Baseline: &baseline,
+		End:      &end,
+	}
 }
 
 func minimaTestRow(artifact *minimaArtifact, backend, scenario string) *minimaScenarioEvidence {
@@ -614,13 +646,14 @@ func TestMinimaArtifactRejectsNonFiniteMetrics(t *testing.T) {
 	}
 }
 
-func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
+func minimaPartialBackendEvidence(t *testing.T) (minimaArtifact, minimaArtifact) {
+	t.Helper()
 	full := validMinimaArtifact()
 	tree := cloneMinimaArtifact(t, full)
 	tree.State, tree.Passing, tree.Recommendation = "partial", false, "not_evaluated"
 	tree.Backends, tree.Scenarios = tree.Backends[:1], tree.Scenarios[:len(tree.Manifest.Corpora)]
-	qdrant := cloneMinimaArtifact(t, full)
 	tree.RawEvidence = map[string]minimaRawBackendEvidence{"treedb": tree.RawEvidence["treedb"]}
+	qdrant := cloneMinimaArtifact(t, full)
 	qdrant.State, qdrant.Passing, qdrant.Recommendation = "partial", false, "not_evaluated"
 	qdrant.Backends, qdrant.Scenarios = qdrant.Backends[1:], qdrant.Scenarios[len(qdrant.Manifest.Corpora):]
 	qdrant.RawEvidence = map[string]minimaRawBackendEvidence{"qdrant": qdrant.RawEvidence["qdrant"]}
@@ -637,6 +670,11 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		qdrant.Scenarios[i].Route.ScoredCandidates = nil
 		qdrant.Scenarios[i].Route.AdmittedCandidates = nil
 	}
+	return tree, qdrant
+}
+
+func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
+	tree, qdrant := minimaPartialBackendEvidence(t)
 	dir := t.TempDir()
 	treePath, qdrantPath := filepath.Join(dir, "tree.json"), filepath.Join(dir, "qdrant.json")
 	for path, artifact := range map[string]minimaArtifact{treePath: tree, qdrantPath: qdrant} {
@@ -672,6 +710,44 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 	if err := validateMinimaArtifact(&combined); err != nil || combined.State != "pass" || !combined.Passing {
 		t.Fatalf("combined artifact=%+v err=%v", combined, err)
+	}
+	if info, err := os.Stat(report); err != nil || info.Size() == 0 {
+		t.Fatalf("report info=%v err=%v", info, err)
+	}
+}
+
+func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T) {
+	tree, qdrant := minimaPartialBackendEvidence(t)
+	tree.Failures = append(tree.Failures, "treedb final oracle mismatch")
+	dir := t.TempDir()
+	treePath, qdrantPath := filepath.Join(dir, "tree.json"), filepath.Join(dir, "qdrant.json")
+	for path, artifact := range map[string]minimaArtifact{treePath: tree, qdrantPath: qdrant} {
+		raw, err := json.Marshal(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations"); err == nil {
+		t.Fatal("partial oracle failure returned success")
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var combined minimaArtifact
+	if err := json.Unmarshal(raw, &combined); err != nil {
+		t.Fatal(err)
+	}
+	if combined.State != "partial" || combined.Passing || combined.Recommendation != "not_evaluated" ||
+		len(combined.Failures) != 1 || combined.Failures[0] != "treedb final oracle mismatch" {
+		t.Fatalf("combined partial artifact=%+v", combined)
+	}
+	if err := validateMinimaArtifact(&combined); err != nil {
+		t.Fatalf("preserved partial artifact is invalid: %v", err)
 	}
 	if info, err := os.Stat(report); err != nil || info.Size() == 0 {
 		t.Fatalf("report info=%v err=%v", info, err)

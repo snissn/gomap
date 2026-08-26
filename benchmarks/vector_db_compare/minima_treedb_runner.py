@@ -40,21 +40,10 @@ class ServiceController:
         self.process: subprocess.Popen[str] | None = None
         self.log_path = data_dir.parent / "treedb-document-service.log"
         self.log_file: Any | None = None
-        self.rss_max = 0
-        self.cpu_seconds = 0.0
-        self.samples_complete = True
 
     @property
     def pid(self) -> int | None:
         return self.process.pid if self.process is not None and self.process.poll() is None else None
-
-    def _sample(self) -> None:
-        usage = common.server_resource_usage(self.pid, self.data_dir)
-        self.samples_complete = self.samples_complete and usage["captured"]
-        if usage["rss_bytes"] is not None:
-            self.rss_max = max(self.rss_max, int(usage["rss_bytes"]))
-        if usage["cpu_seconds"] is not None:
-            self.cpu_seconds += float(usage["cpu_seconds"])
 
     def start(self) -> None:
         if self.pid is not None:
@@ -86,7 +75,6 @@ class ServiceController:
     def stop(self) -> None:
         if self.process is not None:
             if self.process.poll() is None:
-                self._sample()
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=self.timeout)
@@ -111,11 +99,6 @@ class ServiceController:
             "tail": tail.decode("utf-8", errors="replace"),
             "max_tail_bytes": SERVICE_LOG_TAIL_BYTES,
         }
-
-    def resource(self) -> dict[str, Any]:
-        self._sample()
-        return {"captured": self.samples_complete, "rss_bytes": self.rss_max,
-                "cpu_seconds": self.cpu_seconds, "disk_bytes": common.disk_bytes(self.data_dir)}
 
 
 class ThreadLocalClients:
@@ -345,7 +328,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def artifact(self) -> dict[str, Any]:
         artifact = super().artifact()
-        resource = self.controller.resource()
+        resource = self.resource_evidence()
         backend = artifact["backends"][0]
         backend.update({
             "name": "treedb", "server_version": SERVICE_CONTRACT, "client_version": CLIENT_VERSION,
@@ -401,12 +384,9 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         raw["resource_measurement"] = resource
         raw["service_log"] = self.controller.log_evidence()
         raw["resource_availability"] = {
-            "baseline": {"rss_bytes": "owned TreeDB service process", "cpu_seconds": "owned TreeDB service process",
-                         "disk_bytes": str(self.controller.data_dir), "bytes_per_op": "unavailable",
-                         "allocs_per_op": "unavailable", "measurement_error": ""},
-            "end": {"rss_bytes": "owned TreeDB service process", "cpu_seconds": "owned TreeDB service process",
-                    "disk_bytes": str(self.controller.data_dir), "bytes_per_op": "unavailable",
-                    "allocs_per_op": "unavailable", "measurement_error": ""},
+            "measurement": common.RESOURCE_SEMANTICS,
+            "baseline": resource["baseline"]["availability"],
+            "end": resource["end"]["availability"],
         }
         return artifact
 
