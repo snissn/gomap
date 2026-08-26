@@ -3,6 +3,8 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"sync"
 	"testing"
 
@@ -139,7 +141,7 @@ func TestNativeScalarPlannerOverLimitMixedFiniteAndTenantIsolation(t *testing.T)
 	}
 
 	all := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "active_idx", Value: true}, 8)
-	if all.Stats.ScalarFilterPlan != NativeScalarFilterPlanVectorAligned || all.Stats.ScalarFilterProbeTruncated == 0 {
+	if all.Stats.ScalarFilterPlan != NativeScalarFilterPlanVectorAligned || all.Stats.ScalarFilterProbeTruncated == 0 || all.Stats.ScalarFilterExactScoring != 0 {
 		t.Fatalf("all-match diagnostics=%+v", all.Diagnostics())
 	}
 	unfiltered := searchNativeUnfilteredTest(t, col, def, 8)
@@ -161,18 +163,28 @@ func TestNativeScalarPlannerOverLimitMixedFiniteAndTenantIsolation(t *testing.T)
 		{IndexName: "tenant_idx", Value: "alpha"},
 		{IndexName: "path_idx", Value: "small"},
 	}}, 8)
-	if mixed.Stats.ScalarFilterPlan != NativeScalarFilterPlanMixed || mixed.Stats.ScalarFilterProbeTruncated == 0 || len(mixed.Results) != 2 {
+	if mixed.Stats.ScalarFilterPlan != NativeScalarFilterPlanMixed || mixed.Stats.ScalarFilterProbeTruncated == 0 || mixed.Stats.ScalarFilterExactScoring != 1 || len(mixed.Results) != 2 {
 		t.Fatalf("mixed diagnostics=%+v results=%+v", mixed.Diagnostics(), mixed.Results)
 	}
 
 	finite := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "path_idx", Value: "finite"}, 8)
-	if finite.Stats.ScalarFilterPlan != NativeScalarFilterPlanCompleteFinite || len(finite.Results) != 8 {
+	if finite.Stats.ScalarFilterPlan != NativeScalarFilterPlanCompleteFinite || finite.Stats.ScalarFilterExactScoring != 0 || len(finite.Results) != 8 {
 		t.Fatalf("finite diagnostics=%+v results=%d", finite.Diagnostics(), len(finite.Results))
 	}
 	exact := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "path_idx", Value: "small"}, 8)
-	if exact.Stats.ScalarFilterPlan != NativeScalarFilterPlanCompleteExact || len(exact.Results) != 2 {
+	if exact.Stats.ScalarFilterPlan != NativeScalarFilterPlanCompleteExact || exact.Stats.ScalarFilterExactScoring != 1 || len(exact.Results) != 2 {
 		t.Fatalf("exact diagnostics=%+v results=%d", exact.Diagnostics(), len(exact.Results))
 	}
+	totalRows := alphaRows + betaRows
+	smallOracle := nativeScalarFixtureExactOracle(totalRows, 8, func(i int) bool { return i < 2 })
+	assertNativeScalarExactOracle(t, exact.Results, smallOracle)
+	assertNativeScalarExactOracle(t, mixed.Results, smallOracle)
+	finiteOracle := nativeScalarFixtureExactOracle(totalRows, 8, func(i int) bool {
+		return i >= 2 && i < 2+nativeScalarExactSafetyCap+88
+	})
+	assertNativeScalarANNOracleContract(t, finite.Results, finiteOracle)
+	allOracle := nativeScalarFixtureExactOracle(totalRows, 8, func(int) bool { return true })
+	assertNativeScalarANNOracleContract(t, all.Results, allOracle)
 }
 
 func TestNativeScalarColumnsReopenFromSecondaryIndexes(t *testing.T) {
@@ -397,6 +409,99 @@ func BenchmarkNativeScalarFilterPlanCrossover(b *testing.B) {
 	}
 }
 
+func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
+	for _, dimensions := range []int{2, 128} {
+		for _, cardinality := range []int{256, 512, 1024} {
+			idx, query, allowSet := newNativeScalarExecutorBenchmarkIndex(b, dimensions, cardinality)
+			view := idx.searchView.Load()
+			if view == nil {
+				b.Fatal("native scalar benchmark view is unavailable")
+			}
+			plans := []struct {
+				name  string
+				exact bool
+			}{
+				{name: "exact", exact: true},
+				{name: "finite_ann", exact: false},
+			}
+			for _, route := range plans {
+				identity := NativeScalarFilterPlanCompleteFinite
+				if route.exact {
+					identity = NativeScalarFilterPlanCompleteExact
+				}
+				plan := &nativeScalarFilterExecution{
+					identity:         identity,
+					finiteIDs:        allowSet,
+					candidateIDs:     uint64(cardinality),
+					sourceGeneration: view.sourceDocumentGeneration,
+					exactScoring:     route.exact,
+				}
+				name := fmt.Sprintf("dim%d/card%d/serial/%s", dimensions, cardinality, route.name)
+				b.Run(name, func(b *testing.B) {
+					var buffer VectorIndexSearchBuffer
+					b.ReportAllocs()
+					b.ReportMetric(float64(cardinality), "candidate_ids/op")
+					for b.Loop() {
+						results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
+						if err != nil || len(results) != 10 {
+							b.Fatalf("results=%d err=%v", len(results), err)
+						}
+					}
+				})
+				if dimensions == 128 && cardinality == 512 {
+					name = fmt.Sprintf("dim%d/card%d/parallel/%s", dimensions, cardinality, route.name)
+					b.Run(name, func(b *testing.B) {
+						b.ReportAllocs()
+						b.ReportMetric(float64(cardinality), "candidate_ids/op")
+						b.RunParallel(func(pb *testing.PB) {
+							var buffer VectorIndexSearchBuffer
+							for pb.Next() {
+								results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
+								if err != nil || len(results) != 10 {
+									b.Errorf("results=%d err=%v", len(results), err)
+									return
+								}
+							}
+						})
+					})
+				}
+			}
+		}
+	}
+}
+
+func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, cardinality int) (*VectorIndex, []float32, hybridScalarAllowSet) {
+	b.Helper()
+	idx, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "native_scalar_crossover", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: dimensions, M: 8, EfConstruction: 64, EfSearch: 64,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	query := make([]float32, dimensions)
+	query[0] = 1
+	allowSet := make(hybridScalarAllowSet, cardinality)
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	for i := 0; i < cardinality; i++ {
+		id := []byte(fmt.Sprintf("doc-%05d", i))
+		vector := make([]float32, dimensions)
+		vector[0] = 1
+		for dimension := 1; dimension < dimensions; dimension++ {
+			vector[dimension] = float32((i+dimension)%97+1) / 1000
+		}
+		if err := idx.insertVectorLocked(id, vector); err != nil {
+			b.Fatal(err)
+		}
+		allowSet[string(id)] = struct{}{}
+	}
+	idx.sourceDocumentGeneration = 1
+	idx.sourceDocumentRootsValid = true
+	idx.publishSearchViewLocked(true)
+	return idx, query, allowSet
+}
+
 func newNativeScalarTestCollection(tb testing.TB, indexes []IndexDefinition) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
@@ -435,6 +540,69 @@ func searchNativeUnfilteredTest(t *testing.T, col *Collection, def VectorIndexDe
 		t.Fatal(err)
 	}
 	return response
+}
+
+func nativeScalarFixtureExactOracle(totalRows, topK int, matches func(int) bool) []VectorIndexSearchResult {
+	results := make([]VectorIndexSearchResult, 0, topK)
+	for i := 0; i < totalRows; i++ {
+		if !matches(i) {
+			continue
+		}
+		y := float32(float64(i+1) / 100000)
+		results = append(results, VectorIndexSearchResult{
+			ID:    []byte(fmt.Sprintf("doc-%05d", i)),
+			Score: 1 / math.Sqrt(1+float64(y)*float64(y)),
+		})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return string(results[i].ID) < string(results[j].ID)
+	})
+	if len(results) > topK {
+		results = results[:topK]
+	}
+	return results
+}
+
+func assertNativeScalarExactOracle(t *testing.T, got, oracle []VectorIndexSearchResult) {
+	t.Helper()
+	if len(got) != len(oracle) {
+		t.Fatalf("exact result count=%d want=%d results=%+v", len(got), len(oracle), got)
+	}
+	for i := range oracle {
+		if string(got[i].ID) != string(oracle[i].ID) || math.Abs(got[i].Score-oracle[i].Score) > 1e-6 {
+			t.Fatalf("exact result[%d]=%+v want=%+v", i, got[i], oracle[i])
+		}
+	}
+}
+
+func assertNativeScalarANNOracleContract(t *testing.T, got, oracle []VectorIndexSearchResult) {
+	t.Helper()
+	if len(got) != len(oracle) {
+		t.Fatalf("ANN result count=%d want=%d results=%+v", len(got), len(oracle), got)
+	}
+	oracleIDs := make(map[string]struct{}, len(oracle))
+	for _, result := range oracle {
+		oracleIDs[string(result.ID)] = struct{}{}
+	}
+	overlap := 0
+	for i, result := range got {
+		if math.IsNaN(result.Score) || math.IsInf(result.Score, 0) {
+			t.Fatalf("ANN result[%d] has non-finite score: %+v", i, result)
+		}
+		if i > 0 && (got[i-1].Score < result.Score ||
+			got[i-1].Score == result.Score && string(got[i-1].ID) > string(result.ID)) {
+			t.Fatalf("ANN results violate deterministic score/id order at %d: %+v", i, got)
+		}
+		if _, ok := oracleIDs[string(result.ID)]; ok {
+			overlap++
+		}
+	}
+	if overlap != len(oracle) {
+		t.Fatalf("ANN top-k recall=%d/%d results=%+v oracle=%+v", overlap, len(oracle), got, oracle)
+	}
 }
 
 func sameVectorIndexResultIDs(left, right []VectorIndexSearchResult) bool {
