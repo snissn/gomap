@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestDiagnosticsHandlerSnapshotIsReadOnlyAndBounded(t *testing.T) {
@@ -140,6 +142,52 @@ func TestDiagnosticsSnapshotRestoresCompletedInsertForReopenedIndex(t *testing.T
 	svc.noteDiagnosticsIndex("a", IndexInfo{Name: "a", Generation: snapshot.LastOpened.Generation + 1})
 	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Generation != snapshot.LastOpened.Generation+1 || got.Insert.Documents != 0 {
 		t.Fatalf("stale generation resurrected completed insert: %+v", got)
+	}
+}
+
+func TestDiagnosticsSnapshotOpenDoesNotPublishStaleCompletedInsert(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	svc.DiagnosticsHandler(nil)
+	for _, name := range []string{"a", "b"} {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2}); err != nil {
+			t.Fatalf("CreateIndex %q: %v", name, err)
+		}
+	}
+	a, err := svc.OpenIndex(ctx, "a")
+	if err != nil {
+		t.Fatalf("OpenIndex a: %v", err)
+	}
+	b, err := svc.OpenIndex(ctx, "b")
+	if err != nil {
+		t.Fatalf("OpenIndex b: %v", err)
+	}
+	svc.publishDiagnosticsInsert(a.Name, a, collections.CollectionInsertStats{Documents: 1})
+	svc.noteDiagnosticsIndex(b.Name, b)
+	loaded := make(chan struct{})
+	release := make(chan struct{})
+	svc.diagnosticsBeforeActivePublish = func() {
+		close(loaded)
+		<-release
+	}
+	opened := make(chan struct{})
+	go func() {
+		svc.noteDiagnosticsIndex(a.Name, a)
+		close(opened)
+	}()
+	<-loaded
+	published := make(chan struct{})
+	go func() {
+		svc.publishDiagnosticsInsert(a.Name, a, collections.CollectionInsertStats{Documents: 2})
+		close(published)
+	}()
+	close(release)
+	<-opened
+	<-published
+	svc.diagnosticsBeforeActivePublish = nil
+	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Name != "a" || got.Insert.Documents != 2 {
+		t.Fatalf("stale completed insert published after overlapping open: %+v", got)
 	}
 }
 

@@ -27,15 +27,17 @@ type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu       sync.RWMutex
-	benchmarkSearchCache         map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool    sync.Pool
-	denseVectorNativeAfterSearch func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations    *vectorpartition.OperationsV1
-	diagnosticsEnabled           atomic.Bool
-	diagnosticsActive            atomic.Pointer[diagnosticsActiveIndex]
-	diagnosticsCompleted         sync.Map // map[string]*diagnosticsCompletedInsert
-	closed                       bool
+	benchmarkSearchCacheMu         sync.RWMutex
+	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool      sync.Pool
+	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations      *vectorpartition.OperationsV1
+	diagnosticsEnabled             atomic.Bool
+	diagnosticsMu                  sync.Mutex
+	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsBeforeActivePublish func()
+	closed                         bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -1162,13 +1164,13 @@ func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo) {
 	if s == nil || !s.diagnosticsEnabled.Load() {
 		return
 	}
-	for {
-		active := s.diagnosticsActive.Load()
-		next := &diagnosticsActiveIndex{name: name, info: info, insert: s.completedDiagnosticsInsert(name, info)}
-		if s.diagnosticsActive.CompareAndSwap(active, next) {
-			return
-		}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	insert := s.completedDiagnosticsInsert(name, info)
+	if s.diagnosticsBeforeActivePublish != nil {
+		s.diagnosticsBeforeActivePublish()
 	}
+	s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
 }
 
 // publishDiagnosticsInsert records the completed insert snapshot only while
@@ -1178,16 +1180,12 @@ func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert c
 	if s == nil || !s.diagnosticsEnabled.Load() {
 		return
 	}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
 	s.diagnosticsCompleted.Store(name, &diagnosticsCompletedInsert{generation: info.Generation, insert: insert})
-	for {
-		active := s.diagnosticsActive.Load()
-		if active == nil || active.name != name || active.info.Generation != info.Generation {
-			return
-		}
-		next := &diagnosticsActiveIndex{name: name, info: info, insert: insert}
-		if s.diagnosticsActive.CompareAndSwap(active, next) {
-			return
-		}
+	active := s.diagnosticsActive.Load()
+	if active != nil && active.name == name && active.info.Generation == info.Generation {
+		s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
 	}
 }
 
