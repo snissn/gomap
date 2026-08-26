@@ -370,6 +370,7 @@ type VectorIndex struct {
 	frozenPrefixBatches  uint64
 	liveDelta            *VectorIndex
 	scalarDefinitions    []IndexDefinition
+	scalarRuntimes       []indexRuntime
 	scalarColumns        map[string]vectorIndexScalarColumn
 	liveDeltaEnabled     atomic.Bool
 	liveDeltaCutovers    uint64
@@ -798,7 +799,13 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	}
 	var scalarDefinitions []IndexDefinition
 	if c != nil {
-		scalarDefinitions = nativeScalarDefinitions(c.meta)
+		if def, ok := findVectorIndex(c.meta.VectorIndexes, opts.Name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+			scalarDefinitions = nativeScalarDefinitions(c.meta)
+		}
+	}
+	scalarRuntimes, err := nativeScalarRuntimes(scalarDefinitions)
+	if err != nil {
+		return nil, err
 	}
 	return &VectorIndex{
 		collection:          c,
@@ -815,6 +822,7 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		rebuildDeletedRatio: rebuildRatio,
 		schemaGeneration:    opts.schemaGeneration,
 		scalarDefinitions:   scalarDefinitions,
+		scalarRuntimes:      scalarRuntimes,
 		scalarColumns:       newNativeScalarColumns(scalarDefinitions),
 		currentNode:         make(map[string]int),
 		entry:               -1,
@@ -5168,6 +5176,7 @@ func (idx *VectorIndex) Rebuild() error {
 	for i := range scalarDefinitions {
 		scalarDefinitions[i].Components = append([]IndexComponent(nil), rebuilt.scalarDefinitions[i].Components...)
 	}
+	scalarRuntimes := cloneNativeScalarRuntimes(rebuilt.scalarRuntimes)
 	scalarColumns := cloneVectorIndexScalarColumns(rebuilt.scalarColumns)
 	entry := rebuilt.entry
 	maxLevel := rebuilt.maxLevel
@@ -5183,6 +5192,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.nodes = nodes
 	idx.currentNode = currentNode
 	idx.scalarDefinitions = scalarDefinitions
+	idx.scalarRuntimes = scalarRuntimes
 	idx.scalarColumns = scalarColumns
 	idx.entry = entry
 	idx.maxLevel = maxLevel

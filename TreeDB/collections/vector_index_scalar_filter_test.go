@@ -146,6 +146,64 @@ func TestNativeScalarVectorIndexRebuildSwapsAlignedColumns(t *testing.T) {
 	}
 }
 
+func TestNonNativeVectorIndexesSkipScalarRuntimeAndRetainBatchPath(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	columnDef := VectorIndexDefinition{
+		Name: "embedding_column", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: nativeVectorFrozenPrefixBatchWidth, Strategy: VectorIndexStrategyColumnGraph,
+	}
+	manager := NewCollectionManager(d)
+	if _, err := manager.CreateCollection(&CollectionMeta{
+		Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		Indexes:       []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{columnDef},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	column, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(columnDef))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adHoc, err := newVectorIndex(col, VectorIndexOptions{
+		Name: "adhoc", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: nativeVectorFrozenPrefixBatchWidth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, idx := range map[string]*VectorIndex{"column_graph": column, "ad_hoc": adHoc} {
+		if len(idx.scalarDefinitions) != 0 || len(idx.scalarRuntimes) != 0 || len(idx.scalarColumns) != 0 {
+			t.Fatalf("%s scalar state defs=%d runtimes=%d columns=%d", name, len(idx.scalarDefinitions), len(idx.scalarRuntimes), len(idx.scalarColumns))
+		}
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = materializer.Close() }()
+	ids := make([][]byte, nativeVectorFrozenPrefixBatchMinimum)
+	documents := make([][]byte, len(ids))
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d", i))
+		documents[i] = []byte(fmt.Sprintf(`{"embedding":[1,%0.4f],"tenant":"alpha"}`, float64(i+1)/1000))
+	}
+	column.nativePersistent = true // Make the retained frozen-prefix batch path observable.
+	if err := column.insertStoredDocumentsUnpublished(materializer, ids, documents); err != nil {
+		t.Fatal(err)
+	}
+	if column.frozenPrefixBatches == 0 || len(column.nodes) != len(ids) {
+		t.Fatalf("batch path batches=%d nodes=%d want nodes=%d", column.frozenPrefixBatches, len(column.nodes), len(ids))
+	}
+}
+
 func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *testing.T) {
 	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
 	defer func() { _ = d.Close() }()
@@ -461,6 +519,39 @@ func TestNativeScalarFilterUnsupportedMultikeyFailsClosed(t *testing.T) {
 	if err == nil || len(response.Results) != 0 || response.Stats.SearchRouteNativeRuntime != 0 {
 		t.Fatalf("response=%+v err=%v", response, err)
 	}
+}
+
+func BenchmarkNativeScalarRowCachedRuntimes(b *testing.B) {
+	d, col, def := newNativeScalarTestCollection(b, []IndexDefinition{
+		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},
+		{Name: "sequence_idx", Field: "sequence", ValueType: IndexValueInt64},
+	})
+	defer func() { _ = d.Close() }()
+	idx, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(idx.scalarRuntimes) != 2 {
+		b.Fatalf("cached scalar runtimes=%d want=2", len(idx.scalarRuntimes))
+	}
+	firstRuntime := &idx.scalarRuntimes[0]
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { _ = materializer.Close() }()
+	document := []byte(`{"embedding":[1,0],"tenant":"alpha","sequence":42}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		row, err := idx.nativeScalarRow(materializer, document)
+		if err != nil || len(row) != 2 {
+			b.Fatalf("row=%v err=%v", row, err)
+		}
+	}
+	if &idx.scalarRuntimes[0] != firstRuntime {
+		b.Fatal("native scalar runtime cache was replaced during document extraction")
+	}
+	b.ReportMetric(1, "runtime_builds/setup")
 }
 
 func BenchmarkNativeScalarFilterPlanCrossover(b *testing.B) {

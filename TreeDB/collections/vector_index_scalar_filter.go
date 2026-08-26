@@ -122,6 +122,19 @@ func nativeScalarRuntimes(defs []IndexDefinition) ([]indexRuntime, error) {
 	}
 	return (insertBatchPlanner{indexes: indexes}).indexRuntimes()
 }
+
+func cloneNativeScalarRuntimes(in []indexRuntime) []indexRuntime {
+	out := append([]indexRuntime(nil), in...)
+	for i := range out {
+		out[i].def.components = append([]IndexComponent(nil), in[i].def.components...)
+		out[i].path = append([]string(nil), in[i].path...)
+		out[i].componentPaths = make([][]string, len(in[i].componentPaths))
+		for component := range in[i].componentPaths {
+			out[i].componentPaths[component] = append([]string(nil), in[i].componentPaths[component]...)
+		}
+	}
+	return out
+}
 func vectorIndexNodeOrdinalMap(nodes []vectorIndexNode) map[string]int {
 	if len(nodes) == 0 {
 		return nil
@@ -141,11 +154,10 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	if err != nil {
 		return nil, err
 	}
-	runtimes, err := nativeScalarRuntimes(idx.scalarDefinitions)
-	if err != nil {
-		return nil, err
+	if len(idx.scalarRuntimes) != len(idx.scalarDefinitions) {
+		return nil, errors.New("collections: native scalar runtimes are unavailable")
 	}
-	state, err := orderedIndexStateForDocument(jsonDocument, runtimes, collectionOptions{documentFormat: DocumentFormatJSON})
+	state, err := orderedIndexStateForDocument(jsonDocument, idx.scalarRuntimes, collectionOptions{documentFormat: DocumentFormatJSON})
 	if err != nil {
 		return nil, err
 	}

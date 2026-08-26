@@ -26,6 +26,7 @@ func (idx *VectorIndex) ensureLiveDeltaLocked() (*VectorIndex, error) {
 		return nil, err
 	}
 	delta.scalarDefinitions = idx.scalarDefinitions
+	delta.scalarRuntimes = cloneNativeScalarRuntimes(idx.scalarRuntimes)
 	delta.scalarColumns = newNativeScalarColumns(delta.scalarDefinitions)
 	delta.parallelReciprocalLinks = idx.parallelReciprocalLinks
 	delta.constructionWorkers = idx.constructionWorkers
