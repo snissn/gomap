@@ -34,6 +34,7 @@ type Service struct {
 	vectorPartitionOperations    *vectorpartition.OperationsV1
 	diagnosticsEnabled           atomic.Bool
 	diagnosticsActive            atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted         sync.Map // map[string]*diagnosticsCompletedInsert
 	closed                       bool
 }
 
@@ -1163,10 +1164,8 @@ func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo) {
 	}
 	for {
 		active := s.diagnosticsActive.Load()
-		if active != nil && active.name == name && active.info.Generation == info.Generation {
-			return
-		}
-		if s.diagnosticsActive.CompareAndSwap(active, &diagnosticsActiveIndex{name: name, info: info}) {
+		next := &diagnosticsActiveIndex{name: name, info: info, insert: s.completedDiagnosticsInsert(name, info)}
+		if s.diagnosticsActive.CompareAndSwap(active, next) {
 			return
 		}
 	}
@@ -1179,6 +1178,7 @@ func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert c
 	if s == nil || !s.diagnosticsEnabled.Load() {
 		return
 	}
+	s.diagnosticsCompleted.Store(name, &diagnosticsCompletedInsert{generation: info.Generation, insert: insert})
 	for {
 		active := s.diagnosticsActive.Load()
 		if active == nil || active.name != name || active.info.Generation != info.Generation {
@@ -1189,6 +1189,23 @@ func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert c
 			return
 		}
 	}
+}
+
+type diagnosticsCompletedInsert struct {
+	generation uint64
+	insert     collections.CollectionInsertStats
+}
+
+func (s *Service) completedDiagnosticsInsert(name string, info IndexInfo) collections.CollectionInsertStats {
+	value, ok := s.diagnosticsCompleted.Load(name)
+	if !ok {
+		return collections.CollectionInsertStats{}
+	}
+	completed, ok := value.(*diagnosticsCompletedInsert)
+	if !ok || completed.generation != info.Generation {
+		return collections.CollectionInsertStats{}
+	}
+	return completed.insert
 }
 
 func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {

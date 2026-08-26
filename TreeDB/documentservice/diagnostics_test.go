@@ -108,6 +108,41 @@ func TestDiagnosticsSnapshotKeepsCompletedInsertAcrossReopenAndFailedUpsert(t *t
 	}
 }
 
+func TestDiagnosticsSnapshotRestoresCompletedInsertForReopenedIndex(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	h := svc.DiagnosticsHandler(nil)
+	for _, name := range []string{"a", "b"} {
+		if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: name, Dimension: 2}); err != nil {
+			t.Fatalf("CreateIndex %q: %v", name, err)
+		}
+	}
+	if _, err := svc.UpsertDocuments(ctx, "a", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("UpsertDocuments a: %v", err)
+	}
+	if _, err := svc.OpenIndex(ctx, "b"); err != nil {
+		t.Fatalf("OpenIndex b: %v", err)
+	}
+	if _, err := svc.OpenIndex(ctx, "a"); err != nil {
+		t.Fatalf("OpenIndex a: %v", err)
+	}
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/debug/treedb/stats", nil))
+	var snapshot DiagnosticsSnapshot
+	if err := json.NewDecoder(res.Body).Decode(&snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snapshot.LastOpened == nil || snapshot.LastOpened.Name != "a" || snapshot.LastOpened.Insert.Documents != 1 {
+		t.Fatalf("a insert snapshot was not restored: %+v", snapshot.LastOpened)
+	}
+	// A stale record is never exposed under a different generation.
+	svc.noteDiagnosticsIndex("a", IndexInfo{Name: "a", Generation: snapshot.LastOpened.Generation + 1})
+	if got := svc.DiagnosticsSnapshot(nil).LastOpened; got == nil || got.Generation != snapshot.LastOpened.Generation+1 || got.Insert.Documents != 0 {
+		t.Fatalf("stale generation resurrected completed insert: %+v", got)
+	}
+}
+
 func BenchmarkDiagnosticsOpenIndex(b *testing.B) {
 	for _, diagnostics := range []bool{false, true} {
 		b.Run(map[bool]string{false: "off", true: "on"}[diagnostics], func(b *testing.B) {
