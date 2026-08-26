@@ -294,7 +294,10 @@ func (s *Service) searchDenseVectorNative(ctx context.Context, col *collections.
 			ScalarFilterPlan:           search.Stats.ScalarFilterPlan,
 			ScalarFilterProbeIDs:       search.Stats.ScalarFilterProbeIDs,
 			ScalarFilterProbeTruncated: search.Stats.ScalarFilterProbeTruncated,
+			ScalarFilterCandidateIDs:   search.Stats.ScalarFilterCandidateIDs,
 			ScalarFilterVisited:        search.Stats.ScalarFilterVisited,
+			ScalarFilterAdmitted:       search.Stats.ScalarFilterAdmitted,
+			ScalarFilterExactScoring:   search.Stats.ScalarFilterExactScoring > 0,
 			ScalarFilterUnderfill:      search.Stats.ScalarFilterUnderfill > 0,
 		}, nil
 	}

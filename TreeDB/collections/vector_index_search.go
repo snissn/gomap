@@ -1102,9 +1102,14 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // split search/fetch shape can run a no-document search first, then use
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
+// DeclaredScalarFilter is native-runtime buffered-only; this convenience path
+// fails closed rather than forwarding it to an unfiltered owned/one-shot route.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
+	}
+	if opts.DeclaredScalarFilter != nil {
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support DeclaredScalarFilter; use SearchVectorIndexWithBuffer for native_runtime declared scalar filtering", ErrVectorIndexSearchUnavailable)
 	}
 	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
 		response, err := c.searchVectorIndexPreparedNoDocumentOwned(opts)

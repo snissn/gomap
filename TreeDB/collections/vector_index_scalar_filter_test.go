@@ -1,7 +1,9 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -42,6 +44,31 @@ func TestNativeScalarColumnsNormalizeTypesMissingAndLiveMutations(t *testing.T) 
 			t.Fatalf("filter=%+v plan=%s", filter, response.Stats.ScalarFilterPlan)
 		}
 	}
+	rangeChecks := []struct {
+		filter HybridScalarFilter
+		wantID string
+	}{
+		{
+			filter: HybridScalarFilter{IndexName: "sequence_idx", Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(7), Inclusive: true},
+				Upper: IndexRangeBound{Value: int64(9007199254740993), Inclusive: false},
+			}},
+			wantID: "other",
+		},
+		{
+			filter: HybridScalarFilter{IndexName: "sequence_idx", Range: &IndexRangeOptions{
+				Lower: IndexRangeBound{Value: int64(7), Inclusive: false},
+				Upper: IndexRangeBound{Value: int64(9007199254740993), Inclusive: true},
+			}},
+			wantID: "all",
+		},
+	}
+	for _, check := range rangeChecks {
+		response := searchNativeScalarTest(t, col, def, check.filter, 3)
+		if len(response.Results) != 1 || string(response.Results[0].ID) != check.wantID {
+			t.Fatalf("range=%+v results=%+v want=%q; missing field must not match", check.filter.Range, response.Results, check.wantID)
+		}
+	}
 	if replaced, err := col.Replace([]byte("all"), []byte(`{"embedding":[0.99,0.01],"tenant":"beta","active":true,"sequence":9007199254740993,"weight":1.5}`)); err != nil || !replaced {
 		t.Fatalf("replace=%v err=%v", replaced, err)
 	}
@@ -53,6 +80,27 @@ func TestNativeScalarColumnsNormalizeTypesMissingAndLiveMutations(t *testing.T) 
 	}
 	if got := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "active_idx", Value: true}, 3); len(got.Results) != 0 {
 		t.Fatalf("deleted id survived scalar search: %+v", got.Results)
+	}
+}
+
+func TestSearchVectorIndexDeclaredScalarFilterFailsClosedWithoutTenantLeak(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch([][]byte{[]byte("alpha"), []byte("beta-nearest")}, [][]byte{
+		[]byte(`{"embedding":[0,1],"tenant":"alpha"}`),
+		[]byte(`{"embedding":[1,0],"tenant":"beta"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	filter := HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}
+	response, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name, Query: []float32{1, 0}, TopK: 1, DeclaredScalarFilter: &filter,
+	})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || len(response.Results) != 0 {
+		t.Fatalf("response=%+v err=%v; convenience path must fail closed instead of returning beta-nearest", response, err)
 	}
 }
 
@@ -178,6 +226,105 @@ func TestNativeScalarColumnsReopenFromSecondaryIndexes(t *testing.T) {
 	response := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 2)
 	if len(response.Results) != 1 || string(response.Results[0].ID) != "alpha" {
 		t.Fatalf("reopened scalar results=%+v", response.Results)
+	}
+	if replaced, err := col.Replace([]byte("alpha"), []byte(`{"embedding":[1,0],"tenant":"beta"}`)); err != nil || !replaced {
+		t.Fatalf("replace after reopen=%v err=%v", replaced, err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("gamma")}, [][]byte{[]byte(`{"embedding":[0.98,0.02],"tenant":"alpha"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("beta")}); err != nil || deleted != 1 {
+		t.Fatalf("delete after reopen=%d err=%v", deleted, err)
+	}
+	response = searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 3)
+	if len(response.Results) != 1 || string(response.Results[0].ID) != "gamma" {
+		t.Fatalf("base+live-delta update/delete results=%+v", response.Results)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 3)
+	if len(response.Results) != 1 || string(response.Results[0].ID) != "gamma" {
+		t.Fatalf("base+delta update/delete second reopen results=%+v", response.Results)
+	}
+}
+
+func TestNativeScalarConcurrentMutationSearchTenantIsolation(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch([][]byte{[]byte("alpha"), []byte("beta")}, [][]byte{
+		[]byte(`{"embedding":[0.9,0.1],"tenant":"alpha"}`),
+		[]byte(`{"embedding":[1,0],"tenant":"beta"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 32; i++ {
+			document := []byte(fmt.Sprintf(`{"embedding":[1,%0.4f],"tenant":"beta"}`, float64(i+1)/1000))
+			replaced, err := col.Replace([]byte("beta"), document)
+			if err != nil {
+				errs <- fmt.Errorf("replace beta: %w", err)
+				return
+			}
+			if !replaced {
+				errs <- errors.New("replace beta reported missing document")
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		filter := HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}
+		var buffer VectorIndexSearchBuffer
+		for i := 0; i < 64; i++ {
+			response, err := col.SearchVectorIndexWithBuffer(VectorIndexSearchOptions{
+				IndexName: def.Name, Query: []float32{1, 0}, TopK: 2, EfSearch: 64,
+				StatsMode: VectorIndexSearchStatsModeProduction, DeclaredScalarFilter: &filter,
+			}, &buffer)
+			if err != nil {
+				if errors.Is(err, ErrHybridSearchStaleIndex) || errors.Is(err, ErrVectorIndexSnapshotMismatch) {
+					continue
+				}
+				errs <- err
+				return
+			}
+			for _, result := range response.Results {
+				if string(result.ID) != "alpha" {
+					errs <- fmt.Errorf("cross-tenant result %q", result.ID)
+					return
+				}
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
 	}
 }
 

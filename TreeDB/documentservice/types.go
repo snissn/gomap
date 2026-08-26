@@ -230,7 +230,10 @@ type DenseVectorSearchResponse struct {
 	ScalarFilterPlan           collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
 	ScalarFilterProbeIDs       uint64                             `json:"scalar_filter_probe_ids,omitempty"`
 	ScalarFilterProbeTruncated uint64                             `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidateIDs   uint64                             `json:"scalar_filter_candidate_ids,omitempty"`
 	ScalarFilterVisited        uint64                             `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterAdmitted       uint64                             `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterExactScoring   bool                               `json:"scalar_filter_exact_scoring,omitempty"`
 	ScalarFilterUnderfill      bool                               `json:"scalar_filter_underfill,omitempty"`
 }
 

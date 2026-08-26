@@ -42,7 +42,12 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dense.Route != RouteAnn || dense.Exact || dense.ScalarFilterPlan != collections.NativeScalarFilterPlanCompleteExact {
+	if dense.Route != RouteAnn ||
+		dense.Exact ||
+		dense.ScalarFilterPlan != collections.NativeScalarFilterPlanCompleteExact ||
+		dense.ScalarFilterCandidateIDs != 2 ||
+		dense.ScalarFilterAdmitted != 2 ||
+		!dense.ScalarFilterExactScoring {
 		t.Fatalf("dense=%+v", dense)
 	}
 	hybrid, err := svc.SearchHybrid(ctx, create.Name, HybridSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, VectorCandidateLimit: 2, EfSearch: 16, Filter: filter})
