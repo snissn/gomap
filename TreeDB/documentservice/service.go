@@ -448,6 +448,26 @@ func (s *Service) CountDocuments(ctx context.Context, index string, req CountDoc
 	if err != nil {
 		return CountDocumentsResponse{}, err
 	}
+	if req.Filter == nil {
+		if err := ctxErr(ctx); err != nil {
+			return CountDocumentsResponse{}, err
+		}
+		count := 0
+		_, err = col.ScanDocumentIDsFunc(maxServiceScanDocuments, func([]byte) (bool, error) {
+			if err := ctxErr(ctx); err != nil {
+				return false, err
+			}
+			count++
+			return true, nil
+		})
+		if err != nil {
+			return CountDocumentsResponse{}, mapDocumentScanError(err)
+		}
+		if err := ctxErr(ctx); err != nil {
+			return CountDocumentsResponse{}, err
+		}
+		return CountDocumentsResponse{Index: info, Count: count}, nil
+	}
 	if err := req.Filter.Validate(); err != nil {
 		return CountDocumentsResponse{}, err
 	}
@@ -1527,20 +1547,24 @@ func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Colle
 		}
 		return true, nil
 	})
-	if err != nil {
-		if errors.Is(err, errStopDocumentCursorPage) {
-			return truncated, err
-		}
-		var serviceErr *Error
-		if errors.As(err, &serviceErr) {
-			return truncated, err
-		}
-		if errors.Is(err, backenddb.ErrClosed) {
-			return truncated, wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
-		}
-		return truncated, wrapServiceError(CodeInternal, "document scan failed", err)
+	if errors.Is(err, errStopDocumentCursorPage) {
+		return truncated, err
 	}
-	return truncated, nil
+	return truncated, mapDocumentScanError(err)
+}
+
+func mapDocumentScanError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var serviceErr *Error
+	if errors.As(err, &serviceErr) {
+		return err
+	}
+	if errors.Is(err, backenddb.ErrClosed) {
+		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
+	}
+	return wrapServiceError(CodeInternal, "document scan failed", err)
 }
 
 func decodeStoredDocument(id []byte, raw []byte) (Document, error) {

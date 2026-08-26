@@ -355,6 +355,10 @@ type columnStoreCandidateResourceWorkMetric struct {
 	RetainedIndexNodeVisits         uint64 `json:"retained_index_node_visits,omitempty"`
 	RetainedIndexNodeCopies         uint64 `json:"retained_index_node_copies,omitempty"`
 	LogicalIndexNodesAdmitted       uint64 `json:"logical_index_nodes_admitted,omitempty"`
+	AggregateMembershipProbes       uint64 `json:"aggregate_membership_probes,omitempty"`
+	AggregateMembershipNodeVisits   uint64 `json:"aggregate_membership_node_visits,omitempty"`
+	AggregateMembershipNodeCopies   uint64 `json:"aggregate_membership_node_copies,omitempty"`
+	AggregateMembershipAdmissions   uint64 `json:"aggregate_membership_admissions,omitempty"`
 	NewlyAdmittedEntries            uint64 `json:"newly_admitted_entries,omitempty"`
 	NewlyAdmittedObligations        uint64 `json:"newly_admitted_obligations,omitempty"`
 	RemovedObligations              uint64 `json:"removed_obligations,omitempty"`
@@ -1855,6 +1859,10 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 			RetainedIndexNodeVisits:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeVisits,
 			RetainedIndexNodeCopies:         stats.ColumnPublishFinalizeCandidateResourceWork.RetainedIndexNodeCopies,
 			LogicalIndexNodesAdmitted:       stats.ColumnPublishFinalizeCandidateResourceWork.LogicalIndexNodesAdmitted,
+			AggregateMembershipProbes:       stats.ColumnPublishFinalizeCandidateResourceWork.AggregateMembershipProbes,
+			AggregateMembershipNodeVisits:   stats.ColumnPublishFinalizeCandidateResourceWork.AggregateMembershipNodeVisits,
+			AggregateMembershipNodeCopies:   stats.ColumnPublishFinalizeCandidateResourceWork.AggregateMembershipNodeCopies,
+			AggregateMembershipAdmissions:   stats.ColumnPublishFinalizeCandidateResourceWork.AggregateMembershipAdmissions,
 			NewlyAdmittedEntries:            stats.ColumnPublishFinalizeCandidateResourceWork.NewlyAdmittedEntries,
 			NewlyAdmittedObligations:        stats.ColumnPublishFinalizeCandidateResourceWork.NewlyAdmittedObligations,
 			RemovedObligations:              stats.ColumnPublishFinalizeCandidateResourceWork.RemovedObligations,
@@ -5085,6 +5093,10 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `retained_index_node_visits` | %d |\n", work.RetainedIndexNodeVisits))
 		sb.WriteString(fmt.Sprintf("| `retained_index_node_copies` | %d |\n", work.RetainedIndexNodeCopies))
 		sb.WriteString(fmt.Sprintf("| `logical_index_nodes_admitted` | %d |\n", work.LogicalIndexNodesAdmitted))
+		sb.WriteString(fmt.Sprintf("| `aggregate_membership_probes` | %d |\n", work.AggregateMembershipProbes))
+		sb.WriteString(fmt.Sprintf("| `aggregate_membership_node_visits` | %d |\n", work.AggregateMembershipNodeVisits))
+		sb.WriteString(fmt.Sprintf("| `aggregate_membership_node_copies` | %d |\n", work.AggregateMembershipNodeCopies))
+		sb.WriteString(fmt.Sprintf("| `aggregate_membership_admissions` | %d |\n", work.AggregateMembershipAdmissions))
 		sb.WriteString(fmt.Sprintf("| `newly_admitted_obligations` | %d |\n", work.NewlyAdmittedObligations))
 		sb.WriteString(fmt.Sprintf("| `removed_obligations` | %d |\n", work.RemovedObligations))
 		sb.WriteString(fmt.Sprintf("| `append_only_fast_path` | %d |\n", work.AppendOnlyFastPath))

@@ -1,6 +1,6 @@
 # Durable Command-WAL Cleanup Proof
 
-Status: current backend contract for issue #3682 under parent #1595.
+Status: current backend contract for issues #3682 and #4376 under parent #1595.
 
 TreeDB is pre-alpha. This contract deliberately fails closed rather than
 preserving a cleanup path that can infer deletion authority from visible state,
@@ -54,13 +54,15 @@ Read-only open never performs ordinary cleanup.
 - `cleanupThrough`, the minimum `AppliedCommandLSN` across those roots;
 - the dependency-closed `durableWALLSN`, which must cover every root's applied
   LSN;
-- the command-journal cleanup epoch and namespace generation;
+- the command-journal cleanup epoch, namespace generation, lane, and active
+  segment generation;
 - the exact active segment path, physical identity, accepted byte frontier,
   and active maximum LSN;
 - pending stable-rotation and pending-successor state, both of which must be
-  empty before a proof is available;
-- the complete scanned segment decisions, including open handles, physical
-  identities, sizes, scanned bytes, frame counts, and min/max LSN ranges.
+  empty before a proof is available and immediately before deletion;
+- the complete scanned segment decisions, including captured lane/sequence,
+  open handles, physical identities, sizes, scanned bytes, frame counts, and
+  min/max LSN ranges.
 
 The proof does not copy visible `DBState.AppliedCommandLSN`. Visible state may be
 ahead of the last durable root. It also does not treat
@@ -71,8 +73,9 @@ both durable roots still require replay from it.
 
 A segment is eligible only when all of the following hold:
 
-1. its file name parses as a command-WAL segment, but the name is used only for
-   discovery and diagnostics;
+1. its file name parses as a command-WAL segment; the captured lane/sequence is
+   used only to conservatively retain active/post-capture generations, never to
+   authorize deletion;
 2. the exact opened file identity remains stable through scan and immediate
    pre-unlink revalidation;
 3. a full frame scan validates the segment header and derives a complete
@@ -82,12 +85,17 @@ A segment is eligible only when all of the following hold:
    lineage; frames at or below the cleanup frontier may be sparse after
    earlier multi-lane cleanup batches;
 5. the segment's maximum complete LSN is at or below `cleanupThrough`;
-6. the exact physical segment is not the journal's active append target;
+6. the exact physical segment is neither the captured nor current journal
+   active append target, and its captured lane sequence is below the captured
+   active segment generation so rotations after the scan cannot make it a
+   candidate;
 7. no stable-resource capture, retry, replay, or repair pin blocks its physical
    identity or pathname namespace;
-8. the durable roots, durable WAL frontier, journal cleanup epoch, namespace
-   generation, active identity, and pending-ownership state still match
-   immediately before the destructive batch.
+8. current durable-root cleanup coverage and durable WAL progress are not below
+   the captured frontiers, the same journal owner is live, journal counters and
+   segment generation have not regressed, same-segment path/identity/bytes/LSN
+   state has only advanced, and pending ownership remains empty immediately
+   before the destructive batch.
 
 Any ambiguity retains data. Rotation alone authorizes no deletion.
 
@@ -103,11 +111,14 @@ Ordinary cleanup is serialized per DB and follows this order:
    successor ownership;
 4. scan every typed command segment completely and bind the exact decisions to
    the proof;
-5. reacquire the durable-publication lock and compare the proof authority with
-   current durable-root state;
-6. retain the journal owner lock while matching the exact active identity,
-   acquiring all candidate identity/namespace delete leases, and revalidating
-   every pathname against its captured physical identity;
+5. reacquire the durable-publication lock, freshly validate current root
+   runtime, and require its minimum cleanup frontier and durable WAL LSN not to
+   have regressed below the captured authority;
+6. retain the journal owner lock while monotonically revalidating append and
+   rotation progress, marking the captured and current active identities plus
+   every captured-lane generation at or above the captured active sequence,
+   acquiring all remaining candidate identity/namespace delete leases, and
+   revalidating every pathname against its captured physical identity;
 7. unlink only the eligible exact identities;
 8. advance the in-process journal namespace generation and cleanup epoch, and
    record command-WAL namespace-sync debt, as soon as any unlink succeeds;
@@ -169,7 +180,10 @@ The focused test matrix proves:
 - visible applied LSN and durable WAL prefix ahead of durable-root coverage do
   not advance cleanup;
 - the older selectable root retains its replay source;
-- stale root and append snapshots delete nothing;
+- root-frontier, durable-WAL, journal-counter, segment-generation, and
+  pending-ownership regressions delete nothing;
+- appends and one or more rotations after a scan preserve captured/current and
+  post-capture active generations while covered old segments still converge;
 - filename rebinding, duplicate lineage, gaps, incomplete non-active tails,
   and post-append poison fail closed;
 - active identities and identity pins retain exact segments, and a pin-release

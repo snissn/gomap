@@ -66,6 +66,60 @@ func TestCaptureDurableRootAppendRequirementsStayMutationLocal4366(t *testing.T)
 	}
 }
 
+func TestCaptureDurableRootDistinctSegmentAppendAvoidsExactRequirements4371(t *testing.T) {
+	database, basePath := openDurableRootClosureDB3928(t)
+	retained := make([]rootpublication.StableLogicalObligation, 4096)
+	for i := range retained {
+		retained[i] = durableRootClosureObligation3928(uint64(i + 1))
+	}
+	base := durableRootClosureSetWithResource3928(t, basePath, "base-segment", nil, retained...)
+	defer base.Release()
+
+	producerPath := filepath.Join(t.TempDir(), "distinct-column-segment.bin")
+	if err := os.WriteFile(producerPath, make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added := durableRootClosureObligation3928(4097)
+	producer := durableRootClosureSetWithResource3928(t, producerPath, "producer-segment", nil, added)
+	mutation := rootpublication.StableLogicalObligationMutation{
+		ScopedFields: []rootpublication.ReachabilityField{rootpublication.ReachabilityColumnManifest},
+		Added:        []rootpublication.StableLogicalObligation{added},
+	}
+	fallbackCalls := 0
+	var timing CommandWALPublishTiming
+	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+		database.idx.Load(), database.meta, nil, base, producer,
+		rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{},
+		mutation, rootpublication.StableResourceClosureWork{FinalRequirementRecordsDecoded: 1}, func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error) {
+			fallbackCalls++
+			return rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableResourceClosureWork{}, errors.New("unexpected exact requirements fallback")
+		}, false, &timing,
+	)
+	if err != nil {
+		producer.Release()
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	work := timing.FinalizeCandidateResourceWork
+	if fallbackCalls != 0 || work.FinalRequirementProofFastPath != 1 || work.FinalRequirementProofFallbacks != 0 || work.FinalRequirementObligationsMaterialized != 0 || work.FullClosureValidations != 0 || work.LogicalObligationNormalizations != 3 {
+		t.Fatalf("distinct append fallback=%d work=%+v want bounded certified capture", fallbackCalls, work)
+	}
+	if work.AggregateMembershipProbes == 0 || work.AggregateMembershipNodeVisits == 0 || work.AggregateMembershipNodeVisits > 128 || work.AggregateMembershipNodeCopies > 64 {
+		t.Fatalf("distinct append aggregate work=%+v want logarithmic membership proof and admission", work)
+	}
+	descriptors := candidate.Descriptors()
+	if len(descriptors) != 2 {
+		t.Fatalf("candidate descriptors=%d want two distinct physical segments", len(descriptors))
+	}
+	obligations := 0
+	for _, descriptor := range descriptors {
+		obligations += len(descriptor.LogicalObligations())
+	}
+	if obligations != len(retained)+1 {
+		t.Fatalf("candidate obligations=%d want %d", obligations, len(retained)+1)
+	}
+}
+
 func TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366(t *testing.T) {
 	database, path := openDurableRootClosureDB3928(t)
 	baseObligation := durableRootClosureObligation3928(1)

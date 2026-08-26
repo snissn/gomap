@@ -1510,3 +1510,80 @@ func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T
 		}
 	}
 }
+
+func TestCommandJournalCleanupSnapshotAcceptsMonotonicAppendAndRotation(t *testing.T) {
+	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: 4, SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer journal.Close()
+
+	captured, err := journal.CaptureCleanupSnapshot()
+	if err != nil {
+		t.Fatalf("CaptureCleanupSnapshot: %v", err)
+	}
+	if _, err := journal.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	if err := journal.WithCleanupSnapshot(captured, nil); err != nil {
+		t.Fatalf("WithCleanupSnapshot after append: %v", err)
+	}
+	if err := journal.RotateActiveSegment(false); err != nil {
+		t.Fatalf("RotateActiveSegment: %v", err)
+	}
+	if err := journal.WithCleanupSnapshot(captured, nil); err != nil {
+		t.Fatalf("WithCleanupSnapshot after rotation: %v", err)
+	}
+}
+
+func TestCommandJournalCleanupSnapshotRejectsRegressionAndPendingOwnership(t *testing.T) {
+	journal, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: 4, SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer journal.Close()
+	if _, err := journal.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	captured, err := journal.CaptureCleanupSnapshot()
+	if err != nil {
+		t.Fatalf("CaptureCleanupSnapshot: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*CommandJournalCleanupSnapshot)
+	}{
+		{name: "cleanup-epoch", mutate: func(current *CommandJournalCleanupSnapshot) { current.CleanupEpoch-- }},
+		{name: "namespace-generation", mutate: func(current *CommandJournalCleanupSnapshot) { current.NamespaceGeneration-- }},
+		{name: "lane", mutate: func(current *CommandJournalCleanupSnapshot) { current.Lane++ }},
+		{name: "segment-sequence", mutate: func(current *CommandJournalCleanupSnapshot) { current.SegmentSeq-- }},
+		{name: "same-segment-path", mutate: func(current *CommandJournalCleanupSnapshot) { current.ActivePath += ".rebound" }},
+		{name: "same-segment-bytes", mutate: func(current *CommandJournalCleanupSnapshot) { current.ActiveBytes-- }},
+		{name: "same-segment-max-lsn", mutate: func(current *CommandJournalCleanupSnapshot) { current.ActiveSegmentMaxLSN-- }},
+		{name: "pending-stable-rotation", mutate: func(current *CommandJournalCleanupSnapshot) { current.PendingStableRotation = 1 }},
+		{name: "pending-successor", mutate: func(current *CommandJournalCleanupSnapshot) { current.PendingSuccessor = true }},
+		{
+			name: "rotation-without-counter-progress",
+			mutate: func(current *CommandJournalCleanupSnapshot) {
+				current.SegmentSeq++
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := captured
+			tc.mutate(&current)
+			if err := validateMonotonicCleanupSnapshot(captured, current); !errors.Is(err, ErrCommandWALCleanupSnapshotStale) {
+				t.Fatalf("validateMonotonicCleanupSnapshot error=%v, want stale", err)
+			}
+		})
+	}
+}

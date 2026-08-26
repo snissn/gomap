@@ -1234,18 +1234,17 @@ func TestIngestSourcesCommandWALPublicationCutsRecoverWholeSource(t *testing.T) 
 			dir, d, col := openCommandWALIngestTestCollection(t, 64)
 			cfg := ingestTestCfg(64)
 			mustIngest(t, col, []SourceDocument{ingestTestSource("src-0", 0)}, cfg)
-			fired := false
+			var fired atomic.Bool
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-				if !fired && tc.matches(event) {
-					fired = true
+				if tc.matches(event) && fired.CompareAndSwap(false, true) {
 					return errIngestInjected
 				}
 				return nil
 			})
 			_, err := col.IngestSources(context.Background(), []SourceDocument{ingestTestSource("src-0", 7)}, cfg)
 			restore()
-			if !fired || !errors.Is(err, errIngestInjected) {
-				t.Fatalf("cut fired=%t err=%v", fired, err)
+			if !fired.Load() || !errors.Is(err, errIngestInjected) {
+				t.Fatalf("cut fired=%t err=%v", fired.Load(), err)
 			}
 			_ = d.Close()
 

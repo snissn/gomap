@@ -210,6 +210,76 @@ func BenchmarkStableResourceSetAppendDistinctPhysical(b *testing.B) {
 	}
 }
 
+func BenchmarkStableResourceSetAppendDistinctLogicalObligation4371(b *testing.B) {
+	for _, benchmark := range []struct {
+		retained int
+		added    int
+	}{{64, 1}, {4096, 1}, {65536, 1}, {4096, 16}} {
+		b.Run(fmt.Sprintf("retained=%d/added=%d", benchmark.retained, benchmark.added), func(b *testing.B) {
+			file := writeStableResourceFixture(b, b.TempDir(), "logical-segments.pack", "segments")
+			baseBuilder := NewStableResourceSetBuilder()
+			for id := uint64(1); id <= uint64(benchmark.retained); id++ {
+				if err := baseBuilder.Add(appendMutationDistinctResourceToken(b, file, id, appendMutationTestObligation(id))); err != nil {
+					b.Fatal(err)
+				}
+			}
+			base, err := baseBuilder.Freeze()
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer base.Release()
+			added := make([]StableLogicalObligation, benchmark.added)
+			for index := range added {
+				added[index] = appendMutationTestObligation(uint64(benchmark.retained + index + 1))
+			}
+			mutation := StableLogicalObligationMutation{ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: added}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				inherited, _, err := CloneStableResourceSetApplyingLogicalObligationMutation(base, StableLogicalObligationMutation{})
+				if err != nil {
+					b.Fatal(err)
+				}
+				producerBuilder := NewStableResourceSetBuilder()
+				for index, obligation := range added {
+					id := uint64(benchmark.retained + index + 1)
+					if err := producerBuilder.Add(appendMutationDistinctResourceToken(b, file, id, obligation)); err != nil {
+						b.Fatal(err)
+					}
+				}
+				producer, err := producerBuilder.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				candidate := NewStableResourceSetBuilder()
+				if err := candidate.Merge(inherited); err != nil {
+					b.Fatal(err)
+				}
+				b.StartTimer()
+				work, err := candidate.MergeAppendOnlyLogicalObligations(producer, mutation)
+				if err != nil {
+					b.Fatal(err)
+				}
+				result, err := candidate.Freeze()
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.StopTimer()
+				if work.AppendOnlyFastPath != 1 || work.SourceObligationsInspected != uint64(benchmark.added) || work.AggregateMembershipProbes != uint64(2*benchmark.added) || work.AggregateMembershipAdmissions != uint64(benchmark.added) {
+					b.Fatalf("work=%+v", work)
+				}
+				b.ReportMetric(float64(work.AggregateMembershipNodeVisits), "membership-node-visits/op")
+				b.ReportMetric(float64(work.AggregateMembershipNodeCopies), "membership-node-copies/op")
+				b.ReportMetric(float64(benchmark.retained), "retained-obligations")
+				b.ReportMetric(1, "resource-kinds")
+				b.ReportMetric(float64(benchmark.added), "added-obligations")
+				result.Release()
+			}
+		})
+	}
+}
+
 func BenchmarkStableResourceSetAppendPhysicalCollision(b *testing.B) {
 	for _, entries := range []int{8, 32, 4096} {
 		b.Run(fmt.Sprintf("entries=%d", entries), func(b *testing.B) {

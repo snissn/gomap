@@ -680,10 +680,11 @@ func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
 }
 
 // CleanupCommandWALCoveredSegments removes complete command-WAL segments covered
-// by the exact validated durable-root proof and outside every journal/pin
-// protection. Any successful unlink is followed by a WAL-directory sync before
-// success is reported. The legacy sync argument is retained for callers, but
-// cleanup never mints or advances a durable WAL frontier.
+// by a freshly revalidated monotonic durable-root proof and outside every
+// journal/generation/pin protection. Any successful unlink is followed by a
+// WAL-directory sync before success is reported. The legacy sync argument is
+// retained for callers, but cleanup never mints or advances a durable WAL
+// frontier.
 func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 	if db == nil || !db.commandWAL {
 		return nil
@@ -729,6 +730,27 @@ func normalizeCommandWALCheckpointCleanupError(err error) error {
 		return nil
 	}
 	return err
+}
+
+func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentCleanupDecision, captured, current commitlog.CommandJournalCleanupSnapshot) error {
+	for i := range decisions {
+		decision := &decisions[i]
+		if !decision.Covered {
+			continue
+		}
+		if !decision.generationKnown || decision.lane < 0 {
+			return errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup candidate has invalid generation: %s", filepath.Base(decision.Path)))
+		}
+		if rootpublication.SamePhysicalIdentity(decision.identity, captured.ActiveIdentity) ||
+			rootpublication.SamePhysicalIdentity(decision.identity, current.ActiveIdentity) {
+			decision.Active = true
+			continue
+		}
+		if decision.lane == captured.Lane && decision.seq >= captured.SegmentSeq {
+			decision.Active = true
+		}
+	}
+	return nil
 }
 
 // cleanupCommandWALCoveredSegmentsV1 is the allow-closing cleanup path used by
@@ -796,12 +818,13 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
-			for i := range proof.segments {
-				if rootpublication.SamePhysicalIdentity(proof.segments[i].identity, proof.journal.ActiveIdentity) {
-					proof.segments[i].Active = true
+			err = proof.journalOwner.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry, current commitlog.CommandJournalCleanupSnapshot) (bool, error) {
+				if poisonErr := db.commandWALPoisonedError(); poisonErr != nil {
+					return false, poisonErr
 				}
-			}
-			err = proof.journalOwner.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry) (bool, error) {
+				if retainErr := retainCommandWALCleanupAuthoritySegments(proof.segments, proof.journal, current); retainErr != nil {
+					return false, retainErr
+				}
 				var removeErr error
 				proof.segments, removeErr = removeCoveredCommandWALSegmentsWithRegistry(proof.segments, registry)
 				for i := range proof.segments {
