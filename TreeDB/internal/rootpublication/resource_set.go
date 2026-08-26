@@ -1676,7 +1676,7 @@ func (builder *StableResourceSetBuilder) MergeAppendOnlyLogicalObligations(child
 		return StableResourceClosureWork{}, err
 	}
 	temporaryChildBuilder.mu.Lock()
-	temporaryChild := &StableResourceSet{entries: temporaryChildBuilder.entries, createdAt: child.createdAt}
+	temporaryChild := &StableResourceSet{entries: temporaryChildBuilder.entries}
 	temporaryChild.owner.Store(uint32(ResourceOwnerBuilder))
 	temporaryChildBuilder.entries = nil
 	temporaryChildBuilder.closed = true
@@ -2276,7 +2276,7 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 	if builder.kindViews != nil {
 		views := builder.kindViews
 		set := &StableResourceSet{
-			kindViews: views, createdAt: time.Now(),
+			kindViews:    views,
 			pinHighWater: stableResourcePinCountsFromViews(views),
 		}
 		set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -2291,7 +2291,7 @@ func (builder *StableResourceSetBuilder) Freeze() (*StableResourceSet, error) {
 		return nil, err
 	}
 	set := &StableResourceSet{
-		entries: entries, kindViews: views, createdAt: time.Now(),
+		entries: entries, kindViews: views,
 		pinHighWater: stableResourcePinCounts(entries),
 	}
 	set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -2356,7 +2356,6 @@ type StableResourceSet struct {
 	logicalMembershipEvidence map[ResourceKind]stableLogicalMembershipEvidence
 	pinHighWater              map[ResourceKind]uint64
 	owner                     atomic.Uint32
-	createdAt                 time.Time
 }
 
 func (set *StableResourceSet) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -2413,13 +2412,12 @@ func cloneStableResourceSetKindView(source *StableResourceSet, excluded ...Resou
 		return nil, false, nil
 	}
 	views, ok := cloneStableResourceKindViews(source.kindViews, excludedKinds)
-	createdAt := source.createdAt
 	source.mu.Unlock()
 	if !ok {
 		return nil, false, ErrResourceOwnership
 	}
 	set := &StableResourceSet{
-		kindViews: views, createdAt: createdAt,
+		kindViews:    views,
 		pinHighWater: stableResourcePinCountsFromViews(views),
 	}
 	set.owner.Store(uint32(ResourceOwnerBuilder))
@@ -3785,7 +3783,7 @@ func stableUnionLogicalMembershipEvidence(entries []stableResourceEntry, candida
 }
 
 func UnionStableResourceSets(sets ...*StableResourceSet) (*StableResourceSet, error) {
-	view := &StableResourceSet{createdAt: time.Now()}
+	view := &StableResourceSet{}
 	view.owner.Store(uint32(ResourceOwnerView))
 	lookup := stableResourceEntryLookup{}
 	var evidenceCandidates map[ResourceKind][]stableLogicalMembershipEvidence
