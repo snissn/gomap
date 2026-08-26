@@ -120,13 +120,17 @@ func (idx *VectorIndex) foldLiveDeltaLocked() error {
 		scalarRows = append(scalarRows, delta.nativeScalarRowAtLocked(nodeID))
 		vectors = append(vectors, vector)
 	}
+	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
+		return err
+	}
+	if err := idx.validateNativeScalarRowsAppendLocked(scalarRows...); err != nil {
+		return err
+	}
 	if err := idx.insertVectorBatchLocked(documentIDs, vectors); err != nil {
 		return err
 	}
 	for _, row := range scalarRows {
-		if err := idx.appendNativeScalarRowValuesLocked(row); err != nil {
-			return err
-		}
+		idx.appendNativeScalarRowValuesPrevalidatedLocked(row)
 	}
 	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
 		return err

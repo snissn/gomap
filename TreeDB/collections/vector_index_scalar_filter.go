@@ -40,13 +40,7 @@ func newVectorIndexScalarColumn(valueType IndexValueType) vectorIndexScalarColum
 	return vectorIndexScalarColumn{valueType: valueType, offsets: []uint32{0}}
 }
 
-func (c *vectorIndexScalarColumn) append(value []byte, present bool) error {
-	if c == nil {
-		return errors.New("collections: nil native scalar column")
-	}
-	if uint64(len(c.data)+len(value)) > math.MaxUint32 {
-		return errors.New("collections: native scalar column exceeds 4GiB payload limit")
-	}
+func (c *vectorIndexScalarColumn) appendPrevalidated(value []byte, present bool) {
 	row := len(c.offsets) - 1
 	if present {
 		word := row / 64
@@ -57,7 +51,6 @@ func (c *vectorIndexScalarColumn) append(value []byte, present bool) error {
 		c.data = append(c.data, value...)
 	}
 	c.offsets = append(c.offsets, uint32(len(c.data)))
-	return nil
 }
 
 func (c vectorIndexScalarColumn) value(row int) ([]byte, bool) {
@@ -147,22 +140,29 @@ func vectorIndexNodeOrdinalMap(nodes []vectorIndexNode) map[string]int {
 }
 
 func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterializer, document []byte) (map[string][]byte, error) {
-	if idx == nil || len(idx.scalarDefinitions) == 0 {
+	if idx == nil {
+		return nil, nil
+	}
+	idx.mu.RLock()
+	definitions := idx.scalarDefinitions
+	runtimes := idx.scalarRuntimes
+	idx.mu.RUnlock()
+	if len(definitions) == 0 {
 		return nil, nil
 	}
 	jsonDocument, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
 		return nil, err
 	}
-	if len(idx.scalarRuntimes) != len(idx.scalarDefinitions) {
+	if len(runtimes) != len(definitions) {
 		return nil, errors.New("collections: native scalar runtimes are unavailable")
 	}
-	state, err := orderedIndexStateForDocument(jsonDocument, idx.scalarRuntimes, collectionOptions{documentFormat: DocumentFormatJSON})
+	state, err := orderedIndexStateForDocument(jsonDocument, runtimes, collectionOptions{documentFormat: DocumentFormatJSON})
 	if err != nil {
 		return nil, err
 	}
-	row := make(map[string][]byte, len(idx.scalarDefinitions))
-	for i, def := range idx.scalarDefinitions {
+	row := make(map[string][]byte, len(definitions))
+	for i, def := range definitions {
 		values := state.valuesAt(i)
 		if len(values) > 1 {
 			return nil, fmt.Errorf("collections: native scalar index %q produced multiple values", def.Name)
@@ -174,18 +174,40 @@ func (idx *VectorIndex) nativeScalarRow(materializer *StoredDocumentJSONMaterial
 	return row, nil
 }
 
-func (idx *VectorIndex) appendNativeScalarRowValuesLocked(row map[string][]byte) error {
+func (idx *VectorIndex) validateNativeScalarRowsAppendLocked(rows ...map[string][]byte) error {
 	for _, def := range idx.scalarDefinitions {
 		column, ok := idx.scalarColumns[def.Name]
 		if !ok {
 			return fmt.Errorf("collections: native scalar column %q is unavailable", def.Name)
 		}
-		value, present := row[def.Name]
-		if err := column.append(value, present); err != nil {
-			return err
+		dataBytes := uint64(len(column.data))
+		for _, row := range rows {
+			value, present := row[def.Name]
+			if present {
+				dataBytes += uint64(len(value))
+				if dataBytes > math.MaxUint32 {
+					return errors.New("collections: native scalar column exceeds 4GiB payload limit")
+				}
+			}
 		}
+	}
+	return nil
+}
+
+func (idx *VectorIndex) appendNativeScalarRowValuesPrevalidatedLocked(row map[string][]byte) {
+	for _, def := range idx.scalarDefinitions {
+		column := idx.scalarColumns[def.Name]
+		value, present := row[def.Name]
+		column.appendPrevalidated(value, present)
 		idx.scalarColumns[def.Name] = column
 	}
+}
+
+func (idx *VectorIndex) appendNativeScalarRowValuesLocked(row map[string][]byte) error {
+	if err := idx.validateNativeScalarRowsAppendLocked(row); err != nil {
+		return err
+	}
+	idx.appendNativeScalarRowValuesPrevalidatedLocked(row)
 	return nil
 }
 
@@ -259,6 +281,12 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 		return idx.insertVectorLocked(documentID, vector)
 	}
 	if !idx.liveDeltaActiveLocked() {
+		if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
+			return err
+		}
+		if err := idx.validateNativeScalarRowsAppendLocked(row); err != nil {
+			return err
+		}
 		idx.tombstoneDocumentIDLocked(documentID)
 		before := len(idx.nodes)
 		if err := idx.insertVectorLocked(documentID, vector); err != nil {
@@ -267,13 +295,14 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 		if len(idx.nodes) != before+1 {
 			return errors.New("collections: native scalar vector insertion did not append one node")
 		}
-		return idx.appendNativeScalarRowLocked(row)
+		idx.appendNativeScalarRowValuesPrevalidatedLocked(row)
+		return idx.validateNativeScalarColumnLengthsLocked()
 	}
 	delta, err := idx.ensureLiveDeltaLocked()
 	if err != nil {
 		return err
 	}
-	if len(delta.nodes) >= defaultVectorIndexLiveDeltaRows {
+	if len(delta.nodes)+1 >= defaultVectorIndexLiveDeltaRows {
 		if err := idx.foldLiveDeltaLocked(); err != nil {
 			return err
 		}
@@ -281,6 +310,12 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 		if err != nil {
 			return err
 		}
+	}
+	if err := delta.validateNativeScalarColumnLengthsLocked(); err != nil {
+		return err
+	}
+	if err := delta.validateNativeScalarRowsAppendLocked(row); err != nil {
+		return err
 	}
 	delta.tombstoneDocumentIDLocked(documentID)
 	before := len(delta.nodes)
@@ -290,14 +325,12 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 	if len(delta.nodes) != before+1 {
 		return errors.New("collections: native scalar delta insertion did not append one node")
 	}
-	if err := delta.appendNativeScalarRowLocked(row); err != nil {
+	delta.appendNativeScalarRowValuesPrevalidatedLocked(row)
+	if err := delta.validateNativeScalarColumnLengthsLocked(); err != nil {
 		return err
 	}
 	idx.tombstoneDocumentIDLocked(documentID)
 	idx.markGraphChangedLocked()
-	if len(delta.nodes) >= defaultVectorIndexLiveDeltaRows {
-		return idx.foldLiveDeltaLocked()
-	}
 	return nil
 }
 

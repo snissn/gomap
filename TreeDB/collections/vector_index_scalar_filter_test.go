@@ -521,6 +521,103 @@ func TestNativeScalarFilterUnsupportedMultikeyFailsClosed(t *testing.T) {
 	}
 }
 
+func TestNativeScalarRowSnapshotsMetadataDuringReplacement(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{
+		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},
+		{Name: "sequence_idx", Field: "sequence", ValueType: IndexValueInt64},
+	})
+	defer func() { _ = d.Close() }()
+	idx, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = materializer.Close() }()
+	definitions := append([]IndexDefinition(nil), idx.scalarDefinitions...)
+	runtimes := cloneNativeScalarRuntimes(idx.scalarRuntimes)
+	document := []byte(`{"embedding":[1,0],"tenant":"alpha","sequence":42}`)
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 1000 {
+			idx.mu.Lock()
+			idx.scalarDefinitions = append([]IndexDefinition(nil), definitions...)
+			idx.scalarRuntimes = cloneNativeScalarRuntimes(runtimes)
+			idx.mu.Unlock()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 1000 {
+			row, err := idx.nativeScalarRow(materializer, document)
+			if err != nil {
+				errs <- err
+				return
+			}
+			if len(row) != 2 {
+				errs <- fmt.Errorf("native scalar row=%v want two values", row)
+				return
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeScalarAppendFailureLeavesGraphAndColumnsUnchanged(t *testing.T) {
+	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{
+		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},
+		{Name: "sequence_idx", Field: "sequence", ValueType: IndexValueInt64},
+	})
+	defer func() { _ = d.Close() }()
+	idx, err := newVectorIndex(col, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if err := idx.insertVectorWithNativeScalarLocked(
+		[]byte("doc"),
+		[]float32{1, 0},
+		map[string][]byte{"tenant_idx": []byte("alpha"), "sequence_idx": []byte{1}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	oldNodeID := idx.currentNode["doc"]
+	oldNodes := len(idx.nodes)
+	tenantColumn := idx.scalarColumns["tenant_idx"]
+	oldTenantOffsets := len(tenantColumn.offsets)
+	delete(idx.scalarColumns, "sequence_idx")
+
+	err = idx.insertVectorWithNativeScalarLocked(
+		[]byte("doc"),
+		[]float32{0, 1},
+		map[string][]byte{"tenant_idx": []byte("beta"), "sequence_idx": []byte{2}},
+	)
+	if err == nil {
+		t.Fatal("insert with unavailable later scalar column succeeded")
+	}
+	tenantColumn = idx.scalarColumns["tenant_idx"]
+	if len(idx.nodes) != oldNodes ||
+		idx.currentNode["doc"] != oldNodeID ||
+		idx.nodes[oldNodeID].deleted ||
+		len(tenantColumn.offsets) != oldTenantOffsets {
+		t.Fatalf("failed insert mutated state: nodes=%d/%d current=%d/%d deleted=%v tenant_offsets=%d/%d", len(idx.nodes), oldNodes, idx.currentNode["doc"], oldNodeID, idx.nodes[oldNodeID].deleted, len(tenantColumn.offsets), oldTenantOffsets)
+	}
+}
+
 func BenchmarkNativeScalarRowCachedRuntimes(b *testing.B) {
 	d, col, def := newNativeScalarTestCollection(b, []IndexDefinition{
 		{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString},

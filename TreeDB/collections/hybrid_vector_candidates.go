@@ -68,8 +68,12 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 }
 func (c *Collection) searchHybridVectorCandidatesNativeScalar(query HybridVectorQuery, filter *HybridScalarFilter) (HybridCandidateResponse, error) {
+	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
-		return HybridCandidateResponse{}, err
+		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
+		response.Stats.FailClosed = 1
+		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
+		return response, err
 	}
 	opts := hybridVectorSearchOptions(query)
 	opts.StatsMode = VectorIndexSearchStatsModeProduction
@@ -77,12 +81,12 @@ func (c *Collection) searchHybridVectorCandidatesNativeScalar(query HybridVector
 	var buffer VectorIndexSearchBuffer
 	vectorResponse, err := c.SearchVectorIndexWithBuffer(opts, &buffer)
 	if err != nil {
-		stats := hybridVectorCandidateStatsFromSearch(query.CandidateLimit, vectorResponse.Stats, 0)
+		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
 		stats.FailClosed = 1
 		stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
 		return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
 	}
-	return hybridVectorCandidatesFromSearchResponse(query.CandidateLimit, query.IndexName, vectorResponse)
+	return hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
 }
 
 func hybridVectorSearchOptions(query HybridVectorQuery) VectorIndexSearchOptions {
