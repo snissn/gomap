@@ -14,7 +14,7 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 	if got, want := manifest.CorpusSHA256, "8cec31c8c9f1b63dcc697e0036375bc9852ff00adc6c5656f88a94f7b7da45d8"; got != want {
 		t.Fatalf("corpus hash=%s want %s", got, want)
 	}
-	if got, want := manifest.QuerySHA256, "ec9a00e8632dffb97d51fa9678bf3aa0e97e522ce98816b48f624762777cd387"; got != want {
+	if got, want := manifest.QuerySHA256, "e94fd70c183407f238bf6e2905efaef62c90fa9b6f74e4f722e4cb925a18a1e7"; got != want {
 		t.Fatalf("query hash=%s want %s", got, want)
 	}
 	if got, want := manifest.OperationSHA256, "745fec08d42ef88884155d34531fdc1367ea8599687df1534a6171fec97617aa"; got != want {
@@ -42,6 +42,23 @@ func TestMinimaFixtureIsFrozen(t *testing.T) {
 		if got.CorpusRows != want.rows || got.EligibleRows != want.matches {
 			t.Fatalf("%s cardinality=%d/%d want %d/%d", name, got.EligibleRows, got.CorpusRows, want.matches, want.rows)
 		}
+	}
+	queries := minimaQueryMap(&manifest)
+	smallFinal := []string{
+		"minima/small/000016", "minima/small/000018", "minima/small/000019",
+		"minima/small/000020", "minima/small/000021",
+	}
+	mixedFinal := []string{
+		"minima/mixed_broad_narrow/replacement/000000",
+		"minima/mixed_broad_narrow/replacement/000001",
+		"minima/mixed_broad_narrow/replacement/000002",
+		"minima/mixed_broad_narrow/replacement/000003",
+		"minima/mixed_broad_narrow/replacement/000004",
+	}
+	if minimaDigest(queries["small"].FinalOracleIDs) != minimaDigest(smallFinal) ||
+		minimaDigest(queries["mixed_broad_narrow"].FinalOracleIDs) != minimaDigest(mixedFinal) ||
+		queries["mixed_broad_narrow"].InitialOracleIDs[0] != "minima/mixed_broad_narrow/010020" {
+		t.Fatal("initial/final operation-derived oracles drifted")
 	}
 
 	distractor, err := minimaDocumentAt(scenarios["small"], 0)
@@ -121,6 +138,20 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"stale delete", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Correctness.StaleDeleteIDs = 1 }},
 		{"reported recall mismatch", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Recall = 0 }},
 		{"reported overlap mismatch", func(a *minimaArtifact) { minimaTestRow(a, "treedb", "small").Overlap = 0 }},
+		{"initial results use final oracle", func(a *minimaArtifact) {
+			row := minimaTestRow(a, "treedb", "small")
+			row.InitialActualIDs = append([]string(nil), row.ActualIDs...)
+			row.InitialActualScores = append([]float64(nil), row.ActualScores...)
+		}},
+		{"final results use initial oracle", func(a *minimaArtifact) {
+			row := minimaTestRow(a, "treedb", "small")
+			row.ActualIDs = append([]string(nil), row.InitialActualIDs...)
+			row.ActualScores = append([]float64(nil), row.InitialActualScores...)
+		}},
+		{"reopen results use initial oracle", func(a *minimaArtifact) {
+			row := minimaTestRow(a, "treedb", "mixed_broad_narrow")
+			row.ReopenIDs = append([]string(nil), row.InitialActualIDs...)
+		}},
 		{"duplicate actual ID", func(a *minimaArtifact) {
 			row := minimaTestRow(a, "treedb", "small")
 			row.ActualIDs[1] = row.ActualIDs[0]
@@ -206,9 +237,10 @@ func validMinimaArtifact() minimaArtifact {
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
 	artifact := minimaArtifact{Schema: minimaArtifactSchema, State: "pass", Passing: true, Manifest: manifest, Backends: backends, Recommendation: "ready_direct"}
+	queries := minimaQueryMap(&manifest)
 	for _, backend := range backends {
 		for _, spec := range manifest.Corpora {
-			ids, scores := minimaOracle(spec)
+			query := queries[spec.Name]
 			zeroMismatch, zeroRetry := 0, 0
 			route := minimaRouteEvidence{
 				Identity: "qdrant_filtered_hnsw", DeclaredScalarFiltering: true,
@@ -236,9 +268,12 @@ func validMinimaArtifact() minimaArtifact {
 			}
 			artifact.Scenarios = append(artifact.Scenarios, minimaScenarioEvidence{
 				Backend: backend.Name, Scenario: spec.Name, CorpusRows: spec.CorpusRows, ExpectedMatches: spec.EligibleRows, Selectivity: spec.Selectivity,
-				OracleIDs: ids, OracleScores: scores, ActualIDs: append([]string(nil), ids...), ActualScores: append([]float64(nil), scores...),
-				ReopenIDs: append([]string(nil), ids...), ReopenParity: true,
-				Recall: 1, Overlap: 1, OrderTolerance: 0, ScoreTolerance: 0.000001,
+				InitialOracleIDs: query.InitialOracleIDs, InitialOracleScores: query.InitialOracleScores,
+				FinalOracleIDs: query.FinalOracleIDs, FinalOracleScores: query.FinalOracleScores,
+				InitialActualIDs: append([]string(nil), query.InitialOracleIDs...), InitialActualScores: append([]float64(nil), query.InitialOracleScores...),
+				ActualIDs: append([]string(nil), query.FinalOracleIDs...), ActualScores: append([]float64(nil), query.FinalOracleScores...),
+				ReopenIDs: append([]string(nil), query.FinalOracleIDs...), ReopenParity: true,
+				Recall: 1, Overlap: 1, OrderTolerance: minimaOrderTolerance, ScoreTolerance: minimaScoreTolerance,
 				Route: route, Visibility: minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry},
 				Timing: minimaTimingEvidence{Captured: true}, Resource: minimaResourceEvidence{Captured: true},
 			})

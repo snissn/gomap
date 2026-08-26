@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 )
 
 const (
@@ -57,10 +58,12 @@ type minimaScenarioSpec struct {
 }
 
 type minimaQuerySpec struct {
-	Scenario    string    `json:"scenario"`
-	Vector      []float64 `json:"vector"`
-	OracleIDs   []string  `json:"oracle_ids"`
-	OracleScore []float64 `json:"oracle_scores"`
+	Scenario            string    `json:"scenario"`
+	Vector              []float64 `json:"vector"`
+	InitialOracleIDs    []string  `json:"initial_oracle_ids"`
+	InitialOracleScores []float64 `json:"initial_oracle_scores"`
+	FinalOracleIDs      []string  `json:"final_oracle_ids"`
+	FinalOracleScores   []float64 `json:"final_oracle_scores"`
 }
 
 type minimaInsertRange struct {
@@ -149,7 +152,7 @@ func buildMinimaManifest() minimaManifest {
 		ids, scores := minimaOracle(corpus)
 		vector := make([]float64, minimaDimension)
 		vector[0] = 1
-		queries = append(queries, minimaQuerySpec{Scenario: corpus.Name, Vector: vector, OracleIDs: ids, OracleScore: scores})
+		queries = append(queries, minimaQuerySpec{Scenario: corpus.Name, Vector: vector, InitialOracleIDs: ids, InitialOracleScores: scores})
 	}
 	initialRanges, concurrentRanges := minimaInsertRanges(corpora, defaultMinimaWorkloadConfig().BatchSize)
 	mixed := corpora[5]
@@ -184,9 +187,13 @@ func buildMinimaManifest() minimaManifest {
 	}
 	manifest := minimaManifest{Schema: minimaManifestSchema, Config: defaultMinimaWorkloadConfig(), Corpora: corpora, Queries: queries, Operations: operations}
 	manifest.CorpusSHA256 = minimaDigest(corpora)
-	manifest.QuerySHA256 = minimaDigest(queries)
 	manifest.OperationSHA256 = minimaDigest(operations)
-	manifest.ExpectedStateSHA256, _ = minimaExpectedStateHash(&manifest)
+	applied, _ := minimaApplyOperations(&manifest)
+	manifest.ExpectedStateSHA256 = minimaDigest(applied.Summary)
+	for i, corpus := range corpora {
+		manifest.Queries[i].FinalOracleIDs, manifest.Queries[i].FinalOracleScores = minimaFinalOracleFromState(corpus, applied)
+	}
+	manifest.QuerySHA256 = minimaDigest(manifest.Queries)
 	return manifest
 }
 func minimaInsertRanges(corpora []minimaScenarioSpec, batchSize int) ([]minimaInsertRange, []minimaInsertRange) {
@@ -243,9 +250,22 @@ type minimaPostOperationState struct {
 	Mutations        []minimaStateMutation `json:"mutations"`
 }
 
-func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
-	state := minimaPostOperationState{BaseCorpusSHA256: manifest.CorpusSHA256, LiveRows: map[string]int{}}
+type minimaAppliedState struct {
+	Summary   minimaPostOperationState
+	Deleted   map[string]map[string]bool
+	Documents map[string]map[string]minimaGeneratedDocument
+}
+
+func minimaApplyOperations(manifest *minimaManifest) (minimaAppliedState, error) {
+	applied := minimaAppliedState{
+		Summary: minimaPostOperationState{BaseCorpusSHA256: manifest.CorpusSHA256, LiveRows: map[string]int{}},
+		Deleted: map[string]map[string]bool{}, Documents: map[string]map[string]minimaGeneratedDocument{},
+	}
 	specs := minimaScenarioMap(manifest)
+	for name := range specs {
+		applied.Deleted[name] = map[string]bool{}
+		applied.Documents[name] = map[string]minimaGeneratedDocument{}
+	}
 	for _, operation := range manifest.Operations {
 		switch operation.Effect {
 		case "none":
@@ -254,29 +274,40 @@ func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
 			for _, insertion := range operation.InsertRanges {
 				spec, ok := specs[insertion.Scenario]
 				if !ok || insertion.Start < 0 || insertion.Rows <= 0 || insertion.Start+insertion.Rows > spec.CorpusRows {
-					return "", fmt.Errorf("minima state: invalid insert range in operation %d", operation.Ordinal)
+					return minimaAppliedState{}, fmt.Errorf("minima state: invalid insert range in operation %d", operation.Ordinal)
 				}
-				state.LiveRows[insertion.Scenario] += insertion.Rows
+				applied.Summary.LiveRows[insertion.Scenario] += insertion.Rows
 			}
 			if len(operation.Documents) > 0 {
 				if _, ok := specs[operation.Target]; !ok {
-					return "", fmt.Errorf("minima state: insert targets unknown scenario %q", operation.Target)
+					return minimaAppliedState{}, fmt.Errorf("minima state: insert targets unknown scenario %q", operation.Target)
 				}
-				state.LiveRows[operation.Target] += len(operation.Documents)
+				applied.Summary.LiveRows[operation.Target] += len(operation.Documents)
+				for _, document := range operation.Documents {
+					delete(applied.Deleted[operation.Target], document.ID)
+					applied.Documents[operation.Target][document.ID] = document
+				}
 			}
 		case "delete":
 			if _, ok := specs[operation.Target]; !ok || len(operation.IDs) == 0 {
-				return "", fmt.Errorf("minima state: invalid delete operation %d", operation.Ordinal)
+				return minimaAppliedState{}, fmt.Errorf("minima state: invalid delete operation %d", operation.Ordinal)
 			}
-			state.LiveRows[operation.Target] -= len(operation.IDs)
+			applied.Summary.LiveRows[operation.Target] -= len(operation.IDs)
+			for _, id := range operation.IDs {
+				applied.Deleted[operation.Target][id] = true
+				delete(applied.Documents[operation.Target], id)
+			}
 		case "update":
 			if _, ok := specs[operation.Target]; !ok || len(operation.Documents) == 0 {
-				return "", fmt.Errorf("minima state: invalid update operation %d", operation.Ordinal)
+				return minimaAppliedState{}, fmt.Errorf("minima state: invalid update operation %d", operation.Ordinal)
+			}
+			for _, document := range operation.Documents {
+				applied.Documents[operation.Target][document.ID] = document
 			}
 		default:
-			return "", fmt.Errorf("minima state: unknown effect %q", operation.Effect)
+			return minimaAppliedState{}, fmt.Errorf("minima state: unknown effect %q", operation.Effect)
 		}
-		state.Mutations = append(state.Mutations, minimaStateMutation{
+		applied.Summary.Mutations = append(applied.Summary.Mutations, minimaStateMutation{
 			Ordinal: operation.Ordinal, Effect: operation.Effect, Target: operation.Target,
 			InsertRanges: operation.InsertRanges, IDs: operation.IDs, Documents: operation.Documents,
 		})
@@ -286,16 +317,86 @@ func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
 		if name == "small" {
 			want--
 		}
-		if state.LiveRows[name] != want {
-			return "", fmt.Errorf("minima state: %s live rows=%d want %d", name, state.LiveRows[name], want)
+		if applied.Summary.LiveRows[name] != want {
+			return minimaAppliedState{}, fmt.Errorf("minima state: %s live rows=%d want %d", name, applied.Summary.LiveRows[name], want)
 		}
 	}
-	return minimaDigest(state), nil
+	return applied, nil
+}
+
+func minimaExpectedStateHash(manifest *minimaManifest) (string, error) {
+	applied, err := minimaApplyOperations(manifest)
+	if err != nil {
+		return "", err
+	}
+	return minimaDigest(applied.Summary), nil
 }
 
 func minimaDigest(value any) string {
 	raw, _ := json.Marshal(value)
 	return artifactHash("", raw).SHA256
+}
+
+type minimaScoredDocument struct {
+	ID    string
+	Score float64
+}
+
+func minimaFinalOracleFromState(spec minimaScenarioSpec, applied minimaAppliedState) ([]string, []float64) {
+	deleted := applied.Deleted[spec.Name]
+	documents := applied.Documents[spec.Name]
+	candidates := make([]minimaScoredDocument, 0, 5+len(deleted)+len(documents))
+	seen := make(map[string]bool, cap(candidates))
+	needed := 5 + len(deleted) + len(documents)
+	for ordinal := spec.EligibleStart; ordinal < spec.EligibleStart+spec.EligibleRows && len(candidates) < needed; ordinal++ {
+		document, _ := minimaDocumentAt(spec, ordinal)
+		if deleted[document.ID] {
+			continue
+		}
+		if updated, ok := documents[document.ID]; ok {
+			document = updated
+		}
+		if minimaDocumentMatches(spec, document) {
+			candidates = append(candidates, minimaScoredDocument{ID: document.ID, Score: minimaDocumentScore(document)})
+			seen[document.ID] = true
+		}
+	}
+	for id, document := range documents {
+		if !seen[id] && !deleted[id] && minimaDocumentMatches(spec, document) {
+			candidates = append(candidates, minimaScoredDocument{ID: id, Score: minimaDocumentScore(document)})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Score == candidates[j].Score {
+			return candidates[i].ID < candidates[j].ID
+		}
+		return candidates[i].Score > candidates[j].Score
+	})
+	count := min(5, len(candidates))
+	ids := make([]string, count)
+	scores := make([]float64, count)
+	for i := range count {
+		ids[i], scores[i] = candidates[i].ID, candidates[i].Score
+	}
+	return ids, scores
+}
+
+func minimaDocumentMatches(spec minimaScenarioSpec, document minimaGeneratedDocument) bool {
+	if spec.Filter == "user_id" {
+		return document.UserID == spec.UserID
+	}
+	return document.UserID == spec.UserID && document.FPath == spec.FPath
+}
+
+func minimaDocumentScore(document minimaGeneratedDocument) float64 {
+	var squared float64
+	for _, value := range document.Vector {
+		squared += value * value
+	}
+	if squared == 0 {
+		return math.Inf(-1)
+	}
+	return document.Vector[0] / math.Sqrt(squared)
 }
 
 func minimaDocumentAt(spec minimaScenarioSpec, ordinal int) (minimaGeneratedDocument, error) {
@@ -356,6 +457,10 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 	if len(manifest.Corpora) != len(manifest.Queries) {
 		return fmt.Errorf("minima manifest: corpus/query cardinality mismatch")
 	}
+	applied, err := minimaApplyOperations(manifest)
+	if err != nil {
+		return err
+	}
 	for i, corpus := range manifest.Corpora {
 		if corpus.CorpusRows <= 0 || corpus.EligibleRows < 0 || corpus.EligibleStart < 0 || corpus.EligibleStart+corpus.EligibleRows > corpus.CorpusRows {
 			return fmt.Errorf("minima manifest: invalid cardinality for %s", corpus.Name)
@@ -365,9 +470,15 @@ func validateMinimaManifest(manifest *minimaManifest) error {
 			return fmt.Errorf("minima manifest: selectivity mismatch for %s", corpus.Name)
 		}
 		query := manifest.Queries[i]
-		ids, scores := minimaOracle(corpus)
-		if query.Scenario != corpus.Name || minimaDigest(query.OracleIDs) != minimaDigest(ids) || minimaDigest(query.OracleScore) != minimaDigest(scores) || len(query.Vector) != manifest.Config.Dimension {
-			return fmt.Errorf("minima manifest: exact oracle mismatch for %s", corpus.Name)
+		initialIDs, initialScores := minimaOracle(corpus)
+		finalIDs, finalScores := minimaFinalOracleFromState(corpus, applied)
+		if query.Scenario != corpus.Name ||
+			minimaDigest(query.InitialOracleIDs) != minimaDigest(initialIDs) ||
+			minimaDigest(query.InitialOracleScores) != minimaDigest(initialScores) ||
+			minimaDigest(query.FinalOracleIDs) != minimaDigest(finalIDs) ||
+			minimaDigest(query.FinalOracleScores) != minimaDigest(finalScores) ||
+			len(query.Vector) != manifest.Config.Dimension {
+			return fmt.Errorf("minima manifest: exact initial/final oracle mismatch for %s", corpus.Name)
 		}
 	}
 	byName := minimaScenarioMap(manifest)
@@ -392,6 +503,13 @@ func minimaScenarioMap(manifest *minimaManifest) map[string]minimaScenarioSpec {
 	out := make(map[string]minimaScenarioSpec, len(manifest.Corpora))
 	for _, scenario := range manifest.Corpora {
 		out[scenario.Name] = scenario
+	}
+	return out
+}
+func minimaQueryMap(manifest *minimaManifest) map[string]minimaQuerySpec {
+	out := make(map[string]minimaQuerySpec, len(manifest.Queries))
+	for _, query := range manifest.Queries {
+		out[query.Scenario] = query
 	}
 	return out
 }
@@ -494,28 +612,32 @@ type minimaResourceEvidence struct {
 }
 
 type minimaScenarioEvidence struct {
-	Backend         string                    `json:"backend"`
-	Scenario        string                    `json:"scenario"`
-	CorpusRows      int                       `json:"corpus_rows"`
-	ExpectedMatches int                       `json:"expected_matches"`
-	Selectivity     float64                   `json:"selectivity"`
-	OracleIDs       []string                  `json:"oracle_ids"`
-	OracleScores    []float64                 `json:"oracle_scores"`
-	ActualIDs       []string                  `json:"actual_ids"`
-	ActualScores    []float64                 `json:"actual_scores"`
-	ReopenIDs       []string                  `json:"reopen_ids"`
-	ReopenParity    bool                      `json:"reopen_parity"`
-	Recall          float64                   `json:"recall"`
-	Overlap         float64                   `json:"overlap"`
-	OrderTolerance  int                       `json:"order_tolerance"`
-	ScoreTolerance  float64                   `json:"score_tolerance"`
-	Errors          int                       `json:"errors"`
-	Timeouts        int                       `json:"timeouts"`
-	Correctness     minimaCorrectnessEvidence `json:"correctness"`
-	Route           minimaRouteEvidence       `json:"route"`
-	Visibility      minimaVisibilityEvidence  `json:"visibility"`
-	Timing          minimaTimingEvidence      `json:"timing"`
-	Resource        minimaResourceEvidence    `json:"resource"`
+	Backend             string                    `json:"backend"`
+	Scenario            string                    `json:"scenario"`
+	CorpusRows          int                       `json:"corpus_rows"`
+	ExpectedMatches     int                       `json:"expected_matches"`
+	Selectivity         float64                   `json:"selectivity"`
+	InitialOracleIDs    []string                  `json:"initial_oracle_ids"`
+	InitialOracleScores []float64                 `json:"initial_oracle_scores"`
+	FinalOracleIDs      []string                  `json:"final_oracle_ids"`
+	FinalOracleScores   []float64                 `json:"final_oracle_scores"`
+	InitialActualIDs    []string                  `json:"initial_actual_ids"`
+	InitialActualScores []float64                 `json:"initial_actual_scores"`
+	ActualIDs           []string                  `json:"actual_ids"`
+	ActualScores        []float64                 `json:"actual_scores"`
+	ReopenIDs           []string                  `json:"reopen_ids"`
+	ReopenParity        bool                      `json:"reopen_parity"`
+	Recall              float64                   `json:"recall"`
+	Overlap             float64                   `json:"overlap"`
+	OrderTolerance      int                       `json:"order_tolerance"`
+	ScoreTolerance      float64                   `json:"score_tolerance"`
+	Errors              int                       `json:"errors"`
+	Timeouts            int                       `json:"timeouts"`
+	Correctness         minimaCorrectnessEvidence `json:"correctness"`
+	Route               minimaRouteEvidence       `json:"route"`
+	Visibility          minimaVisibilityEvidence  `json:"visibility"`
+	Timing              minimaTimingEvidence      `json:"timing"`
+	Resource            minimaResourceEvidence    `json:"resource"`
 }
 
 type minimaArtifact struct {
@@ -578,6 +700,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 	if len(backends) != 2 {
 		return fmt.Errorf("minima artifact: requires TreeDB and Qdrant evidence")
 	}
+	queries := minimaQueryMap(&artifact.Manifest)
 	specs := minimaScenarioMap(&artifact.Manifest)
 	seen := make(map[string]bool, len(artifact.Scenarios))
 	for _, row := range artifact.Scenarios {
@@ -593,7 +716,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 			return fmt.Errorf("minima artifact: duplicate scenario %s", key)
 		}
 		seen[key] = true
-		if err := validateMinimaScenarioEvidence(row, spec); err != nil {
+		if err := validateMinimaScenarioEvidence(row, spec, queries[row.Scenario]); err != nil {
 			return fmt.Errorf("minima artifact: %s: %w", key, err)
 		}
 	}
@@ -603,32 +726,35 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 	return nil
 }
 
-func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec) error {
+func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec, query minimaQuerySpec) error {
 	if row.CorpusRows != spec.CorpusRows || row.ExpectedMatches != spec.EligibleRows || row.Selectivity != spec.Selectivity {
 		return fmt.Errorf("missing or incorrect selectivity/cardinality")
 	}
-	ids, scores := minimaOracle(spec)
-	if minimaDigest(row.OracleIDs) != minimaDigest(ids) || minimaDigest(row.OracleScores) != minimaDigest(scores) || len(row.ActualIDs) != len(ids) || len(row.ActualScores) != len(ids) || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || row.OrderTolerance != minimaOrderTolerance || row.ScoreTolerance != minimaScoreTolerance {
-		return fmt.Errorf("missing exact oracle/candidate quality evidence")
+	if minimaDigest(row.InitialOracleIDs) != minimaDigest(query.InitialOracleIDs) ||
+		minimaDigest(row.InitialOracleScores) != minimaDigest(query.InitialOracleScores) ||
+		minimaDigest(row.FinalOracleIDs) != minimaDigest(query.FinalOracleIDs) ||
+		minimaDigest(row.FinalOracleScores) != minimaDigest(query.FinalOracleScores) ||
+		row.OrderTolerance != minimaOrderTolerance || row.ScoreTolerance != minimaScoreTolerance {
+		return fmt.Errorf("missing exact initial/final oracle evidence")
 	}
-	recall, overlap, ranks, err := minimaQuality(row.ActualIDs, ids)
-	if err != nil || math.Abs(row.Recall-recall) > 1e-12 || math.Abs(row.Overlap-overlap) > 1e-12 {
-		return fmt.Errorf("reported recall/overlap does not match actual IDs: %v", err)
+	initialRecall, initialOverlap, err := validateMinimaRanking(
+		row.InitialActualIDs, row.InitialActualScores,
+		query.InitialOracleIDs, query.InitialOracleScores,
+		row.OrderTolerance, row.ScoreTolerance,
+	)
+	if err != nil || initialRecall != 1 || initialOverlap != 1 {
+		return fmt.Errorf("initial actual results do not match initial oracle: %v", err)
 	}
-	for i, score := range row.ActualScores {
-		rank, ok := ranks[row.ActualIDs[i]]
-		if !ok {
-			return fmt.Errorf("actual ID %q lacks an exact oracle score", row.ActualIDs[i])
-		}
-		if absInt(rank-i) > row.OrderTolerance {
-			return fmt.Errorf("actual ordering exceeds tolerance")
-		}
-		if !finiteNonnegative(score) || math.Abs(score-scores[rank]) > row.ScoreTolerance {
-			return fmt.Errorf("actual score exceeds tolerance")
-		}
+	recall, overlap, err := validateMinimaRanking(
+		row.ActualIDs, row.ActualScores,
+		query.FinalOracleIDs, query.FinalOracleScores,
+		row.OrderTolerance, row.ScoreTolerance,
+	)
+	if err != nil || !finiteFraction(row.Recall) || !finiteFraction(row.Overlap) || math.Abs(row.Recall-recall) > 1e-12 || math.Abs(row.Overlap-overlap) > 1e-12 {
+		return fmt.Errorf("reported recall/overlap does not match final actual IDs: %v", err)
 	}
 	if !row.ReopenParity || minimaDigest(row.ReopenIDs) != minimaDigest(row.ActualIDs) {
-		return fmt.Errorf("missing per-scenario reopen evidence")
+		return fmt.Errorf("missing per-scenario final reopen evidence")
 	}
 	if row.Errors != 0 || row.Timeouts != 0 {
 		return fmt.Errorf("errors or timeouts recorded")
@@ -689,6 +815,29 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 		return fmt.Errorf("missing resource evidence")
 	}
 	return nil
+}
+
+func validateMinimaRanking(actualIDs []string, actualScores []float64, oracleIDs []string, oracleScores []float64, orderTolerance int, scoreTolerance float64) (float64, float64, error) {
+	if len(actualIDs) != len(oracleIDs) || len(actualScores) != len(oracleIDs) || len(oracleScores) != len(oracleIDs) {
+		return 0, 0, fmt.Errorf("ranking length mismatch")
+	}
+	recall, overlap, ranks, err := minimaQuality(actualIDs, oracleIDs)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i, score := range actualScores {
+		rank, ok := ranks[actualIDs[i]]
+		if !ok {
+			return 0, 0, fmt.Errorf("actual ID %q lacks an exact oracle score", actualIDs[i])
+		}
+		if absInt(rank-i) > orderTolerance {
+			return 0, 0, fmt.Errorf("actual ordering exceeds tolerance")
+		}
+		if !finiteNonnegative(score) || math.Abs(score-oracleScores[rank]) > scoreTolerance {
+			return 0, 0, fmt.Errorf("actual score exceeds tolerance")
+		}
+	}
+	return recall, overlap, nil
 }
 
 func minimaQuality(actual, oracle []string) (float64, float64, map[string]int, error) {
