@@ -262,6 +262,8 @@ type ColumnPublishPlan struct {
 	stableResources                        *rootpublication.StableResourceSet
 	durableResourceRequirements            rootpublication.StableLogicalObligationRequirements
 	durableResourceMutation                rootpublication.StableLogicalObligationMutation
+	durableResourceRequirementsFallback    func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+	durableResourceRequirementWork         rootpublication.StableResourceClosureWork
 }
 
 // ColumnManifestRootDelta is the ordered-root publish descriptor for the
@@ -481,16 +483,11 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.CurrentManifestRecords, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
 	}
-	durableResourceRequirements, err := stableColumnManifestDurableRequirements(manifest.Records, manifest.Identity.Generation, cfg.AssetManager.Namespace)
+	durableResourceRequirements, durableResourceMutation, durableResourceRequirementsFallback, durableResourceRequirementWork, err := stableColumnManifestDurablePublication(
+		input.CurrentManifestRecords, rootDelta, manifest.Identity.Generation, cfg.AssetManager.Namespace,
+	)
 	if err != nil {
-		return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource closure: %w", err)
-	}
-	var durableResourceMutation rootpublication.StableLogicalObligationMutation
-	if rootDelta.MutationDelta {
-		durableResourceMutation, err = stableColumnManifestDurableMutation(input.CurrentManifestRecords, rootDelta.Mutations, manifest.Identity.Generation, cfg.AssetManager.Namespace)
-		if err != nil {
-			return ColumnPublishPlan{}, fmt.Errorf("collections: derive durable column resource mutation: %w", err)
-		}
+		return ColumnPublishPlan{}, err
 	}
 
 	preparedBytes, err := checkedSumColumnPreparedAssetBytes(manifestPrepared.Assets)
@@ -527,10 +524,12 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 			PreparedRefs:   len(manifestPrepared.Assets),
 			PreparedBytes:  preparedBytes,
 		},
-		StageMetrics:                metrics,
-		stableResources:             stableResources,
-		durableResourceRequirements: durableResourceRequirements,
-		durableResourceMutation:     durableResourceMutation,
+		StageMetrics:                        metrics,
+		stableResources:                     stableResources,
+		durableResourceRequirements:         durableResourceRequirements,
+		durableResourceMutation:             durableResourceMutation,
+		durableResourceRequirementsFallback: durableResourceRequirementsFallback,
+		durableResourceRequirementWork:      durableResourceRequirementWork,
 	}
 
 	if input.Hooks.BuildSystemDelta != nil {

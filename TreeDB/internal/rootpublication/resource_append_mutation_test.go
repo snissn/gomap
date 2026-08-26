@@ -1183,6 +1183,71 @@ func TestStableLogicalObligationCommitmentCertifiesOnlyCompleteMutation(t *testi
 	}
 }
 
+func TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366(t *testing.T) {
+	dir := t.TempDir()
+	file := writeStableResourceFixture(t, dir, "aggregate.pack", "aggregate")
+	retained := make([]StableLogicalObligation, 4096)
+	for i := range retained {
+		retained[i] = appendMutationTestObligation(uint64(i + 1))
+	}
+	added := appendMutationTestObligation(4097)
+	freeze := func(obligations ...StableLogicalObligation) *StableResourceSet {
+		t.Helper()
+		builder := NewStableResourceSetBuilder()
+		if err := builder.Add(appendMutationResourceToken(t, file, ResourceColumnAsset, "aggregate", 8, ReachabilityColumnManifest, obligations...)); err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		set, err := builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		return set
+	}
+	base := freeze(retained...)
+	defer base.Release()
+	producer := freeze(added)
+	defer producer.Release()
+	mutation := StableLogicalObligationMutation{
+		ScopedFields: []ReachabilityField{ReachabilityColumnManifest},
+		Added:        []StableLogicalObligation{added},
+	}
+	work, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !certified {
+		t.Fatal("complete aggregate append mutation was not certified")
+	}
+	if work.SourceObligationsInspected > 1 || work.RequirementObligationsInspected > 1 {
+		t.Fatalf("certification work=%+v scales with retained history", work)
+	}
+
+	wrong := mutation
+	wrong.Added = []StableLogicalObligation{appendMutationTestObligation(4098)}
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, wrong); err != nil || certified {
+		t.Fatalf("producer mismatch certified=%v err=%v", certified, err)
+	}
+
+	producerView := producer.kindViews[ResourceColumnAsset]
+	producerCommitments := producerView.logicalCommitments
+	producerView.logicalCommitments = nil
+	producer.kindViews[ResourceColumnAsset] = producerView
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation); err != nil || certified {
+		t.Fatalf("missing producer commitment certified=%v err=%v", certified, err)
+	}
+	producerView.logicalCommitments = producerCommitments
+	producer.kindViews[ResourceColumnAsset] = producerView
+
+	view := base.kindViews[ResourceColumnAsset]
+	view.logicalCommitments = nil
+	base.kindViews[ResourceColumnAsset] = view
+	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation); err != nil || certified {
+		t.Fatalf("missing source commitment certified=%v err=%v", certified, err)
+	}
+}
+
 func TestStableLogicalObligationMutationRequiresExactFinalRequirements(t *testing.T) {
 	retained := appendMutationTestObligation(1)
 	added := appendMutationTestObligation(2)

@@ -569,16 +569,20 @@ type ColumnPublishCandidateResourceWork struct {
 	LogicalIndexNodesAdmitted       uint64
 	// PhysicalEntryLookup* mirrors indexed root-publication work after its
 	// small <=16-entry linear fast path.
-	PhysicalEntryLookupProbes      uint64
-	PhysicalEntryLookupComparisons uint64
-	PhysicalEntryLookupAdmissions  uint64
-	NewlyAdmittedEntries           uint64
-	NewlyAdmittedObligations       uint64
-	RemovedObligations             uint64
-	AppendOnlyFastPath             uint64
-	AppendOnlyFallbacks            uint64
-	DestructiveFallbacks           uint64
-	FullClosureValidations         uint64
+	PhysicalEntryLookupProbes               uint64
+	PhysicalEntryLookupComparisons          uint64
+	PhysicalEntryLookupAdmissions           uint64
+	NewlyAdmittedEntries                    uint64
+	NewlyAdmittedObligations                uint64
+	RemovedObligations                      uint64
+	AppendOnlyFastPath                      uint64
+	AppendOnlyFallbacks                     uint64
+	DestructiveFallbacks                    uint64
+	FullClosureValidations                  uint64
+	FinalRequirementProofFastPath           uint64
+	FinalRequirementProofFallbacks          uint64
+	FinalRequirementRecordsDecoded          uint64
+	FinalRequirementObligationsMaterialized uint64
 }
 
 func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidateResourceWork) {
@@ -614,6 +618,10 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 	work.AppendOnlyFallbacks += other.AppendOnlyFallbacks
 	work.DestructiveFallbacks += other.DestructiveFallbacks
 	work.FullClosureValidations += other.FullClosureValidations
+	work.FinalRequirementProofFastPath += other.FinalRequirementProofFastPath
+	work.FinalRequirementProofFallbacks += other.FinalRequirementProofFallbacks
+	work.FinalRequirementRecordsDecoded += other.FinalRequirementRecordsDecoded
+	work.FinalRequirementObligationsMaterialized += other.FinalRequirementObligationsMaterialized
 }
 
 // CollectionInsertStats captures phase timings and counters from the most

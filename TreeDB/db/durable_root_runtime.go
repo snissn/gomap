@@ -655,9 +655,9 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 // are replaced by a fresh candidate dependency capture. additional is a
 // producer-owned exact closure for resources made reachable by this publish
 // and is consumed on both success and failure.
-func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
 	selected := db.durableRoot.slotResources[db.durableRoot.slot]
-	return db.captureDurableRootResourcesFromBaseV1(idx, next, delta, selected, additional, requirements, mutation, valueLogPublicationLocked, timing)
+	return db.captureDurableRootResourcesFromBaseV1(idx, next, delta, selected, additional, requirements, mutation, appendMutation, requirementWork, requirementsFallback, valueLogPublicationLocked, timing)
 }
 
 // captureDurableRootResourcesFromBaseV1 is the common closure builder for
@@ -666,7 +666,7 @@ func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBod
 // path passes its independently owned visible-root closure so a candidate
 // built while an earlier group is syncing inherits every transitive resource
 // that remains reachable from the immediately preceding visible root.
-func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
+func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
 	if additional != nil {
 		defer additional.Release()
 	}
@@ -720,6 +720,65 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	if hasReplacementManifest {
 		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafManifest)
 	}
+	if timing != nil {
+		timing.FinalizeCandidateResourceWork.Add(requirementWork)
+	}
+	appendRequirementsCertified := false
+	if requirementsFallback != nil {
+		fallback := requirementsFallback
+		materializeRequirements := func() error {
+			if fallback == nil {
+				return errors.New("durable-root exact requirements fallback invoked more than once")
+			}
+			exact, fallbackWork, fallbackErr := fallback()
+			fallback = nil
+			fallbackWork.FinalRequirementProofFallbacks++
+			if timing != nil {
+				timing.FinalizeCandidateResourceWork.Add(fallbackWork)
+			}
+			if fallbackErr != nil {
+				return fmt.Errorf("materialize durable-root exact requirements fallback: %w", fallbackErr)
+			}
+			mergedRequirements, mergeErr := rootpublication.MergeStableLogicalObligationRequirements(requirements, exact)
+			if mergeErr != nil {
+				return fmt.Errorf("merge durable-root exact requirements fallback: %w", mergeErr)
+			}
+			mergedMutation, mergeErr := rootpublication.MergeStableLogicalObligationMutations(mutation, appendMutation)
+			if mergeErr != nil {
+				return fmt.Errorf("merge durable-root append mutation fallback: %w", mergeErr)
+			}
+			requirements = mergedRequirements
+			mutation = mergedMutation
+			return nil
+		}
+		mixedGenericRegistration := len(requirements.ScopedFields) != 0 || len(requirements.Obligations) != 0 || len(mutation.ScopedFields) != 0 || len(mutation.Added) != 0 || len(mutation.Removed) != 0
+		if mixedGenericRegistration || len(appendMutation.ScopedFields) == 0 || len(appendMutation.Removed) != 0 {
+			if err := materializeRequirements(); err != nil {
+				return nil, err
+			}
+		} else {
+			proofWork, certified, proofErr := rootpublication.CertifyStableLogicalObligationAppendMutation(
+				base, additional, appendMutation, excludedInheritedKinds...,
+			)
+			if timing != nil {
+				timing.FinalizeCandidateResourceWork.Add(proofWork)
+			}
+			if proofErr != nil {
+				return nil, fmt.Errorf("certify durable-root append requirements: %w", proofErr)
+			}
+			if certified {
+				mutation = appendMutation
+				appendRequirementsCertified = true
+				if timing != nil {
+					timing.FinalizeCandidateResourceWork.FinalRequirementProofFastPath++
+				}
+			} else if err := materializeRequirements(); err != nil {
+				return nil, err
+			}
+		}
+	} else if len(appendMutation.ScopedFields) != 0 || len(appendMutation.Added) != 0 || len(appendMutation.Removed) != 0 {
+		return nil, errors.New("durable-root append mutation missing exact requirements fallback")
+	}
 	var inherited *rootpublication.StableResourceSet
 	inheritedStart := time.Now()
 	var inheritedWork rootpublication.StableResourceClosureWork
@@ -730,7 +789,7 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 	// with additions are counted by MergeAppendOnlyLogicalObligations.
 	hasMutationEvidence := len(mutation.ScopedFields) != 0
 	mutationCertified := false
-	if hasMutationEvidence {
+	if hasMutationEvidence && !appendRequirementsCertified {
 		if err := rootpublication.ValidateStableLogicalObligationMutationFinalRequirements(mutation, requirements); err != nil {
 			return nil, fmt.Errorf("validate durable-root logical mutation evidence: %w", err)
 		}
@@ -740,6 +799,9 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 		if err != nil {
 			return nil, fmt.Errorf("certify durable-root logical mutation completeness: %w", err)
 		}
+	}
+	if appendRequirementsCertified {
+		mutationCertified = true
 	}
 	appendOnlyMutation := mutationCertified && len(mutation.Removed) == 0
 	if mutationCertified {
@@ -788,6 +850,8 @@ func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.Met
 		}
 		if appendErr == nil {
 			appendOnlyCertified = true
+		} else if appendRequirementsCertified {
+			return nil, fmt.Errorf("merge certified producer durable-root resources: %w", appendErr)
 		} else if err := merge(additional); err != nil {
 			return nil, fmt.Errorf("merge producer durable-root resources after append-only decline (%v): %w", appendErr, err)
 		} else if timing != nil {
@@ -1567,7 +1631,7 @@ func (db *DB) publishDurableRootV1(idx *indexGen, next page.MetaPageBody, retire
 	var resources *rootpublication.StableResourceSet
 	var err error
 	if db.durableRoot.pending == nil {
-		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, false, nil)
+		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, nil)
 		if err != nil {
 			return page.MetaPageBody{}, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}

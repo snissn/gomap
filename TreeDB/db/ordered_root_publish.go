@@ -294,10 +294,49 @@ type OrderedRootGroupSystemBuilder func(rootIDs []uint64) (iterator.UnsafeIterat
 // context-aware grouped publish APIs so command append and root publication
 // remain one fail-closed boundary.
 type CommandWALPublishContext struct {
-	AppliedCommandLSN           uint64
-	durableResources            *rootpublication.StableResourceSetBuilder
-	durableResourceRequirements *rootpublication.StableLogicalObligationRequirements
-	durableResourceMutation     *rootpublication.StableLogicalObligationMutation
+	AppliedCommandLSN                   uint64
+	durableResources                    *rootpublication.StableResourceSetBuilder
+	durableResourceRequirements         *rootpublication.StableLogicalObligationRequirements
+	durableResourceMutation             *rootpublication.StableLogicalObligationMutation
+	durableResourceAppendMutation       *rootpublication.StableLogicalObligationMutation
+	durableResourceRequirementWork      *rootpublication.StableResourceClosureWork
+	durableResourceRequirementsFallback *func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
+}
+
+// RegisterDurableLogicalObligationAppendMutation supplies collections-owned,
+// root-validated append evidence together with a lazy exact requirements
+// fallback. Generic mutation registration remains non-authoritative: only this
+// purpose-specific path may defer complete requirement materialization.
+func (ctx CommandWALPublishContext) RegisterDurableLogicalObligationAppendMutation(
+	mutation rootpublication.StableLogicalObligationMutation,
+	work rootpublication.StableResourceClosureWork,
+	fallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error),
+) error {
+	if ctx.durableResourceAppendMutation == nil || ctx.durableResourceRequirementWork == nil || ctx.durableResourceRequirementsFallback == nil || fallback == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	if len(mutation.ScopedFields) == 0 || len(mutation.Removed) != 0 || *ctx.durableResourceRequirementsFallback != nil {
+		return rootpublication.ErrResourceConflict
+	}
+	normalized, err := rootpublication.NormalizeStableLogicalObligationMutation(mutation)
+	if err != nil {
+		return err
+	}
+	*ctx.durableResourceAppendMutation = normalized
+	ctx.durableResourceRequirementWork.Add(work)
+	*ctx.durableResourceRequirementsFallback = fallback
+	return nil
+}
+
+// RecordDurableLogicalObligationRequirementWork attaches collections-side
+// derivation work to the existing publication timing. It carries diagnostics
+// only and grants no closure authority.
+func (ctx CommandWALPublishContext) RecordDurableLogicalObligationRequirementWork(work rootpublication.StableResourceClosureWork) error {
+	if ctx.durableResourceRequirementWork == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	ctx.durableResourceRequirementWork.Add(work)
+	return nil
 }
 
 // RegisterDurableLogicalObligationMutation supplies the exact root-local
@@ -3629,10 +3668,16 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	defer durableResourceBuilder.Abandon()
 	durableResourceRequirements := rootpublication.StableLogicalObligationRequirements{}
 	durableResourceMutation := rootpublication.StableLogicalObligationMutation{}
+	durableResourceAppendMutation := rootpublication.StableLogicalObligationMutation{}
+	durableResourceRequirementWork := rootpublication.StableResourceClosureWork{}
+	var durableResourceRequirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error)
 	ctx := CommandWALPublishContext{
 		AppliedCommandLSN: lsn, durableResources: durableResourceBuilder,
-		durableResourceRequirements: &durableResourceRequirements,
-		durableResourceMutation:     &durableResourceMutation,
+		durableResourceRequirements:         &durableResourceRequirements,
+		durableResourceMutation:             &durableResourceMutation,
+		durableResourceAppendMutation:       &durableResourceAppendMutation,
+		durableResourceRequirementWork:      &durableResourceRequirementWork,
+		durableResourceRequirementsFallback: &durableResourceRequirementsFallback,
 	}
 
 	allOrdered := ordered
@@ -3853,6 +3898,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	finalizeOpts.durableResources = durableResources
 	finalizeOpts.durableResourceRequirements = durableResourceRequirements
 	finalizeOpts.durableResourceMutation = durableResourceMutation
+	finalizeOpts.durableResourceAppendMutation = durableResourceAppendMutation
+	finalizeOpts.durableResourceRequirementWork = durableResourceRequirementWork
+	finalizeOpts.durableResourceRequirementsFallback = durableResourceRequirementsFallback
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, syncCommandWAL, merged, touchedValueLogSegments,
 		true, vlogRefDelta, nil, nil, finalizeOpts,
