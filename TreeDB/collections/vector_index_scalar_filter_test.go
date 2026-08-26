@@ -817,6 +817,39 @@ func TestNativeScalarAppendFailureLeavesGraphAndColumnsUnchanged(t *testing.T) {
 	}
 }
 
+func TestNativeScalarChunkPayloadLimitResetsAtRowBoundary(t *testing.T) {
+	def := IndexDefinition{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}
+	idx := &VectorIndex{
+		scalarDefinitions: []IndexDefinition{def},
+		scalarColumns:     map[string]vectorIndexScalarColumn{def.Name: newVectorIndexScalarColumn(def.ValueType)},
+	}
+	row := func(value []byte) map[string][]byte {
+		return map[string][]byte{def.Name: value}
+	}
+
+	column := idx.scalarColumns[def.Name]
+	column.rows = 1
+	column.tailBytes = math.MaxUint32 - 1
+	idx.scalarColumns[def.Name] = column
+	if err := idx.validateNativeScalarRowsAppendLocked(row([]byte{1, 2})); err == nil {
+		t.Fatal("same-chunk append beyond uint32 payload limit succeeded")
+	}
+
+	column.rows = nativeScalarColumnChunkRows
+	column.tailBytes = math.MaxUint32
+	idx.scalarColumns[def.Name] = column
+	if err := idx.validateNativeScalarRowsAppendLocked(row([]byte{1, 2})); err != nil {
+		t.Fatalf("next-chunk append inherited prior chunk payload: %v", err)
+	}
+
+	column.rows = nativeScalarColumnChunkRows - 1
+	column.tailBytes = math.MaxUint32 - 1
+	idx.scalarColumns[def.Name] = column
+	if err := idx.validateNativeScalarRowsAppendLocked(row([]byte{1}), row([]byte{2, 3})); err != nil {
+		t.Fatalf("batch crossing chunk boundary inherited prior chunk payload: %v", err)
+	}
+}
+
 func TestNativeScalarPublicationSnapshotsOnlyMutableTail(t *testing.T) {
 	column := newVectorIndexScalarColumn(IndexValueString)
 	columns := map[string]vectorIndexScalarColumn{"tenant_idx": column}

@@ -42,7 +42,7 @@ type vectorIndexScalarColumn struct {
 	fullChunks []vectorIndexScalarColumnChunk
 	tail       vectorIndexScalarColumnChunk
 	rows       int
-	dataBytes  uint64
+	tailBytes  uint64
 }
 
 func newVectorIndexScalarColumn(valueType IndexValueType) vectorIndexScalarColumn {
@@ -56,6 +56,7 @@ func (c *vectorIndexScalarColumn) appendPrevalidated(value []byte, present bool)
 	if c.rows > 0 && c.rows%nativeScalarColumnChunkRows == 0 {
 		c.fullChunks = append(c.fullChunks, c.tail)
 		c.tail = vectorIndexScalarColumnChunk{offsets: []uint32{0}}
+		c.tailBytes = 0
 	}
 	row := c.rows % nativeScalarColumnChunkRows
 	if present {
@@ -65,7 +66,7 @@ func (c *vectorIndexScalarColumn) appendPrevalidated(value []byte, present bool)
 		}
 		c.tail.present[word] |= uint64(1) << uint(row%64)
 		c.tail.data = append(c.tail.data, value...)
-		c.dataBytes += uint64(len(value))
+		c.tailBytes += uint64(len(value))
 	}
 	c.tail.offsets = append(c.tail.offsets, uint32(len(c.tail.data)))
 	c.rows++
@@ -233,15 +234,25 @@ func (idx *VectorIndex) validateNativeScalarRowsAppendLocked(rows ...map[string]
 		if !ok {
 			return fmt.Errorf("collections: native scalar column %q is unavailable", def.Name)
 		}
-		dataBytes := column.dataBytes
+		chunkRows := column.rows % nativeScalarColumnChunkRows
+		if column.rows > 0 && chunkRows == 0 {
+			chunkRows = nativeScalarColumnChunkRows
+		}
+		chunkBytes := column.tailBytes
 		for _, row := range rows {
+			if chunkRows == nativeScalarColumnChunkRows {
+				chunkRows = 0
+				chunkBytes = 0
+			}
 			value, present := row[def.Name]
 			if present {
-				dataBytes += uint64(len(value))
-				if dataBytes > math.MaxUint32 {
-					return errors.New("collections: native scalar column exceeds 4GiB payload limit")
+				valueBytes := uint64(len(value))
+				if valueBytes > math.MaxUint32 || chunkBytes > math.MaxUint32-valueBytes {
+					return errors.New("collections: native scalar column chunk exceeds 4GiB payload limit")
 				}
+				chunkBytes += valueBytes
 			}
+			chunkRows++
 		}
 	}
 	return nil
