@@ -218,6 +218,7 @@ type DB struct {
 	vacuumCutoverDone      chan struct{}
 	vacuum                 vacuumRecorder
 	systemRootPublishEpoch atomic.Uint64
+	vacuumOnlineAttemptID  atomic.Uint64
 	vacuumOnlineLast       atomic.Pointer[VacuumOnlineStats]
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)

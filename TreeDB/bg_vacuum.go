@@ -481,10 +481,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 
 	w.vacuumAttempts.Add(1)
 	vacuumStarted := time.Now()
-	beforeOnline := db.backend.VacuumOnlineStats()
+	beforeAttemptID := db.backend.VacuumOnlineStats().AttemptID
 	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
 		w.recordVacuumDuration(time.Since(vacuumStarted))
-		w.recordOnlineVacuumIfChanged(db, beforeOnline)
+		w.recordOnlineVacuumIfAdvanced(db, beforeAttemptID)
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
@@ -516,12 +516,12 @@ func (w *bgIndexVacuumWorker) recordOnlineVacuum(db *DB) {
 	w.lastOnlineVacuum.Store(&stats)
 }
 
-func (w *bgIndexVacuumWorker) recordOnlineVacuumIfChanged(db *DB, before backenddb.VacuumOnlineStats) {
+func (w *bgIndexVacuumWorker) recordOnlineVacuumIfAdvanced(db *DB, beforeAttemptID uint64) {
 	if w == nil || db == nil || db.backend == nil {
 		return
 	}
 	after := db.backend.VacuumOnlineStats()
-	if after != before {
+	if after.AttemptID != 0 && after.AttemptID != beforeAttemptID {
 		w.lastOnlineVacuum.Store(&after)
 	}
 }
@@ -860,7 +860,11 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.last_collection_roots_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastCollectionRootSpanRatio)
 	out["treedb.bg_vacuum.last_debt_reason"] = stats.LastDebtReason
 	out["treedb.bg_vacuum.last_online.total_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.TotalDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.attempt_id"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.AttemptID)
 	out["treedb.bg_vacuum.last_online.recoverable_set_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptureDuration.Nanoseconds())
+	out["treedb.bg_vacuum.last_online.recoverable_set_capture_attempts"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptureAttempts)
+	out["treedb.bg_vacuum.last_online.recoverable_set_captures"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetCaptures)
+	out["treedb.bg_vacuum.last_online.recoverable_set_recapture_attempts"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetRecaptureAttempts)
 	out["treedb.bg_vacuum.last_online.recoverable_set_recaptures"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableSetRecaptures)
 	out["treedb.bg_vacuum.last_online.recoverable_roots"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecoverableRoots)
 	out["treedb.bg_vacuum.last_online.older_root_rebuild_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuildDuration.Nanoseconds())

@@ -47,11 +47,31 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 		t.Fatalf("root-publication index=%p want replacement %p", db.rootPublication.idx, newIndex)
 	}
 	stats := db.VacuumOnlineStats()
-	if !stats.WorkCompleted || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
+	if stats.AttemptID == 0 || !stats.WorkCompleted || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
 		t.Fatalf("vacuum stats=%+v want completed production recoverable-root snapshot", stats)
 	}
 	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 1 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
+	}
+}
+
+func TestVacuumIndexOnlineInitialCaptureFailureRecordsAttempt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := database.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.AttemptID == 0 || !stats.Canceled || stats.RecoverableSetCaptureAttempts != 1 || stats.RecoverableSetCaptures != 0 || stats.RecoverableSetRecaptureAttempts != 0 || stats.RecoverableSetCaptureDuration <= 0 {
+		t.Fatalf("capture-failure stats=%+v want one attempted and zero completed capture", stats)
 	}
 }
 

@@ -62,6 +62,7 @@ const (
 )
 
 type VacuumOnlineStats struct {
+	AttemptID                               uint64
 	TotalDuration                           time.Duration
 	UserTreeDuration                        time.Duration
 	SystemReserveDuration                   time.Duration
@@ -82,7 +83,9 @@ type VacuumOnlineStats struct {
 	DeferredCutovers                        uint64
 	ConcurrentMutationAborts                uint64
 	RecoverableSetCaptureDuration           time.Duration
+	RecoverableSetCaptureAttempts           uint64
 	RecoverableSetCaptures                  uint64
+	RecoverableSetRecaptureAttempts         uint64
 	RecoverableSetRecaptures                uint64
 	RecoverableRoots                        uint64
 	OlderRootRebuildDuration                time.Duration
@@ -363,6 +366,7 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	if db == nil {
 		return ErrClosed
 	}
+	attemptID := db.vacuumOnlineAttemptID.Add(1)
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
@@ -377,7 +381,7 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	}
 	attemptStarted := time.Now()
 	captureStarted := attemptStarted
-	seed := VacuumOnlineStats{}
+	seed := VacuumOnlineStats{AttemptID: attemptID, RecoverableSetCaptureAttempts: 1}
 	rebuildStarted := false
 	defer func() {
 		if retErr == nil || rebuildStarted {
@@ -389,10 +393,12 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		db.vacuumOnlineLast.Store(&published)
 	}()
 	roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+	seed.RecoverableSetCaptureDuration = time.Since(captureStarted)
 	if err != nil {
 		return err
 	}
-	seed = VacuumOnlineStats{RecoverableSetCaptureDuration: time.Since(captureStarted), RecoverableSetCaptures: 1, RecoverableRoots: uint64(len(roots.Roots()))}
+	seed.RecoverableSetCaptures = 1
+	seed.RecoverableRoots = uint64(len(roots.Roots()))
 	rebuildStarted = true
 	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots, &seed, attemptStarted)
 }
@@ -936,13 +942,15 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 				captureStarted := time.Now()
 				recoverableRoots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
 				runStats.RecoverableSetCaptureDuration += time.Since(captureStarted)
-				runStats.RecoverableSetCaptures++
-				runStats.RecoverableSetRecaptures++
+				runStats.RecoverableSetCaptureAttempts++
+				runStats.RecoverableSetRecaptureAttempts++
 				if err != nil {
 					_ = successor.Close()
 					cleanupNewPager()
 					return err
 				}
+				runStats.RecoverableSetCaptures++
+				runStats.RecoverableSetRecaptures++
 				runStats.RecoverableRoots = uint64(len(recoverableRoots.Roots()))
 				olderRecord := recoverableRoots.durable.slotRecord[recoverableRoots.durable.slot^1]
 				if olderRecord.CommitSeq == 0 {

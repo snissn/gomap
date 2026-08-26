@@ -41,6 +41,11 @@ stable outer-leaf record identities. O2a reports `UniqueExternalSegments`
 without calling it a leaf count; exact unique outer-leaf accounting requires a
 shared scanner callback semantic expansion and is a truthful successor seam.
 
+Each production backend vacuum now has a monotonic `AttemptID`. Recoverable
+root-set counters distinguish attempts from completed captures, so failed
+initial or recaptured closures retain timing and attempted-work evidence
+without claiming a completed capture.
+
 `BenchmarkVacuumIndexOnlineCollection/bytes_1x` was also sampled as a whole
 vacuum guardrail, but repeated multi-iteration runs did not terminate promptly
 on this host and one-iteration samples were dominated by sync I/O variance.
