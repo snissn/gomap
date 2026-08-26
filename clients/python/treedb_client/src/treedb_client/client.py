@@ -255,11 +255,17 @@ class TreeDBClient:
         limit: int = 0,
         offset: int = 0,
         return_embedding: bool = False,
+        after_id: Optional[str] = None,
+        cursor_page: bool = False,
         expected_generation: Optional[int] = None,
     ) -> FilterDocumentsResponse:
         """List documents matching a server-side filter in document-ID order."""
 
         request: dict[str, Any] = {"limit": limit, "offset": offset, "return_embedding": return_embedding}
+        if after_id is not None:
+            request["after_id"] = str(after_id)
+        if cursor_page:
+            request["cursor_page"] = True
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "filter"), request)

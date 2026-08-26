@@ -50,6 +50,12 @@ class SharedQdrant:
         self.lock = threading.Lock()
         self.writer_completed = threading.Event()
 
+        self.restart_count = 0
+
+    def restart(self) -> int:
+        self.restart_count += 1
+        return 1
+
     def factory(self) -> "FakeClient":
         client = FakeClient(self)
         self.clients.append(client)
@@ -252,7 +258,7 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
     return runner.QdrantMinimaRunner(manifest, client_factory=shared.factory, models=Models, url="http://fake",
         collection="tiny", allow_drop=allow_drop, operation_timeout=1, optimizer_timeout=0.1,
         poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
-        server_pid=None)
+        server_pid=None, restart_server=shared.restart, restart_identity="fake owned server")
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -387,7 +393,9 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(shared.index_fields, ["user_id", "fpath"])
         self.assertEqual(len(shared.clients), 2)
         self.assertTrue(all(client.closed for client in shared.clients))
-        self.assertTrue(artifact["backend_raw_evidence"]["final_scroll_state"]["match"])
+        self.assertEqual(shared.restart_count, 1)
+        raw = artifact["backend_raw_evidence"]["qdrant"]
+        self.assertTrue(raw["final_scroll_state"]["match"])
         self.assertFalse(artifact["passing"])
         self.assertEqual(artifact["state"], "partial")
         operations = artifact["backends"][0]["operations"]
@@ -417,16 +425,24 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             for row in operation["reader_queries"]
         ))
         self.assertTrue(operations["reindex_delete_replace"])
-        self.assertNotIn("phase_latency_samples", artifact["backend_raw_evidence"])
-        self.assertGreater(artifact["backend_raw_evidence"]["phase_latency_distributions"]["search"]["count"], 0)
+        self.assertNotIn("phase_latency_samples", raw)
+        self.assertGreater(raw["phase_latency_distributions"]["search"]["count"], 0)
         self.assertEqual(len(trace["rounds"]), len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
         self.assertEqual(operations["timed_execution_sha256"], runner.timed_trace_digest(trace))
         self.assertTrue(operations["batch_insert_during_search"])
-        self.assertTrue(artifact["backend_raw_evidence"]["timed_overlap"]["all_rounds_writer_search_overlap_observed"])
+        self.assertTrue(raw["timed_overlap"]["all_rounds_writer_search_overlap_observed"])
         self.assertTrue(all(row["initial_actual_ids"] == row["initial_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["actual_ids"] == row["final_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["reopen_ids"] == row["actual_ids"] for row in artifact["scenarios"]))
         self.assertTrue(shared.query_filters)
+
+    def test_close_rejects_missing_restart_hook(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.restart_server = None
+        with self.assertRaisesRegex(RuntimeError, "restart hook"):
+            workload.run()
+        workload.close()
 
     def test_reads_after_writer_completion_fail_overlap_contracts(self) -> None:
         manifest = tiny_manifest()

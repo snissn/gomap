@@ -21,10 +21,15 @@ QDRANT_API_KEY="${QDRANT_API_KEY:-}"
 ALLOW_DROP="${ALLOW_DROP:-false}"
 QDRANT_PID=""
 QDRANT_SERVER_PID="${QDRANT_SERVER_PID:-}"
+QDRANT_RESTART_HOOK="${QDRANT_RESTART_HOOK:-}"
+QDRANT_PID_FILE="$RUN_DIR/qdrant.pid"
 QDRANT_CONTAINER=""
 DEPLOYMENT=""
 
 cleanup() {
+	if [[ -s "$QDRANT_PID_FILE" ]]; then
+		QDRANT_PID=$(cat "$QDRANT_PID_FILE")
+	fi
 	if [[ -n "$QDRANT_PID" ]]; then
 		kill "$QDRANT_PID" >/dev/null 2>&1 || true
 		wait "$QDRANT_PID" >/dev/null 2>&1 || true
@@ -54,6 +59,10 @@ go run ./TreeDB/cmd/treedb_rag_benchmark \
 	-dump-minima-manifest "$MANIFEST_PATH"
 
 if [[ -n "$QDRANT_URL" ]]; then
+	if [[ -z "$QDRANT_RESTART_HOOK" || ! -x "$QDRANT_RESTART_HOOK" ]]; then
+		echo "External Qdrant requires executable QDRANT_RESTART_HOOK that restarts the same durable service and prints its PID" >&2
+		exit 2
+	fi
 	DEPLOYMENT=external
 elif [[ -n "$QDRANT_BIN" ]]; then
 	if [[ ! -x "$QDRANT_BIN" ]]; then
@@ -63,12 +72,18 @@ elif [[ -n "$QDRANT_BIN" ]]; then
 	QDRANT_PORT=$("$VENV/bin/python" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 	QDRANT_URL="http://127.0.0.1:$QDRANT_PORT"
 	DEPLOYMENT=standalone
+	QDRANT_RESTART_HOOK="$RUN_DIR/restart-qdrant.sh"
+	printf '#!/usr/bin/env bash\nexec %q standalone %q %q %q %q %q\n' \
+		"$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_BIN" "$QDRANT_PORT" \
+		"$QDRANT_STORAGE_PATH" "$RUN_DIR/qdrant.log" "$QDRANT_PID_FILE" >"$QDRANT_RESTART_HOOK"
+	chmod +x "$QDRANT_RESTART_HOOK"
 	QDRANT__SERVICE__HOST=127.0.0.1 \
 	QDRANT__SERVICE__HTTP_PORT="$QDRANT_PORT" \
 	QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" \
 		"$QDRANT_BIN" >"$RUN_DIR/qdrant.log" 2>&1 &
 	QDRANT_PID=$!
 	QDRANT_SERVER_PID="$QDRANT_PID"
+	printf '%s\n' "$QDRANT_PID" >"$QDRANT_PID_FILE"
 else
 	if [[ ! "$QDRANT_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
 		echo "QDRANT_IMAGE must be digest-pinned, got: $QDRANT_IMAGE" >&2
@@ -82,6 +97,10 @@ else
 	QDRANT_URL="http://127.0.0.1:$QDRANT_PORT"
 	DEPLOYMENT=docker
 	QDRANT_CONTAINER="gomap-minima-qdrant-${RANDOM}-$$"
+	QDRANT_RESTART_HOOK="$RUN_DIR/restart-qdrant.sh"
+	printf '#!/usr/bin/env bash\nexec %q docker %q\n' \
+		"$ROOT/scripts/restart_minima_qdrant_backend.sh" "$QDRANT_CONTAINER" >"$QDRANT_RESTART_HOOK"
+	chmod +x "$QDRANT_RESTART_HOOK"
 	docker run -d --rm \
 		--name "$QDRANT_CONTAINER" \
 		-p "127.0.0.1:${QDRANT_PORT}:6333" \
@@ -127,6 +146,7 @@ RUNNER_ARGS=(
 	--operation-timeout "$QDRANT_OPERATION_TIMEOUT"
 	--optimizer-timeout "$QDRANT_OPTIMIZER_TIMEOUT"
 	--deployment "$DEPLOYMENT"
+	--restart-hook "$QDRANT_RESTART_HOOK"
 )
 if [[ "$ALLOW_DROP" == "true" ]]; then
 	RUNNER_ARGS+=(--allow-drop)

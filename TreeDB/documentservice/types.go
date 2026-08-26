@@ -197,6 +197,8 @@ type FilterDocumentsRequest struct {
 	Limit              int     `json:"limit,omitempty"`
 	Offset             int     `json:"offset,omitempty"`
 	ReturnEmbedding    bool    `json:"return_embedding,omitempty"`
+	AfterID            string  `json:"after_id,omitempty"`
+	CursorPage         bool    `json:"cursor_page,omitempty"`
 }
 
 type FilterDocumentsResponse struct {
@@ -204,6 +206,8 @@ type FilterDocumentsResponse struct {
 	Documents    []Document `json:"documents"`
 	MatchedCount int        `json:"matched_count"`
 	Truncated    bool       `json:"truncated,omitempty"`
+	NextAfterID  string     `json:"next_after_id,omitempty"`
+	Exhausted    bool       `json:"exhausted,omitempty"`
 }
 
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route

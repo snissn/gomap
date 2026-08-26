@@ -269,6 +269,15 @@ POST /v1/indexes/{index}/documents/filter
 `limit=0` means no service-side result cap. Results are returned in stable
 TreeDB document-ID order.
 
+Large exports use bounded cursor pages rather than `limit=0`. Set
+`"cursor_page": true`, a positive `limit`, and optionally `"after_id"` from the
+previous response's `next_after_id`. Cursor pages require `offset=0`, return at
+most `limit` documents, and include `exhausted`; when `exhausted` is false,
+resume strictly after `next_after_id`. A selective filter can produce an empty,
+non-exhausted page because physical scan work is bounded as well as response
+size. Each page starts a new TreeDB snapshot, so callers requiring one stable
+state must prevent concurrent writes.
+
 ## Metadata filters
 
 Filter nodes use this shape:

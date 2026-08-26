@@ -789,7 +789,8 @@ class QdrantMinimaRunner:
     def __init__(self, manifest: dict[str, Any], *, client_factory: Callable[[], Any], models: Any, url: str,
                  collection: str, allow_drop: bool, operation_timeout: int, optimizer_timeout: float,
                  poll_interval: float, server_version: str, deployment: str, image: str,
-                 storage_path: Path | None, server_pid: int | None) -> None:
+                 storage_path: Path | None, server_pid: int | None,
+                 restart_server: Callable[[], int] | None = None, restart_identity: str = "") -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
         self.mutation_vectors = {
@@ -802,6 +803,7 @@ class QdrantMinimaRunner:
         self.operation_timeout, self.optimizer_timeout, self.poll_interval = operation_timeout, optimizer_timeout, poll_interval
         self.server_version, self.deployment, self.image, self.storage_path = server_version, deployment, image, storage_path
         self.server_pid = server_pid
+        self.restart_server, self.restart_identity = restart_server, restart_identity
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
         self.operations = {
@@ -814,12 +816,41 @@ class QdrantMinimaRunner:
         }
         self.reopen_attempted = self.reopen_parity = False
         self.resource_baseline: dict[str, Any] | None = None
+        self.completed_resource_segments: list[dict[str, Any]] = []
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
 
     def connect(self) -> None:
         self.client = self.client_factory()
+
+    def restart_backend(self) -> None:
+        if self.restart_server is None or not self.restart_identity:
+            raise RuntimeError("close/reopen requires an explicit backend restart hook")
+        if self.resource_baseline is not None:
+            self.completed_resource_segments.append(
+                resource_delta(self.resource_baseline, server_resource_usage(self.server_pid, self.storage_path))
+            )
+        new_pid = self.restart_server()
+        if type(new_pid) is not int or new_pid <= 0:
+            raise RuntimeError("backend restart hook must return the restarted Qdrant server PID")
+        self.server_pid = new_pid
+        self.resource_baseline = server_resource_usage(self.server_pid, self.storage_path)
+
+    def resource_evidence(self) -> dict[str, Any]:
+        baseline = self.resource_baseline or server_resource_usage(self.server_pid, self.storage_path)
+        segments = [*self.completed_resource_segments,
+                    resource_delta(baseline, server_resource_usage(self.server_pid, self.storage_path))]
+        captured = bool(segments) and all(segment["captured"] for segment in segments)
+        return {
+            "captured": captured,
+            "rss_bytes": sum(segment["rss_bytes"] for segment in segments) if captured else 0,
+            "cpu_seconds": sum(segment["cpu_seconds"] for segment in segments) if captured else 0.0,
+            "disk_bytes": sum(segment["disk_bytes"] for segment in segments) if captured else 0,
+            "baseline": segments[0]["baseline"],
+            "end": segments[-1]["end"],
+        }
+
 
     def create_owned_collection(self) -> None:
         assert self.client is not None
@@ -1275,6 +1306,7 @@ class QdrantMinimaRunner:
                     self.evidence.preclose[scenario] = self.search("preclose_reopen_baseline", scenario)
                 self.client.close()
                 self.client = None
+                self.restart_backend()
             elif name == "reopen":
                 self.reopen_attempted = True
                 self.connect()
@@ -1325,8 +1357,7 @@ class QdrantMinimaRunner:
             if sample["scenario"] in timing and bucket in timing[sample["scenario"]]:
                 timing[sample["scenario"]][bucket] += sample["duration_nanos"]
         latency_distributions = {name: latency_distribution(values) for name, values in latency_values.items()}
-        baseline = self.resource_baseline or server_resource_usage(self.server_pid, self.storage_path)
-        resource = resource_delta(baseline, server_resource_usage(self.server_pid, self.storage_path))
+        resource = self.resource_evidence()
         scenarios = []
         for spec in self.manifest["corpora"]:
             name, query = spec["name"], self.queries[spec["name"]]
@@ -1358,8 +1389,9 @@ class QdrantMinimaRunner:
                 "timing": {"captured": True, "writer_millis": timing[name]["writer"] / 1e6, "search_millis": timing[name]["search"] / 1e6,
                     "fetch_millis": timing[name]["fetch"] / 1e6, "decode_millis": timing[name]["decode"] / 1e6,
                     "embedding_included": False, "llm_included": False},
-                "resource": {"captured": resource["captured"], "bytes_per_op": 0.0, "allocs_per_op": 0.0,
-                    "rss_bytes": resource["rss_bytes"], "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]},
+                "resource": {"captured": resource["captured"], "bytes_per_op": None, "allocs_per_op": None,
+                    "allocation_availability": "unavailable", "rss_bytes": resource["rss_bytes"],
+                    "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]},
             })
         result_hash = self.manifest["expected_state_sha256"] if self.state_scroll.get("match") else self.state_scroll.get("actual_hash", "")
         configuration = {"url": self.url, "collection": self.collection, "vector_field": self.config["vector_field"],
@@ -1369,6 +1401,7 @@ class QdrantMinimaRunner:
             "write_wait": "true", "point_id_mapping": "uuid5(NAMESPACE_URL,snissn/gomap/minima-qdrant/v1/<manifest-id>)",
             "deployment": self.deployment, "image": self.image or "not_applicable",
             "server_pid": str(self.server_pid) if self.server_pid is not None else "unavailable",
+            "restart_identity": self.restart_identity,
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
             "cpu": platform.processor() or "unavailable", "memory": memory_bytes(), "python": platform.python_version()}
@@ -1379,7 +1412,7 @@ class QdrantMinimaRunner:
                 "operations": self.operations, "reopen": {"attempted": self.reopen_attempted, "committed_parity": self.reopen_parity,
                     "result_manifest_hash": result_hash}}],
             "scenarios": scenarios, "failures": self.evidence.failures, "readiness_recommendation": "not_evaluated",
-            "backend_raw_evidence": {
+            "backend_raw_evidence": {"qdrant": {
                 "phase_latency_distributions": latency_distributions, "events": self.evidence.events,
                 "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
                 "resource_measurement": resource,
@@ -1387,7 +1420,7 @@ class QdrantMinimaRunner:
                     "baseline": resource["baseline"]["availability"],
                     "end": resource["end"]["availability"],
                 },
-            }}
+            }}}
 
     def close(self) -> None:
         if self.client is not None:
@@ -1406,6 +1439,28 @@ def server_info(url: str, api_key: str) -> dict[str, Any]:
     return value
 
 
+def restart_from_hook(hook: Path, url: str, api_key: str, ready_timeout: float) -> int:
+    result = subprocess.run([str(hook)], check=True, capture_output=True, text=True, timeout=ready_timeout)
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError("Qdrant restart hook did not print the restarted server PID")
+    try:
+        pid = int(lines[-1])
+    except ValueError as exc:
+        raise RuntimeError(f"Qdrant restart hook printed an invalid PID: {lines[-1]!r}") from exc
+    if pid <= 0:
+        raise RuntimeError(f"Qdrant restart hook printed an invalid PID: {pid}")
+    deadline, last = time.monotonic() + ready_timeout, None
+    while time.monotonic() < deadline:
+        try:
+            server_info(url, api_key)
+            return pid
+        except Exception as exc:
+            last = exc
+            time.sleep(0.25)
+    raise TimeoutError(f"restarted Qdrant did not become ready within {ready_timeout}s: {last}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -1420,6 +1475,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deployment", choices=("external", "standalone", "docker"), required=True)
     parser.add_argument("--image", default="")
     parser.add_argument("--storage-path", type=Path)
+    parser.add_argument("--restart-hook", type=Path, required=True)
     parser.add_argument("--server-pid", type=int)
     return parser.parse_args()
 
@@ -1432,11 +1488,15 @@ def main() -> int:
         raise RuntimeError(f"qdrant-client must be exactly {CLIENT_VERSION}, got {installed}")
     from qdrant_client import QdrantClient, models
     info = server_info(args.url, args.api_key)
+    if not args.restart_hook.is_file() or not os.access(args.restart_hook, os.X_OK):
+        raise RuntimeError(f"Qdrant restart hook must be executable: {args.restart_hook}")
     runner = QdrantMinimaRunner(manifest, client_factory=lambda: QdrantClient(url=args.url, api_key=args.api_key or None,
         timeout=args.operation_timeout, prefer_grpc=False), models=models, url=args.url, collection=args.collection,
         allow_drop=args.allow_drop, operation_timeout=args.operation_timeout, optimizer_timeout=args.optimizer_timeout,
         poll_interval=args.poll_interval, server_version=str(info["version"]), deployment=args.deployment,
-        image=args.image, storage_path=args.storage_path, server_pid=args.server_pid)
+        image=args.image, storage_path=args.storage_path, server_pid=args.server_pid,
+        restart_server=lambda: restart_from_hook(args.restart_hook, args.url, args.api_key, args.optimizer_timeout),
+        restart_identity=str(args.restart_hook))
     exit_code = 0
     try:
         runner.run()

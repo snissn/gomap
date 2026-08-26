@@ -1102,12 +1102,13 @@ type minimaTimingEvidence struct {
 }
 
 type minimaResourceEvidence struct {
-	Captured    bool    `json:"captured"`
-	BytesPerOp  float64 `json:"bytes_per_op"`
-	AllocsPerOp float64 `json:"allocs_per_op"`
-	RSSBytes    int64   `json:"rss_bytes"`
-	CPUSeconds  float64 `json:"cpu_seconds"`
-	DiskBytes   int64   `json:"disk_bytes"`
+	Captured               bool     `json:"captured"`
+	BytesPerOp             *float64 `json:"bytes_per_op"`
+	AllocsPerOp            *float64 `json:"allocs_per_op"`
+	AllocationAvailability string   `json:"allocation_availability"`
+	RSSBytes               int64    `json:"rss_bytes"`
+	CPUSeconds             float64  `json:"cpu_seconds"`
+	DiskBytes              int64    `json:"disk_bytes"`
 }
 
 type minimaScenarioEvidence struct {
@@ -1140,14 +1141,15 @@ type minimaScenarioEvidence struct {
 }
 
 type minimaArtifact struct {
-	Schema         string                   `json:"schema"`
-	State          string                   `json:"state"`
-	Passing        bool                     `json:"passing"`
-	Manifest       minimaManifest           `json:"manifest"`
-	Backends       []minimaBackendEvidence  `json:"backends"`
-	Scenarios      []minimaScenarioEvidence `json:"scenarios"`
-	Failures       []string                 `json:"failures"`
-	Recommendation string                   `json:"readiness_recommendation"`
+	Schema         string                              `json:"schema"`
+	State          string                              `json:"state"`
+	Passing        bool                                `json:"passing"`
+	Manifest       minimaManifest                      `json:"manifest"`
+	Backends       []minimaBackendEvidence             `json:"backends"`
+	Scenarios      []minimaScenarioEvidence            `json:"scenarios"`
+	Failures       []string                            `json:"failures"`
+	Recommendation string                              `json:"readiness_recommendation"`
+	RawEvidence    map[string]minimaRawBackendEvidence `json:"backend_raw_evidence"`
 }
 
 func validateMinimaArtifact(artifact *minimaArtifact) error {
@@ -1242,7 +1244,7 @@ func validateMinimaArtifact(artifact *minimaArtifact) error {
 	if len(seen) != len(specs)*len(backends) {
 		return fmt.Errorf("minima artifact: missing per-backend scenario evidence")
 	}
-	return nil
+	return validateMinimaRawEvidence(artifact, backends)
 }
 
 func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScenarioSpec, query minimaQuerySpec) error {
@@ -1335,8 +1337,21 @@ func validateMinimaScenarioEvidence(row minimaScenarioEvidence, spec minimaScena
 	if !row.Timing.Captured || row.Timing.EmbeddingIncluded || row.Timing.LLMIncluded || !finiteNonnegative(row.Timing.WriterMillis) || !finiteNonnegative(row.Timing.SearchMillis) || !finiteNonnegative(row.Timing.FetchMillis) || !finiteNonnegative(row.Timing.DecodeMillis) {
 		return fmt.Errorf("contaminated or missing timing evidence")
 	}
-	if !row.Resource.Captured || !finiteNonnegative(row.Resource.BytesPerOp) || !finiteNonnegative(row.Resource.AllocsPerOp) || row.Resource.RSSBytes < 0 || !finiteNonnegative(row.Resource.CPUSeconds) || row.Resource.DiskBytes < 0 {
+	if !row.Resource.Captured || row.Resource.RSSBytes < 0 || !finiteNonnegative(row.Resource.CPUSeconds) || row.Resource.DiskBytes < 0 {
 		return fmt.Errorf("missing resource evidence")
+	}
+	switch row.Resource.AllocationAvailability {
+	case "unavailable":
+		if row.Resource.BytesPerOp != nil || row.Resource.AllocsPerOp != nil {
+			return fmt.Errorf("unavailable allocation evidence has numeric values")
+		}
+	case "measured":
+		if row.Resource.BytesPerOp == nil || row.Resource.AllocsPerOp == nil ||
+			!finiteNonnegative(*row.Resource.BytesPerOp) || !finiteNonnegative(*row.Resource.AllocsPerOp) {
+			return fmt.Errorf("measured allocation evidence is missing or non-finite")
+		}
+	default:
+		return fmt.Errorf("allocation evidence availability is missing")
 	}
 	return nil
 }

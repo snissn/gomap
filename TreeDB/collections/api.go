@@ -22180,10 +22180,16 @@ func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte)
 // collection is exhausted, or fn returns false. The returned boolean is true
 // only when additional documents were present beyond the maxDocuments limit.
 func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
-	return c.scanDocumentsFunc(maxDocuments, fn, false)
+	return c.scanDocumentsFunc(nil, maxDocuments, fn, false)
 }
 
-func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
+// ScanDocumentsAfterFunc is the bounded cursor form of ScanDocumentsFunc.
+// It returns documents whose IDs sort strictly after afterID.
+func (c *Collection) ScanDocumentsAfterFunc(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	return c.scanDocumentsFunc(afterID, maxDocuments, fn, false)
+}
+
+func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -22219,7 +22225,7 @@ func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	if catalog == nil {
 		return false, errCollectionNotFound
 	}
-	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), afterID, nil, false)
 	if err != nil {
 		return false, err
 	}
@@ -22227,22 +22233,27 @@ func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, nil
 	}
 	defer func() { _ = it.Close() }()
+	for it.Valid() && len(afterID) > 0 && bytes.Compare(it.UnsafeKey(), afterID) <= 0 {
+		it.Next()
+	}
 	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
 	if reconstructDocuments {
-		certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog, maxDocuments)
-		if err != nil {
-			return false, err
-		}
-		if preflightRan {
-			scanStats.PreflightProjectedColumns = uint64(preflightDiag.ProjectedColumns)
-			scanStats.PhysicalPasses++
-			scanStats.PhysicalRows += uint64(preflightDiag.RowsScanned)
-			scanStats.PhysicalBytes += uint64(preflightDiag.PhysicalBytesScanned)
-			scanStats.PhysicalDecodedBlocks += uint64(preflightDiag.DecodedBlocks)
-		}
-		if certified {
-			scanStats.CertifiedMonotonicPath = true
-			return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
+		if len(afterID) == 0 {
+			certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog, maxDocuments)
+			if err != nil {
+				return false, err
+			}
+			if preflightRan {
+				scanStats.PreflightProjectedColumns = uint64(preflightDiag.ProjectedColumns)
+				scanStats.PhysicalPasses++
+				scanStats.PhysicalRows += uint64(preflightDiag.RowsScanned)
+				scanStats.PhysicalBytes += uint64(preflightDiag.PhysicalBytesScanned)
+				scanStats.PhysicalDecodedBlocks += uint64(preflightDiag.DecodedBlocks)
+			}
+			if certified {
+				scanStats.CertifiedMonotonicPath = true
+				return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
+			}
 		}
 		scanStats.GenericFallback = true
 		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn, &scanStats)

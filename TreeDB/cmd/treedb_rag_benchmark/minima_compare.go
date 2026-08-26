@@ -1,13 +1,176 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 )
+
+type minimaRawTimedOverlapRound struct {
+	Ordinal                   int   `json:"ordinal"`
+	QueriesExecuted           int   `json:"queries_executed"`
+	OverlappingReaders        []int `json:"overlapping_readers"`
+	AllReadersOverlapObserved bool  `json:"all_readers_overlap_observed"`
+}
+
+type minimaRawTimedOverlap struct {
+	ConfiguredSearches                   int                          `json:"configured_searches"`
+	ExecutedSearches                     int                          `json:"executed_searches"`
+	ConfiguredReaderConcurrency          int                          `json:"configured_reader_concurrency"`
+	ConfiguredWriterConcurrency          int                          `json:"configured_writer_concurrency"`
+	Rounds                               []minimaRawTimedOverlapRound `json:"rounds"`
+	AllRoundsWriterSearchOverlapObserved bool                         `json:"all_rounds_writer_search_overlap_observed"`
+	TimedExecutionSHA256                 string                       `json:"timed_execution_sha256"`
+}
+
+type minimaRawPayloadState struct {
+	ExpectedHash string `json:"expected_hash"`
+	ActualHash   string `json:"actual_hash"`
+	Match        bool   `json:"match"`
+}
+
+type minimaRawVectorState struct {
+	Algorithm             string  `json:"algorithm,omitempty"`
+	CheckedRows           int     `json:"checked_rows"`
+	ExpectedRows          int     `json:"expected_rows,omitempty"`
+	MismatchRows          int     `json:"mismatch_rows"`
+	MaximumComponentDelta float64 `json:"maximum_component_delta"`
+	Tolerance             float64 `json:"tolerance"`
+	Match                 bool    `json:"match"`
+}
+
+type minimaRawFinalState struct {
+	Algorithm    string                `json:"algorithm"`
+	ExpectedHash string                `json:"expected_hash"`
+	ActualHash   string                `json:"actual_hash"`
+	ExpectedRows int                   `json:"expected_rows"`
+	ActualRows   int                   `json:"actual_rows"`
+	Payload      minimaRawPayloadState `json:"payload"`
+	Vectors      minimaRawVectorState  `json:"vectors"`
+	Match        bool                  `json:"match"`
+}
+
+type minimaRawLatencyDistribution struct {
+	Count        int   `json:"count"`
+	TotalNanos   int64 `json:"total_nanos"`
+	MinimumNanos int64 `json:"minimum_nanos"`
+	P50Nanos     int64 `json:"p50_nanos"`
+	P95Nanos     int64 `json:"p95_nanos"`
+	P99Nanos     int64 `json:"p99_nanos"`
+	MaximumNanos int64 `json:"maximum_nanos"`
+}
+
+type minimaRawResourceSnapshot struct {
+	Captured     bool              `json:"captured"`
+	RSSBytes     int64             `json:"rss_bytes"`
+	CPUSeconds   float64           `json:"cpu_seconds"`
+	DiskBytes    int64             `json:"disk_bytes"`
+	Availability map[string]string `json:"availability,omitempty"`
+}
+
+type minimaRawResourceMeasurement struct {
+	Captured   bool                       `json:"captured"`
+	RSSBytes   int64                      `json:"rss_bytes"`
+	CPUSeconds float64                    `json:"cpu_seconds"`
+	DiskBytes  int64                      `json:"disk_bytes"`
+	Baseline   *minimaRawResourceSnapshot `json:"baseline,omitempty"`
+	End        *minimaRawResourceSnapshot `json:"end,omitempty"`
+}
+
+type minimaRawBackendEvidence struct {
+	PhaseLatencyDistributions map[string]minimaRawLatencyDistribution `json:"phase_latency_distributions,omitempty"`
+	Events                    []json.RawMessage                       `json:"events,omitempty"`
+	TimedOverlap              minimaRawTimedOverlap                   `json:"timed_overlap"`
+	FinalScrollState          minimaRawFinalState                     `json:"final_scroll_state"`
+	ResourceMeasurement       minimaRawResourceMeasurement            `json:"resource_measurement"`
+	ResourceAvailability      map[string]map[string]string            `json:"resource_availability,omitempty"`
+	NativeRouteResponses      map[string]json.RawMessage              `json:"native_route_responses,omitempty"`
+}
+
+var minimaPayloadEvidenceCache struct {
+	once sync.Once
+	hash string
+	rows int
+	err  error
+}
+
+func minimaExpectedPayloadEvidence(manifest *minimaManifest) (string, int, error) {
+	minimaPayloadEvidenceCache.once.Do(func() {
+		deleted := make(map[string]bool)
+		overrides := make(map[string]minimaGeneratedDocument)
+		additions := make(map[string]minimaGeneratedDocument)
+		for _, operation := range manifest.Operations {
+			switch operation.Effect {
+			case "delete":
+				for _, id := range operation.IDs {
+					deleted[id] = true
+				}
+			case "update":
+				for _, document := range operation.Documents {
+					overrides[document.ID] = document
+				}
+			case "insert":
+				for _, document := range operation.Documents {
+					additions[document.ID] = document
+				}
+			}
+		}
+		var xor, total [sha256.Size]byte
+		add := func(document minimaGeneratedDocument) {
+			digest := sha256.New()
+			for _, value := range []string{document.ID, document.Content, document.UserID, document.FPath} {
+				_, _ = digest.Write([]byte(value))
+				_, _ = digest.Write([]byte{0})
+			}
+			sum := digest.Sum(nil)
+			carry := 0
+			for i := len(total) - 1; i >= 0; i-- {
+				xor[i] ^= sum[i]
+				value := int(total[i]) + int(sum[i]) + carry
+				total[i], carry = byte(value), value>>8
+			}
+			minimaPayloadEvidenceCache.rows++
+		}
+		for _, spec := range manifest.Corpora {
+			for ordinal := 0; ordinal < spec.CorpusRows; ordinal++ {
+				document, err := minimaDocumentAt(spec, ordinal)
+				if err != nil {
+					minimaPayloadEvidenceCache.err = err
+					return
+				}
+				if deleted[document.ID] {
+					continue
+				}
+				if replacement, ok := overrides[document.ID]; ok {
+					document = replacement
+				}
+				add(document)
+			}
+		}
+		ids := make([]string, 0, len(additions))
+		for id := range additions {
+			if !deleted[id] {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			add(additions[id])
+		}
+		value := fmt.Sprintf("minima-committed-payload-v1:%d:%s:%s",
+			minimaPayloadEvidenceCache.rows, hex.EncodeToString(xor[:]), hex.EncodeToString(total[:]))
+		sum := sha256.Sum256([]byte(value))
+		minimaPayloadEvidenceCache.hash = hex.EncodeToString(sum[:])
+	})
+	return minimaPayloadEvidenceCache.hash, minimaPayloadEvidenceCache.rows, minimaPayloadEvidenceCache.err
+}
 
 func readMinimaArtifact(path string) (minimaArtifact, error) {
 	var artifact minimaArtifact
@@ -40,6 +203,12 @@ func readMinimaBackendEvidence(path, backend string) (minimaArtifact, error) {
 			return artifact, fmt.Errorf("%s evidence contains scenario for %q", backend, scenario.Backend)
 		}
 	}
+	if len(artifact.RawEvidence) != 1 {
+		return artifact, fmt.Errorf("%s evidence must contain exactly one namespaced raw evidence object", backend)
+	}
+	if _, ok := artifact.RawEvidence[backend]; !ok {
+		return artifact, fmt.Errorf("%s evidence is missing its namespaced raw evidence object", backend)
+	}
 	return artifact, nil
 }
 
@@ -49,6 +218,13 @@ func combineMinimaEvidence(treedb, qdrant minimaArtifact, recommendation string)
 		Backends:       append(append([]minimaBackendEvidence(nil), treedb.Backends...), qdrant.Backends...),
 		Scenarios:      append(append([]minimaScenarioEvidence(nil), treedb.Scenarios...), qdrant.Scenarios...),
 		Recommendation: recommendation,
+		RawEvidence:    make(map[string]minimaRawBackendEvidence, 2),
+	}
+	for name, evidence := range treedb.RawEvidence {
+		combined.RawEvidence[name] = evidence
+	}
+	for name, evidence := range qdrant.RawEvidence {
+		combined.RawEvidence[name] = evidence
 	}
 	combined.Failures = append(combined.Failures, treedb.Failures...)
 	combined.Failures = append(combined.Failures, qdrant.Failures...)
@@ -62,6 +238,77 @@ func combineMinimaEvidence(treedb, qdrant minimaArtifact, recommendation string)
 		combined.State, combined.Passing, combined.Recommendation = "partial", false, "not_evaluated"
 	}
 	return combined
+}
+func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]minimaBackendEvidence) error {
+	if len(artifact.RawEvidence) != len(backends) {
+		return fmt.Errorf("minima artifact: requires one namespaced raw evidence object per backend")
+	}
+	expectedHash, expectedRows, err := minimaExpectedPayloadEvidence(&artifact.Manifest)
+	if err != nil {
+		return fmt.Errorf("minima artifact: compute expected payload state: %w", err)
+	}
+	timedPlan := artifact.Manifest.Operations[3].TimedPlan
+	actualHashes := make(map[string]string, len(backends))
+	for name, backend := range backends {
+		raw, ok := artifact.RawEvidence[name]
+		if !ok {
+			return fmt.Errorf("minima artifact: %s raw evidence missing", name)
+		}
+		overlap := raw.TimedOverlap
+		if overlap.ConfiguredSearches != timedPlan.QueryCount ||
+			overlap.ExecutedSearches != timedPlan.QueryCount ||
+			overlap.ConfiguredReaderConcurrency != timedPlan.ReaderConcurrency ||
+			overlap.ConfiguredWriterConcurrency != timedPlan.WriterConcurrency ||
+			len(overlap.Rounds) != len(timedPlan.Rounds) ||
+			!overlap.AllRoundsWriterSearchOverlapObserved ||
+			overlap.TimedExecutionSHA256 != backend.Operations.TimedExecutionSHA256 {
+			return fmt.Errorf("minima artifact: %s raw overlap summary mismatch", name)
+		}
+		for ordinal, expectedRound := range timedPlan.Rounds {
+			round := overlap.Rounds[ordinal]
+			if round.Ordinal != ordinal || round.QueriesExecuted != expectedRound.QueryCount ||
+				len(round.OverlappingReaders) != timedPlan.ReaderConcurrency ||
+				!round.AllReadersOverlapObserved {
+				return fmt.Errorf("minima artifact: %s raw overlap round %d incomplete", name, ordinal)
+			}
+			for reader, observed := range round.OverlappingReaders {
+				if observed != reader {
+					return fmt.Errorf("minima artifact: %s raw overlap round %d readers mismatch", name, ordinal)
+				}
+			}
+		}
+		state := raw.FinalScrollState
+		if state.Algorithm == "" || !state.Match || !state.Payload.Match || !state.Vectors.Match ||
+			state.ExpectedRows != expectedRows || state.ActualRows != expectedRows ||
+			state.Vectors.CheckedRows != expectedRows || state.Vectors.ExpectedRows != expectedRows ||
+			state.Vectors.MismatchRows != 0 ||
+			!finiteNonnegative(state.Vectors.MaximumComponentDelta) ||
+			state.Vectors.Tolerance != artifact.Manifest.Config.ScoreTolerance ||
+			state.ExpectedHash != expectedHash || state.ActualHash != expectedHash ||
+			state.Payload.ExpectedHash != expectedHash || state.Payload.ActualHash != expectedHash {
+			return fmt.Errorf("minima artifact: %s raw full-state evidence mismatch", name)
+		}
+		actualHashes[name] = state.ActualHash
+		resource := raw.ResourceMeasurement
+		if !resource.Captured || resource.RSSBytes < 0 || !finiteNonnegative(resource.CPUSeconds) || resource.DiskBytes < 0 {
+			return fmt.Errorf("minima artifact: %s raw resource evidence missing", name)
+		}
+		for _, row := range artifact.Scenarios {
+			if row.Backend != name {
+				continue
+			}
+			if !row.Resource.Captured ||
+				row.Resource.RSSBytes != resource.RSSBytes ||
+				row.Resource.CPUSeconds != resource.CPUSeconds ||
+				row.Resource.DiskBytes != resource.DiskBytes {
+				return fmt.Errorf("minima artifact: %s scenario resource summary does not match raw measurement", name)
+			}
+		}
+	}
+	if actualHashes["treedb"] == "" || actualHashes["treedb"] != actualHashes["qdrant"] {
+		return fmt.Errorf("minima artifact: backend actual full-state hashes differ")
+	}
+	return nil
 }
 
 func writeMinimaComparisonArtifacts(artifact minimaArtifact, jsonPath, reportPath string) error {

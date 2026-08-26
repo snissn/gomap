@@ -536,6 +536,8 @@ class TreeDBClientTests(unittest.TestCase):
                     "index": SAMPLE_INDEX,
                     "matched_count": 1,
                     "documents": [{"id": "a", "content": "alpha", "meta": {"repo": "gomap"}}],
+                    "next_after_id": "a",
+                    "exhausted": False,
                 },
                 0,
             ),
@@ -560,12 +562,18 @@ class TreeDBClientTests(unittest.TestCase):
             client = TreeDBClient(server.base_url, timeout=1)
 
             self.assertEqual(client.count_documents("docs", {"field": "meta.repo", "operator": "==", "value": "gomap"}).count, 2)
-            self.assertEqual(client.filter_documents("docs", limit=10).documents[0].id, "a")
+            filtered = client.filter_documents("docs", limit=10, after_id="before", cursor_page=True)
+            self.assertEqual(filtered.documents[0].id, "a")
+            self.assertEqual(filtered.next_after_id, "a")
+            self.assertFalse(filtered.exhausted)
             self.assertEqual(client.query_by_embedding("docs", [1, 0], 1).documents[0].score, 1.0)
             self.assertEqual(client.delete_by_filter("docs", {"field": "meta.repo", "operator": "$eq", "value": "gomap"}).deleted, 1)
 
             delete_body = json_body(server.records[-1])
             self.assertEqual(delete_body["filter"], {"field": "meta.repo", "operator": "==", "value": "gomap"})
+            filter_body = json_body(server.records[1])
+            self.assertEqual(filter_body["after_id"], "before")
+            self.assertTrue(filter_body["cursor_page"])
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:

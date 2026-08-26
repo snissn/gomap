@@ -379,6 +379,28 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"wrong reindex execution hash", func(a *minimaArtifact) {
 			minimaTestBackend(a, "treedb").Operations.ReindexExecutionSHA256 = "wrong"
 		}},
+		{"raw full-state actual hash mismatch", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.FinalScrollState.ActualHash = "doctored"
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"raw overlap omits reader", func(a *minimaArtifact) {
+			raw := a.RawEvidence["treedb"]
+			raw.TimedOverlap.Rounds[0].OverlappingReaders = raw.TimedOverlap.Rounds[0].OverlappingReaders[:3]
+			a.RawEvidence["treedb"] = raw
+		}},
+		{"raw resource disagrees with summary", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.ResourceMeasurement.DiskBytes = 1
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"synthetic zero allocations marked unavailable", func(a *minimaArtifact) {
+			zero := 0.0
+			minimaTestRow(a, "qdrant", "small").Resource.BytesPerOp = &zero
+		}},
+		{"measured allocations omitted", func(a *minimaArtifact) {
+			minimaTestRow(a, "treedb", "small").Resource.AllocationAvailability = "measured"
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -422,8 +444,57 @@ func validMinimaArtifact() minimaArtifact {
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
-	artifact := minimaArtifact{Schema: minimaArtifactSchema, State: "pass", Passing: true, Manifest: manifest, Backends: backends, Recommendation: "ready_direct"}
 	queries := minimaQueryMap(&manifest)
+	expectedPayloadHash, expectedRows, err := minimaExpectedPayloadEvidence(&manifest)
+	if err != nil {
+		panic(err)
+	}
+	rawEvidence := make(map[string]minimaRawBackendEvidence, len(backends))
+	for _, backend := range backends {
+		rounds := make([]minimaRawTimedOverlapRound, len(timed.Rounds))
+		for ordinal, round := range timed.Rounds {
+			readers := make([]int, timed.ReaderConcurrency)
+			for reader := range readers {
+				readers[reader] = reader
+			}
+			rounds[ordinal] = minimaRawTimedOverlapRound{
+				Ordinal: ordinal, QueriesExecuted: round.QueryCount,
+				OverlappingReaders: readers, AllReadersOverlapObserved: true,
+			}
+		}
+		rawEvidence[backend.Name] = minimaRawBackendEvidence{
+			TimedOverlap: minimaRawTimedOverlap{
+				ConfiguredSearches: timed.QueryCount, ExecutedSearches: timed.QueryCount,
+				ConfiguredReaderConcurrency: timed.ReaderConcurrency, ConfiguredWriterConcurrency: timed.WriterConcurrency,
+				Rounds: rounds, AllRoundsWriterSearchOverlapObserved: true,
+				TimedExecutionSHA256: operations.TimedExecutionSHA256,
+			},
+			FinalScrollState: minimaRawFinalState{
+				Algorithm:    "payload digest plus normalized-float32 full-vector comparison",
+				ExpectedHash: expectedPayloadHash, ActualHash: expectedPayloadHash,
+				ExpectedRows: expectedRows, ActualRows: expectedRows,
+				Payload: minimaRawPayloadState{ExpectedHash: expectedPayloadHash, ActualHash: expectedPayloadHash, Match: true},
+				Vectors: minimaRawVectorState{
+					Algorithm: "streaming normalized-float32 comparison", CheckedRows: expectedRows,
+					ExpectedRows: expectedRows, Tolerance: minimaScoreTolerance, Match: true,
+				},
+				Match: true,
+			},
+			PhaseLatencyDistributions: map[string]minimaRawLatencyDistribution{
+				"search": {Count: 1, TotalNanos: 7, MinimumNanos: 7, P50Nanos: 7, P95Nanos: 7, P99Nanos: 7, MaximumNanos: 7},
+			},
+			Events:              []json.RawMessage{json.RawMessage(`{"operation":"test"}`)},
+			ResourceMeasurement: minimaRawResourceMeasurement{Captured: true},
+			ResourceAvailability: map[string]map[string]string{
+				"baseline": {"rss_bytes": "test"},
+				"end":      {"rss_bytes": "test"},
+			},
+		}
+	}
+	artifact := minimaArtifact{
+		Schema: minimaArtifactSchema, State: "pass", Passing: true, Manifest: manifest,
+		Backends: backends, Recommendation: "ready_direct", RawEvidence: rawEvidence,
+	}
 	for _, backend := range backends {
 		for _, spec := range manifest.Corpora {
 			query := queries[spec.Name]
@@ -461,7 +532,8 @@ func validMinimaArtifact() minimaArtifact {
 				ReopenIDs: append([]string(nil), query.FinalOracleIDs...), ReopenParity: true,
 				Recall: 1, Overlap: 1, OrderTolerance: minimaOrderTolerance, ScoreTolerance: minimaScoreTolerance,
 				Route: route, Visibility: minimaVisibilityEvidence{GenerationConsistent: true, MismatchCount: &zeroMismatch, RetryCount: &zeroRetry},
-				Timing: minimaTimingEvidence{Captured: true}, Resource: minimaResourceEvidence{Captured: true},
+				Timing:   minimaTimingEvidence{Captured: true},
+				Resource: minimaResourceEvidence{Captured: true, AllocationAvailability: "unavailable"},
 			})
 		}
 	}
@@ -521,8 +593,10 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	tree.State, tree.Passing, tree.Recommendation = "partial", false, "not_evaluated"
 	tree.Backends, tree.Scenarios = tree.Backends[:1], tree.Scenarios[:len(tree.Manifest.Corpora)]
 	qdrant := cloneMinimaArtifact(t, full)
+	tree.RawEvidence = map[string]minimaRawBackendEvidence{"treedb": tree.RawEvidence["treedb"]}
 	qdrant.State, qdrant.Passing, qdrant.Recommendation = "partial", false, "not_evaluated"
 	qdrant.Backends, qdrant.Scenarios = qdrant.Backends[1:], qdrant.Scenarios[len(qdrant.Manifest.Corpora):]
+	qdrant.RawEvidence = map[string]minimaRawBackendEvidence{"qdrant": qdrant.RawEvidence["qdrant"]}
 	for i := range qdrant.Scenarios {
 		qdrant.Scenarios[i].Route.FullDocumentScanFallbacks = nil
 		qdrant.Scenarios[i].Route.ScalarFilterUnbounded = nil
@@ -558,6 +632,16 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	var combined minimaArtifact
 	if err := json.Unmarshal(raw, &combined); err != nil {
 		t.Fatal(err)
+	}
+	if len(combined.RawEvidence) != 2 ||
+		combined.RawEvidence["treedb"].FinalScrollState.ActualHash == "" ||
+		combined.RawEvidence["qdrant"].FinalScrollState.ActualHash == "" {
+		t.Fatal("combined artifact dropped namespaced backend raw evidence")
+	}
+	if combined.RawEvidence["treedb"].PhaseLatencyDistributions["search"].Count != 1 ||
+		len(combined.RawEvidence["qdrant"].Events) != 1 ||
+		combined.RawEvidence["qdrant"].ResourceAvailability["end"]["rss_bytes"] != "test" {
+		t.Fatal("combined artifact dropped typed backend raw evidence fields")
 	}
 	if err := validateMinimaArtifact(&combined); err != nil || combined.State != "pass" || !combined.Passing {
 		t.Fatalf("combined artifact=%+v err=%v", combined, err)

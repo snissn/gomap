@@ -135,9 +135,16 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                          collection=collection, allow_drop=False, operation_timeout=int(operation_timeout),
                          optimizer_timeout=operation_timeout, poll_interval=0.05,
                          server_version=SERVICE_CONTRACT, deployment="owned_process", image="",
-                         storage_path=controller.data_dir, server_pid=controller.pid)
+                         storage_path=controller.data_dir, server_pid=controller.pid,
+                         restart_server=self.restart_controller, restart_identity="owned TreeDB service controller")
         self.clients, self.ef_search = clients, ef_search
         self.route_evidence: dict[str, Any] = {}
+    def restart_controller(self) -> int:
+        self.controller.start()
+        if self.controller.pid is None:
+            raise RuntimeError("TreeDB service controller restarted without a PID")
+        return self.controller.pid
+
 
     def connect(self) -> None:
         self.controller.start()
@@ -245,21 +252,31 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def actual_scroll(self) -> tuple[str, int, dict[str, Any]]:
         assert self.client is not None
-        result = self.client.filter_documents(self.collection, limit=0, return_embedding=True)
         accumulator, mismatches, maximum_delta = common.StateAccumulator(), 0, 0.0
-        for row in result.documents:
-            document = {"id": row.id, "content": row.content, "vector": row.embedding,
-                        "user_id": row.meta.get("user_id"), "fpath": row.meta.get("fpath")}
-            accumulator.add(document)
-            try:
-                expected, actual = self.expected_vector(row.id), common.normalized_f32_vector(row.embedding or [])
-                deltas = [abs(left - right) for left, right in zip(actual, expected, strict=True)]
-                maximum_delta = max(maximum_delta, max(deltas, default=0.0))
-                mismatches += int(any(delta > self.config["score_tolerance"] for delta in deltas))
-            except (KeyError, TypeError, ValueError):
-                mismatches += 1
-        if result.matched_count != accumulator.count or result.truncated:
-            mismatches += 1
+        after_id: str | None = None
+        while True:
+            result = self.client.filter_documents(
+                self.collection, limit=1024, return_embedding=True,
+                after_id=after_id, cursor_page=True,
+            )
+            if result.matched_count != len(result.documents) or len(result.documents) > 1024:
+                raise RuntimeError("TreeDB cursor page count exceeds its bounded response")
+            for row in result.documents:
+                document = {"id": row.id, "content": row.content, "vector": row.embedding,
+                            "user_id": row.meta.get("user_id"), "fpath": row.meta.get("fpath")}
+                accumulator.add(document)
+                try:
+                    expected, actual = self.expected_vector(row.id), common.normalized_f32_vector(row.embedding or [])
+                    deltas = [abs(left - right) for left, right in zip(actual, expected, strict=True)]
+                    maximum_delta = max(maximum_delta, max(deltas, default=0.0))
+                    mismatches += int(any(delta > self.config["score_tolerance"] for delta in deltas))
+                except (KeyError, TypeError, ValueError):
+                    mismatches += 1
+            if result.exhausted:
+                break
+            if not result.next_after_id or result.next_after_id == after_id:
+                raise RuntimeError("TreeDB cursor did not advance")
+            after_id = result.next_after_id
         return accumulator.hexdigest(), accumulator.count, {
             "algorithm": "public filter stream plus normalized-float32 full-vector comparison",
             "checked_rows": accumulator.count, "mismatch_rows": mismatches,
@@ -341,10 +358,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             row["visibility"] = {"generation_consistent": True,
                                  "visibility_mismatch_count": route.visibility_mismatch_count,
                                  "visibility_retry_count": route.visibility_retry_count}
-            row["resource"] = {"captured": resource["captured"], "bytes_per_op": 0.0, "allocs_per_op": 0.0,
-                               "rss_bytes": resource["rss_bytes"], "cpu_seconds": resource["cpu_seconds"],
-                               "disk_bytes": resource["disk_bytes"]}
-        artifact["backend_raw_evidence"]["native_route_responses"] = {
+            row["resource"] = {"captured": resource["captured"], "bytes_per_op": None, "allocs_per_op": None,
+                               "allocation_availability": "unavailable", "rss_bytes": resource["rss_bytes"],
+                               "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
+        raw = artifact["backend_raw_evidence"].pop("qdrant")
+        artifact["backend_raw_evidence"]["treedb"] = raw
+        raw["native_route_responses"] = {
             scenario: {"membership_source": value.scalar_filter_membership_source,
                        "plan": value.scalar_filter_plan, "probe_ids": value.scalar_filter_probe_ids,
                        "candidates": value.scalar_filter_candidates,
@@ -356,7 +375,15 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                        "visibility_retries": value.visibility_retry_count}
             for scenario, value in self.route_evidence.items()
         }
-        artifact["backend_raw_evidence"]["resource_measurement"] = resource
+        raw["resource_measurement"] = resource
+        raw["resource_availability"] = {
+            "baseline": {"rss_bytes": "owned TreeDB service process", "cpu_seconds": "owned TreeDB service process",
+                         "disk_bytes": str(self.controller.data_dir), "bytes_per_op": "unavailable",
+                         "allocs_per_op": "unavailable", "measurement_error": ""},
+            "end": {"rss_bytes": "owned TreeDB service process", "cpu_seconds": "owned TreeDB service process",
+                    "disk_bytes": str(self.controller.data_dir), "bytes_per_op": "unavailable",
+                    "allocs_per_op": "unavailable", "measurement_error": ""},
+        }
         return artifact
 
 

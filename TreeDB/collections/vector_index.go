@@ -621,7 +621,7 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	}
 	defer func() { _ = materializer.Close() }()
 
-	_, err = c.scanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+	_, err = c.scanDocumentsFunc(nil, maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, index.fieldPath)
 		if err != nil {
 			return false, fmt.Errorf("collections: vector field %q in document %q: %w", index.field, record.ID, err)

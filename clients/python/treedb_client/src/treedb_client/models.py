@@ -609,6 +609,8 @@ class FilterDocumentsResponse:
     documents: list[Document]
     matched_count: int
     truncated: bool = False
+    next_after_id: str = ""
+    exhausted: bool = False
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "FilterDocumentsResponse":
@@ -618,6 +620,8 @@ class FilterDocumentsResponse:
             documents=[Document.from_dict(item) for item in data.get("documents", [])],
             matched_count=_as_int(data["matched_count"], "matched_count"),
             truncated=_as_bool(data.get("truncated", False), "truncated"),
+            next_after_id=_as_optional_str_default(data.get("next_after_id"), "next_after_id"),
+            exhausted=_as_bool(data.get("exhausted", False), "exhausted"),
         )
 
 
