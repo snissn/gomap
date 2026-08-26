@@ -593,6 +593,16 @@ type VectorIndexSearchStats struct {
 	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
 }
 
+type vectorIndexSearchVisibility struct {
+	runtime                  *VectorIndex
+	collectionName           string
+	indexName                string
+	strategy                 VectorIndexStrategy
+	schemaGeneration         uint64
+	mutationSeq              uint64
+	sourceDocumentGeneration uint64
+}
+
 // VectorIndexSearchResponse is returned by public vector-index search APIs.
 type VectorIndexSearchResponse struct {
 	// IndexName is the searched collection vector-index name.
@@ -609,7 +619,8 @@ type VectorIndexSearchResponse struct {
 	// SearchVectorIndex return response-owned slices; SearchWithBuffer and
 	// SearchVectorIndexWithBuffer return slices owned by the caller's
 	// VectorIndexSearchBuffer.
-	Results []VectorIndexSearchResult `json:"results,omitempty"`
+	Results    []VectorIndexSearchResult `json:"results,omitempty"`
+	visibility vectorIndexSearchVisibility
 }
 
 // VectorIndexSearchRouteKind is a compact route summary derived from public
@@ -1230,6 +1241,9 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // Returned Results and result IDs alias buffer and remain valid only until buffer is reused or
 // Reset is called. The same buffer must not be reused concurrently; parallel
 // callers should use independent buffers.
+// Native-runtime responses also carry an opaque process-local publication
+// identity consumed by OpenCollectionReadViewForVectorIndexSearch; it is not
+// serialized or exposed as a public token.
 //
 // This method supports exact/zero QueryMode through the exact
 // hnsw_search_pack_v1 route, and explicit quantized_only / quantized_rerank
@@ -1427,6 +1441,15 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 			response.Stats.SearchRouteNativeRuntime = 1
 			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
 			response.Stats.CandidateRows = uint64(searchState.liveDocs)
+			response.visibility = vectorIndexSearchVisibility{
+				runtime:                  index,
+				collectionName:           c.collectionName(),
+				indexName:                def.Name,
+				strategy:                 def.Strategy,
+				schemaGeneration:         def.SchemaGeneration,
+				mutationSeq:              searchState.mutationSeq,
+				sourceDocumentGeneration: searchState.sourceDocumentGeneration,
+			}
 		} else if !index.hasValidSourceDocumentRoots() {
 			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		}

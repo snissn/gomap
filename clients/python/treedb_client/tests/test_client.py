@@ -24,6 +24,7 @@ from treedb_client import (
     IndexUnavailableError,
     InvalidRequestError,
     QuantizedIndexInfo,
+    SnapshotMismatchError,
     ScalarFieldDeclaration,
     TreeDBClient,
     TreeDBConfigError,
@@ -863,7 +864,7 @@ class TreeDBClientTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "invalid_request")
         self.assertIn("query or query_embedding", caught.exception.message)
 
-    def test_keyword_and_hybrid_service_errors_propagate(self) -> None:
+    def test_service_errors_propagate(self) -> None:
         routes = {
             ("POST", "/v1/indexes/docs/search/keyword"): (
                 501,
@@ -885,6 +886,11 @@ class TreeDBClientTests(unittest.TestCase):
                 {"error": {"code": "index_unavailable", "message": "text/vector unavailable"}},
                 0,
             ),
+            ("POST", "/v1/indexes/mismatch/search/vector"): (
+                409,
+                {"error": {"code": "snapshot_mismatch", "message": "visibility changed"}},
+                0,
+            ),
         }
         with FixtureServer(routes) as server:
             client = TreeDBClient(server.base_url, timeout=1)
@@ -898,6 +904,8 @@ class TreeDBClientTests(unittest.TestCase):
                 client.search_hybrid("stale", query="refund", top_k=1)
             with self.assertRaises(IndexUnavailableError):
                 client.search_hybrid("unavailable", query_embedding=[1.0, 0.0], top_k=1)
+            with self.assertRaises(SnapshotMismatchError):
+                client.query_by_embedding("mismatch", [1.0, 0.0], 1)
 
     def test_delete_documents_rejects_bare_string_ids_before_http(self) -> None:
         client = TreeDBClient("http://127.0.0.1:9", timeout=1)
