@@ -373,6 +373,40 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         delta = runner.resource_delta(baseline, end)
         self.assertEqual((delta["rss_bytes"], delta["cpu_seconds"], delta["disk_bytes"]), (3072, 1.5, 150))
 
+    def test_shared_disk_snapshot_tolerates_disappearing_files_only(self) -> None:
+        class Entries:
+            def __init__(self, values: list[object]) -> None:
+                self.values = values
+
+            def __iter__(self):
+                return iter(self.values)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stable = root / "stable"
+            vanished = root / "vanished"
+            stable.write_bytes(b"stable!")
+            vanished.write_bytes(b"gone")
+            with os.scandir(root) as scan:
+                entries = list(scan)
+            vanished.unlink()
+            with mock.patch.object(runner.os, "scandir", return_value=Entries(entries)):
+                self.assertEqual(runner.disk_bytes(root), len(b"stable!"))
+
+            denied = SimpleNamespace(
+                path=str(root / "denied"),
+                stat=lambda **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+            )
+            with mock.patch.object(runner.os, "scandir", return_value=Entries([denied])):
+                with self.assertRaises(PermissionError):
+                    runner.disk_bytes(root)
+
     def test_fake_qdrant_lifecycle_and_exact_oracles(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)

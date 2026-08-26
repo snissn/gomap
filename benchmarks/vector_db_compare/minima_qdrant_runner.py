@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import argparse
+import errno
 import hashlib
 from decimal import Decimal
 import importlib.metadata
@@ -16,6 +17,7 @@ import json
 import math
 import os
 import platform
+import stat
 import struct
 import subprocess
 import sys
@@ -640,9 +642,44 @@ def memory_bytes() -> str:
 
 
 def disk_bytes(path: Path | None) -> int:
-    if path is None or not path.exists():
+    if path is None:
         return 0
-    return sum(row.stat().st_size for row in path.rglob("*") if row.is_file())
+    transient_missing = {errno.ENOENT, getattr(errno, "ESTALE", errno.ENOENT)}
+
+    def disappeared(exc: OSError) -> bool:
+        return exc.errno in transient_missing
+
+    try:
+        root = path.stat()
+    except OSError as exc:
+        if disappeared(exc):
+            return 0
+        raise
+    if not stat.S_ISDIR(root.st_mode):
+        return 0
+    total = 0
+    pending = [path]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = os.scandir(directory)
+        except OSError as exc:
+            if disappeared(exc):
+                continue
+            raise
+        with entries:
+            for entry in entries:
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError as exc:
+                    if disappeared(exc):
+                        continue
+                    raise
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(info.st_mode):
+                    total += info.st_size
+    return total
 
 
 def cpu_time_seconds(value: str) -> float:
