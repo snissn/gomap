@@ -50,7 +50,7 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	if !stats.WorkCompleted || stats.RecoverableSetCaptures != 1 || stats.RecoverableRoots < 2 {
 		t.Fatalf("vacuum stats=%+v want completed production recoverable-root snapshot", stats)
 	}
-	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
+	if stats.TotalDuration < stats.RecoverableSetCaptureDuration || stats.RecoverableSetCaptureDuration <= 0 || stats.OlderRootRebuilds != 1 || stats.OlderRootDurableResourceCaptures != 1 || stats.OlderRootDurableResourceCaptureDuration <= 0 || stats.OlderRootExactCandidateScans != 1 || stats.DurableResourceCaptures != 1 || !stats.ExactCandidateScan {
 		t.Fatalf("vacuum attribution=%+v want capture, older rebuild, and durable-resource capture", stats)
 	}
 }
@@ -83,7 +83,7 @@ func TestVacuumIndexOnlineCancellationBeforeCutoverMutatesNoNamespace(t *testing
 	if err := database.VacuumIndexOnline(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("VacuumIndexOnline error=%v, want context.Canceled", err)
 	}
-	if stats := database.VacuumOnlineStats(); !stats.Canceled || stats.WorkCompleted {
+	if stats := database.VacuumOnlineStats(); !stats.Canceled || stats.WorkCompleted || stats.UserTreeDuration <= 0 || stats.OlderRootRebuilds == 0 {
 		t.Fatalf("canceled vacuum stats=%+v want canceled incomplete attempt", stats)
 	}
 	for _, event := range namespaceEvents {

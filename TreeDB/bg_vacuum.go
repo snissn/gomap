@@ -481,9 +481,10 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 
 	w.vacuumAttempts.Add(1)
 	vacuumStarted := time.Now()
+	beforeOnline := db.backend.VacuumOnlineStats()
 	if err := backgroundIndexVacuumRun(db, ctx); err != nil {
 		w.recordVacuumDuration(time.Since(vacuumStarted))
-		w.recordOnlineVacuum(db)
+		w.recordOnlineVacuumIfChanged(db, beforeOnline)
 		w.recordVacuumError(err)
 		w.finishRun(now, err.Error())
 		// A bounded online-vacuum pass may lose its cutover race to foreground
@@ -496,9 +497,7 @@ func (w *bgIndexVacuumWorker) runOnceContext(ctx context.Context, db *DB) {
 	}
 	w.recordVacuumDuration(time.Since(vacuumStarted))
 	w.recordOnlineVacuum(db)
-	if last := w.lastOnlineVacuum.Load(); last != nil && last.WorkCompleted {
-		w.vacuumWorkCompleted.Add(1)
-	}
+	w.vacuumWorkCompleted.Add(1)
 
 	w.retryProbe = false
 	w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
@@ -515,6 +514,16 @@ func (w *bgIndexVacuumWorker) recordOnlineVacuum(db *DB) {
 	}
 	stats := db.backend.VacuumOnlineStats()
 	w.lastOnlineVacuum.Store(&stats)
+}
+
+func (w *bgIndexVacuumWorker) recordOnlineVacuumIfChanged(db *DB, before backenddb.VacuumOnlineStats) {
+	if w == nil || db == nil || db.backend == nil {
+		return
+	}
+	after := db.backend.VacuumOnlineStats()
+	if after != before {
+		w.lastOnlineVacuum.Store(&after)
+	}
 }
 
 func (w *bgIndexVacuumWorker) recordProbeDuration(d time.Duration) {
@@ -860,12 +869,18 @@ func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
 	out["treedb.bg_vacuum.last_online.older_root_capture_count"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceCaptures)
 	out["treedb.bg_vacuum.last_online.older_root_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceDescriptors)
 	out["treedb.bg_vacuum.last_online.older_root_bytes"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootDurableResourceBytes)
+	out["treedb.bg_vacuum.last_online.older_root_exact_candidate_scans"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootExactCandidateScans)
+	out["treedb.bg_vacuum.last_online.older_root_reused_non_value_log_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootReusedNonValueLogDescriptors)
+	out["treedb.bg_vacuum.last_online.older_root_unique_external_segments"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootUniqueExternalSegments)
 	out["treedb.bg_vacuum.last_online.older_root_rebuilt_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.OlderRootRebuiltPages)
 	out["treedb.bg_vacuum.last_online.durable_resource_capture_ns"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceCaptureDuration.Nanoseconds())
 	out["treedb.bg_vacuum.last_online.durable_resource_capture_count"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceCaptures)
 	out["treedb.bg_vacuum.last_online.durable_resource_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceDescriptors)
 	out["treedb.bg_vacuum.last_online.durable_resource_bytes"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.DurableResourceBytes)
-	out["treedb.bg_vacuum.last_online.current_root_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.CurrentRootPages)
+	out["treedb.bg_vacuum.last_online.replacement_pager_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.ReplacementPagerPages)
+	out["treedb.bg_vacuum.last_online.preclone_traversal_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.PrecloneTraversalPages)
+	out["treedb.bg_vacuum.last_online.reclone_traversal_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.RecloneTraversalPages)
+	out["treedb.bg_vacuum.last_online.cutover_clone_traversal_pages"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.CutoverCloneTraversalPages)
 	out["treedb.bg_vacuum.last_online.exact_candidate_scan"] = fmt.Sprintf("%t", stats.LastOnlineVacuum.ExactCandidateScan)
 	out["treedb.bg_vacuum.last_online.reused_non_value_log_descriptors"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.ReusedNonValueLogDescriptors)
 	out["treedb.bg_vacuum.last_online.unique_external_segments"] = fmt.Sprintf("%d", stats.LastOnlineVacuum.UniqueExternalSegments)

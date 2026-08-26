@@ -64,6 +64,35 @@ func TestBackgroundIndexVacuumDurationStatsAccumulateMonotonically(t *testing.T)
 	}
 }
 
+func TestBackgroundIndexVacuumFailedRunDoesNotRepublishStaleOnlineSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+	d.bgVac.spanRatioPPM = 1
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.collectionRootPages = ^uint64(0)
+	stale := backenddb.VacuumOnlineStats{WorkCompleted: true, TotalDuration: time.Nanosecond}
+	d.bgVac.lastOnlineVacuum.Store(&stale)
+	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) error {
+		return errors.New("cached checkpoint admission failed before backend vacuum")
+	})
+	defer restore()
+
+	d.bgVac.runOnce(d)
+	stats := d.bgVac.Stats()
+	if stats.VacuumAttempts != 1 || stats.PermanentFailuresTotal != 1 {
+		t.Fatalf("failed background attempt counters=%+v", stats)
+	}
+	if stats.LastOnlineVacuum != stale {
+		t.Fatalf("last online snapshot=%+v want retained stale prior snapshot=%+v", stats.LastOnlineVacuum, stale)
+	}
+	if stats.VacuumWorkCompleted != 0 {
+		t.Fatalf("completed work=%d want 0 for failed pre-backend attempt", stats.VacuumWorkCompleted)
+	}
+}
+
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
 	dir := t.TempDir()
 
