@@ -689,7 +689,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 
 	resources, err := db.captureDurableRootResourcesFromBaseV1(
 		idx, next, vlogRefDelta, visibleBase, opts.durableResources,
-		opts.durableResourceRequirements, opts.durableResourceMutation, opts.valueLogPublicationLocked,
+		opts.durableResourceRequirements, opts.durableResourceMutation,
+		opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback,
+		opts.valueLogPublicationLocked,
 		&candidateTiming,
 	)
 	if err != nil {

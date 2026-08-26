@@ -468,6 +468,14 @@ func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
 			},
 			wantError: "manifest records omitted",
 		},
+		{
+			name: "omitted manifest mutation",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.MutationDelta = true
+				delta.Mutations = nil
+			},
+			wantError: "mutation delta does not produce logical post-state",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
