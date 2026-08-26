@@ -410,13 +410,24 @@ func BenchmarkNativeScalarFilterPlanCrossover(b *testing.B) {
 }
 
 func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
+	const graphRows = 8192
+	cardinalities := []int{256, 512, 1024}
 	for _, dimensions := range []int{2, 128} {
-		for _, cardinality := range []int{256, 512, 1024} {
-			idx, query, allowSet := newNativeScalarExecutorBenchmarkIndex(b, dimensions, cardinality)
-			view := idx.searchView.Load()
-			if view == nil {
-				b.Fatal("native scalar benchmark view is unavailable")
+		idx, query := newNativeScalarExecutorBenchmarkIndex(b, dimensions, graphRows)
+		view := idx.searchView.Load()
+		if view == nil {
+			b.Fatal("native scalar benchmark view is unavailable")
+		}
+		allowSets := make(map[int]hybridScalarAllowSet, len(cardinalities))
+		for _, cardinality := range cardinalities {
+			allowSet := make(hybridScalarAllowSet, cardinality)
+			for i := 0; i < cardinality; i++ {
+				allowSet[fmt.Sprintf("doc-%05d", i)] = struct{}{}
 			}
+			allowSets[cardinality] = allowSet
+		}
+		for _, cardinality := range cardinalities {
+			allowSet := allowSets[cardinality]
 			plans := []struct {
 				name  string
 				exact bool
@@ -440,18 +451,20 @@ func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
 				b.Run(name, func(b *testing.B) {
 					var buffer VectorIndexSearchBuffer
 					b.ReportAllocs()
-					b.ReportMetric(float64(cardinality), "candidate_ids/op")
 					for b.Loop() {
 						results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
 						if err != nil || len(results) != 10 {
 							b.Fatalf("results=%d err=%v", len(results), err)
 						}
 					}
+					b.ReportMetric(float64(graphRows), "graph_rows")
+					b.ReportMetric(float64(cardinality), "candidate_ids/op")
 				})
 				if dimensions == 128 && cardinality == 512 {
 					name = fmt.Sprintf("dim%d/card%d/parallel/%s", dimensions, cardinality, route.name)
 					b.Run(name, func(b *testing.B) {
 						b.ReportAllocs()
+						b.ReportMetric(float64(graphRows), "graph_rows")
 						b.ReportMetric(float64(cardinality), "candidate_ids/op")
 						b.RunParallel(func(pb *testing.PB) {
 							var buffer VectorIndexSearchBuffer
@@ -470,7 +483,7 @@ func BenchmarkNativeScalarFilterExecutorCrossover(b *testing.B) {
 	}
 }
 
-func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, cardinality int) (*VectorIndex, []float32, hybridScalarAllowSet) {
+func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, graphRows int) (*VectorIndex, []float32) {
 	b.Helper()
 	idx, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "native_scalar_crossover", Field: "embedding", Metric: VectorMetricCosine,
@@ -481,25 +494,21 @@ func newNativeScalarExecutorBenchmarkIndex(b *testing.B, dimensions, cardinality
 	}
 	query := make([]float32, dimensions)
 	query[0] = 1
-	allowSet := make(hybridScalarAllowSet, cardinality)
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	for i := 0; i < cardinality; i++ {
+	for i := 0; i < graphRows; i++ {
 		id := []byte(fmt.Sprintf("doc-%05d", i))
 		vector := make([]float32, dimensions)
 		vector[0] = 1
-		for dimension := 1; dimension < dimensions; dimension++ {
-			vector[dimension] = float32((i+dimension)%97+1) / 1000
-		}
+		vector[1] = float32(i+1) / float32(graphRows*4)
 		if err := idx.insertVectorLocked(id, vector); err != nil {
 			b.Fatal(err)
 		}
-		allowSet[string(id)] = struct{}{}
 	}
 	idx.sourceDocumentGeneration = 1
 	idx.sourceDocumentRootsValid = true
 	idx.publishSearchViewLocked(true)
-	return idx, query, allowSet
+	return idx, query
 }
 
 func newNativeScalarTestCollection(tb testing.TB, indexes []IndexDefinition) (*backenddb.DB, *Collection, VectorIndexDefinition) {
