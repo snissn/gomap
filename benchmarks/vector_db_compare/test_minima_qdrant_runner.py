@@ -6,6 +6,7 @@ import copy
 import threading
 import time
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +48,7 @@ class SharedQdrant:
         self.index_fields: list[str] = []
         self.query_filters: list[Model] = []
         self.lock = threading.Lock()
+        self.writer_completed = threading.Event()
 
     def factory(self) -> "FakeClient":
         client = FakeClient(self)
@@ -88,6 +90,7 @@ class FakeClient:
         with self.shared.lock:
             for point in points:
                 self.shared.points[point.id] = point
+        self.shared.writer_completed.set()
 
     @staticmethod
     def _matches(point: Model, filter_value: Model) -> bool:
@@ -116,6 +119,7 @@ class FakeClient:
                 doomed = list(points_selector.points)
             for key in doomed:
                 self.shared.points.pop(key, None)
+        self.shared.writer_completed.set()
     def count(self, *, count_filter: Model, **_: object) -> Model:
         with self.shared.lock:
             return Model(count=sum(self._matches(point, count_filter) for point in self.shared.points.values()))
@@ -344,16 +348,30 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(resource["cpu_seconds"], 0.0)
         self.assertEqual(resource["availability"]["rss_bytes"], "unavailable")
         with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
-            owned = runner.server_resource_usage(123, None)
+            self.assertFalse(runner.server_resource_usage(123, None)["captured"])
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(runner.subprocess, "run", return_value=SimpleNamespace(stdout="2048 01:02.5")):
+                owned = runner.server_resource_usage(123, Path(directory))
         self.assertTrue(owned["captured"])
         self.assertEqual(owned["rss_bytes"], 2048 * 1024)
         self.assertEqual(owned["cpu_seconds"], 62.5)
+        baseline = {**owned, "rss_bytes": 1024, "cpu_seconds": 1.0, "disk_bytes": 100}
+        end = {**owned, "rss_bytes": 4096, "cpu_seconds": 2.5, "disk_bytes": 250}
+        delta = runner.resource_delta(baseline, end)
+        self.assertEqual((delta["rss_bytes"], delta["cpu_seconds"], delta["disk_bytes"]), (3072, 1.5, 150))
 
     def test_fake_qdrant_lifecycle_and_exact_oracles(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)
         workload.run()
         artifact = workload.artifact()
+        corrupt_id = runner.point_id("minima/empty_file/000007")
+        shared.points[corrupt_id].vector["embedding"] = [0.0, 1.0] + [0.0] * 6
+        expected_payload, _ = workload.expected_scroll()
+        actual_payload, _, vector_evidence = workload.actual_scroll()
+        self.assertEqual(actual_payload, expected_payload)
+        self.assertFalse(vector_evidence["match"])
+        self.assertEqual(vector_evidence["mismatch_rows"], 1)
         workload.close()
         self.assertEqual(shared.index_fields, ["user_id", "fpath"])
         self.assertEqual(len(shared.clients), 2)
@@ -366,12 +384,24 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertEqual(operations["timed_queries_executed"], manifest["config"]["timed_queries"])
         self.assertEqual(operations["timed_rounds_completed"], len(manifest["operations"][3]["timed_reader_plan"]["rounds"]))
         self.assertEqual(len(trace["queries"]), manifest["config"]["timed_queries"])
-        self.assertTrue(all(row["writer_in_flight"] for row in trace["queries"]))
+        for round_value in trace["rounds"]:
+            queries = [row for row in trace["queries"] if row["round"] == round_value["ordinal"]]
+            for reader in range(manifest["config"]["reader_concurrency"]):
+                self.assertTrue(any(
+                    row["reader"] == reader and runner.intervals_overlap(
+                        row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                        round_value["writer_started_monotonic_ns"], round_value["writer_ended_monotonic_ns"],
+                    )
+                    for row in queries
+                ))
         reindex_trace = operations["reindex_execution_trace"]
         self.assertEqual(operations["reindex_operations_executed"], 2)
         self.assertEqual(operations["reindex_execution_sha256"], runner.reindex_trace_digest(reindex_trace))
         self.assertTrue(all(
-            row["mutation_in_flight"]
+            runner.intervals_overlap(
+                row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                operation["mutation_started_monotonic_ns"], operation["mutation_ended_monotonic_ns"],
+            )
             for operation in reindex_trace["operations"]
             for row in operation["reader_queries"]
         ))
@@ -386,6 +416,28 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         self.assertTrue(all(row["actual_ids"] == row["final_oracle_ids"] for row in artifact["scenarios"]))
         self.assertTrue(all(row["reopen_ids"] == row["actual_ids"] for row in artifact["scenarios"]))
         self.assertTrue(shared.query_filters)
+
+    def test_reads_after_writer_completion_fail_overlap_contracts(self) -> None:
+        manifest = tiny_manifest()
+        for method_name, operation_ordinal in (("run_timed_overlap", 3), ("run_concurrent_mutation", 4)):
+            with self.subTest(method=method_name):
+                shared = SharedQdrant()
+                workload = new_runner(manifest, shared)
+                workload.connect()
+                workload.create_owned_collection()
+                shared.writer_completed.clear()
+                original_search = workload.search
+
+                def late_search(operation: str, scenario: str, interval: dict[str, int] | None = None):
+                    if not shared.writer_completed.wait(1):
+                        raise RuntimeError("writer did not complete")
+                    time.sleep(0.01)
+                    return original_search(operation, scenario, interval)
+
+                workload.search = late_search
+                with self.assertRaisesRegex(RuntimeError, "overlap contract failed"):
+                    getattr(workload, method_name)(manifest["operations"][operation_ordinal])
+                workload.close()
 
     def test_existing_namespace_requires_explicit_allow_drop(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()

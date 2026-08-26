@@ -42,8 +42,8 @@ FROZEN_HASHES = {
     "operation_sha256": "f2d85501ae55255784749f042892836078335a99e7603ac254bd1a88eafa9179",
     "expected_state_sha256": "e74c2b4aaea81c3ad4ee0444bb706ca936f652dfa7ee173bf52d686f3a14480f",
 }
-TIMED_EXECUTION_SHA256 = "2ccd4e9badc7644e15cd4a5e4eeb68f59005c2e040506d5f9e4d5935e23f6fdd"
-REINDEX_EXECUTION_SHA256 = "9ec2d96b41783bf9ac323f522244940b023c4d27efd759714c149e0ae4568ee0"
+TIMED_EXECUTION_SHA256 = "84b8eb10e5f86c558264d00e8cae2c6844683aff2b8bca1d76cafe6b06890ea4"
+REINDEX_EXECUTION_SHA256 = "99823f1eac0fb27dce81e21e0cf5884019c6a911c410be11b675b2315cbde534"
 OPERATION_NAMES = [
     "ensure_compatible_collection", "initial_batch_insert", "warmup_search",
     "timed_search_with_batch_insert", "reindex_delete_by_user_and_fpath_while_reading",
@@ -212,6 +212,13 @@ def cosine(vector: list[float], query: list[float]) -> float:
     norm = math.sqrt(sum(v * v for v in vector)) * math.sqrt(sum(v * v for v in query))
     return dot / norm if norm else 0.0
 
+def normalized_f32_vector(vector: list[float]) -> list[float]:
+    values = [f32(finite(value, "vector component")) for value in vector]
+    norm = math.sqrt(sum(value * value for value in values))
+    if not norm:
+        raise ValueError("vector norm must be positive")
+    return [f32(value / norm) for value in values]
+
 def f32(value: float) -> float:
     return struct.unpack(">f", struct.pack(">f", value))[0]
 
@@ -315,10 +322,20 @@ def expected_state_hash(manifest: dict[str, Any]) -> str:
             raise ValueError(f"{name} live rows={live_rows[name]} want {want}")
     return go_digest({"base_payload_sha256": payload_corpus_digest(manifest["corpora"]), "live_rows": live_rows, "mutations": mutations})
 
+
+def intervals_overlap(first_start: int, first_end: int, second_start: int, second_end: int) -> bool:
+    return (
+        0 <= first_start < first_end
+        and 0 <= second_start < second_end
+        and first_start < second_end
+        and second_start < first_end
+    )
+
+
 def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
     lines = [
         f"query|ordinal={row['ordinal']}|round={row['round']}|reader={row['reader']}|scenario={row['scenario']}|"
-        f"writer_in_flight={str(row['writer_in_flight']).lower()}\n"
+        f"started_monotonic_ns={row['started_monotonic_ns']}|ended_monotonic_ns={row['ended_monotonic_ns']}\n"
         for row in trace["queries"]
     ]
     for row in trace["rounds"]:
@@ -326,24 +343,34 @@ def timed_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
         lines.append(
             f"round|ordinal={row['ordinal']}|query_start={row['query_start']}|query_count={row['query_count']}|"
             f"insert={insertion['scenario']}:{insertion['start']}:{insertion['rows']}|"
-            f"start={row['start_barrier']}|end={row['end_barrier']}\n"
+            f"start={row['start_barrier']}|end={row['end_barrier']}|"
+            f"writer_started_monotonic_ns={row['writer_started_monotonic_ns']}|"
+            f"writer_ended_monotonic_ns={row['writer_ended_monotonic_ns']}\n"
         )
     return hashlib.sha256("".join(lines).encode()).hexdigest()
 
 
 def timed_execution_digest(plan: dict[str, Any]) -> str:
+    rounds = []
     queries = []
     for round_value in plan["rounds"]:
+        base = (round_value["ordinal"] + 1) * 1_000_000
+        rounds.append({
+            **round_value,
+            "writer_started_monotonic_ns": base + 100,
+            "writer_ended_monotonic_ns": base + 900,
+        })
         begin = round_value["query_start"]
         end = begin + round_value["query_count"]
         for ordinal in range(begin, end):
+            started = base + 200 + (ordinal - begin) * 2
             queries.append({
                 "ordinal": ordinal, "round": round_value["ordinal"],
                 "reader": ordinal % plan["reader_concurrency"],
                 "scenario": plan["scenario_order"][ordinal % len(plan["scenario_order"])],
-                "writer_in_flight": True,
+                "started_monotonic_ns": started, "ended_monotonic_ns": started + 1,
             })
-    return timed_trace_digest({"queries": queries, "rounds": plan["rounds"]})
+    return timed_trace_digest({"queries": queries, "rounds": rounds})
 
 
 def reindex_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
@@ -351,29 +378,39 @@ def reindex_trace_digest(trace: dict[str, list[dict[str, Any]]]) -> str:
     for operation in trace["operations"]:
         lines.append(
             f"reindex|operation={operation['operation_ordinal']}|mutation={operation['mutation']}|"
-            f"start={operation['start_barrier']}|end={operation['end_barrier']}\n"
+            f"start={operation['start_barrier']}|end={operation['end_barrier']}|"
+            f"mutation_started_monotonic_ns={operation['mutation_started_monotonic_ns']}|"
+            f"mutation_ended_monotonic_ns={operation['mutation_ended_monotonic_ns']}\n"
         )
         for query in operation["reader_queries"]:
             lines.append(
                 f"reindex_query|operation={operation['operation_ordinal']}|reader={query['reader']}|"
                 f"query_ordinal={query['query_ordinal']}|scenario={query['scenario']}|"
-                f"mutation_in_flight={str(query['mutation_in_flight']).lower()}\n"
+                f"started_monotonic_ns={query['started_monotonic_ns']}|"
+                f"ended_monotonic_ns={query['ended_monotonic_ns']}\n"
             )
     return hashlib.sha256("".join(lines).encode()).hexdigest()
-
 def expected_reindex_execution(manifest: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     operations = []
     for operation in manifest["operations"]:
         plan = operation.get("concurrent_mutation_plan")
         if plan is None:
             continue
+        base = (operation["ordinal"] + 1) * 1_000_000
+        reader_queries = []
+        for assignment in plan["reader_assignments"]:
+            started = base + 200 + assignment["reader"] * 10
+            reader_queries.append({
+                **assignment,
+                "started_monotonic_ns": started,
+                "ended_monotonic_ns": started + 1,
+            })
         operations.append({
             "operation_ordinal": operation["ordinal"], "mutation": plan["mutation"],
             "start_barrier": plan["start_barrier"], "end_barrier": plan["end_barrier"],
-            "reader_queries": [
-                {**assignment, "mutation_in_flight": True}
-                for assignment in plan["reader_assignments"]
-            ],
+            "mutation_started_monotonic_ns": base + 100,
+            "mutation_ended_monotonic_ns": base + 900,
+            "reader_queries": reader_queries,
         })
     return {"operations": operations}
 
@@ -630,8 +667,9 @@ def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[st
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
     disk_available = storage_path is not None and storage_path.exists()
+    captured = rss is not None and cpu is not None and disk_available
     return {
-        "captured": rss is not None and cpu is not None,
+        "captured": captured,
         "rss_bytes": rss or 0,
         "cpu_seconds": cpu or 0.0,
         "disk_bytes": disk_bytes(storage_path),
@@ -642,6 +680,17 @@ def server_resource_usage(pid: int | None, storage_path: Path | None) -> dict[st
             "bytes_per_op": "unavailable", "allocs_per_op": "unavailable",
             "measurement_error": error,
         },
+    }
+
+
+def resource_delta(baseline: dict[str, Any], end: dict[str, Any]) -> dict[str, Any]:
+    captured = baseline["captured"] and end["captured"]
+    return {
+        "captured": captured,
+        "rss_bytes": max(0, end["rss_bytes"] - baseline["rss_bytes"]) if captured else 0,
+        "cpu_seconds": max(0.0, end["cpu_seconds"] - baseline["cpu_seconds"]) if captured else 0.0,
+        "disk_bytes": max(0, end["disk_bytes"] - baseline["disk_bytes"]) if captured else 0,
+        "baseline": baseline, "end": end,
     }
 
 
@@ -679,7 +728,7 @@ class Evidence:
         self.stale_delete = dict.fromkeys(names, 0)
 
     def call(self, operation: str, category: str, scenario: str, function: Callable[[], Any]) -> Any:
-        start = time.perf_counter_ns()
+        start = time.monotonic_ns()
         try:
             return function()
         except BaseException as exc:
@@ -689,7 +738,7 @@ class Evidence:
             self.events.append({"operation": operation, "scenario": scenario, "kind": "timeout" if is_timeout(exc) else "error", "error": f"{type(exc).__name__}: {exc}"})
             raise
         finally:
-            end = time.perf_counter_ns()
+            end = time.monotonic_ns()
             self.samples.append({"operation": operation, "scenario": scenario, "category": category,
                                  "start_nanos": start, "end_nanos": end, "duration_nanos": end - start})
 
@@ -758,6 +807,7 @@ class QdrantMinimaRunner:
             "explicit_update_visible": False, "explicit_delete_visible": False, "empty_cases_checked": False,
         }
         self.reopen_attempted = self.reopen_parity = False
+        self.resource_baseline: dict[str, Any] | None = None
         self.state_scroll: dict[str, Any] = {}
         self.effective_collection: dict[str, Any] = {}
         self.overlap_evidence: dict[str, Any] = {}
@@ -832,14 +882,20 @@ class QdrantMinimaRunner:
         if ranges and not wait_each:
             self.evidence.call(name, "writer_wait", "all", self.wait_ready)
 
-    def search(self, operation: str, scenario: str) -> tuple[list[str], list[float]]:
+    def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
         spec, query = self.specs[scenario], self.queries[scenario]
-        response = self.evidence.call(operation, "search", scenario, lambda: self.client.query_points(
-            collection_name=self.collection, query=query["vector"], using=self.config["vector_field"],
-            query_filter=payload_filter(self.models, spec), limit=self.config["top_k"], with_payload=True,
-            with_vectors=False, timeout=self.operation_timeout))
-        started, ids, scores = time.perf_counter_ns(), [], []
+        if interval is not None:
+            interval["started_monotonic_ns"] = time.monotonic_ns()
+        try:
+            response = self.evidence.call(operation, "search", scenario, lambda: self.client.query_points(
+                collection_name=self.collection, query=query["vector"], using=self.config["vector_field"],
+                query_filter=payload_filter(self.models, spec), limit=self.config["top_k"], with_payload=True,
+                with_vectors=False, timeout=self.operation_timeout))
+        finally:
+            if interval is not None:
+                interval["ended_monotonic_ns"] = time.monotonic_ns()
+        started, ids, scores = time.monotonic_ns(), [], []
         for point in getattr(response, "points", response):
             payload = getattr(point, "payload", None) or {}
             identifier = payload.get("id")
@@ -849,7 +905,7 @@ class QdrantMinimaRunner:
                 self.evidence.cross_user[scenario] += 1
             ids.append(identifier)
             scores.append(float(getattr(point, "score")))
-        ended = time.perf_counter_ns()
+        ended = time.monotonic_ns()
         self.evidence.samples.append({"operation": operation, "scenario": scenario, "category": "decode",
                                       "start_nanos": started, "end_nanos": ended, "duration_nanos": ended - started})
         return ids, scores
@@ -925,11 +981,9 @@ class QdrantMinimaRunner:
                 start_barrier = threading.Barrier(readers + 1)
                 end_barrier = threading.Barrier(readers + 1)
                 insertion = round_value["insert_range"]
-                writer_in_flight = threading.Event()
-                sample_start = len(self.evidence.samples)
+                writer_interval: dict[str, int] = {}
 
                 def write_round() -> None:
-                    writer_in_flight.set()
                     start_barrier.wait()
                     try:
                         spec = self.specs[insertion["scenario"]]
@@ -937,7 +991,18 @@ class QdrantMinimaRunner:
                             generated_document(spec, value)
                             for value in range(insertion["start"], insertion["start"] + insertion["rows"])
                         ]
+                        sample_start = len(self.evidence.samples)
                         self.upsert(operation["name"], spec["name"], documents)
+                        samples = [
+                            row for row in self.evidence.samples[sample_start:]
+                            if row["operation"] == operation["name"] and row["category"] == "writer"
+                        ]
+                        if not samples:
+                            raise RuntimeError("timed insert produced no raw writer call interval")
+                        writer_interval.update({
+                            "writer_started_monotonic_ns": min(row["start_nanos"] for row in samples),
+                            "writer_ended_monotonic_ns": max(row["end_nanos"] for row in samples),
+                        })
                         visible = len(self.retrieve(operation["name"], spec["name"], [row["id"] for row in documents]))
                         missing = len(documents) - visible
                         self.evidence.stale_insert[spec["name"]] += missing
@@ -946,11 +1011,7 @@ class QdrantMinimaRunner:
                     except BaseException:
                         end_barrier.abort()
                         raise
-                    finally:
-                        try:
-                            end_barrier.wait()
-                        finally:
-                            writer_in_flight.clear()
+                    end_barrier.wait()
 
                 def read_round(worker: int) -> None:
                     start_barrier.wait()
@@ -959,12 +1020,11 @@ class QdrantMinimaRunner:
                         end = round_value["query_start"] + round_value["query_count"]
                         for query_ordinal in range(begin, end, readers):
                             scenario = plan["scenario_order"][query_ordinal % len(plan["scenario_order"])]
-                            active_before = writer_in_flight.is_set()
-                            self.search(operation["name"], scenario)
+                            interval: dict[str, int] = {}
+                            self.search(operation["name"], scenario, interval)
                             query_observations[query_ordinal] = {
                                 "ordinal": query_ordinal, "round": round_value["ordinal"],
-                                "reader": worker, "scenario": scenario,
-                                "writer_in_flight": active_before and writer_in_flight.is_set(),
+                                "reader": worker, "scenario": scenario, **interval,
                             }
                     except BaseException:
                         end_barrier.abort()
@@ -977,23 +1037,28 @@ class QdrantMinimaRunner:
                 for future in reader_futures:
                     future.result()
 
-                round_samples = self.evidence.samples[sample_start:]
-                writer_samples = [row for row in round_samples if row["operation"] == operation["name"] and row["category"] == "writer"]
-                search_samples = [row for row in round_samples if row["operation"] == operation["name"] and row["category"] == "search"]
-                overlap = any(
-                    writer_sample["start_nanos"] < search_sample["end_nanos"]
-                    and search_sample["start_nanos"] < writer_sample["end_nanos"]
-                    for writer_sample in writer_samples
-                    for search_sample in search_samples
-                )
-                round_evidence.append({
-                    "ordinal": round_value["ordinal"], "queries_executed": len(search_samples),
-                    "writer_calls": len(writer_samples), "writer_search_overlap_observed": overlap,
-                })
-                round_observations.append({
+                round_observation = {
                     "ordinal": round_value["ordinal"], "query_start": round_value["query_start"],
                     "query_count": round_value["query_count"], "insert_range": dict(insertion),
                     "start_barrier": round_value["start_barrier"], "end_barrier": round_value["end_barrier"],
+                    **writer_interval,
+                }
+                round_observations.append(round_observation)
+                round_queries = [
+                    row for row in query_observations
+                    if row is not None and row["round"] == round_value["ordinal"]
+                ]
+                overlapping_readers = sorted({
+                    row["reader"] for row in round_queries
+                    if intervals_overlap(
+                        row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                        writer_interval["writer_started_monotonic_ns"], writer_interval["writer_ended_monotonic_ns"],
+                    )
+                })
+                round_evidence.append({
+                    "ordinal": round_value["ordinal"], "queries_executed": len(round_queries),
+                    "overlapping_readers": overlapping_readers,
+                    "all_readers_overlap_observed": overlapping_readers == list(range(readers)),
                 })
 
         observed_queries = [row for row in query_observations if row is not None]
@@ -1001,17 +1066,13 @@ class QdrantMinimaRunner:
         trace_hash = timed_trace_digest(observed_trace)
         queries_executed = len(observed_queries)
         rounds_completed = len(round_observations)
-        all_overlap = (
-            all(row["writer_search_overlap_observed"] for row in round_evidence)
-            and all(row["writer_in_flight"] for row in observed_queries)
-        )
+        all_overlap = all(row["all_readers_overlap_observed"] for row in round_evidence)
         self.overlap_evidence = {
             "configured_searches": plan["query_count"], "executed_searches": queries_executed,
             "configured_reader_concurrency": readers, "configured_writer_concurrency": plan["writer_concurrency"],
             "rounds": round_evidence, "all_rounds_writer_search_overlap_observed": all_overlap,
             "timed_execution_sha256": trace_hash,
         }
-        expected_trace_hash = timed_execution_digest(plan)
         self.operations.update({
             "timed_queries_executed": queries_executed,
             "timed_rounds_completed": rounds_completed,
@@ -1020,7 +1081,6 @@ class QdrantMinimaRunner:
             "batch_insert_during_search": (
                 queries_executed == plan["query_count"]
                 and rounds_completed == len(plan["rounds"])
-                and trace_hash == expected_trace_hash
                 and all_overlap
             ),
         })
@@ -1032,41 +1092,45 @@ class QdrantMinimaRunner:
         readers = plan["reader_concurrency"]
         start_barrier = threading.Barrier(readers + 1)
         end_barrier = threading.Barrier(readers + 1)
-        mutation_in_flight = threading.Event()
+        mutation_interval: dict[str, int] = {}
         observations: list[dict[str, Any] | None] = [None] * readers
 
         def mutate() -> None:
-            mutation_in_flight.set()
             start_barrier.wait()
             try:
+                sample_start = len(self.evidence.samples)
                 if operation["effect"] == "delete":
                     self.delete_filter(operation)
                 elif operation["effect"] == "insert":
                     self.upsert(operation["name"], operation["target"], operation["documents"])
+                else:
+                    raise RuntimeError(f"unsupported concurrent mutation {operation['effect']}")
+                samples = [
+                    row for row in self.evidence.samples[sample_start:]
+                    if row["operation"] == operation["name"] and row["category"] == "writer"
+                ]
+                if not samples:
+                    raise RuntimeError("concurrent reindex produced no raw mutation call interval")
+                mutation_interval.update({
+                    "mutation_started_monotonic_ns": min(row["start_nanos"] for row in samples),
+                    "mutation_ended_monotonic_ns": max(row["end_nanos"] for row in samples),
+                })
+                if operation["effect"] == "insert":
                     visible = len(self.retrieve(operation["name"], operation["target"],
                                                 [row["id"] for row in operation["documents"]]))
                     if visible != len(operation["documents"]):
                         raise RuntimeError("replacement insert did not become visible")
-                else:
-                    raise RuntimeError(f"unsupported concurrent mutation {operation['effect']}")
             except BaseException:
                 end_barrier.abort()
                 raise
-            finally:
-                try:
-                    end_barrier.wait()
-                finally:
-                    mutation_in_flight.clear()
+            end_barrier.wait()
 
         def read_during_mutation(assignment: dict[str, Any]) -> None:
             start_barrier.wait()
             try:
-                active_before = mutation_in_flight.is_set()
-                self.search(operation["name"], assignment["scenario"])
-                observations[assignment["reader"]] = {
-                    **assignment,
-                    "mutation_in_flight": active_before and mutation_in_flight.is_set(),
-                }
+                interval: dict[str, int] = {}
+                self.search(operation["name"], assignment["scenario"], interval)
+                observations[assignment["reader"]] = {**assignment, **interval}
             except BaseException:
                 end_barrier.abort()
                 raise
@@ -1086,20 +1150,24 @@ class QdrantMinimaRunner:
         observed = {
             "operation_ordinal": operation["ordinal"], "mutation": plan["mutation"],
             "start_barrier": plan["start_barrier"], "end_barrier": plan["end_barrier"],
-            "reader_queries": reader_queries,
+            **mutation_interval, "reader_queries": reader_queries,
         }
-        if len(reader_queries) != readers or not all(row["mutation_in_flight"] for row in reader_queries):
+        overlaps = len(reader_queries) == readers and all(
+            intervals_overlap(
+                row["started_monotonic_ns"], row["ended_monotonic_ns"],
+                mutation_interval["mutation_started_monotonic_ns"],
+                mutation_interval["mutation_ended_monotonic_ns"],
+            )
+            for row in reader_queries
+        )
+        if not overlaps:
             raise RuntimeError(f"concurrent mutation overlap contract failed for operation {operation['ordinal']}")
         self.operations["reindex_execution_trace"]["operations"].append(observed)
         trace = self.operations["reindex_execution_trace"]
         digest = reindex_trace_digest(trace)
         self.operations["reindex_operations_executed"] = len(trace["operations"])
         self.operations["reindex_execution_sha256"] = digest
-        self.operations["reindex_delete_replace"] = (
-            len(trace["operations"]) == 2
-            and all(row["mutation_in_flight"] for item in trace["operations"] for row in item["reader_queries"])
-            and digest == reindex_trace_digest(expected_reindex_execution(self.manifest))
-        )
+        self.operations["reindex_delete_replace"] = len(trace["operations"]) == 2
 
 
     def expected_scroll(self) -> tuple[str, int]:
@@ -1108,9 +1176,15 @@ class QdrantMinimaRunner:
             accumulator.add(document)
         return accumulator.hexdigest(), accumulator.count
 
-    def actual_scroll(self) -> tuple[str, int]:
+    def actual_scroll(self) -> tuple[str, int, dict[str, Any]]:
         assert self.client is not None
+        expected_vectors = {
+            document["id"]: normalized_f32_vector(document["vector"])
+            for document in final_documents(self.manifest)
+        }
         accumulator, offset = StateAccumulator(), None
+        seen: set[str] = set()
+        mismatches, maximum_delta = 0, 0.0
         while True:
             rows, offset = self.client.scroll(collection_name=self.collection, limit=self.config["batch_size"], offset=offset,
                 with_payload=True, with_vectors=[self.config["vector_field"]], timeout=self.operation_timeout)
@@ -1121,10 +1195,33 @@ class QdrantMinimaRunner:
                 if set(document) != set(DOCUMENT_KEYS) or not isinstance(vector, list) or len(vector) != self.config["dimension"]:
                     raise RuntimeError("Qdrant scroll row does not match the Minima document schema")
                 accumulator.add(document)
+                identifier = document["id"]
+                expected = expected_vectors.get(identifier)
+                if expected is None or identifier in seen:
+                    mismatches += 1
+                    continue
+                seen.add(identifier)
+                try:
+                    actual = normalized_f32_vector(vector)
+                except ValueError:
+                    mismatches += 1
+                    continue
+                deltas = [abs(left - right) for left, right in zip(actual, expected, strict=True)]
+                maximum_delta = max(maximum_delta, max(deltas, default=0.0))
+                mismatches += int(any(delta > self.config["score_tolerance"] for delta in deltas))
             if offset is None:
-                return accumulator.hexdigest(), accumulator.count
+                missing = len(set(expected_vectors) - seen)
+                mismatches += missing
+                return accumulator.hexdigest(), accumulator.count, {
+                    "algorithm": "per-record normalized-float32 full-vector comparison",
+                    "checked_rows": len(seen), "expected_rows": len(expected_vectors),
+                    "mismatch_rows": mismatches, "maximum_component_delta": maximum_delta,
+                    "tolerance": self.config["score_tolerance"],
+                    "match": mismatches == 0 and len(seen) == len(expected_vectors),
+                }
 
     def run(self) -> None:
+        self.resource_baseline = server_resource_usage(self.server_pid, self.storage_path)
         for ordinal, operation in enumerate(self.manifest["operations"]):
             if operation["ordinal"] != ordinal or operation["name"] != OPERATION_NAMES[ordinal]:
                 raise RuntimeError("operation stream changed after validation")
@@ -1185,12 +1282,18 @@ class QdrantMinimaRunner:
                     # Reopen evidence was captured immediately after reconnect, not assigned from this final query.
                     self.compare_oracle("final", scenario, result)
                 expected_hash, expected_rows = self.expected_scroll()
-                actual_hash, actual_rows = self.evidence.call(name, "fetch", "all", self.actual_scroll)
-                self.state_scroll = {"algorithm": "sha256(count,xor256,sum256) over canonical id/content/user_id/fpath digests",
-                    "expected_hash": expected_hash, "actual_hash": actual_hash, "expected_rows": expected_rows,
-                    "actual_rows": actual_rows, "match": expected_hash == actual_hash and expected_rows == actual_rows}
+                actual_hash, actual_rows, vector_evidence = self.evidence.call(name, "fetch", "all", self.actual_scroll)
+                payload_match = expected_hash == actual_hash and expected_rows == actual_rows
+                self.state_scroll = {
+                    "algorithm": "payload digest plus normalized-float32 full-vector comparison",
+                    "expected_hash": expected_hash, "actual_hash": actual_hash,
+                    "expected_rows": expected_rows, "actual_rows": actual_rows,
+                    "payload": {"expected_hash": expected_hash, "actual_hash": actual_hash, "match": payload_match},
+                    "vectors": vector_evidence,
+                    "match": payload_match and vector_evidence["match"],
+                }
                 if not self.state_scroll["match"]:
-                    self.evidence.failures.append("final Qdrant scroll/state hash mismatch")
+                    self.evidence.failures.append("final Qdrant payload/vector scroll mismatch")
         self.operations["manifest_ordered"] = True
         self.reopen_parity = self.state_scroll.get("match", False) and all(
             name in self.evidence.preclose
@@ -1211,7 +1314,8 @@ class QdrantMinimaRunner:
             if sample["scenario"] in timing and bucket in timing[sample["scenario"]]:
                 timing[sample["scenario"]][bucket] += sample["duration_nanos"]
         latency_distributions = {name: latency_distribution(values) for name, values in latency_values.items()}
-        resource = server_resource_usage(self.server_pid, self.storage_path)
+        baseline = self.resource_baseline or server_resource_usage(self.server_pid, self.storage_path)
+        resource = resource_delta(baseline, server_resource_usage(self.server_pid, self.storage_path))
         scenarios = []
         for spec in self.manifest["corpora"]:
             name, query = spec["name"], self.queries[spec["name"]]
@@ -1267,7 +1371,11 @@ class QdrantMinimaRunner:
             "backend_raw_evidence": {
                 "phase_latency_distributions": latency_distributions, "events": self.evidence.events,
                 "timed_overlap": self.overlap_evidence, "final_scroll_state": self.state_scroll,
-                "resource_availability": resource["availability"],
+                "resource_measurement": resource,
+                "resource_availability": {
+                    "baseline": resource["baseline"]["availability"],
+                    "end": resource["end"]["availability"],
+                },
             }}
 
     def close(self) -> None:
