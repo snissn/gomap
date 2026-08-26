@@ -15,9 +15,9 @@ import (
 )
 
 func (db *DB) reportValueLogDictPublishError(err error) {
-	// Dictionary publication is retried from the unchanged active profile. A
-	// stale cleanup proof means the durable write raced another command-WAL
-	// append; cleanup retained the WAL and a later pass can safely converge.
+	// Dictionary publication is retried from the unchanged active profile.
+	// Monotonic command-WAL appends and rotations preserve cleanup authority;
+	// only unsafe publication or ownership changes stale it and retain the WAL.
 	if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
 		return
 	}

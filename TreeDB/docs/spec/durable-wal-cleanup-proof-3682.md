@@ -60,8 +60,9 @@ Read-only open never performs ordinary cleanup.
   and active maximum LSN;
 - pending stable-rotation and pending-successor state, both of which must be
   empty before a proof is available and immediately before deletion;
-- the complete scanned segment decisions, including open handles, physical
-  identities, sizes, scanned bytes, frame counts, and min/max LSN ranges.
+- the complete scanned segment decisions, including captured lane/sequence,
+  open handles, physical identities, sizes, scanned bytes, frame counts, and
+  min/max LSN ranges.
 
 The proof does not copy visible `DBState.AppliedCommandLSN`. Visible state may be
 ahead of the last durable root. It also does not treat
@@ -72,8 +73,9 @@ both durable roots still require replay from it.
 
 A segment is eligible only when all of the following hold:
 
-1. its file name parses as a command-WAL segment, but the name is used only for
-   discovery and diagnostics;
+1. its file name parses as a command-WAL segment; the captured lane/sequence is
+   used only to conservatively retain active/post-capture generations, never to
+   authorize deletion;
 2. the exact opened file identity remains stable through scan and immediate
    pre-unlink revalidation;
 3. a full frame scan validates the segment header and derives a complete

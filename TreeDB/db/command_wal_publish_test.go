@@ -2032,6 +2032,17 @@ func TestCommandWALCleanupConvergesUnderSustainedRotatingWrites(t *testing.T) {
 	stopWriter()
 }
 
+func TestCommandWALCleanupRejectsDecisionWithoutGeneration(t *testing.T) {
+	err := retainCommandWALCleanupAuthoritySegments(
+		[]commandWALSegmentCleanupDecision{{Path: "commit-l0-000001.log", Covered: true}},
+		commitlog.CommandJournalCleanupSnapshot{},
+		commitlog.CommandJournalCleanupSnapshot{},
+	)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("retainCommandWALCleanupAuthoritySegments error=%v, want recovery required", err)
+	}
+}
+
 func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

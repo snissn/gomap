@@ -738,16 +738,15 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 		if !decision.Covered {
 			continue
 		}
+		if !decision.generationKnown || decision.lane < 0 {
+			return errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup candidate has invalid generation: %s", filepath.Base(decision.Path)))
+		}
 		if rootpublication.SamePhysicalIdentity(decision.identity, captured.ActiveIdentity) ||
 			rootpublication.SamePhysicalIdentity(decision.identity, current.ActiveIdentity) {
 			decision.Active = true
 			continue
 		}
-		lane, seq, valueLog, ok := parseLogSeq(filepath.Base(decision.Path))
-		if !ok || valueLog || !commitlog.IsCommandSegmentName(filepath.Base(decision.Path)) {
-			return errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup candidate has invalid generation: %s", filepath.Base(decision.Path)))
-		}
-		if lane == captured.Lane && seq >= captured.SegmentSeq {
+		if decision.lane == captured.Lane && decision.seq >= captured.SegmentSeq {
 			decision.Active = true
 		}
 	}

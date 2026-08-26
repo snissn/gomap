@@ -8181,9 +8181,9 @@ func backendSyncBoundary(backend BackendDB) error {
 	if checkpointer, ok := backend.(backendCheckpointer); ok {
 		err := checkpointer.Checkpoint()
 		// Backend checkpointing establishes the durable boundary before it
-		// attempts command-WAL cleanup. A concurrent append can invalidate only
-		// that cleanup proof; the retained WAL is safe and a later checkpoint
-		// can retry reclamation.
+		// attempts command-WAL cleanup. Monotonic appends and rotations retain
+		// newer generations while old covered segments can still be deleted;
+		// only unsafe publication or ownership changes stale the proof.
 		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
 			return nil
 		}
@@ -24798,10 +24798,10 @@ func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
 	}
 	if err := cleanupHook(sync); err != nil {
 		// Command-WAL cleanup is opportunistic after this checkpoint has already
-		// established its durable boundary. A concurrent append/publication can
-		// invalidate only the deletion proof; retaining the WAL is safe and a
-		// later checkpoint will recapture it. Do not turn that expected retry
-		// condition into a sticky background error.
+		// established its durable boundary. Monotonic appends and rotations
+		// retain newer generations while old covered segments can still be
+		// deleted; only unsafe publication or ownership changes stale the proof.
+		// Do not turn that retained-WAL retry condition into a sticky error.
 		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
 			return nil
 		}
