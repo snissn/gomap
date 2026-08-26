@@ -4758,6 +4758,24 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if err != nil {
 		return nil, true, err
 	}
+	conflictSnap := snap
+	if currentCatalog != nil && currentCatalog.pager != snap.Pager() {
+		refreshed := c.db.AcquireSnapshot()
+		if refreshed == nil {
+			return nil, true, backenddb.ErrClosed
+		}
+		defer func() { _ = refreshed.Close() }()
+		currentCatalog, err = c.revalidateBufferedWriteDomainAtSnapshotLocked(domain, refreshed)
+		if err != nil {
+			return nil, true, err
+		}
+		currentOptions, err = collectionPlannerOptionsForDB(c.db, currentCatalog.meta)
+		if err != nil {
+			return nil, true, err
+		}
+		indexed = len(currentCatalog.meta.Indexes) > 0
+		conflictSnap = refreshed
+	}
 	if indexed || currentCatalog == nil || !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
 		return nil, false, nil
 	}
@@ -4775,12 +4793,13 @@ func (c *Collection) bufferNoIndexInsertBatch(
 			return nil, true, ErrDocumentExists
 		}
 	}
-	if domain.primaryRoot != 0 {
+	primaryRoot := currentCatalog.rootID(collectionPrimaryRootName(currentCatalog.meta.Name))
+	if primaryRoot != 0 {
 		keys := make([][]byte, len(entries))
 		for i := range entries {
 			keys[i] = entries[i].id
 		}
-		exists, err := snap.HasAnySortedAtRoot(domain.primaryRoot, keys)
+		exists, err := conflictSnap.HasAnySortedAtRoot(primaryRoot, keys)
 		if err != nil {
 			return nil, true, err
 		}
@@ -4809,7 +4828,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	}
 	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if domain.loaded && domain.count > 0 {
-		catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+		catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -4892,7 +4911,19 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	return catalog, options, len(catalog.meta.Indexes) > 0, nil
 }
 
-func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain, currentCommitSeq, currentSystemRoot uint64) (*collectionCatalog, error) {
+func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain) (*collectionCatalog, error) {
+	if c == nil || c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	return c.revalidateBufferedWriteDomainAtSnapshotLocked(domain, snap)
+}
+
+func (c *Collection) revalidateBufferedWriteDomainAtSnapshotLocked(domain *collectionWriteDomain, snap *backenddb.Snapshot) (*collectionCatalog, error) {
 	if c == nil || c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4902,21 +4933,18 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if domain.catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
 	currentPager := snap.Pager()
+	currentSystemRoot := snapshotSystemRoot(snap)
+	currentCommitSeq := snapshotCommitSeq(snap)
 	if domain.baseSystemRoot == currentSystemRoot &&
 		domain.baseCommitSeq == currentCommitSeq &&
 		domain.catalog.pager == currentPager {
-		_ = snap.Close()
 		return domain.catalog, nil
 	}
 	catalog, err := loadCollectionCatalog(snap, domain.meta.Name)
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
-	_ = snap.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -4968,12 +4996,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	}
 	domain.meta = catalog.meta
 	domain.catalog = catalog
-	domain.baseCommitSeq = baseCommitSeq
-	domain.baseSystemRoot = baseSystemRoot
+	domain.baseCommitSeq = currentCommitSeq
+	domain.baseSystemRoot = currentSystemRoot
 	domain.primaryRoot = catalog.rootID(primaryRootName)
 	domain.storagePolicy = options.dataStoragePolicy
 	c.meta = catalog.meta
-	c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
+	c.rememberCatalogAtSystemRoot(currentSystemRoot, catalog)
 	return catalog, nil
 }
 
@@ -5128,8 +5156,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	if domain.catalog == nil {
 		return errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return err
 	}
@@ -5233,8 +5260,7 @@ func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
 	if !domain.indexedDeletesOnly {
 		return true
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return true
 	}
@@ -5325,8 +5351,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		return 0, errors.New("collections: indexed write buffer requires an indexed schema")
 	}
 	if domain.count > 0 {
-		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 		if err != nil {
 			return 0, err
 		}
@@ -8948,8 +8973,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if domain.catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -9582,8 +9606,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	if domain.catalog == nil {
 		return errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return err
 	}

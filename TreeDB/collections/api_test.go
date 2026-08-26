@@ -3179,6 +3179,85 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionNoIndexBufferedInsertRejectsDuplicateAcrossOnlineVacuumSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	original := []byte(`{"name":"original"}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{original}); err != nil {
+		t.Fatalf("insert original: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush original: %v", err)
+	}
+
+	stale := d.AcquireSnapshot()
+	if stale == nil {
+		t.Fatal("acquire pre-vacuum snapshot")
+	}
+	defer func() { _ = stale.Close() }()
+	stalePager := stale.Pager()
+	staleCatalog, err := loadCollectionCatalog(stale, "users")
+	if err != nil {
+		t.Fatalf("load pre-vacuum catalog: %v", err)
+	}
+	options, err := collectionPlannerOptionsForDB(d, staleCatalog.meta)
+	if err != nil {
+		t.Fatalf("planner options: %v", err)
+	}
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	current := d.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("acquire post-vacuum snapshot")
+	}
+	if current.Pager() == stalePager {
+		_ = current.Close()
+		t.Fatal("vacuum did not replace pager")
+	}
+	_ = current.Close()
+
+	_, buffered, err := col.bufferNoIndexInsertBatch(
+		col.writeDomain,
+		staleCatalog,
+		stale,
+		options,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"replacement"}`)},
+		insertBatchExecutionOptions{},
+	)
+	if !buffered || !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("stale-snapshot duplicate buffered=%t err=%v want ErrDocumentExists", buffered, err)
+	}
+	if col.writeDomain.count != 0 {
+		t.Fatalf("buffered duplicate count=%d want 0", col.writeDomain.count)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get original after rejected insert: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("document after rejected insert=%s want %s", got, original)
+	}
+}
+
 func TestCollectionInsertBatchBuffersNoIndexJSONBeforeFlush(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
