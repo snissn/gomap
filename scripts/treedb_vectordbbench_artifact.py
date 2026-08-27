@@ -259,7 +259,16 @@ def memory_bytes() -> int | None:
     with contextlib.suppress(OSError, ValueError):
         for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
             if line.startswith("MemTotal:"):
-                return int(line.split()[1]) * 1024
+                total = int(line.split()[1]) * 1024
+                if total > 0:
+                    return total
+    with contextlib.suppress(AttributeError, OSError, ValueError):
+        total = int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
+        if total > 0:
+            return total
+    value = command_output(["sysctl", "-n", "hw.memsize"])
+    if value.isascii() and value.isdigit() and int(value) > 0:
+        return int(value)
     return None
 
 
@@ -2043,8 +2052,17 @@ def lifecycle_dataset_shape(args: argparse.Namespace) -> tuple[int, int]:
     return case_vector_count(args.case_type), case_vector_dimensions(args.case_type)
 
 
+def custom_task_config_dataset(task_config: dict[str, Any]) -> dict[str, Any]:
+    current: Any = task_config
+    for key in ("case_config", "custom_case", "dataset_config"):
+        if not isinstance(current, dict) or not isinstance(current.get(key), dict):
+            raise ValueError(f"custom task_config {key} must be an object")
+        current = current[key]
+    return current
+
+
 def custom_task_config_shape(task_config: dict[str, Any]) -> tuple[int, int]:
-    dataset = ((task_config.get("case_config") or {}).get("custom_case") or {}).get("dataset_config") or {}
+    dataset = custom_task_config_dataset(task_config)
     values = []
     for key in ("size", "dim"):
         value = dataset.get(key)
@@ -2060,7 +2078,7 @@ def custom_task_config_shape(task_config: dict[str, Any]) -> tuple[int, int]:
 
 
 def custom_task_config_dataset_file(task_config: dict[str, Any]) -> Path:
-    dataset = ((task_config.get("case_config") or {}).get("custom_case") or {}).get("dataset_config") or {}
+    dataset = custom_task_config_dataset(task_config)
     directory = dataset.get("dir")
     file_count = dataset.get("file_count")
     shuffled = dataset.get("use_shuffled")
@@ -3006,6 +3024,11 @@ def main(argv: list[str]) -> int:
         return 2
     state = HarnessState(root=args.out)
     context = collect_context(gomap_root, args.vectordbbench_dir, args.out)
+    if args.lifecycle:
+        total_memory = context.get("host", {}).get("memory_bytes")
+        if isinstance(total_memory, bool) or not isinstance(total_memory, int) or total_memory <= 0:
+            print("harness failed before start; error=positive host memory size is unavailable", file=sys.stderr)
+            return 2
     service_proc: subprocess.Popen[str] | None = None
     service_command: list[str] | None = None
     sampler: DiagnosticsSampler | None = None

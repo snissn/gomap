@@ -270,6 +270,34 @@ class ArtifactRootTest(unittest.TestCase):
                 harness.prepare_artifact_root(root)
 
 
+class HostContextTest(unittest.TestCase):
+    def test_memory_bytes_uses_portable_sysconf_when_proc_is_unavailable(self) -> None:
+        with mock.patch.object(Path, "read_text", side_effect=OSError("no proc")), \
+                mock.patch.object(harness.os, "sysconf", side_effect=(4096, 1000)):
+            self.assertEqual(harness.memory_bytes(), 4_096_000)
+
+    def test_lifecycle_fails_before_build_when_memory_size_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "artifact"
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            context = {"host": {"memory_bytes": None}}
+            stderr = io.StringIO()
+            with mock.patch.object(harness, "collect_context", return_value=context), \
+                    mock.patch.object(harness, "build_service") as build, \
+                    contextlib.redirect_stderr(stderr):
+                exit_code = harness.main([
+                    "--out", str(root), "--run-vdbbench", "--rows", "exact",
+                    "--case-type", "PerformanceCustomDataset", "--lifecycle",
+                    "--lifecycle-dataset-file", str(dataset),
+                    "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                ])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("positive host memory size is unavailable", stderr.getvalue())
+        build.assert_not_called()
+
+
 class SmokeShapeTest(unittest.TestCase):
     def test_campaign_shape_is_valid_and_deterministic(self) -> None:
         harness.validate_smoke_shape(768, 256, 100, 192, 150)
@@ -572,6 +600,43 @@ class LifecycleValidatorTest(unittest.TestCase):
             rejected = harness.validate_lifecycle_artifact(root)
             self.assertFalse(rejected["complete"])
             self.assertTrue(any("shape" in error for error in rejected["errors"]), rejected)
+
+    def test_custom_task_config_nested_values_must_be_objects(self) -> None:
+        mutations = (
+            lambda config: config.__setitem__("case_config", []),
+            lambda config: config["case_config"].__setitem__("custom_case", "bad"),
+            lambda config: config["case_config"]["custom_case"].__setitem__("dataset_config", 42),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                task_config = {"case_config": {"custom_case": {"dataset_config": {
+                    "dir": str(root), "size": 50000, "dim": 768,
+                    "file_count": "1", "use_shuffled": False,
+                }}}}
+                mutate(task_config)
+                result = root / "vdbbench-results" / "result.json"
+                result.parent.mkdir()
+                result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
+                metrics = {
+                    "result_file": str(result.relative_to(root)),
+                    "result_sha256": harness.sha256_file(result),
+                    "task_config": task_config,
+                    "task_config_sha256": harness.canonical_sha256(task_config),
+                }
+                manifest["harness"]["case_type"] = "PerformanceCustomDataset"
+                manifest["vdbbench"] = [{"load_metrics": metrics}]
+                manifest["lifecycle"]["task_config_binding"] = {
+                    key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
+                }
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("must be an object" in error for error in got["errors"]), got)
 
     def test_completed_fixture_requires_positive_t_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
