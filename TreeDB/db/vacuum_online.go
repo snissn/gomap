@@ -179,14 +179,7 @@ func (db *DB) publishVacuumOnlineStats(stats VacuumOnlineStats) {
 }
 
 func vacuumDurableResourceSummary(resources *rootpublication.StableResourceSet) (descriptors, bytes uint64) {
-	if resources == nil {
-		return 0, 0
-	}
-	for _, descriptor := range resources.Descriptors() {
-		descriptors++
-		bytes += descriptor.Frontier().Bytes
-	}
-	return descriptors, bytes
+	return resources.PhysicalSummary()
 }
 
 // VacuumOnlineStats returns an owned snapshot of the most recently completed

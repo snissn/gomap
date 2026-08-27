@@ -506,7 +506,7 @@ func rangeStableResourceKindViews(views map[ResourceKind]stableResourceKindView,
 // Roots retain token ownership; path-copied logical entries may therefore
 // differ from the immutable rope entry after certified append-only coalescing.
 func rangeStableResourceLogicalIndex(root *stableResourceLogicalIndexNode, visit func(*stableResourceEntry) bool) bool {
-	stack := make([]*stableResourceLogicalIndexNode, 0, 8)
+	stack := make([]*stableResourceLogicalIndexNode, 0, 16)
 	for root != nil || len(stack) != 0 {
 		for root != nil {
 			stack = append(stack, root)

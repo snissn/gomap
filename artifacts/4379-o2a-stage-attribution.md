@@ -36,6 +36,32 @@ and write loops. It is not the final #4379 <=3% product gate: that gate is
 paired diagnostics-on load throughput and stage wall time after O2b/#4380 can
 exercise the complete lifecycle. It remains pending, not waived.
 
+The snapshot benchmark above measures only the owned atomic value copy. The
+post-cutover `vacuumDurableResourceSummary` is separately O(resources): it
+counts existing coalesced physical resource entries and sums their frontiers.
+It does not clone descriptor fields or RID memberships. The direct benchmark
+uses construction outside the timed region and five samples per case:
+
+```sh
+go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumDurableResourceSummary$' -benchtime=200ms -count=5 -benchmem
+```
+
+| resources | RIDs/resource | kinds | median ns/op | B/op | allocs/op |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0 | 1 | 44.15 | 0 | 0 |
+| 64 | 0 | 1 | 177.8 | 0 | 0 |
+| 1024 | 0 | 1 | 2691 | 0 | 0 |
+| 1024 | 0 | 2 | 2713 | 0 | 0 |
+| 1 | 1024 | 1 | 44.16 | 0 | 0 |
+| 64 | 16 | 1 | 176.3 | 0 | 0 |
+
+Before this direct traversal, descriptor materialization measured medians of
+344.2 ns/op (1), 13,527 ns/op (64), and 235,145 ns/op (1024), with 4, 132,
+and 2,053 allocs/op respectively. Raw before and after samples are retained
+under `/mnt/fast4tb/codex-gomap-4378-exec-20260826/evidence/`. This measures
+the summary seam only; the final paired diagnostics-on load/stage-wall <=3%
+gate remains pending and is not waived.
+
 The exact scanner currently exposes unique external segment identities, not
 stable outer-leaf record identities. O2a reports `UniqueExternalSegments`
 without calling it a leaf count; exact unique outer-leaf accounting requires a
@@ -49,6 +75,4 @@ without claiming a completed capture.
 `BenchmarkVacuumIndexOnlineCollection/bytes_1x` was also sampled as a whole
 vacuum guardrail, but repeated multi-iteration runs did not terminate promptly
 on this host and one-iteration samples were dominated by sync I/O variance.
-It is therefore not used to attribute O2a overhead. The direct benchmark is
-the gate evidence because the new work is O(1) snapshot publication, not an
-inner-loop counter.
+It is therefore not used to attribute O2a overhead.
