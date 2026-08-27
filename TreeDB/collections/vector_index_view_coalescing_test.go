@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -73,6 +74,41 @@ func TestNativeVectorAcknowledgedMutationsCoalesceSearchViewPublication(t *testi
 	}
 	if got := index.searchView.Load(); got != published {
 		t.Fatalf("subsequent acquisition republished immutable view %p, want %p", got, published)
+	}
+
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("doc-concurrent")},
+		[][]byte{[]byte(`{"embedding":[1,0.09],"tenant":"alpha"}`)},
+	); err != nil {
+		t.Fatalf("insert before concurrent acquisition: %v", err)
+	}
+	const readers = 16
+	start := make(chan struct{})
+	acquired := make(chan *vectorIndexSearchView, readers)
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	for range readers {
+		go func() {
+			defer wg.Done()
+			<-start
+			view := index.acquireSearchView()
+			acquired <- view
+			if view != nil {
+				index.releaseSearchView(view)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(acquired)
+	concurrent := index.searchView.Load()
+	if concurrent == nil || concurrent == published {
+		t.Fatalf("concurrent first acquisition view=%p previous=%p", concurrent, published)
+	}
+	for view := range acquired {
+		if view != concurrent {
+			t.Fatalf("concurrent acquisition view=%p want single publication %p", view, concurrent)
+		}
 	}
 }
 
