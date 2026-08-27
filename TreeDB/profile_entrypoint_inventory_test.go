@@ -32,7 +32,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "Set", "SetMaintenancePhase", "SetSync", "Stats",
-		"Update", "UpdateSync", "VacuumIndexOnline", "ValueLogGC", "ValueLogRewriteOnline",
+		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
