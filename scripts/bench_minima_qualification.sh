@@ -19,13 +19,41 @@ TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
 TREEDB_OPERATION_TIMEOUT=${TREEDB_OPERATION_TIMEOUT:-120}
+TREEDB_DIAGNOSTICS_DIR=${TREEDB_DIAGNOSTICS_DIR:-}
+TREEDB_DIAGNOSTICS_URL=${TREEDB_DIAGNOSTICS_URL:-http://127.0.0.1:17121}
+TREEDB_DIAGNOSTIC_SLOW_SECONDS=${TREEDB_DIAGNOSTIC_SLOW_SECONDS:-30}
+TREEDB_DIAGNOSTIC_PROFILE_SECONDS=${TREEDB_DIAGNOSTIC_PROFILE_SECONDS:-5}
+TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT=${TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT:-10}
+TREEDB_DIAGNOSTIC_RESUME_SCENARIO=${TREEDB_DIAGNOSTIC_RESUME_SCENARIO:-}
+TREEDB_DIAGNOSTIC_RESUME_START=${TREEDB_DIAGNOSTIC_RESUME_START:-}
 RECOMMENDATION=${RECOMMENDATION:-ready_with_alpha_limitations}
 PYTHON=${PYTHON:-python3}
+
+treedb_diagnostic_args=()
+if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
+	treedb_diagnostic_args+=(
+		--diagnostics-dir "$TREEDB_DIAGNOSTICS_DIR"
+		--diagnostics-url "$TREEDB_DIAGNOSTICS_URL"
+		--diagnostic-slow-seconds "$TREEDB_DIAGNOSTIC_SLOW_SECONDS"
+		--diagnostic-profile-seconds "$TREEDB_DIAGNOSTIC_PROFILE_SECONDS"
+		--diagnostic-capture-timeout "$TREEDB_DIAGNOSTIC_CAPTURE_TIMEOUT"
+	)
+fi
 
 mkdir -p "$RUN_DIR/bin"
 
 case "$MODE" in
 representative)
+	;;
+diagnostic-resume)
+	if [[ -z "$TREEDB_DIAGNOSTICS_DIR" || -z "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO" || -z "$TREEDB_DIAGNOSTIC_RESUME_START" ]]; then
+		printf '%s\n' 'MODE=diagnostic-resume requires TREEDB_DIAGNOSTICS_DIR, TREEDB_DIAGNOSTIC_RESUME_SCENARIO, and TREEDB_DIAGNOSTIC_RESUME_START.' >&2
+		exit 2
+	fi
+	treedb_diagnostic_args+=(
+		--diagnostic-resume-scenario "$TREEDB_DIAGNOSTIC_RESUME_SCENARIO"
+		--diagnostic-resume-start "$TREEDB_DIAGNOSTIC_RESUME_START"
+	)
 	;;
 small)
 	printf '%s\n' 'MODE=small runs the real TreeDB small-scenario lifecycle and emits nonpassing partial evidence.' >&2
@@ -44,14 +72,15 @@ small)
 		--collection "$TREEDB_COLLECTION" \
 		--profile "$TREEDB_PROFILE" \
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
-		--ef-search "$TREEDB_EF_SEARCH" ||
+		--ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 		treedb_status=$?
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
 	printf 'small manifest: %s\nvalidated partial TreeDB evidence: %s\n' "$MANIFEST_PATH" "$TREEDB_EVIDENCE"
 	exit "$treedb_status"
 	;;
 *)
-	printf 'unsupported MODE=%s (use small or representative)\n' "$MODE" >&2
+	printf 'unsupported MODE=%s (use small, representative, or diagnostic-resume)\n' "$MODE" >&2
 	exit 2
 	;;
 esac
@@ -74,8 +103,15 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--collection "$TREEDB_COLLECTION" \
 	--profile "$TREEDB_PROFILE" \
 	--ef-search "$TREEDB_EF_SEARCH" \
-	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" ||
+	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
+	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
+
+if [[ "$MODE" == "diagnostic-resume" ]]; then
+	printf 'diagnostic manifest: %s\nnonqualifying TreeDB evidence: %s\ndiagnostic profiles: %s\n' \
+		"$MANIFEST_PATH" "$TREEDB_EVIDENCE" "$TREEDB_DIAGNOSTICS_DIR"
+	exit "$treedb_status"
+fi
 
 qdrant_status=0
 if [[ "$(uname -s)" == "Darwin" && -z "${QDRANT_BIN:-}" && -z "${QDRANT_SERVER_PID:-}" ]]; then
