@@ -1052,12 +1052,24 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
     if events:
         report["last_stage"] = events[-1].get("stage")
+        if report["last_stage"] != "teardown":
+            completion_errors.append("teardown must be the final lifecycle stage")
         final_state = events[-1].get("state")
         rows = final_state.get("rows") if isinstance(final_state, dict) else None
         if isinstance(rows, dict):
             report["counts"] = {key: rows.get(key) for key in ("client_sent", "server_accepted", "server_durable", "reopened")}
 
     if expected_rows is not None:
+        for stage in ("reset", "load_start"):
+            if stage not in stage_events:
+                continue
+            state = stage_events[stage].get("state")
+            rows = state.get("rows") if isinstance(state, dict) else {}
+            if not isinstance(rows, dict):
+                rows = {}
+            for key in ("client_sent", "server_accepted", "server_durable", "reopened"):
+                if rows.get(key) != 0:
+                    completion_errors.append(f"stage {stage} rows.{key} must be zero")
         count_stages = {
             "load_end": ("client_sent", "server_accepted"),
             "drain_checkpoint": ("client_sent", "server_accepted", "server_durable"),

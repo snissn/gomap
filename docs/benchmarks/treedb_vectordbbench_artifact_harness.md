@@ -61,6 +61,10 @@ startup -> reset -> load_start -> load_end -> drain_checkpoint
 -> graceful_close -> cold_open_ready -> exact_verify -> route_verify -> teardown
 ```
 
+For a completed lifecycle, both `reset` and `load_start` must report zero for
+all four row counts. `teardown` must be the final event and must retain the
+exact expected row counts.
+
 The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle

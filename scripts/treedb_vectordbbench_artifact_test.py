@@ -543,6 +543,42 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertTrue(any("stage teardown rows.server_accepted" in item for item in got["completion_errors"]), got)
 
+    def test_reset_and_load_start_must_prove_an_empty_boundary(self) -> None:
+        for sequence, stage in ((1, "reset"), (2, "load_start")):
+            with self.subTest(stage=stage):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    for key in ("client_sent", "server_accepted", "server_durable", "reopened"):
+                        events[sequence]["state"]["rows"][key] = 1
+                    rewrite_lifecycle_fixture(root, manifest, events)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(
+                    f"stage {stage} rows.client_sent must be zero" in item
+                    for item in got["completion_errors"]
+                ), got)
+
+    def test_teardown_must_be_the_terminal_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            late = json.loads(json.dumps(events[-1]))
+            late["sequence"] += 1
+            late["stage"] = "post_teardown"
+            late["timestamp"] = "2026-08-27T00:00:14Z"
+            late["state"]["counters"]["writes"] += 1
+            events.append(late)
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["complete"])
+        self.assertEqual(got["last_stage"], "post_teardown")
+        self.assertTrue(any("teardown must be the final" in item for item in got["completion_errors"]), got)
+
     def test_stale_index_generation_or_fallback_route_fails_closed(self) -> None:
         def stale_identity(rows: list[dict]) -> None:
             rows[10]["state"]["index"]["identity"] = "stale-index"
