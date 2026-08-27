@@ -904,7 +904,30 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) error {
 	if _, err := c.refreshNativeVectorIndexDeclaration(index.name); err != nil {
 		return err
 	}
-	c.registerVectorIndexCurrentCatalog(index)
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	if declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil {
+		c.registerVectorIndexCurrentCatalog(index)
+		return nil
+	}
+	return c.registerAdHocVectorIndexCurrentCatalog(index)
+}
+
+func (c *Collection) registerAdHocVectorIndexCurrentCatalog(index *VectorIndex) error {
+	coord := c.collectionSchemaCoordinator()
+	if coord != nil {
+		coord.adHocVectorAdmissionMu.Lock()
+		defer coord.adHocVectorAdmissionMu.Unlock()
+	}
+	if sourceGeneration, valid := index.sourceDocumentCoverage(); valid {
+		currentGeneration, err := c.currentVectorIndexDocumentGeneration()
+		if err != nil {
+			return err
+		}
+		if currentGeneration != sourceGeneration {
+			return ErrConcurrentMutation
+		}
+	}
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
 	return nil
 }
 
@@ -916,6 +939,13 @@ func (c *Collection) registerVectorIndexCurrentCatalog(index *VectorIndex) {
 		coord.adHocVectorAdmissionMu.Lock()
 		defer coord.adHocVectorAdmissionMu.Unlock()
 	}
+	c.registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index)
+}
+
+func (c *Collection) registerVectorIndexCurrentCatalogWithAdHocAdmissionLocked(index *VectorIndex) {
+	def, declaredNative := findVectorIndex(c.meta.VectorIndexes, index.name)
+	sharedNative := declaredNative && vectorIndexDefinitionUsesNativeRuntime(def) && c.writeDomain != nil
+	coord := c.collectionSchemaCoordinator()
 	if index.searchView.Load() == nil && index.hasValidSourceDocumentRoots() {
 		index.publishSearchView()
 	}
