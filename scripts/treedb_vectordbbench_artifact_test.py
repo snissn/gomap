@@ -242,6 +242,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                     "name": "index-a",
                     "generation": 7,
                     "vector_strategy": "column_graph",
+                    "vector_m": 16,
+                    "vector_ef_construction": 128,
                 },
                 "vector_index_name": "vector_hnsw",
                 "status": {
@@ -1904,6 +1906,20 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(expected in error for error in got["errors"]), got)
 
+    def test_completed_fixture_binds_build_parameters_to_raw_optimize_response(self) -> None:
+        for key, value in (("m", 17), ("ef_construction", 129)):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["harness"][key] = value
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("build parameters" in error for error in got["errors"]), got)
+
     def test_completed_fixture_malformed_boundary_state_is_structured_error(self) -> None:
         for mutation, expected in (("snapshot", "snapshot must be an object"), ("rows", "state must contain")):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
@@ -3520,6 +3536,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
                         "name": harness.lifecycle_index_name(args),
                         "generation": 7,
                         "vector_strategy": "column_graph",
+                        "vector_m": args.m,
+                        "vector_ef_construction": args.ef_construction,
                     },
                     "vector_index_name": "vector_hnsw",
                     "status": {

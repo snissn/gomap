@@ -151,6 +151,9 @@ service's signed `flag.Int` range. A nonempty effective `pprof` address must
 use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
 65535; port zero is excluded because the service does not publish the selected
 ephemeral diagnostics port.
+The checksum-bound adapter optimize response must echo `m` and
+`ef_construction` on the ready index, binding the declared graph-build settings
+to the asset used after cold reopen.
 
 Storage evidence names the discovery method, device, filesystem, mount,
 resolved benchmark path, and positive byte capacity. Linux uses structured

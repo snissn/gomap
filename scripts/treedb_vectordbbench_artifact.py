@@ -2269,7 +2269,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             else:
                 try:
                     raw_identity, raw_generation, raw_expected_service_generation = lifecycle_ready_asset(
-                        optimize_response, expected_index_name
+                        optimize_response, expected_index_name,
+                        expected_m=harness.get("m"),
+                        expected_ef_construction=harness.get("ef_construction"),
                     )
                 except RuntimeError as exc:
                     errors.append(f"adapter optimize response does not prove a ready index: {exc}")
@@ -3462,7 +3464,13 @@ def run_loaded_route_proof(
     return route
 
 
-def lifecycle_ready_asset(optimize: dict[str, Any], index_name: str) -> tuple[str, int, int | None]:
+def lifecycle_ready_asset(
+    optimize: dict[str, Any],
+    index_name: str,
+    *,
+    expected_m: int | None = None,
+    expected_ef_construction: int | None = None,
+) -> tuple[str, int, int | None]:
     index_info = optimize.get("index")
     status = optimize.get("status")
     if not isinstance(index_info, dict) or not isinstance(status, dict):
@@ -3478,6 +3486,13 @@ def lifecycle_ready_asset(optimize: dict[str, Any], index_name: str) -> tuple[st
         or status.get("rebuild_needed") is not False
     ):
         raise RuntimeError(f"optimize response does not prove a ready durable asset: {optimize}")
+    if (
+        expected_m is not None
+        and index_info.get("vector_m") != expected_m
+        or expected_ef_construction is not None
+        and index_info.get("vector_ef_construction") != expected_ef_construction
+    ):
+        raise RuntimeError("optimize response build parameters do not match the lifecycle harness")
     expected_service_generation: int | None = None
     if strategy == "column_graph":
         generation = index_info.get("generation")
@@ -3524,7 +3539,9 @@ def complete_lifecycle(
     optimize = adapter["optimize_response"]
     index_name = lifecycle_index_name(args)
     index_identity, asset_generation, expected_service_generation = lifecycle_ready_asset(
-        optimize, index_name
+        optimize, index_name,
+        expected_m=args.m,
+        expected_ef_construction=args.ef_construction,
     )
     index_state = {"identity": index_identity, "asset_generation": asset_generation, "status": "ready"}
     builder = LifecycleStateBuilder()
