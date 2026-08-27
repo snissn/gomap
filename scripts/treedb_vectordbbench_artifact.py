@@ -1078,15 +1078,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     ):
         errors.append("manifest.service.command must be a non-empty argv list of strings")
     else:
-        profile_positions = []
-        invalid_profile = False
+        known_flags = {
+            "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
+        }
+        profile_values = []
+        invalid_command = False
         parsing_flags = True
         position = 1
         while position < len(service_command):
             argument = service_command[position]
             if not parsing_flags:
-                if argument == "-profile" or argument.startswith("-profile="):
-                    invalid_profile = True
+                trailing_flag = argument[2:] if argument.startswith("--") else argument[1:]
+                if argument.startswith("-") and trailing_flag.partition("=")[0] == "profile":
+                    invalid_command = True
                 position += 1
                 continue
             if argument == "--":
@@ -1097,23 +1101,29 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 parsing_flags = False
                 position += 1
                 continue
-            if argument.startswith("-profile="):
-                invalid_profile = True
+            flag = argument[2:] if argument.startswith("--") else argument[1:]
+            name, separator, inline_value = flag.partition("=")
+            if name not in known_flags:
+                invalid_command = True
                 position += 1
                 continue
-            if argument in {"-dir", "-addr", "-profile"}:
-                if argument == "-profile":
-                    profile_positions.append(position)
+            if separator:
+                value = inline_value
+                position += 1
+            elif position + 1 < len(service_command):
+                value = service_command[position + 1]
                 position += 2
-                continue
-            position += 1
+            else:
+                invalid_command = True
+                break
+            if name == "profile":
+                profile_values.append(value)
         if (
-            invalid_profile
-            or len(profile_positions) != 1
-            or profile_positions[0] + 1 >= len(service_command)
-            or service_command[profile_positions[0] + 1] != service.get("profile")
+            invalid_command
+            or len(profile_values) != 1
+            or profile_values[0] != service.get("profile")
         ):
-            errors.append("manifest.service.command must contain exactly one matching '-profile <profile>' selector")
+            errors.append("manifest.service.command has invalid flags or does not select exactly one matching profile")
     binary_path = binary.get("path")
     if not isinstance(binary_path, str) or not binary_path:
         errors.append("manifest.service.binary.path must be a non-empty string")
@@ -1288,6 +1298,20 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if not isinstance(state, dict):
             errors.append(f"{prefix} state must be an object")
             continue
+        if "index" in state:
+            index = state.get("index")
+            if not isinstance(index, dict):
+                errors.append(f"{prefix} state.index must be an object")
+            else:
+                if "identity" in index and not isinstance(index.get("identity"), str):
+                    errors.append(f"{prefix} state.index.identity must be a string")
+                generation = index.get("asset_generation")
+                if "asset_generation" in index and (
+                    isinstance(generation, bool) or not isinstance(generation, int)
+                ):
+                    errors.append(f"{prefix} state.index.asset_generation must be an integer")
+                if "status" in index and not isinstance(index.get("status"), str):
+                    errors.append(f"{prefix} state.index.status must be a string")
         rows = state.get("rows")
         wal = state.get("wal")
         counters = state.get("counters")
@@ -1408,31 +1432,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             continue
         state = stage_events[stage].get("state")
         index = state.get("index") if isinstance(state, dict) else None
-        if index is not None and not isinstance(index, dict):
-            errors.append(f"stage {stage} index must be an object")
-            continue
         if not isinstance(index, dict):
             index = {}
         index_identity = index.get("identity")
         index_generation = index.get("asset_generation")
         index_status = index.get("status")
-        malformed = False
-        if "identity" in index and not isinstance(index_identity, str):
-            errors.append(f"stage {stage} index.identity must be a string")
-            malformed = True
-        if "asset_generation" in index and (
-            isinstance(index_generation, bool) or not isinstance(index_generation, int)
-        ):
-            errors.append(f"stage {stage} index.asset_generation must be an integer")
-            malformed = True
-        if "status" in index and not isinstance(index_status, str):
-            errors.append(f"stage {stage} index.status must be a string")
-            malformed = True
-        if malformed:
-            continue
         current = (index_identity, index_generation)
         if (
-            not current[0]
+            not isinstance(current[0], str)
+            or not current[0]
+            or isinstance(current[1], bool)
             or not isinstance(current[1], int)
             or current[1] <= 0
             or index_status != "ready"

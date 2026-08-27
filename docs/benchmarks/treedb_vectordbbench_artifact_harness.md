@@ -74,8 +74,9 @@ commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes a canonical public service profile, case type,
-the exact non-empty service argv with one matching `-profile <profile>`
-selector before Go flag parsing terminates at `--` or a positional argument,
+the exact non-empty service argv using only the document service's defined
+flags and with one matching `profile` selector before Go flag parsing
+terminates at `--` or a positional argument,
 concurrency, batch size, `m`, and `ef_construction`. The argv is part
 of the effective-configuration checksum, and its executable must equal the
 path of the SHA-256-bound service binary. Standard case names (for

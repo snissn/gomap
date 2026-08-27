@@ -680,6 +680,7 @@ class LifecycleValidatorTest(unittest.TestCase):
 
     def test_present_index_snapshot_types_are_structural_in_partial_artifacts(self) -> None:
         cases = (
+            (3, lambda state: state.__setitem__("index", []), "index must be an object"),
             (6, lambda state: state.__setitem__("index", []), "index must be an object"),
             (7, lambda state: state["index"].__setitem__("identity", 7), "index.identity"),
             (8, lambda state: state["index"].__setitem__("asset_generation", 7.0), "index.asset_generation"),
@@ -696,9 +697,12 @@ class LifecycleValidatorTest(unittest.TestCase):
                     rewrite_lifecycle_fixture(root, manifest, events[:event_position + 1])
 
                     got = harness.validate_lifecycle_artifact(root)
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
 
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
+                self.assertEqual(exit_code, 1)
 
     def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -889,9 +893,11 @@ class LifecycleValidatorTest(unittest.TestCase):
             ("empty-argv", lambda row: row["service"].__setitem__("command", [])),
             ("non-string-argument", lambda row: row["service"]["command"].append(7)),
             ("missing-selector", lambda row: row["service"].__setitem__("command", ["treedb-document-service"])),
-            ("inline-selector", lambda row: row["service"]["command"].__setitem__(slice(-2, None), ["-profile=command_wal_durable"])),
             ("declared-command-mismatch", lambda row: row["service"].__setitem__("profile", "command_wal_relaxed")),
             ("duplicate-selector", lambda row: row["service"]["command"].extend(["-profile", "command_wal_durable"])),
+            ("unknown-flag", lambda row: row["service"]["command"].append("-bogus")),
+            ("unknown-double-dash-flag", lambda row: row["service"]["command"].append("--bogus")),
+            ("unknown-inline-flag", lambda row: row["service"]["command"].append("-bogus=value")),
             (
                 "selector-after-positional",
                 lambda row: row["service"]["command"].__setitem__(
@@ -929,6 +935,24 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("config_sha256 does not match" in item for item in got["errors"]), got)
+
+        for profile_selector in ("-profile=command_wal_durable", "--profile=command_wal_durable"):
+            with self.subTest(profile_selector=profile_selector):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["service"]["command"][-2:] = [
+                        "--pprof=127.0.0.1:6060",
+                        "-block-profile-rate", "1",
+                        "--mutex-profile-fraction=1",
+                        profile_selector,
+                    ]
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertTrue(got["complete"], got)
 
     def test_service_command_executable_matches_declared_binary_path(self) -> None:
         cases = (
