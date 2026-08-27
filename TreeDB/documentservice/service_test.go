@@ -936,8 +936,17 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 		t.Fatalf("optimize timing=%+v want completed cache and rebuild stages", optimize.Timing)
 	}
 	build := optimize.Status.ColumnGraphBuild
-	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.PublicationNanos == 0 {
+	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.InvNormPreparationNanos == 0 || build.AdjacencyStatePreparationNanos == 0 || build.RowRefPreparationNanos == 0 || build.DocumentIDPreparationNanos == 0 || build.QuantizedPreparationNanos == 0 || build.SearchPackPreparationNanos == 0 || build.ManifestFinalizationNanos == 0 || build.FileSyncNanos == 0 || build.FileSyncCount == 0 || build.NamespaceSyncNanos == 0 || build.NamespaceSyncCount == 0 || build.PublicationNanos == 0 {
 		t.Fatalf("column graph build timing=%+v want completed ordered stages", build)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	failed, err := svc.OptimizeIndex(canceled, "bench", OptimizeIndexRequest{})
+	if err == nil {
+		t.Fatal("canceled OptimizeIndex err=nil")
+	}
+	if failed.Timing != (OptimizeIndexTiming{}) || failed.Status.Name != "" || failed.VectorIndexName != "" {
+		t.Fatalf("canceled OptimizeIndex response=%+v must not report success", failed)
 	}
 	exact, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8})
 	if err != nil {
@@ -956,6 +965,29 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 
 	if _, err := svc.ResetIndex(ctx, "bench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions}); ErrorCodeOf(err) != CodeUnsupported {
 		t.Fatalf("ResetIndex existing column_graph err=%v code=%s", err, ErrorCodeOf(err))
+	}
+}
+
+// BenchmarkVectorIndexMaintenanceStatusTimingCopy bounds the response-only
+// timing projection; rebuild work itself is intentionally outside this loop.
+func BenchmarkVectorIndexMaintenanceStatusTimingCopy(b *testing.B) {
+	status := collections.VectorIndexStatus{
+		Name:     "embedding",
+		Strategy: collections.VectorIndexStrategyColumnGraph,
+		ColumnGraphBuild: collections.ColumnGraphBuildTiming{
+			Total: time.Second, Snapshot: time.Nanosecond, RowExtraction: time.Nanosecond,
+			AdjacencyBuild: time.Nanosecond, LocalityRemap: time.Nanosecond, AssetPreparation: time.Nanosecond,
+			InvNormPreparation: time.Nanosecond, AdjacencyStatePreparation: time.Nanosecond,
+			RowRefPreparation: time.Nanosecond, DocumentIDPreparation: time.Nanosecond,
+			QuantizedPreparation: time.Nanosecond, SearchPackPreparation: time.Nanosecond,
+			ManifestFinalization: time.Nanosecond, FileSync: time.Nanosecond, FileSyncCount: 1,
+			NamespaceSync: time.Nanosecond, NamespaceSyncCount: 1, Publication: time.Nanosecond,
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = vectorIndexMaintenanceStatus(status)
 	}
 }
 

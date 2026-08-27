@@ -29,15 +29,28 @@ type VectorIndexStatus struct {
 }
 
 // ColumnGraphBuildTiming records completed named rebuild stages.
+// Asset preparation and publication overlap because the command-WAL publisher
+// invokes the preparation callback; sync durations are nested producer work.
 // It is populated only for a successful column_graph rebuild.
 type ColumnGraphBuildTiming struct {
-	Total            time.Duration
-	Snapshot         time.Duration
-	RowExtraction    time.Duration
-	AdjacencyBuild   time.Duration
-	LocalityRemap    time.Duration
-	AssetPreparation time.Duration
-	Publication      time.Duration
+	Total                     time.Duration
+	Snapshot                  time.Duration
+	RowExtraction             time.Duration
+	AdjacencyBuild            time.Duration
+	LocalityRemap             time.Duration
+	AssetPreparation          time.Duration
+	InvNormPreparation        time.Duration
+	AdjacencyStatePreparation time.Duration
+	RowRefPreparation         time.Duration
+	DocumentIDPreparation     time.Duration
+	QuantizedPreparation      time.Duration
+	SearchPackPreparation     time.Duration
+	ManifestFinalization      time.Duration
+	FileSync                  time.Duration
+	FileSyncCount             uint64
+	NamespaceSync             time.Duration
+	NamespaceSyncCount        uint64
+	Publication               time.Duration
 }
 
 // VectorIndexStatus returns persisted-root and runtime status for a declared
