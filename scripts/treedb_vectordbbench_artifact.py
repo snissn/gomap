@@ -2853,8 +2853,22 @@ def custom_task_config_dataset_file(task_config: dict[str, Any]) -> Path:
 
 
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
-    custom_case = task_config.get("case_config", {}).get("custom_case") or {}
-    size = custom_case.get("dataset_config", {}).get("size")
+    if "case_config" not in task_config:
+        return case_vector_count(case_type), "case_type suffix"
+    case_config = task_config.get("case_config")
+    if not isinstance(case_config, dict):
+        raise ValueError("canonical VDBBench task_config.case_config must be an object")
+    if "custom_case" not in case_config:
+        return case_vector_count(case_type), "case_type suffix"
+    custom_case = case_config.get("custom_case")
+    if not isinstance(custom_case, dict):
+        raise ValueError("canonical VDBBench task_config.case_config.custom_case must be an object")
+    dataset_config = custom_case.get("dataset_config")
+    if not isinstance(dataset_config, dict):
+        raise ValueError(
+            "canonical VDBBench task_config.case_config.custom_case.dataset_config must be an object"
+        )
+    size = dataset_config.get("size")
     if (isinstance(size, int) and not isinstance(size, bool) and size > 0) or (isinstance(size, str) and size.isdigit() and int(size) > 0):
         return int(size), "task_config.case_config.custom_case.dataset_config.size"
     return case_vector_count(case_type), "case_type suffix"

@@ -1037,6 +1037,30 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "inserted_count 49999 != expected"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
+    def test_canonical_result_rejects_malformed_nested_task_config(self) -> None:
+        for case_config in (None, [], "bad"):
+            with self.subTest(case_config=case_config), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                path = root / "result_test.json"
+                path.write_text(json.dumps({"results": [{
+                    "label": ":)",
+                    "metrics": {
+                        "insert_duration": 2.0,
+                        "optimize_duration": 3.0,
+                        "load_duration": 5.0,
+                        "inserted_count": 50_000,
+                    },
+                    "task_config": {
+                        "db_config": {"index_name": "idx"},
+                        "case_config": case_config,
+                    },
+                }]}), encoding="utf-8")
+
+                with self.assertRaisesRegex(ValueError, "case_config"):
+                    harness.load_metrics_from_result(
+                        path, "idx", "PerformanceCustomDataset", root
+                    )
+
     def test_partial_multirow_run_preserves_completed_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1540,6 +1564,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             lambda row: row.__setitem__("label", ":("),
             lambda row: row.__setitem__("metrics", "bad"),
             lambda row: row["metrics"].__setitem__("insert_duration", 10**400),
+            lambda row: row["task_config"].__setitem__("case_config", None),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp:
