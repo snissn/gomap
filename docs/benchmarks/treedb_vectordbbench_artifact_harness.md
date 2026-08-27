@@ -102,10 +102,11 @@ The cold-reopen count is independently retained as the checksum-bound
 
 For a completed lifecycle, both `reset` and `load_start` must report zero for
 all four row counts. `teardown` must be the final event and must retain the
-exact expected row counts. The command-WAL profiles must also report positive
-WAL frontier and cumulative bytes at `load_end` after accepted rows and at
-`drain_checkpoint` after durable rows; `no_wal_fast` and partial streams are
-exempt from this completion proof. Reopened rows remain zero through
+exact expected row counts. Completed lifecycle artifacts currently require
+`command_wal_durable` and must also report positive WAL frontier and cumulative
+bytes at `load_end` after accepted rows and at `drain_checkpoint` after durable
+rows. Other canonical profiles remain analyzable only as partial streams.
+Reopened rows remain zero through
 `graceful_close` and become populated only after the cold-reopen boundary.
 For the currently supported `command_wal_durable` producer, successful insert
 responses establish the durable acknowledgement boundary. The diagnostics
@@ -184,7 +185,9 @@ with `column_graph_loaded` and requires the cold-reopened index to report that s
 `native_runtime` index, H2 uses its positive vector-maintenance root ID. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without
-fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`.
+fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`. The
+checksum-bound route response also records the effective request `ef_search`,
+which must equal `max(harness.ef_search, harness.k)`.
 `graceful_close.database` is the post-close durable state verified by the first
 cold-open diagnostics snapshot, while its event timestamp remains the actual
 close-completion time. TreeDB `Close` may advance the commit sequence after the

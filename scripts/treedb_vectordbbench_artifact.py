@@ -1698,6 +1698,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         manifest_vdbbench = []
     if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
         errors.append("manifest.service.profile must name a canonical public profile")
+    if lifecycle.get("result_status") == "completed" and service.get("profile") != "command_wal_durable":
+        completion_errors.append("completed lifecycle requires command_wal_durable")
     service_command = service.get("command")
     effective_dir = None
     effective_pprof = None
@@ -2168,7 +2170,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     isinstance(generation, bool) or not isinstance(generation, int)
                 ):
                     errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
-                for key in ("service_generation", "requested_top_k", "result_count"):
+                for key in ("service_generation", "requested_top_k", "result_count", "effective_ef_search"):
                     value = route.get(key)
                     if key in route and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
                         errors.append(f"{prefix} state.route.{key} must be a positive integer")
@@ -2178,7 +2180,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             else:
                 for key in (
                     "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
-                    "service_generation", "requested_top_k", "result_count",
+                    "service_generation", "requested_top_k", "result_count", "effective_ef_search",
                 ):
                     if key not in route:
                         errors.append(f"{prefix} state.route is missing required field {key}")
@@ -2631,6 +2633,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     )
                     selected_row = selected_rows[0] if len(selected_rows) == 1 else None
                     harness_k = harness.get("k")
+                    harness_ef_search = harness.get("ef_search")
                     if (
                         isinstance(harness_k, bool)
                         or not isinstance(harness_k, int)
@@ -2640,6 +2643,17 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         or route.get("requested_top_k") != min(harness_k, expected_rows)
                     ):
                         errors.append("lifecycle route requested_top_k does not match harness k and expected rows")
+                    if (
+                        isinstance(harness_ef_search, bool)
+                        or not isinstance(harness_ef_search, int)
+                        or harness_ef_search <= 0
+                        or isinstance(harness_k, bool)
+                        or not isinstance(harness_k, int)
+                        or harness_k <= 0
+                        or raw_route_response.get("request_ef_search") != max(harness_ef_search, harness_k)
+                        or route.get("effective_ef_search") != max(harness_ef_search, harness_k)
+                    ):
+                        errors.append("lifecycle route effective ef_search does not match harness")
                     expected_query_mode = "exact"
                     expected_route_name = "exact_hnsw_search_pack_v1"
                     expected_quantized_index: str | None = None
@@ -2765,9 +2779,15 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
 
 
 def positive_number(value: Any, name: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise ValueError(f"canonical VDBBench result is missing positive {name}")
-    return float(value)
+    try:
+        converted = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"canonical VDBBench result is missing positive {name}") from exc
+    if not math.isfinite(converted):
+        raise ValueError(f"canonical VDBBench result is missing positive {name}")
+    return converted
 
 
 def case_vector_count(case_type: str) -> int:
@@ -3365,9 +3385,11 @@ def run_loaded_route_proof(
             quantized_rerank_candidates=max(args.rerank_candidates, args.k),
         )
     response = http_json("POST", index_url(args.base_url, index_name, "/search/vector-index"), request)
-    write_json(state.root / "lifecycle_route_response.json", response)
     if not isinstance(response, dict):
         raise RuntimeError("cold-reopen route proof response must be an object")
+    persisted_response = dict(response)
+    persisted_response["request_ef_search"] = request["ef_search"]
+    write_json(state.root / "lifecycle_route_response.json", persisted_response)
     response_index = response.get("index")
     diagnostics = response.get("diagnostics")
     if (
@@ -3419,6 +3441,7 @@ def run_loaded_route_proof(
         "service_generation": service_generation,
         "requested_top_k": request["top_k"],
         "result_count": len(results),
+        "effective_ef_search": request["ef_search"],
     }
     if not route["optimized"]:
         raise RuntimeError(f"cold-reopen route proof failed: {route}")

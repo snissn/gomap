@@ -143,6 +143,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "index": {"name": "index-a", "generation": 7},
         "vector_index_name": "vector_hnsw",
         "query_mode": "exact",
+        "request_ef_search": 100,
         "quantized_index_name": None,
         "results": [{"id": "1"}, {"id": "2"}],
         "no_documents": True,
@@ -206,6 +207,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "service_generation": 7,
                 "requested_top_k": 2,
                 "result_count": 2,
+                "effective_ef_search": 100,
             }
         events.append({
             "schema_version": harness.LIFECYCLE_EVENT_SCHEMA,
@@ -331,6 +333,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "num_concurrency": "32",
             "m": 16,
             "ef_construction": 128,
+            "ef_search": 100,
             "rerank_candidates": 32,
             "quantized_index_name": "embedding_scalar_u8",
         },
@@ -972,6 +975,24 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "load_duration"):
                 harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
 
+    def test_canonical_result_fails_closed_when_duration_overflows_float(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "result_test.json"
+            path.write_text(json.dumps({"results": [{
+                "label": ":)",
+                "metrics": {
+                    "insert_duration": 10**400,
+                    "optimize_duration": 3.0,
+                    "load_duration": 5.0,
+                    "inserted_count": 0,
+                },
+                "task_config": {"db_config": {"index_name": "idx"}},
+            }]}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "insert_duration"):
+                harness.load_metrics_from_result(path, "idx", "Performance1536D50K", root)
+
     def test_canonical_result_fails_closed_when_total_is_inconsistent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1300,6 +1321,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response.__setitem__("query_mode", "quantized_rerank"), "search configuration"),
             (lambda response: response.__setitem__("quantized_index_name", "other-quantized"), "search configuration"),
             (lambda response: response.__setitem__("quantized_rerank_candidates", 64), "search configuration"),
+            (lambda response: response.__setitem__("request_ef_search", 101), "ef_search"),
             (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
         )
         for mutation, expected in mutations:
@@ -1420,6 +1442,23 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("requested_top_k" in error for error in got["errors"]), got)
 
+    def test_route_effective_ef_search_must_match_harness(self) -> None:
+        for value in (None, 101):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                if value is None:
+                    manifest["harness"].pop("ef_search")
+                else:
+                    manifest["harness"]["ef_search"] = value
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("ef_search" in error for error in got["errors"]), got)
+
     def test_route_name_must_match_selected_row(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1500,6 +1539,7 @@ class LifecycleValidatorTest(unittest.TestCase):
         mutations = (
             lambda row: row.__setitem__("label", ":("),
             lambda row: row.__setitem__("metrics", "bad"),
+            lambda row: row["metrics"].__setitem__("insert_duration", 10**400),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate), tempfile.TemporaryDirectory() as tmp:
@@ -2311,10 +2351,11 @@ class LifecycleValidatorTest(unittest.TestCase):
             (12, lambda state: state["route"].__setitem__("service_generation", 7.0), "route.service_generation"),
             (12, lambda state: state["route"].__setitem__("requested_top_k", "2"), "route.requested_top_k"),
             (12, lambda state: state["route"].__setitem__("result_count", []), "route.result_count"),
+            (12, lambda state: state["route"].__setitem__("effective_ef_search", 7.0), "route.effective_ef_search"),
         ]
         for field in (
             "name", "fallback_reason", "optimized", "index_identity", "index_asset_generation",
-            "service_generation", "requested_top_k", "result_count",
+            "service_generation", "requested_top_k", "result_count", "effective_ef_search",
         ):
             cases.append((12, lambda state, key=field: state["route"].pop(key), f"required field {field}"))
         for event_position, mutation, expected in cases:
@@ -3325,11 +3366,9 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                     got = harness.validate_lifecycle_artifact(root)
 
-                if profile == "no_wal_fast":
-                    self.assertTrue(got["complete"], got)
-                else:
-                    self.assertTrue(got["analyzable"], got)
-                    self.assertFalse(got["complete"], got)
+                self.assertTrue(got["analyzable"], got)
+                self.assertFalse(got["complete"], got)
+                if profile == "command_wal_durable":
                     self.assertTrue(
                         any("requires positive wal.frontier" in item for item in got["completion_errors"]), got,
                     )
@@ -3337,6 +3376,8 @@ class LifecycleValidatorTest(unittest.TestCase):
                         any("requires positive wal.bytes_written_total" in item for item in got["completion_errors"]),
                         got,
                     )
+                else:
+                    self.assertIn("completed lifecycle requires command_wal_durable", got["completion_errors"])
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3607,9 +3648,14 @@ class LifecycleIntegrationTest(unittest.TestCase):
             responses = iter([{"index": {"generation": 7}}, valid_response])
             with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)):
                 route = harness.run_loaded_route_proof(state, args, "cohere", "cohere:vector_hnsw", 7, 7)
+            persisted_response = json.loads(
+                (root / "lifecycle_route_response.json").read_text(encoding="utf-8")
+            )
 
         self.assertEqual(route["requested_top_k"], 2)
         self.assertEqual(route["result_count"], 2)
+        self.assertEqual(route["effective_ef_search"], args.ef_search)
+        self.assertEqual(persisted_response["request_ef_search"], args.ef_search)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
