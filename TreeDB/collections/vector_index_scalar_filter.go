@@ -362,6 +362,7 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 		idx.appendNativeScalarRowValuesPrevalidatedLocked(row)
 		return idx.validateNativeScalarColumnLengthsLocked()
 	}
+	idx.prepareSearchViewForMutationLocked()
 	delta, err := idx.ensureLiveDeltaLocked()
 	if err != nil {
 		return err

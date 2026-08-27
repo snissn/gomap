@@ -1961,6 +1961,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			}
 		}
 	}
+	idx.prepareSearchViewForMutationLocked()
 	idx.tombstoneDocumentIDLocked(documentID)
 
 	nodeID := len(idx.nodes)
@@ -2020,6 +2021,10 @@ func (idx *VectorIndex) insertVectorBatchLocked(documentIDs [][]byte, vectors []
 	if err := idx.validateVectorBatch(documentIDs, vectors); err != nil {
 		return err
 	}
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	idx.prepareSearchViewForMutationLocked()
 	if len(documentIDs) < nativeVectorFrozenPrefixBatchMinimum {
 		for row := range documentIDs {
 			if err := idx.insertVectorLocked(documentIDs[row], vectors[row]); err != nil {
@@ -2334,6 +2339,7 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 	if !ok {
 		return
 	}
+	idx.prepareSearchViewForMutationLocked()
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
 		idx.nodes[nodeID].deleted = true
 		idx.markVectorNodeDirtyLocked(nodeID)

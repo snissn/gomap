@@ -112,6 +112,67 @@ func TestNativeVectorAcknowledgedMutationsCoalesceSearchViewPublication(t *testi
 	}
 }
 
+func TestVectorIndexNextMutationRetainsLatestAcknowledgedView(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
+		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	index.mu.Lock()
+	if err := index.insertVectorLocked([]byte("seed"), []float32{1, 0}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.mu.Unlock()
+	index.recordSourceDocumentState(1, backenddb.StateToken{})
+	initial := index.acquireSearchView()
+	if initial == nil {
+		t.Fatal("initial immutable view is unavailable")
+	}
+	index.releaseSearchView(initial)
+	index.liveDeltaEnabled.Store(true)
+
+	index.mu.Lock()
+	if err := index.insertVectorLocked([]byte("first"), []float32{0.8, 0.2}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.mu.Unlock()
+	index.recordSourceDocumentState(2, backenddb.StateToken{})
+	if got := index.searchView.Load(); got != initial {
+		t.Fatalf("first acknowledged mutation published eagerly: view=%p initial=%p", got, initial)
+	}
+
+	index.mu.Lock()
+	if err := index.insertVectorLocked([]byte("second"), []float32{0, 1}); err != nil {
+		index.mu.Unlock()
+		t.Fatal(err)
+	}
+	index.mu.Unlock()
+	duringSecond := index.acquireSearchView()
+	if duringSecond == nil {
+		t.Fatal("latest acknowledged view is unavailable during next mutation")
+	}
+	if duringSecond == initial || len(duringSecond.nodes) != 2 || duringSecond.sourceDocumentGeneration != 2 {
+		index.releaseSearchView(duringSecond)
+		t.Fatalf("view=%p initial=%p nodes=%d generation=%d want first acknowledged mutation", duringSecond, initial, len(duringSecond.nodes), duringSecond.sourceDocumentGeneration)
+	}
+	index.releaseSearchView(duringSecond)
+
+	index.recordSourceDocumentState(3, backenddb.StateToken{})
+	current := index.acquireSearchView()
+	if current == nil {
+		t.Fatal("current immutable view is unavailable")
+	}
+	if len(current.nodes) != 3 || current.sourceDocumentGeneration != 3 {
+		index.releaseSearchView(current)
+		t.Fatalf("current nodes=%d generation=%d want 3/3", len(current.nodes), current.sourceDocumentGeneration)
+	}
+	index.releaseSearchView(current)
+}
+
 func TestVectorIndexStaleAcquisitionPublishesBesidePriorReader(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,

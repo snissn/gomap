@@ -267,6 +267,17 @@ func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {
 	return out
 }
 
+func (idx *VectorIndex) prepareSearchViewForMutationLocked() {
+	if idx == nil || !idx.liveDeltaEnabled.Load() || idx.searchViewCurrent.Load() {
+		return
+	}
+	if idx.searchViewAcknowledged &&
+		idx.searchViewAcknowledgedMutationSeq == idx.mutationSeq &&
+		idx.searchViewAcknowledgedGeneration == idx.sourceDocumentGeneration {
+		idx.publishSearchViewLocked(false)
+	}
+}
+
 func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
 	if idx == nil {
 		return nil
