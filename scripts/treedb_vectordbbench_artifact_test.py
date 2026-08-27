@@ -147,7 +147,11 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             },
         }
         if sequence >= 6:
-            state["index"] = {"identity": "index-a", "asset_generation": 7, "status": "ready"}
+            state["index"] = {
+                "identity": "index-a:vector_hnsw",
+                "asset_generation": 7,
+                "status": "ready",
+            }
         if sequence >= 9:
             state["database"] = {"identity": "database-a", "commit_seq": 50_000}
         if stage == "route_verify":
@@ -155,7 +159,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "name": "exact_hnsw_search_pack_v1",
                 "fallback_reason": "none",
                 "optimized": True,
-                "index_identity": "index-a",
+                "index_identity": "index-a:vector_hnsw",
                 "index_asset_generation": 7,
                 "service_generation": 7,
                 "requested_top_k": 2,
@@ -189,7 +193,21 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         {
             "event": "optimize_end",
             "timestamp_ns": boundary_ns["optimize_end"],
-            "response": {"index": {"name": "index-a", "generation": 7}, "status": {"root_id": 7}},
+            "response": {
+                "index": {
+                    "name": "index-a",
+                    "generation": 7,
+                    "vector_strategy": "column_graph",
+                },
+                "vector_index_name": "vector_hnsw",
+                "status": {
+                    "root_id": 0,
+                    "strategy": "column_graph",
+                    "state": "column_graph_loaded",
+                    "loaded": True,
+                    "rebuild_needed": False,
+                },
+            },
         },
         {"event": "cache_prime", "timestamp_ns": boundary_ns["cache_prime"]},
         {"event": "cache_warm", "timestamp_ns": boundary_ns["cache_warm"]},
@@ -1483,6 +1501,60 @@ class LifecycleValidatorTest(unittest.TestCase):
             "stage load_end wal does not match its tagged diagnostics snapshot",
             got["errors"],
         )
+
+    def test_completed_fixture_binds_raw_optimize_response_to_index(self) -> None:
+        for mutation, expected in (
+            (lambda response: response.clear(), "index name"),
+            (lambda response: response["index"].__setitem__("generation", 8), "does not match"),
+            (lambda response: response["index"].__setitem__("name", "other"), "does not match"),
+        ):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                sidecar = root / "adapter-lifecycle.jsonl"
+                records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+                mutation(records[-3]["response"])
+                sidecar.write_text(
+                    "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                    encoding="utf-8",
+                )
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == "adapter-lifecycle.jsonl"
+                )["sha256"] = harness.sha256_file(sidecar)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
+
+    def test_completed_fixture_malformed_boundary_state_is_structured_error(self) -> None:
+        for mutation, expected in (("snapshot", "snapshot must be an object"), ("rows", "state must contain")):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                if mutation == "snapshot":
+                    diagnostics = root / "diagnostics.jsonl"
+                    records = [json.loads(line) for line in diagnostics.read_text(encoding="utf-8").splitlines()]
+                    records[0]["snapshot"] = []
+                    diagnostics.write_text(
+                        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                        encoding="utf-8",
+                    )
+                    next(
+                        artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                        if artifact["path"] == "diagnostics.jsonl"
+                    )["sha256"] = harness.sha256_file(diagnostics)
+                    harness.write_json(root / "manifest.json", manifest)
+                else:
+                    events[harness.LIFECYCLE_STAGES.index("load_end")]["state"]["rows"] = []
+                    rewrite_lifecycle_fixture(root, manifest, events)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
 
     def test_completed_fixture_rejects_corrupt_or_mismatched_load_milestones(self) -> None:
         for mutation, expected in (("corrupt", "cannot parse"), ("mismatch", "do not match")):

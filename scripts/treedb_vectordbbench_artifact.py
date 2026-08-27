@@ -2191,6 +2191,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         errors.append("lifecycle.result_status must be completed, partial, or interrupted")
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
+    raw_optimize_reference: tuple[str, int] | None = None
     if status == "completed":
         required_evidence = {
             "adapter-lifecycle.jsonl",
@@ -2208,6 +2209,22 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             except ValueError as exc:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
+            optimize_response = adapter["optimize_response"]
+            optimize_index = optimize_response.get("index")
+            optimize_index_name = (
+                optimize_index.get("name") if isinstance(optimize_index, dict) else None
+            )
+            if not isinstance(optimize_index_name, str) or not optimize_index_name:
+                errors.append("adapter optimize response index name must be a non-empty string")
+            else:
+                try:
+                    raw_identity, raw_generation, _ = lifecycle_ready_asset(
+                        optimize_response, optimize_index_name
+                    )
+                except RuntimeError as exc:
+                    errors.append(f"adapter optimize response does not prove a ready index: {exc}")
+                else:
+                    raw_optimize_reference = (raw_identity, raw_generation)
             load_end_state = (stage_events.get("load_end") or {}).get("state")
             load_end_rows = load_end_state.get("rows") if isinstance(load_end_state, dict) else None
             final_state = events[-1].get("state") if events else None
@@ -2280,8 +2297,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     )
                 elif isinstance((stage_events.get(boundary) or {}).get("state"), dict):
                     event_state = stage_events[boundary]["state"]
+                    snapshot = boundary_records[0].get("snapshot")
+                    rows = event_state.get("rows")
+                    if not isinstance(snapshot, dict) or not isinstance(rows, dict):
+                        continue
                     expected_state = diagnostic_state_builder.build(
-                        boundary_records[0]["snapshot"], event_state.get("rows", {})
+                        snapshot, rows
                     )
                     for field in ("wal", "counters"):
                         if event_state.get(field) != expected_state[field]:
@@ -2405,6 +2426,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 completion_errors.append(f"index identity changed at stage {stage}")
             if current[1] != index_reference[1]:
                 completion_errors.append(f"index asset generation changed at stage {stage}")
+    if raw_optimize_reference is not None and index_reference != raw_optimize_reference:
+        errors.append(
+            "adapter optimize response index identity/generation does not match optimize_end"
+        )
 
     database_snapshots: dict[str, tuple[str | None, int | None]] = {}
     for stage in ("graceful_close", "cold_open_ready"):
