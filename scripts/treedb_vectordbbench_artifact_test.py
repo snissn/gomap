@@ -678,6 +678,28 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(malformed["analyzable"], malformed)
         self.assertTrue(any("database.commit_seq" in item for item in malformed["errors"]), malformed)
 
+    def test_present_index_snapshot_types_are_structural_in_partial_artifacts(self) -> None:
+        cases = (
+            (6, lambda state: state.__setitem__("index", []), "index must be an object"),
+            (7, lambda state: state["index"].__setitem__("identity", 7), "index.identity"),
+            (8, lambda state: state["index"].__setitem__("asset_generation", 7.0), "index.asset_generation"),
+            (9, lambda state: state["index"].__setitem__("status", []), "index.status"),
+        )
+        for event_position, mutation, expected in cases:
+            with self.subTest(stage_position=event_position, expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = "partial"
+                    manifest["lifecycle"]["profiles"] = []
+                    mutation(events[event_position]["state"])
+                    rewrite_lifecycle_fixture(root, manifest, events[:event_position + 1])
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
+
     def test_cli_fails_closed_unless_analyzable_partial_is_explicitly_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -870,6 +892,18 @@ class LifecycleValidatorTest(unittest.TestCase):
             ("inline-selector", lambda row: row["service"]["command"].__setitem__(slice(-2, None), ["-profile=command_wal_durable"])),
             ("declared-command-mismatch", lambda row: row["service"].__setitem__("profile", "command_wal_relaxed")),
             ("duplicate-selector", lambda row: row["service"]["command"].extend(["-profile", "command_wal_durable"])),
+            (
+                "selector-after-positional",
+                lambda row: row["service"]["command"].__setitem__(
+                    slice(5, None), ["positional", "-profile", "command_wal_durable"],
+                ),
+            ),
+            (
+                "selector-after-double-dash",
+                lambda row: row["service"]["command"].__setitem__(
+                    slice(5, None), ["--", "-profile", "command_wal_durable"],
+                ),
+            ),
         )
         for label, mutation in mutations:
             with self.subTest(command=label):
@@ -1158,6 +1192,23 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(got["analyzable"])
         self.assertFalse(got["complete"])
         self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
+
+    def test_pprof_profile_requires_at_least_one_actual_sample(self) -> None:
+        metadata = b"\n".join((
+            b"PeriodType: cpu nanoseconds",
+            b"Samples:",
+            b"samples/count cpu/nanoseconds",
+            b"Locations",
+            b"Mappings",
+        ))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle_fixture(root)
+            with mock.patch.object(harness, "_pprof_metadata", return_value=metadata):
+                got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
 
     def test_go_1_26_heap_profile_without_default_marker_is_valid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

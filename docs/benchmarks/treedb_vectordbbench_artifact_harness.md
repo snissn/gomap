@@ -75,7 +75,8 @@ dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes a canonical public service profile, case type,
 the exact non-empty service argv with one matching `-profile <profile>`
-selector, concurrency, batch size, `m`, and `ef_construction`. The argv is part
+selector before Go flag parsing terminates at `--` or a positional argument,
+concurrency, batch size, `m`, and `ef_construction`. The argv is part
 of the effective-configuration checksum, and its executable must equal the
 path of the SHA-256-bound service binary. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
@@ -85,7 +86,8 @@ name existing before/after event sequences and use the same checksum as their
 raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,
 `block`, and `mutex` as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
 decoder accepts with matching period and sample metadata. CPU profiles are
-distinct; heap and allocs use the shared Go allocation family but require their
+distinct and every pprof must contain at least one actual sample; heap and
+allocs use the shared Go allocation family but require their
 respective sample-type selection (Go 1.26 heap profiles may omit the default
 marker, while allocs must mark `alloc_space/bytes`); block and mutex share
 indistinguishable Go contention metadata and are validated as that family. Go `trace` is a `.out`
@@ -107,6 +109,9 @@ When `graceful_close` or `cold_open_ready` is present, its database snapshot
 must contain a non-empty string identity and non-negative integer commit
 sequence. A partial stream that has not reached those stages remains
 analyzable; a present malformed snapshot does not.
+The same fail-closed rule applies to a present index snapshot's object and
+identity, asset-generation, and status field types; missing future index
+evidence remains a completion error.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is

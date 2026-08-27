@@ -889,6 +889,20 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
             lines = metadata.decode("utf-8").splitlines()
             samples_position = lines.index("Samples:")
             sample_tokens = lines[samples_position + 1].split()
+            saw_sample = False
+            for line in lines[samples_position + 2:]:
+                if line in {"Locations", "Mappings"}:
+                    break
+                values, separator, _ = line.partition(":")
+                if separator and len(values.split()) == len(sample_tokens):
+                    try:
+                        tuple(int(value) for value in values.split())
+                    except ValueError:
+                        continue
+                    saw_sample = True
+                    break
+            if not saw_sample:
+                return False
             sample_types = {token.removesuffix("[dflt]") for token in sample_tokens}
             default_types = {
                 token.removesuffix("[dflt]") for token in sample_tokens if token.endswith("[dflt]")
@@ -1064,10 +1078,37 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     ):
         errors.append("manifest.service.command must be a non-empty argv list of strings")
     else:
-        profile_positions = [position for position, argument in enumerate(service_command) if argument == "-profile"]
-        inline_profile = any(argument.startswith("-profile=") for argument in service_command)
+        profile_positions = []
+        invalid_profile = False
+        parsing_flags = True
+        position = 1
+        while position < len(service_command):
+            argument = service_command[position]
+            if not parsing_flags:
+                if argument == "-profile" or argument.startswith("-profile="):
+                    invalid_profile = True
+                position += 1
+                continue
+            if argument == "--":
+                parsing_flags = False
+                position += 1
+                continue
+            if not argument.startswith("-") or argument == "-":
+                parsing_flags = False
+                position += 1
+                continue
+            if argument.startswith("-profile="):
+                invalid_profile = True
+                position += 1
+                continue
+            if argument in {"-dir", "-addr", "-profile"}:
+                if argument == "-profile":
+                    profile_positions.append(position)
+                position += 2
+                continue
+            position += 1
         if (
-            inline_profile
+            invalid_profile
             or len(profile_positions) != 1
             or profile_positions[0] + 1 >= len(service_command)
             or service_command[profile_positions[0] + 1] != service.get("profile")
@@ -1366,17 +1407,35 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if stage not in stage_events:
             continue
         state = stage_events[stage].get("state")
-        index = state.get("index") if isinstance(state, dict) else {}
+        index = state.get("index") if isinstance(state, dict) else None
+        if index is not None and not isinstance(index, dict):
+            errors.append(f"stage {stage} index must be an object")
+            continue
         if not isinstance(index, dict):
             index = {}
-        current = (index.get("identity"), index.get("asset_generation"))
+        index_identity = index.get("identity")
+        index_generation = index.get("asset_generation")
+        index_status = index.get("status")
+        malformed = False
+        if "identity" in index and not isinstance(index_identity, str):
+            errors.append(f"stage {stage} index.identity must be a string")
+            malformed = True
+        if "asset_generation" in index and (
+            isinstance(index_generation, bool) or not isinstance(index_generation, int)
+        ):
+            errors.append(f"stage {stage} index.asset_generation must be an integer")
+            malformed = True
+        if "status" in index and not isinstance(index_status, str):
+            errors.append(f"stage {stage} index.status must be a string")
+            malformed = True
+        if malformed:
+            continue
+        current = (index_identity, index_generation)
         if (
-            not isinstance(current[0], str)
-            or not current[0]
-            or isinstance(current[1], bool)
+            not current[0]
             or not isinstance(current[1], int)
             or current[1] <= 0
-            or index.get("status") != "ready"
+            or index_status != "ready"
         ):
             completion_errors.append(f"stage {stage} lacks a ready index identity and asset generation")
         elif index_reference is None:
