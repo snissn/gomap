@@ -1102,7 +1102,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if None not in (sent, accepted, durable, reopened) and not (reopened <= durable <= accepted <= sent):
             errors.append(f"{prefix} row counts violate reopened <= durable <= accepted <= sent")
     if counter_keys == set():
-        completion_errors.append("completed lifecycle requires a non-empty cumulative counter key set")
+        errors.append("lifecycle requires a non-empty cumulative counter key set")
 
     for stage in LIFECYCLE_STAGES:
         if stage not in stage_events:

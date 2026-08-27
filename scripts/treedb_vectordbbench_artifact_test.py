@@ -826,19 +826,23 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
-    def test_completed_lifecycle_requires_nonempty_counters(self) -> None:
+    def test_empty_counters_are_structurally_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
             for event in events:
                 event["state"]["counters"] = {}
             rewrite_lifecycle_fixture(root, manifest, events)
 
             got = harness.validate_lifecycle_artifact(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
 
-        self.assertTrue(got["analyzable"])
+        self.assertFalse(got["analyzable"])
         self.assertFalse(got["complete"])
-        self.assertTrue(any("non-empty cumulative counter" in item for item in got["completion_errors"]), got)
+        self.assertTrue(any("non-empty cumulative counter" in item for item in got["errors"]), got)
+        self.assertEqual(exit_code, 1)
 
 
 class ManifestFileListTest(unittest.TestCase):
