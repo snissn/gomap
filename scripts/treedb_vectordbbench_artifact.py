@@ -816,7 +816,10 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
             return False
         try:
             with gzip.open(path, "rb") as source:
-                return bool(source.read(1))
+                saw_data = False
+                while chunk := source.read(64 * 1024):
+                    saw_data = True
+                return saw_data
         except (OSError, EOFError, zlib.error):
             return False
     if kind == "trace":
@@ -888,6 +891,24 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
+    elif case_type == "PerformanceCustomDataset":
+        completion_errors.append("custom case cannot complete without task_config dataset shape evidence")
+    else:
+        try:
+            case_vectors = case_vector_count(case_type)
+            case_dimensions = case_vector_dimensions(case_type)
+        except ValueError as exc:
+            completion_errors.append(str(exc))
+        else:
+            if (
+                (expected_rows is not None and case_vectors != expected_rows)
+                or (vectors is not None and case_vectors != vectors)
+            ):
+                completion_errors.append(
+                    "standard case vector count does not match lifecycle.expected_rows/dataset.vectors"
+                )
+            if dimensions is not None and case_dimensions != dimensions:
+                completion_errors.append("standard case dimensions do not match lifecycle.dataset.dimensions")
     concurrency = harness.get("num_concurrency")
     if isinstance(concurrency, int) and not isinstance(concurrency, bool):
         valid_concurrency = concurrency > 0
@@ -1236,6 +1257,13 @@ def case_vector_count(case_type: str) -> int:
     if count <= 0:
         raise ValueError(f"cannot derive positive vector count from VDBBench case type {case_type!r}")
     return count
+
+
+def case_vector_dimensions(case_type: str) -> int:
+    match = re.fullmatch(r"Performance(\d+)D\d+[KMG]", case_type, flags=re.IGNORECASE)
+    if match is None or int(match.group(1)) <= 0:
+        raise ValueError(f"cannot derive positive dimensions from standard VDBBench case type {case_type!r}")
+    return int(match.group(1))
 
 
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:

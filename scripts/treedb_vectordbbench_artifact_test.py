@@ -535,6 +535,26 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_case_shape_must_match_lifecycle_dataset(self) -> None:
+        for case_type, expected in (
+            ("Performance768D1M", "vector count"),
+            ("Performance1536D50K", "dimensions"),
+            ("Performance50K", "positive dimensions"),
+            ("PerformanceCustomDataset", "task_config dataset shape"),
+        ):
+            with self.subTest(case_type=case_type):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["harness"]["case_type"] = case_type
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
+
     def test_teardown_counts_must_match_expected_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -634,17 +654,21 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"])
         self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
 
-        for label, payload in (
-            ("empty", b""),
-            ("truncated-gzip", b"\x1f\x8b\x08"),
-            ("relabeled-jsonl", None),
-        ):
+        for label in ("empty", "truncated-gzip", "truncated-after-data", "relabeled-jsonl"):
             with self.subTest(profile_payload=label):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     manifest, _ = lifecycle_fixture(root)
                     profile = root / "profiles" / "build.cpu.pprof"
-                    profile.write_bytes(payload if payload is not None else (root / "lifecycle.jsonl").read_bytes())
+                    if label == "empty":
+                        payload = b""
+                    elif label == "truncated-gzip":
+                        payload = b"\x1f\x8b\x08"
+                    elif label == "truncated-after-data":
+                        payload = profile.read_bytes()[:-8]
+                    else:
+                        payload = (root / "lifecycle.jsonl").read_bytes()
+                    profile.write_bytes(payload)
                     checksum = harness.sha256_file(profile)
                     manifest["lifecycle"]["raw_artifacts"][0]["sha256"] = checksum
                     manifest["lifecycle"]["profiles"][0]["sha256"] = checksum

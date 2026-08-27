@@ -70,7 +70,10 @@ commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes service profile, case type, concurrency, batch size,
-`m`, and `ef_construction`. Profile entries name existing
+`m`, and `ef_construction`. Standard case names (for example,
+`Performance768D1M`) must match the lifecycle dataset dimensions and vector
+count. `PerformanceCustomDataset` cannot complete until H2 binds its selected
+result's task-config dataset shape into this artifact. Profile entries name existing
 before/after event sequences and use the same checksum as their raw-artifact
 entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
 as non-empty gzip-compressed `.pprof` files, Go `trace` as a `.out` file with a
