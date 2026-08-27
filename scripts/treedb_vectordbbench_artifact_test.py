@@ -338,8 +338,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "ef_search": 100,
             "rerank_candidates": 32,
             "quantized_index_name": "embedding_scalar_u8",
+            "vdbbench_dry_run": False,
         },
-        "vdbbench": [{"load_metrics": load_metrics}],
+        "vdbbench": [{"row": "exact", "load_metrics": load_metrics}],
         "route_proof": None,
         "lifecycle_count_proof": "lifecycle_count_response.json",
         "lifecycle_route_proof": "lifecycle_route_response.json",
@@ -1306,6 +1307,33 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(any("vdbbench+lifecycle" in error for error in got["errors"]), got)
         self.assertTrue(any("independent route_proof.json" in error for error in got["errors"]), got)
 
+    def test_completed_lifecycle_rejects_vdbbench_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["harness"]["vdbbench_dry_run"] = True
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["analyzable"], got)
+        self.assertFalse(got["complete"], got)
+        self.assertIn("completed lifecycle requires vdbbench_dry_run=false", got["completion_errors"])
+
+    def test_bound_vdbbench_row_must_match_lifecycle_route_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            manifest["vdbbench"][0]["row"] = "scalar"
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("VDBBench row" in error for error in got["errors"]), got)
+
     def test_lifecycle_route_response_must_match_route_verify(self) -> None:
         mutations = (
             (lambda response: response["diagnostics"].__setitem__("fallback_reason", "exact_scan"), "fallback"),
@@ -1431,6 +1459,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             root = Path(tmp)
             manifest, events = lifecycle_fixture(root)
             manifest["harness"].update(rows=" Scalar ", k=4, rerank_candidates=1)
+            manifest["vdbbench"][0]["row"] = "scalar"
             events[12]["state"]["route"]["name"] = "quantized_rerank"
             events[12]["state"]["route"]["requested_top_k"] = 4
             events[12]["state"]["route"]["result_count"] = 4
@@ -1642,7 +1671,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                 result, "index-a", "PerformanceCustomDataset", root
             )
             manifest["harness"]["case_type"] = "PerformanceCustomDataset"
-            manifest["vdbbench"] = [{"load_metrics": metrics}]
+            manifest["vdbbench"] = [{"row": "exact", "load_metrics": metrics}]
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
@@ -1712,7 +1741,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             metrics = harness.load_metrics_from_result(
                 result, "index-a", "PerformanceCustomDataset", root
             )
-            manifest["vdbbench"] = [{"load_metrics": metrics}]
+            manifest["vdbbench"] = [{"row": "exact", "load_metrics": metrics}]
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
             }
@@ -1747,7 +1776,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                     "task_config_sha256": harness.canonical_sha256(task_config),
                 }
                 manifest["harness"]["case_type"] = "PerformanceCustomDataset"
-                manifest["vdbbench"] = [{"load_metrics": metrics}]
+                manifest["vdbbench"] = [{"row": "exact", "load_metrics": metrics}]
                 manifest["lifecycle"]["task_config_binding"] = {
                     key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
                 }
@@ -3047,6 +3076,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                     response["diagnostics"]["route"] = route_name
                     if route_name == "quantized_rerank":
                         manifest["harness"]["rows"] = "scalar"
+                        manifest["vdbbench"][0]["row"] = "scalar"
                         response["query_mode"] = "quantized_rerank"
                         response["quantized_index_name"] = manifest["harness"]["quantized_index_name"]
                         response["quantized_rerank_candidates"] = manifest["harness"]["rerank_candidates"]

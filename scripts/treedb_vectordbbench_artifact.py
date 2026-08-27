@@ -1700,6 +1700,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         errors.append("manifest.service.profile must name a canonical public profile")
     if lifecycle.get("result_status") == "completed" and service.get("profile") != "command_wal_durable":
         completion_errors.append("completed lifecycle requires command_wal_durable")
+    if lifecycle.get("result_status") == "completed" and harness.get("vdbbench_dry_run") is not False:
+        completion_errors.append("completed lifecycle requires vdbbench_dry_run=false")
     service_command = service.get("command")
     effective_dir = None
     effective_pprof = None
@@ -1826,20 +1828,33 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 if not isinstance(value, str) or not value:
                     errors.append(f"lifecycle.task_config_binding.{key} must be a non-empty string")
             candidates = [
-                row.get("load_metrics")
+                row
                 for row in manifest_vdbbench
                 if isinstance(row, dict) and isinstance(row.get("load_metrics"), dict)
             ]
             matches = [
-                item for item in candidates
-                if item.get("result_file") == binding.get("result_file")
-                and item.get("result_sha256") == binding.get("result_sha256")
-                and item.get("task_config_sha256") == binding.get("task_config_sha256")
+                row for row in candidates
+                if row["load_metrics"].get("result_file") == binding.get("result_file")
+                and row["load_metrics"].get("result_sha256") == binding.get("result_sha256")
+                and row["load_metrics"].get("task_config_sha256") == binding.get("task_config_sha256")
             ]
             if len(matches) != 1:
                 errors.append("lifecycle task_config binding does not select one manifest VDBBench result")
             else:
-                selected = matches[0]
+                selected_row_record = matches[0]
+                selected = selected_row_record["load_metrics"]
+                configured_rows = (
+                    [row.strip().lower() for row in harness.get("rows", "").split(",") if row.strip()]
+                    if isinstance(harness.get("rows"), str)
+                    else []
+                )
+                declared_row = selected_row_record.get("row")
+                if (
+                    len(configured_rows) != 1
+                    or not isinstance(declared_row, str)
+                    or declared_row.strip().lower() != configured_rows[0]
+                ):
+                    errors.append("bound manifest VDBBench row does not match lifecycle harness rows")
                 selected_index_name = selected.get("index_name")
                 if not isinstance(selected_index_name, str) or not selected_index_name:
                     errors.append("bound manifest VDBBench result index_name must be a non-empty string")
