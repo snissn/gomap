@@ -864,10 +864,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     harness = _object(manifest.get("harness"), "manifest.harness", errors)
     if not isinstance(service.get("profile"), str) or not service["profile"].strip():
         errors.append("manifest.service.profile must be non-empty")
-    for key in ("case_type", "num_concurrency"):
-        value = harness.get(key)
-        if not isinstance(value, (str, int)) or isinstance(value, bool) or not str(value).strip():
-            errors.append(f"manifest.harness.{key} must be non-empty")
+    case_type = harness.get("case_type")
+    if not isinstance(case_type, str) or not case_type.strip():
+        errors.append("manifest.harness.case_type must be non-empty")
+    concurrency = harness.get("num_concurrency")
+    if isinstance(concurrency, int) and not isinstance(concurrency, bool):
+        valid_concurrency = concurrency > 0
+    elif isinstance(concurrency, str):
+        parts = [part.strip() for part in concurrency.split(",")]
+        valid_concurrency = bool(parts) and all(part.isdigit() and int(part) > 0 for part in parts)
+    else:
+        valid_concurrency = False
+    if not valid_concurrency:
+        errors.append("manifest.harness.num_concurrency must contain positive integers")
     for key in ("num_per_batch", "m", "ef_construction"):
         value = _nonnegative_int(harness.get(key), f"manifest.harness.{key}", errors)
         if value == 0:
@@ -1053,6 +1062,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "load_end": ("client_sent", "server_accepted"),
             "drain_checkpoint": ("client_sent", "server_accepted", "server_durable"),
             "exact_verify": ("client_sent", "server_accepted", "server_durable", "reopened"),
+            "teardown": ("client_sent", "server_accepted", "server_durable", "reopened"),
         }
         for stage, keys in count_stages.items():
             if stage not in stage_events:

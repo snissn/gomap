@@ -510,6 +510,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda row: row["service"].__setitem__("profile", ""), "service.profile"),
             (lambda row: row["harness"].__setitem__("case_type", ""), "harness.case_type"),
             (lambda row: row["harness"].__setitem__("num_concurrency", ""), "harness.num_concurrency"),
+            (lambda row: row["harness"].__setitem__("num_concurrency", "1,nope"), "harness.num_concurrency"),
             (lambda row: row["harness"].__setitem__("num_per_batch", 0), "harness.num_per_batch"),
             (lambda row: row["harness"].__setitem__("m", None), "harness.m"),
             (lambda row: row["harness"].__setitem__("ef_construction", -1), "harness.ef_construction"),
@@ -526,6 +527,19 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"])
             self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_teardown_counts_must_match_expected_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            events[-1]["state"]["rows"]["client_sent"] += 1
+            events[-1]["state"]["rows"]["server_accepted"] += 1
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["complete"])
+        self.assertTrue(any("stage teardown rows.server_accepted" in item for item in got["completion_errors"]), got)
 
     def test_stale_index_generation_or_fallback_route_fails_closed(self) -> None:
         def stale_identity(rows: list[dict]) -> None:
