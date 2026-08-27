@@ -346,6 +346,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
                 "--base-url http://127.0.0.1:9876"
             ),
+            "exit_code": 0,
             "load_metrics": load_metrics,
         }],
         "route_proof": None,
@@ -1344,6 +1345,8 @@ class LifecycleValidatorTest(unittest.TestCase):
     def test_bound_vdbbench_command_must_match_lifecycle_row(self) -> None:
         commands = (
             "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank",
+            "echo -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
+            "-m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
             (
                 "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
                 "--dry-run"
@@ -1364,6 +1367,22 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("VDBBench command" in error for error in got["errors"]), got)
+
+    def test_bound_vdbbench_execution_must_record_zero_exit_code(self) -> None:
+        for exit_code in (None, 1, True, "0"):
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                if exit_code is None:
+                    manifest["vdbbench"][0].pop("exit_code")
+                else:
+                    manifest["vdbbench"][0]["exit_code"] = exit_code
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("exit_code=0" in error for error in got["errors"]), got)
 
     def test_lifecycle_route_response_must_match_route_verify(self) -> None:
         mutations = (
@@ -1708,6 +1727,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest["vdbbench"] = [{
                 "row": "exact",
                 "command": "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
+                "exit_code": 0,
                 "load_metrics": metrics,
             }]
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
@@ -1782,6 +1802,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             manifest["vdbbench"] = [{
                 "row": "exact",
                 "command": "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
+                "exit_code": 0,
                 "load_metrics": metrics,
             }]
             manifest["lifecycle"]["task_config_binding"] = {

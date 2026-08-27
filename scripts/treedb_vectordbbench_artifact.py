@@ -1869,12 +1869,27 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     if command_tokens[position:position + 2]
                     == ["-m", "vectordb_bench.cli.vectordbbench"]
                 ]
+                valid_launcher = False
+                if len(module_positions) == 1:
+                    module_position = module_positions[0]
+                    direct_launcher = (
+                        module_position == 1
+                        and re.fullmatch(
+                            r"python(?:\d+(?:\.\d+)*)?", Path(command_tokens[0]).name
+                        ) is not None
+                    )
+                    uv_prefix = ["uv", "run", "--no-sync"]
+                    for dependency in VDBBENCH_UV_DEPS:
+                        uv_prefix.extend(["--with", dependency])
+                    uv_prefix.append("python")
+                    valid_launcher = direct_launcher or command_tokens[:module_position] == uv_prefix
                 forbidden_flags = {
                     "--dry-run", "--skip-load", "--skip-search-serial", "--skip-search-concurrent",
                 }
                 if (
                     expected_subcommand is None
                     or len(module_positions) != 1
+                    or not valid_launcher
                     or module_positions[0] + 2 >= len(command_tokens)
                     or command_tokens[module_positions[0] + 2] != expected_subcommand
                     or any(
@@ -1884,6 +1899,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     )
                 ):
                     errors.append("bound manifest VDBBench command does not match the lifecycle row")
+                exit_code = selected_row_record.get("exit_code")
+                if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != 0:
+                    errors.append("bound manifest VDBBench execution must record exit_code=0")
                 selected_index_name = selected.get("index_name")
                 if not isinstance(selected_index_name, str) or not selected_index_name:
                     errors.append("bound manifest VDBBench result index_name must be a non-empty string")
