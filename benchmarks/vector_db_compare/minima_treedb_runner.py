@@ -478,6 +478,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             finally:
                 correlation["ended_monotonic_ns"] = time.monotonic_ns()
                 correlation["duration_nanos"] = correlation["ended_monotonic_ns"] - correlation["started_monotonic_ns"]
+                done.set()
                 correlation["after_stats"] = self.controller.stats_snapshot()
                 if not mapped_expected:
                     after_public_count = self._public_count_snapshot()
@@ -490,7 +491,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     capture(correlation["outcome"])
                 elif correlation["duration_nanos"] >= int(self.diagnostic_slow_seconds * 1e9):
                     capture("slow")
-                done.set()
                 if watcher is not None:
                     watcher.join(self.diagnostic_capture_timeout + self.diagnostic_profile_seconds + 1)
                     if watcher.is_alive():

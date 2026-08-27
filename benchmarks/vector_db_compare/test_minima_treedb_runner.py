@@ -229,6 +229,28 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(correlation["after_stats"]["snapshot"]["stage"], "after")
         self.assertEqual(correlation["outcome"], "completed")
         self.assertEqual(correlation["profile_capture"], {"status": "not_triggered"})
+    def test_completed_upsert_stops_slow_watcher_before_after_stats(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        workload.diagnostic_slow_seconds = 0.01
+        workload._expected_insert_batches[("initial_batch_insert", "mixed", 0)] = 1
+        snapshots = 0
+
+        def stats_snapshot() -> dict[str, object]:
+            nonlocal snapshots
+            snapshots += 1
+            if snapshots == 2:
+                runner.time.sleep(0.03)
+            return {"status": "captured"}
+
+        workload.controller.stats_snapshot = stats_snapshot
+        workload.controller.capture_profiles = mock.Mock(return_value={"status": "captured"})
+        document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                    "user_id": "u", "fpath": "/a"}
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=[100, 110, 120, 130]):
+            workload.upsert("initial_batch_insert", "mixed", [document])
+        workload.controller.capture_profiles.assert_not_called()
+        self.assertEqual(workload.batch_correlations[0]["profile_capture"], {"status": "not_triggered"})
+
     def test_diagnostic_batch_watchers_keep_iteration_local_capture_state(self) -> None:
         workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
         workload._expected_insert_batches = {
