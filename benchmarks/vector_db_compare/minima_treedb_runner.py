@@ -191,7 +191,12 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             raise RuntimeError("TreeDB index is not the compatible native_runtime Minima schema")
         self.effective_collection = info.to_dict()
 
-    def wait_ready(self, expected_count: int | None = None) -> None:
+    def initial_load_to_query_boundary(self) -> None:
+        pass
+
+
+    def wait_ready(self, expected_count: int | None = None,
+                   phase: str = "mutation_visibility") -> None:
         assert self.client is not None
         if expected_count is not None:
             count = self.client.count_documents(self.collection).count

@@ -1204,6 +1204,9 @@ class QdrantMinimaRunner:
             raise
         self.configuration_transition["completed"] = True
 
+    def initial_load_to_query_boundary(self) -> None:
+        self.restore_production_configuration()
+
 
 
     def create_owned_collection(self) -> None:
@@ -1362,7 +1365,7 @@ class QdrantMinimaRunner:
             self.upsert(name, spec["name"], documents, wait_each)
         if ranges and not wait_each:
             if name == "initial_batch_insert":
-                self.restore_production_configuration()
+                self.initial_load_to_query_boundary()
             expected_count = sum(insertion["rows"] for insertion in ranges)
             phase = "initial_load_to_query" if name == "initial_batch_insert" else name
             self.evidence.call(

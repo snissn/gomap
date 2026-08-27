@@ -19,6 +19,7 @@ import minima_treedb_runner as runner
 class FakeClient:
     def __init__(self, response: object) -> None:
         self.response = response
+        self.documents: list[dict[str, object]] = []
         self.call: tuple[object, ...] | None = None
 
     def query_by_embedding(self, *args: object, **kwargs: object) -> object:
@@ -27,13 +28,14 @@ class FakeClient:
 
     def upsert_documents(self, _index: str, documents: list[dict[str, object]],
                          **_kwargs: object) -> object:
+        self.documents.extend(documents)
         return SimpleNamespace(upserted=len(documents), ids=[row["id"] for row in documents])
 
     def delete_by_filter(self, *_args: object, **_kwargs: object) -> object:
         return SimpleNamespace(deleted=1)
 
     def count_documents(self, *_args: object, **_kwargs: object) -> object:
-        return SimpleNamespace(count=0)
+        return SimpleNamespace(count=len(self.documents))
 
 
 def write_health_service(binary: Path) -> None:
@@ -144,6 +146,24 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             on_writer_start=lambda: starts.append("delete"),
         )
         self.assertEqual(starts, ["upsert", "delete"])
+
+    def test_inherited_initial_insert_ranges_skips_qdrant_transition(self) -> None:
+        workload = self.workload(self.response())
+        workload.models = None
+        workload.ensure_compatible = lambda: None
+        workload.specs = {
+            "mixed": {
+                "name": "mixed", "corpus_rows": 1, "filter": "user_id",
+                "eligible_start": 0, "eligible_rows": 1, "user_id": "u",
+            },
+        }
+        workload.insert_ranges(
+            "initial_batch_insert",
+            [{"scenario": "mixed", "start": 0, "rows": 1}],
+            False,
+        )
+        self.assertEqual(len(workload.client.documents), 1)
+        self.assertEqual(workload.client.count_documents("owned").count, 1)
 
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
