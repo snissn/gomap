@@ -80,6 +80,26 @@ VDBBENCH_UV_DEPS = [
     "s3fs",
     "oss2",
 ]
+VDBBENCH_OWNED_OPTIONS = frozenset({
+    "--base-url",
+    "--case-type",
+    "--concurrency-duration",
+    "--db-label",
+    "--dry-run",
+    "--ef-construction",
+    "--ef-search",
+    "--index-name",
+    "--k",
+    "--m",
+    "--num-concurrency",
+    "--quantized-index-name",
+    "--quantized-rerank-candidates",
+    "--skip-load",
+    "--skip-search-concurrent",
+    "--skip-search-serial",
+    "--timeout",
+})
+LIFECYCLE_DIAGNOSTIC_BOUNDARIES = ("load_end", "optimize_start", "optimize_end")
 
 
 def iso_now() -> str:
@@ -914,7 +934,7 @@ def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_ro
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
     if getattr(args, "lifecycle", False):
         env["TREEDB_LIFECYCLE_SIDECAR"] = str(state.root / "adapter-lifecycle.jsonl")
-        env["TREEDB_LIFECYCLE_LOAD_END_ACK"] = str(state.root / "load-end-diagnostics.json")
+        env["TREEDB_LIFECYCLE_BOUNDARY_ACK"] = str(state.root / "lifecycle-boundary-diagnostics.json")
     return env
 
 
@@ -1141,64 +1161,59 @@ class DiagnosticsSampler:
         return self.samples[-1]["snapshot"] if self.samples else {}
 
 
-def capture_load_end_diagnostics(
+def capture_lifecycle_boundary_diagnostics(
     sidecar: Path,
     acknowledgement: Path,
     sampler: DiagnosticsSampler,
     stop: threading.Event,
 ) -> None:
-    """Synchronously sample the server after load_end while optimize is paused."""
+    """Synchronously sample each load/build boundary while the adapter is paused."""
+    next_boundary = 0
     while not stop.wait(0.01):
         try:
             records = read_adapter_lifecycle_records(sidecar)
         except ValueError:
             continue
-        load_end = [record for record in records if record.get("event") == "load_end"]
-        if not load_end:
+        boundary = LIFECYCLE_DIAGNOSTIC_BOUNDARIES[next_boundary]
+        matches = [record for record in records if record.get("event") == boundary]
+        if not matches:
             continue
-        if len(load_end) != 1:
-            raise ValueError("adapter lifecycle sidecar has duplicate load_end boundaries")
-        load_end_ns = load_end[0]["timestamp_ns"]
-        sample = sampler.sample(boundary="load_end", boundary_timestamp_ns=load_end_ns)
+        if len(matches) != 1:
+            raise ValueError(f"adapter lifecycle sidecar has duplicate {boundary} boundaries")
+        boundary_ns = matches[0]["timestamp_ns"]
+        sample = sampler.sample(boundary=boundary, boundary_timestamp_ns=boundary_ns)
         sample_ns = sample["timestamp_ns"]
-        if sample_ns < load_end_ns:
-            raise RuntimeError("load-end diagnostics sample predates the adapter boundary")
+        if sample_ns < boundary_ns:
+            raise RuntimeError(f"{boundary} diagnostics sample predates the adapter boundary")
         temporary = acknowledgement.with_name(f".{acknowledgement.name}.{os.getpid()}.tmp")
         try:
             write_json(temporary, {
-                "load_end_timestamp_ns": load_end_ns,
+                "boundary": boundary,
+                "boundary_timestamp_ns": boundary_ns,
                 "sample_timestamp_ns": sample_ns,
             })
             os.replace(temporary, acknowledgement)
         finally:
             with contextlib.suppress(FileNotFoundError):
                 temporary.unlink()
-        return
+        next_boundary += 1
+        if next_boundary == len(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
+            return
 
 
-def load_end_diagnostics_snapshot(
-    root: Path, load_end_ns: int, sampler: DiagnosticsSampler
+def boundary_diagnostics_snapshot(
+    boundary: str, boundary_ns: int, sampler: DiagnosticsSampler
 ) -> dict[str, Any]:
-    acknowledgement_path = root / "load-end-diagnostics.json"
-    try:
-        acknowledgement = _strict_json_loads(acknowledgement_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise ValueError(f"cannot read load-end diagnostics acknowledgement: {exc}") from exc
-    if not isinstance(acknowledgement, dict):
-        raise ValueError("load-end diagnostics acknowledgement must be an object")
-    sample_ns = acknowledgement.get("sample_timestamp_ns")
-    if acknowledgement.get("load_end_timestamp_ns") != load_end_ns:
-        raise ValueError("load-end diagnostics acknowledgement does not match the adapter boundary")
-    if not isinstance(sample_ns, int) or isinstance(sample_ns, bool) or sample_ns < load_end_ns:
-        raise ValueError("load-end diagnostics acknowledgement has an invalid sample timestamp")
     matches = [
         record for record in sampler.samples
-        if record.get("timestamp_ns") == sample_ns
-        and record.get("boundary") == "load_end"
-        and record.get("boundary_timestamp_ns") == load_end_ns
+        if record.get("boundary") == boundary
+        and record.get("boundary_timestamp_ns") == boundary_ns
+        and isinstance(record.get("timestamp_ns"), int)
+        and not isinstance(record.get("timestamp_ns"), bool)
+        and record["timestamp_ns"] >= boundary_ns
     ]
     if len(matches) != 1 or not isinstance(matches[0].get("snapshot"), dict):
-        raise ValueError("load-end diagnostics acknowledgement has no exact sampled snapshot")
+        raise ValueError(f"{boundary} diagnostics has no exact sampled snapshot")
     return matches[0]["snapshot"]
 
 
@@ -2388,7 +2403,7 @@ def run_vdbbench_rows(
         capture_stop = threading.Event()
         capture_errors: list[BaseException] = []
         capture_thread: threading.Thread | None = None
-        acknowledgement = state.root / "load-end-diagnostics.json"
+        acknowledgement = state.root / "lifecycle-boundary-diagnostics.json"
         if args.lifecycle:
             if sampler is None:
                 raise RuntimeError("lifecycle VDBBench run requires the diagnostics sampler")
@@ -2396,7 +2411,7 @@ def run_vdbbench_rows(
 
             def capture_boundary() -> None:
                 try:
-                    capture_load_end_diagnostics(
+                    capture_lifecycle_boundary_diagnostics(
                         state.root / "adapter-lifecycle.jsonl",
                         acknowledgement,
                         sampler,
@@ -2407,7 +2422,7 @@ def run_vdbbench_rows(
 
             capture_thread = threading.Thread(
                 target=capture_boundary,
-                name="treedb-lifecycle-load-end",
+                name="treedb-lifecycle-boundaries",
                 daemon=True,
             )
             capture_thread.start()
@@ -2426,11 +2441,11 @@ def run_vdbbench_rows(
             if capture_thread is not None:
                 capture_thread.join(timeout=2.0)
         if capture_thread is not None and capture_thread.is_alive():
-            raise RuntimeError("load-end diagnostics capture did not stop")
+            raise RuntimeError("lifecycle boundary diagnostics capture did not stop")
         if capture_errors:
-            raise RuntimeError(f"load-end diagnostics capture failed: {capture_errors[0]}") from capture_errors[0]
+            raise RuntimeError(f"lifecycle boundary diagnostics capture failed: {capture_errors[0]}") from capture_errors[0]
         if args.lifecycle and not acknowledgement.is_file():
-            raise RuntimeError("VDBBench lifecycle ended without load-end diagnostics acknowledgement")
+            raise RuntimeError("VDBBench lifecycle ended without boundary diagnostics acknowledgement")
         row_record = {
             "row": row,
             "index_name": index_name,
@@ -2626,7 +2641,7 @@ def finalize_partial_lifecycle(
     state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
         state.root / "diagnostics.jsonl",
         sidecar,
-        state.root / "load-end-diagnostics.json",
+        state.root / "lifecycle-boundary-diagnostics.json",
         state.root / "service.log",
     ])
     if not sidecar.exists():
@@ -2640,7 +2655,7 @@ def finalize_partial_lifecycle(
     state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
         state.root / "diagnostics.jsonl",
         sidecar,
-        state.root / "load-end-diagnostics.json",
+        state.root / "lifecycle-boundary-diagnostics.json",
         milestone_path,
         state.root / "service.log",
     ])
@@ -2669,8 +2684,8 @@ def finalize_partial_lifecycle(
         rows = lifecycle_rows()
         if stage in {"load_end", "optimize_start"}:
             rows = lifecycle_rows(sent, accepted, accepted)
-        if sampler is not None and stage == "load_end":
-            snapshot = load_end_diagnostics_snapshot(state.root, record["timestamp_ns"], sampler)
+        if sampler is not None and stage in {"load_end", "optimize_start"}:
+            snapshot = boundary_diagnostics_snapshot(stage, record["timestamp_ns"], sampler)
         else:
             snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
         journal.append(stage, builder.build(snapshot, rows), timestamp=iso_from_ns(record["timestamp_ns"]))
@@ -2853,9 +2868,13 @@ def complete_lifecycle(
     zero = lifecycle_rows()
     loaded = lifecycle_rows(expected_rows, expected_rows, expected_rows, 0)
     load_start_snapshot = sampler.at(adapter["load_start_ns"])
-    load_end_snapshot = load_end_diagnostics_snapshot(state.root, adapter["load_end_ns"], sampler)
-    optimize_start_snapshot = sampler.at(adapter["optimize_start_ns"])
-    optimize_end_snapshot = sampler.at(adapter["optimize_end_ns"])
+    load_end_snapshot = boundary_diagnostics_snapshot("load_end", adapter["load_end_ns"], sampler)
+    optimize_start_snapshot = boundary_diagnostics_snapshot(
+        "optimize_start", adapter["optimize_start_ns"], sampler
+    )
+    optimize_end_snapshot = boundary_diagnostics_snapshot(
+        "optimize_end", adapter["optimize_end_ns"], sampler
+    )
     journal.append(
         "reset",
         builder.build(sampler.at(adapter["reset_ns"]), zero),
@@ -2956,7 +2975,7 @@ def complete_lifecycle(
             "teardown",
             builder.build(reopen_snapshot, reopened_rows, index=index_state, database=reopen_database),
         )
-    except Exception:
+    except BaseException:
         terminate_process_group(reopened_proc, graceful_timeout=args.service_close_timeout)
         raise
 
@@ -2966,7 +2985,7 @@ def complete_lifecycle(
         profile_path,
         state.root / "diagnostics.jsonl",
         state.root / "adapter-lifecycle.jsonl",
-        state.root / "load-end-diagnostics.json",
+        state.root / "lifecycle-boundary-diagnostics.json",
         milestone_path,
         state.root / "service.log",
         state.root / "lifecycle_route_response.json",
@@ -3199,9 +3218,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             extra_args = shlex.split(args.vdbbench_extra_args)
         except ValueError as exc:
             parser.error(f"invalid vdbbench-extra-args: {exc}")
-        search_controls = {"--skip-search-serial", "--skip-search-concurrent"}
-        if any(argument.partition("=")[0] in search_controls for argument in extra_args):
-            parser.error("lifecycle search controls must use the dedicated harness flags")
+        overridden = sorted({
+            argument.partition("=")[0]
+            for argument in extra_args
+            if argument.partition("=")[0] in VDBBENCH_OWNED_OPTIONS
+        })
+        if overridden:
+            parser.error(
+                "lifecycle VDBBench options must use dedicated harness arguments: "
+                + ", ".join(overridden)
+            )
         if not args.lifecycle_dataset_file:
             parser.error("lifecycle requires --lifecycle-dataset-file")
         if args.case_type != "PerformanceCustomDataset":

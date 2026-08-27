@@ -84,12 +84,12 @@ responses establish the durable acknowledgement boundary. The diagnostics
 snapshot at `load_end` must independently show a positive accepted frontier,
 a durable frontier at or beyond it, and positive WAL bytes before the adapter's
 `optimize_start`; otherwise the runner fails closed rather than claiming a
-checkpoint. The opt-in adapter pauses after appending `load_end`; the runner
-takes a synchronous sample through the existing diagnostics sampler and writes
-a timestamp-bound acknowledgement before the adapter may append
-`optimize_start`. The acknowledgement and diagnostics stream are both
-checksum-bound raw artifacts. Load-end and optimize-start/end stages each use
-their own sampled snapshot so offline-build counters cannot be attributed to
+checkpoint. The opt-in adapter pauses after appending each of `load_end`,
+`optimize_start`, and `optimize_end`; the runner takes a synchronous sample
+through the existing diagnostics sampler and writes a timestamp-bound
+acknowledgement before the adapter continues. The acknowledgement and
+diagnostics stream are both checksum-bound raw artifacts. Each boundary uses
+its own sampled snapshot so offline-build counters cannot be attributed to
 ingestion.
 The canonical sampler runs every five seconds by default and records both the
 service snapshot and filesystem WAL bytes/file count from the first pre-load
@@ -101,9 +101,9 @@ The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
-configuration keeps at least one VDBBench search phase enabled; search-phase
-controls are accepted only through the dedicated harness flags, never
-`--vdbbench-extra-args`. Before building
+configuration keeps at least one VDBBench search phase enabled. Every option
+owned by the harness command is accepted only through its dedicated harness
+argument, never `--vdbbench-extra-args`. Before building
 the service, lifecycle mode requires both captured source identities to contain
 a valid commit and `dirty == false`.
 It includes a canonical public service profile, case type,

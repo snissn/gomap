@@ -483,7 +483,7 @@ class SmokeShapeTest(unittest.TestCase):
                     "--skip-search-serial", "--skip-search-concurrent",
                 ])
 
-    def test_lifecycle_rejects_search_controls_in_extra_args(self) -> None:
+    def test_lifecycle_rejects_all_harness_owned_options_in_extra_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dataset = Path(tmp) / "train.parquet"
             dataset.write_bytes(b"dataset")
@@ -492,15 +492,32 @@ class SmokeShapeTest(unittest.TestCase):
                 "--lifecycle", "--lifecycle-dataset-file", str(dataset),
                 "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
             ]
-            for control in ("--skip-search-serial", "--skip-search-concurrent", "--skip-search-serial=true"):
-                with self.subTest(control=control), contextlib.redirect_stderr(io.StringIO()), \
+            for option in sorted(harness.VDBBENCH_OWNED_OPTIONS):
+                with self.subTest(option=option), contextlib.redirect_stderr(io.StringIO()), \
                         self.assertRaises(SystemExit):
-                    harness.parse_args([*base, f"--vdbbench-extra-args={control}"])
+                    harness.parse_args([*base, f"--vdbbench-extra-args={option}"])
+            for argument in ("--base-url=http://other", "--skip-search-serial=true"):
+                with self.subTest(argument=argument), contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    harness.parse_args([*base, f"--vdbbench-extra-args={argument}"])
 
             args = harness.parse_args([*base, "--skip-search-serial"])
 
         self.assertTrue(args.skip_search_serial)
         self.assertFalse(args.skip_search_concurrent)
+
+    def test_lifecycle_preserves_adapter_specific_extra_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            args = harness.parse_args([
+                "--run-vdbbench", "--rows", "exact", "--case-type", "PerformanceCustomDataset",
+                "--lifecycle", "--lifecycle-dataset-file", str(dataset),
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+                "--vdbbench-extra-args=--adapter-owned=value",
+            ])
+
+        self.assertEqual(args.vdbbench_extra_args, "--adapter-owned=value")
 
 
 class VDBBenchBatchTest(unittest.TestCase):
@@ -519,7 +536,7 @@ class VDBBenchBatchTest(unittest.TestCase):
         self.assertEqual(cli_override_args.num_per_batch, 500)
         self.assertEqual(override["NUM_PER_BATCH"], "250")
 
-    def test_lifecycle_row_receives_load_end_diagnostics_ack_path(self) -> None:
+    def test_lifecycle_row_receives_boundary_diagnostics_ack_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = harness.HarnessState(root=Path(tmp))
             args = harness.parse_args([
@@ -531,8 +548,8 @@ class VDBBenchBatchTest(unittest.TestCase):
             env = harness.vdbbench_row_env(args, Path("/vdbbench"), Path("/gomap"), state)
 
         self.assertEqual(
-            env["TREEDB_LIFECYCLE_LOAD_END_ACK"],
-            str(Path(tmp) / "load-end-diagnostics.json"),
+            env["TREEDB_LIFECYCLE_BOUNDARY_ACK"],
+            str(Path(tmp) / "lifecycle-boundary-diagnostics.json"),
         )
 
     def test_vdbbench_rows_use_separate_result_directories(self) -> None:
@@ -558,7 +575,7 @@ class VDBBenchBatchTest(unittest.TestCase):
 
 
 class VDBBenchLoadMetricsTest(unittest.TestCase):
-    def test_lifecycle_run_synchronously_captures_load_end_before_command_continues(self) -> None:
+    def test_lifecycle_run_synchronously_captures_each_fast_load_build_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             dataset = root / "train.parquet"
@@ -585,19 +602,41 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
                     return record
 
             def run(*_args, **_kwargs):
-                records = (
+                records = [
                     {"event": "reset", "timestamp_ns": 1, "response": {}},
                     {"event": "load_start", "timestamp_ns": 2},
                     {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
                     {"event": "load_end", "timestamp_ns": 4},
-                )
-                (root / "adapter-lifecycle.jsonl").write_text(
-                    "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
-                )
-                deadline = time.monotonic() + 2
-                while time.monotonic() < deadline and not (root / "load-end-diagnostics.json").exists():
-                    time.sleep(0.01)
-                self.assertTrue((root / "load-end-diagnostics.json").exists())
+                ]
+                sidecar = root / "adapter-lifecycle.jsonl"
+                acknowledgement = root / "lifecycle-boundary-diagnostics.json"
+
+                def write_records() -> None:
+                    sidecar.write_text(
+                        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+                    )
+
+                def wait_for_ack(boundary: str, timestamp_ns: int) -> None:
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if acknowledgement.exists():
+                            payload = json.loads(acknowledgement.read_text())
+                            if (
+                                payload.get("boundary") == boundary
+                                and payload.get("boundary_timestamp_ns") == timestamp_ns
+                            ):
+                                return
+                        time.sleep(0.01)
+                    self.fail(f"missing acknowledgement for {boundary}")
+
+                write_records()
+                wait_for_ack("load_end", 4)
+                records.append({"event": "optimize_start", "timestamp_ns": 6})
+                write_records()
+                wait_for_ack("optimize_start", 6)
+                records.append({"event": "optimize_end", "timestamp_ns": 8, "response": {}})
+                write_records()
+                wait_for_ack("optimize_end", 8)
                 return mock.Mock(command_string="vdbbench exact", exit_code=0)
 
             with mock.patch.object(harness, "run_command", side_effect=run), \
@@ -612,11 +651,12 @@ class VDBBenchLoadMetricsTest(unittest.TestCase):
                     sampler=Sampler(),
                 )
 
-            acknowledgement = json.loads((root / "load-end-diagnostics.json").read_text())
+            acknowledgement = json.loads((root / "lifecycle-boundary-diagnostics.json").read_text())
 
         self.assertEqual(acknowledgement, {
-            "load_end_timestamp_ns": 4,
-            "sample_timestamp_ns": 5,
+            "boundary": "optimize_end",
+            "boundary_timestamp_ns": 8,
+            "sample_timestamp_ns": 9,
         })
 
     def test_canonical_result_records_separated_durations_and_checksum(self) -> None:
@@ -2290,6 +2330,18 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     "boundary": "load_end",
                     "boundary_timestamp_ns": 5,
                 },
+                {
+                    "timestamp_ns": 6,
+                    "snapshot": snapshot,
+                    "boundary": "optimize_start",
+                    "boundary_timestamp_ns": 6,
+                },
+                {
+                    "timestamp_ns": 7,
+                    "snapshot": snapshot,
+                    "boundary": "optimize_end",
+                    "boundary_timestamp_ns": 7,
+                },
             ]
 
             def stop(self):
@@ -2335,38 +2387,47 @@ class LifecycleIntegrationTest(unittest.TestCase):
         (root / "adapter-lifecycle.jsonl").write_text(
             "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
         )
-        harness.write_json(root / "load-end-diagnostics.json", {
-            "load_end_timestamp_ns": 5,
-            "sample_timestamp_ns": 5,
+        harness.write_json(root / "lifecycle-boundary-diagnostics.json", {
+            "boundary": "optimize_end",
+            "boundary_timestamp_ns": 7,
+            "sample_timestamp_ns": 7,
         })
         proc = mock.Mock(returncode=None)
         return args, state, Sampler(), proc
 
-    def test_load_end_uses_synchronous_sample_when_periodic_sample_is_stale(self) -> None:
-        stale = {"database": {"treedb.command_wal.durable_wal_lsn": "0"}}
-        boundary = {"database": {"treedb.command_wal.durable_wal_lsn": "5"}}
+    def test_build_boundaries_use_synchronous_samples_when_periodic_sample_is_stale(self) -> None:
+        stale = {"phase": "stale"}
+        snapshots = {
+            "load_end": {"phase": "loaded"},
+            "optimize_start": {"phase": "build-started"},
+            "optimize_end": {"phase": "build-finished"},
+        }
 
         class Sampler:
-            samples = [
-                {"timestamp_ns": 2, "snapshot": stale},
+            samples = [{"timestamp_ns": 2, "snapshot": stale}] + [
                 {
-                    "timestamp_ns": 5,
-                    "snapshot": boundary,
-                    "boundary": "load_end",
-                    "boundary_timestamp_ns": 4,
-                },
+                    "timestamp_ns": timestamp_ns + 1,
+                    "snapshot": snapshots[boundary],
+                    "boundary": boundary,
+                    "boundary_timestamp_ns": timestamp_ns,
+                }
+                for boundary, timestamp_ns in zip(
+                    harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8), strict=True
+                )
             ]
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            harness.write_json(root / "load-end-diagnostics.json", {
-                "load_end_timestamp_ns": 4,
-                "sample_timestamp_ns": 5,
-            })
+        for boundary, timestamp_ns in zip(
+            harness.LIFECYCLE_DIAGNOSTIC_BOUNDARIES, (4, 6, 8), strict=True
+        ):
+            with self.subTest(boundary=boundary):
+                got = harness.boundary_diagnostics_snapshot(boundary, timestamp_ns, Sampler())
+                self.assertIs(got, snapshots[boundary])
 
-            got = harness.load_end_diagnostics_snapshot(root, 4, Sampler())
+    def test_build_boundary_rejects_periodic_sample_without_exact_tag(self) -> None:
+        sampler = mock.Mock(samples=[{"timestamp_ns": 9, "snapshot": {"periodic": True}}])
 
-        self.assertIs(got, boundary)
+        with self.assertRaisesRegex(ValueError, "optimize_end diagnostics has no exact sampled snapshot"):
+            harness.boundary_diagnostics_snapshot("optimize_end", 8, sampler)
 
     def test_lifecycle_rejects_standard_case_without_checksum_bound_task_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()) as stderr:
@@ -2650,6 +2711,27 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertNotIn("teardown", stages)
         self.assertEqual(calls[0], args.diagnostics_url + "/debug/treedb/stats")
         self.assertTrue(calls[1].endswith("/documents/count"))
+        terminate.assert_called_once_with(reopened, graceful_timeout=1.0)
+
+    def test_reopen_keyboard_interrupt_terminates_owned_service(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, proc = self._complete_fixture(root)
+            reopened = mock.Mock(returncode=None)
+
+            with mock.patch.object(
+                    harness, "fetch_file",
+                    side_effect=lambda _url, path: path.parent.mkdir(parents=True, exist_ok=True)
+                    or path.write_bytes(b"x")), \
+                    mock.patch.object(harness, "http_json", side_effect=KeyboardInterrupt), \
+                    mock.patch.object(harness, "close_process_group_cleanly"), \
+                    mock.patch.object(harness, "terminate_process_group") as terminate, \
+                    mock.patch.object(harness, "start_service", return_value=(reopened, {}, ["service"])):
+                with self.assertRaises(KeyboardInterrupt):
+                    harness.complete_lifecycle(
+                        state, args, root, root / "service", proc, sampler
+                    )
+
         terminate.assert_called_once_with(reopened, graceful_timeout=1.0)
 
 
