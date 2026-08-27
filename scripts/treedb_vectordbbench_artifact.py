@@ -1917,6 +1917,75 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             if actual_hash != expected_hash:
                 errors.append(f"raw artifact checksum mismatch: {relative}")
 
+    diagnostics_records: list[dict[str, Any]] | None = None
+    boundary_acknowledgement: dict[str, Any] | None = None
+    if "adapter-lifecycle.jsonl" in raw_by_path:
+        try:
+            read_adapter_lifecycle_records(root / "adapter-lifecycle.jsonl")
+        except ValueError as exc:
+            errors.append(f"cannot parse adapter lifecycle sidecar: {exc}")
+    if "diagnostics.jsonl" in raw_by_path:
+        try:
+            diagnostics_text = (root / "diagnostics.jsonl").read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            errors.append(f"cannot read lifecycle diagnostics: {exc}")
+        else:
+            if not diagnostics_text or not diagnostics_text.endswith("\n"):
+                errors.append("lifecycle diagnostics is empty or has a partial final record")
+            diagnostics_records = []
+            for line_number, line in enumerate(diagnostics_text.splitlines(), start=1):
+                try:
+                    record = _strict_json_loads(line)
+                except ValueError as exc:
+                    errors.append(f"lifecycle diagnostics line {line_number} is invalid: {exc}")
+                    continue
+                if not isinstance(record, dict):
+                    errors.append(f"lifecycle diagnostics line {line_number} must be an object")
+                    continue
+                timestamp_ns = record.get("timestamp_ns")
+                if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool) or timestamp_ns <= 0:
+                    errors.append(
+                        f"lifecycle diagnostics line {line_number} timestamp_ns must be a positive integer"
+                    )
+                if not isinstance(record.get("snapshot"), dict):
+                    errors.append(f"lifecycle diagnostics line {line_number} snapshot must be an object")
+                if "boundary" in record or "boundary_timestamp_ns" in record:
+                    boundary = record.get("boundary")
+                    boundary_timestamp_ns = record.get("boundary_timestamp_ns")
+                    if boundary not in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
+                        errors.append(
+                            f"lifecycle diagnostics line {line_number} has an unknown boundary"
+                        )
+                    if (
+                        not isinstance(boundary_timestamp_ns, int)
+                        or isinstance(boundary_timestamp_ns, bool)
+                        or boundary_timestamp_ns <= 0
+                    ):
+                        errors.append(
+                            f"lifecycle diagnostics line {line_number} boundary_timestamp_ns must be positive"
+                        )
+                diagnostics_records.append(record)
+    if "lifecycle-boundary-diagnostics.json" in raw_by_path:
+        try:
+            parsed_acknowledgement = _strict_json_loads(
+                (root / "lifecycle-boundary-diagnostics.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(f"cannot parse lifecycle boundary acknowledgement: {exc}")
+        else:
+            if not isinstance(parsed_acknowledgement, dict):
+                errors.append("lifecycle boundary acknowledgement must be an object")
+            else:
+                boundary_acknowledgement = parsed_acknowledgement
+                if boundary_acknowledgement.get("boundary") not in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
+                    errors.append("lifecycle boundary acknowledgement has an unknown boundary")
+                for field in ("boundary_timestamp_ns", "sample_timestamp_ns"):
+                    value = boundary_acknowledgement.get(field)
+                    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                        errors.append(
+                            f"lifecycle boundary acknowledgement {field} must be a positive integer"
+                        )
+
     sequence_events: dict[int, dict[str, Any]] = {}
     stage_events: dict[str, dict[str, Any]] = {}
     previous_sequence = -1
@@ -2047,6 +2116,61 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
     if status == "completed":
+        required_evidence = {
+            "adapter-lifecycle.jsonl",
+            "diagnostics.jsonl",
+            "lifecycle-boundary-diagnostics.json",
+        }
+        for relative in sorted(required_evidence - raw_by_path.keys()):
+            errors.append(f"completed lifecycle requires checksum-bound raw artifact {relative}")
+        adapter = None
+        if "adapter-lifecycle.jsonl" in raw_by_path:
+            try:
+                adapter = read_adapter_lifecycle_sidecar(root / "adapter-lifecycle.jsonl")
+            except ValueError as exc:
+                errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
+        if adapter is not None:
+            for boundary in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
+                boundary_ns = adapter[f"{boundary}_ns"]
+                event_timestamp = (stage_events.get(boundary) or {}).get("_timestamp")
+                expected_timestamp = _dt.datetime.fromtimestamp(
+                    boundary_ns / 1_000_000_000, _dt.timezone.utc
+                )
+                if event_timestamp != expected_timestamp:
+                    errors.append(
+                        f"stage {boundary} timestamp does not match adapter lifecycle boundary"
+                    )
+                boundary_records = [
+                    record for record in (diagnostics_records or [])
+                    if record.get("boundary") == boundary
+                ]
+                if (
+                    len(boundary_records) != 1
+                    or boundary_records[0].get("boundary_timestamp_ns") != boundary_ns
+                    or not isinstance(boundary_records[0].get("timestamp_ns"), int)
+                    or isinstance(boundary_records[0].get("timestamp_ns"), bool)
+                    or boundary_records[0]["timestamp_ns"] < boundary_ns
+                ):
+                    errors.append(
+                        f"stage {boundary} requires exactly one matching tagged diagnostics sample"
+                    )
+            if boundary_acknowledgement is not None:
+                warm_matches = [
+                    record for record in (diagnostics_records or [])
+                    if record.get("boundary") == "cache_warm"
+                    and record.get("boundary_timestamp_ns") == adapter["cache_warm_ns"]
+                ]
+                if (
+                    len(warm_matches) != 1
+                    or boundary_acknowledgement.get("boundary") != "cache_warm"
+                    or boundary_acknowledgement.get("boundary_timestamp_ns")
+                    != adapter["cache_warm_ns"]
+                    or boundary_acknowledgement.get("sample_timestamp_ns")
+                    != warm_matches[0].get("timestamp_ns")
+                ):
+                    errors.append(
+                        "lifecycle boundary acknowledgement does not match the cache_warm diagnostics sample"
+                    )
         lifecycle_route_proof = manifest.get("lifecycle_route_proof")
         if lifecycle_route_proof != "lifecycle_route_response.json":
             completion_errors.append(

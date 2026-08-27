@@ -68,6 +68,11 @@ The TreeDB adapter emits `cache_prime` only after serial search completes and
 samples and acknowledges both boundaries, so their timestamps and state are
 not aliases of `optimize_end`. Lifecycle mode therefore requires both search
 phases; ordinary VectorDBBench runs retain their default phase ordering.
+Completed validation checksum-binds and cross-checks `adapter-lifecycle.jsonl`,
+`diagnostics.jsonl`, and `lifecycle-boundary-diagnostics.json`: all five
+load/build/search boundary timestamps must match their lifecycle stages and
+exact tagged diagnostics samples, with the final acknowledgement proving the
+`cache_warm` sample. Partial artifacts may omit boundaries not yet reached.
 
 The integrated runner creates `startup` and a `partial` lifecycle declaration
 after the service health gate but before invoking VDBBench. Here `startup`
