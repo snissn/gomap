@@ -69,20 +69,19 @@ The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
 dataset checksum/dimensions/count, CPU topology, memory, storage, lifecycle
 JSONL, raw artifacts, and every profile window. The minimum effective
-configuration includes service profile, case type, concurrency, batch size,
-`m`, and `ef_construction`. Standard case names (for example,
-`Performance768D1M`) must match the lifecycle dataset dimensions and vector
-count. `PerformanceCustomDataset` cannot complete until H2 binds its selected
-result's task-config dataset shape into this artifact. Profile entries name existing
-before/after event sequences and use the same checksum as their raw-artifact
-entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
+configuration includes a canonical public service profile, case type,
+concurrency, batch size, `m`, and `ef_construction`. Standard case names (for
+example, `Performance768D1M`) must match the lifecycle dataset dimensions and
+vector count. `PerformanceCustomDataset` cannot complete until H2 binds its
+selected result's task-config dataset shape into this artifact. Profile entries
+name existing before/after event sequences and use the same checksum as their
+raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
 as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
 decoder accepts, Go `trace` as a `.out` file that the native trace decoder
-accepts, and Linux `perf` as a `.data` file with a perf-data header. Profile
-validation is an offline correctness gate and invokes the native decoder once
+accepts, and Linux `perf` as a `.data` file with bounded header sections and a
+nonempty sample record. Profile validation is an offline correctness gate and invokes the native decoder once
 per pprof or trace. The optimized index identity and durable `asset_generation`
-must survive
-close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
+must survive close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without

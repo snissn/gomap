@@ -42,6 +42,21 @@ def valid_trace_fixture() -> bytes:
     ).read_bytes()
 
 
+def valid_perf_fixture() -> bytes:
+    header = bytearray(104)
+    header[:8] = b"PERFILE2"
+    header[8:16] = (104).to_bytes(8, "little")
+    header[16:24] = (80).to_bytes(8, "little")
+    header[24:32] = (104).to_bytes(8, "little")
+    header[32:40] = (80).to_bytes(8, "little")
+    header[40:48] = (184).to_bytes(8, "little")
+    header[48:56] = (16).to_bytes(8, "little")
+    attrs = bytearray(80)
+    attrs[4:8] = (64).to_bytes(4, "little")
+    sample = (9).to_bytes(4, "little") + b"\x00\x00" + (16).to_bytes(2, "little") + b"sample!!"
+    return bytes(header + attrs + sample)
+
+
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
@@ -570,6 +585,8 @@ class LifecycleValidatorTest(unittest.TestCase):
     def test_effective_service_and_harness_config_must_be_present(self) -> None:
         mutations = (
             (lambda row: row["service"].__setitem__("profile", ""), "service.profile"),
+            (lambda row: row["service"].__setitem__("profile", "bench_unsafe"), "service.profile"),
+            (lambda row: row["service"].__setitem__("profile", []), "service.profile"),
             (lambda row: row["harness"].__setitem__("case_type", ""), "harness.case_type"),
             (lambda row: row["harness"].__setitem__("num_concurrency", ""), "harness.num_concurrency"),
             (lambda row: row["harness"].__setitem__("num_concurrency", "1,nope"), "harness.num_concurrency"),
@@ -806,6 +823,41 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(valid["complete"], valid)
         self.assertFalse(header_only["analyzable"])
         self.assertTrue(any("content does not match" in item for item in header_only["errors"]), header_only)
+
+    def test_perf_profile_requires_bounded_sections_and_sample_data(self) -> None:
+        valid_payload = valid_perf_fixture()
+        invalid_payloads = {
+            "header-only": b"PERFILE2",
+            "truncated-data": valid_payload[:-1],
+            "data-overlaps-header": valid_payload[:40] + (1).to_bytes(8, "little") + valid_payload[48:],
+        }
+        for label, payload in {"valid": valid_payload, **invalid_payloads}.items():
+            with self.subTest(payload=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    perf = root / "profiles" / "build.perf.data"
+                    perf.write_bytes(payload)
+                    checksum = harness.sha256_file(perf)
+                    manifest["lifecycle"]["raw_artifacts"] = [{
+                        "path": "profiles/build.perf.data", "sha256": checksum,
+                    }]
+                    manifest["lifecycle"]["profiles"] = [{
+                        "path": "profiles/build.perf.data",
+                        "sha256": checksum,
+                        "kind": "perf",
+                        "before_sequence": 5,
+                        "after_sequence": 6,
+                    }]
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                if label == "valid":
+                    self.assertTrue(got["complete"], got)
+                else:
+                    self.assertFalse(got["analyzable"], got)
+                    self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
 
     def test_rows_wal_and_counters_must_be_monotonic(self) -> None:
         mutations = (

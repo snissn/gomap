@@ -849,7 +849,54 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
         except (OSError, subprocess.TimeoutExpired):
             return False
     if kind == "perf":
-        return path.suffix == ".data" and data.startswith(b"PERFILE2")
+        if path.suffix != ".data" or data[:8] not in {b"PERFILE2", b"2ELIFREP"}:
+            return False
+        byteorder = "little" if data.startswith(b"PERFILE2") else "big"
+        try:
+            file_size = path.stat().st_size
+            with path.open("rb") as source:
+                header = source.read(104)
+                if len(header) != 104:
+                    return False
+                header_size = int.from_bytes(header[8:16], byteorder)
+                attr_size = int.from_bytes(header[16:24], byteorder)
+                if header_size < 104 or header_size > file_size or attr_size == 0:
+                    return False
+                attrs_size = int.from_bytes(header[32:40], byteorder)
+                if attrs_size == 0 or attr_size > attrs_size or attrs_size % attr_size != 0:
+                    return False
+                sections = []
+                for start in (24, 40, 56):
+                    offset = int.from_bytes(header[start:start + 8], byteorder)
+                    size = int.from_bytes(header[start + 8:start + 16], byteorder)
+                    if size:
+                        if offset < header_size or offset > file_size - size:
+                            return False
+                        sections.append((offset, offset + size))
+                sections.sort()
+                if any(left[1] > right[0] for left, right in zip(sections, sections[1:])):
+                    return False
+                data_offset = int.from_bytes(header[40:48], byteorder)
+                data_size = int.from_bytes(header[48:56], byteorder)
+                if data_size < 8:
+                    return False
+                source.seek(data_offset)
+                remaining = data_size
+                while remaining >= 8:
+                    event_header = source.read(8)
+                    if len(event_header) != 8:
+                        return False
+                    event_type = int.from_bytes(event_header[:4], byteorder)
+                    event_size = int.from_bytes(event_header[6:8], byteorder)
+                    if event_size < 8 or event_size > remaining:
+                        return False
+                    if event_type == 9 and event_size > 8:  # PERF_RECORD_SAMPLE
+                        return True
+                    source.seek(event_size - 8, os.SEEK_CUR)
+                    remaining -= event_size
+        except OSError:
+            return False
+        return False
     return False
 
 
@@ -910,8 +957,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     binary = _object(service.get("binary"), "manifest.service.binary", errors)
     identity = _object(lifecycle.get("identity"), "lifecycle.identity", errors)
     harness = _object(manifest.get("harness"), "manifest.harness", errors)
-    if not isinstance(service.get("profile"), str) or not service["profile"].strip():
-        errors.append("manifest.service.profile must be non-empty")
+    if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
+        errors.append("manifest.service.profile must name a canonical public profile")
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
