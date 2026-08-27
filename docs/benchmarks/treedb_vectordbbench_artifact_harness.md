@@ -93,7 +93,8 @@ must survive close and cold reopen. H2 maps `asset_generation` to the vector-mai
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without
-fallback. `T_ready` is reconstructed from `load_start`
+fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`.
+`T_ready` is reconstructed from `load_start`
 through `cold_open_ready`; client, accepted/durable, and reopened counts are
 never substituted for one another, and a completed lifecycle requires strictly
 positive `T_ready`.

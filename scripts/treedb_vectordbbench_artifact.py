@@ -42,6 +42,7 @@ LIFECYCLE_SCHEMA = "treedb-vectordbbench-lifecycle/v1"
 LIFECYCLE_EVENT_SCHEMA = "treedb-vectordbbench-lifecycle-event/v1"
 LIFECYCLE_VALIDATION_SCHEMA = "treedb-vectordbbench-lifecycle-validation/v1"
 PPROF_PROFILE_KINDS = frozenset({"cpu", "heap", "allocs", "block", "mutex"})
+OPTIMIZED_ROUTE_NAMES = frozenset({"exact_hnsw_search_pack_v1", "quantized_rerank"})
 LIFECYCLE_STAGES = (
     "startup",
     "reset",
@@ -822,7 +823,15 @@ def _strict_json_loads(value: str) -> Any:
     def reject_constant(constant: str) -> None:
         raise ValueError(f"non-finite JSON number {constant}")
 
-    return json.loads(value, parse_constant=reject_constant)
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            result[key] = item
+        return result
+
+    return json.loads(value, parse_constant=reject_constant, object_pairs_hook=reject_duplicate_keys)
 
 
 def _pprof_metadata(path: Path) -> bytes | None:
@@ -1027,7 +1036,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     dataset = _object(lifecycle.get("dataset"), "lifecycle.dataset", errors)
     if not isinstance(dataset.get("name"), str) or not dataset.get("name"):
         errors.append("lifecycle.dataset.name must be non-empty")
-    if not re.fullmatch(r"[0-9a-f]{64}", str(dataset.get("sha256") or "")):
+    dataset_sha256 = dataset.get("sha256")
+    if not isinstance(dataset_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", dataset_sha256):
         errors.append("lifecycle.dataset.sha256 must be a lowercase SHA-256")
     dimensions = _nonnegative_int(dataset.get("dimensions"), "lifecycle.dataset.dimensions", errors)
     if dimensions == 0:
@@ -1155,7 +1165,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         relative = artifact.get("path")
         path = _artifact_file(root, relative, f"raw artifact {position}", errors)
         expected_hash = artifact.get("sha256")
-        if not re.fullmatch(r"[0-9a-f]{64}", str(expected_hash or "")):
+        if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
             errors.append(f"raw artifact {position} has invalid SHA-256")
             continue
         if not isinstance(relative, str):
@@ -1367,7 +1377,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         route.get("optimized") is True
         and route.get("fallback_reason") == "none"
         and isinstance(route.get("name"), str)
-        and route.get("name")
+        and route.get("name") in OPTIMIZED_ROUTE_NAMES
         and index_reference is not None
         and route.get("index_identity") == index_reference[0]
         and not isinstance(route_generation, bool)
@@ -1393,7 +1403,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         if (
             not isinstance(relative, str)
             or relative not in raw_by_path
-            or profile.get("sha256") != raw_by_path.get(str(relative))
+            or profile.get("sha256") != raw_by_path.get(relative)
             or isinstance(before, bool)
             or isinstance(after, bool)
             or not isinstance(before, int)

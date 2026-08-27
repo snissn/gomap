@@ -589,6 +589,48 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any("non-finite JSON number" in item for item in got["errors"]), got)
 
+    def test_duplicate_json_keys_are_structurally_invalid_at_any_depth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            manifest["ignored"] = {"sentinel": 1}
+            harness.write_json(root / "manifest.json", manifest)
+            manifest_path = root / "manifest.json"
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            manifest_path.write_text(
+                manifest_text.replace('"sentinel": 1', '"sentinel": 1, "sentinel": 2'),
+                encoding="utf-8",
+            )
+
+            complete = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(complete["analyzable"], complete)
+        self.assertTrue(any("duplicate JSON object key 'sentinel'" in item for item in complete["errors"]), complete)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            events[0]["ignored"] = {"sentinel": 1}
+            rewrite_lifecycle_fixture(root, manifest, events[:4])
+            lifecycle_path = root / "lifecycle.jsonl"
+            lifecycle_text = lifecycle_path.read_text(encoding="utf-8")
+            lifecycle_path.write_text(
+                lifecycle_text.replace('"sentinel": 1', '"sentinel": 1, "sentinel": 2'),
+                encoding="utf-8",
+            )
+            manifest["lifecycle"]["sha256"] = harness.sha256_file(lifecycle_path)
+            harness.write_json(root / "manifest.json", manifest)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+            partial = json.loads(output.getvalue())
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(partial["analyzable"], partial)
+        self.assertTrue(any("duplicate JSON object key 'sentinel'" in item for item in partial["errors"]), partial)
+
     def test_partial_fixture_rejects_impossible_known_stage_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -734,6 +776,32 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_dataset_and_raw_artifact_digests_must_be_strings(self) -> None:
+        cases = (
+            (
+                "dataset",
+                lambda row: row["lifecycle"]["dataset"].__setitem__("sha256", int("4" * 64)),
+                "lifecycle.dataset.sha256",
+            ),
+            (
+                "raw-artifact",
+                lambda row: row["lifecycle"]["raw_artifacts"][0].__setitem__("sha256", int("5" * 64)),
+                "raw artifact 0 has invalid SHA-256",
+            ),
+        )
+        for label, mutation, expected in cases:
+            with self.subTest(digest=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
+
     def test_effective_service_and_harness_config_must_be_present(self) -> None:
         mutations = (
             (lambda row: row["service"].__setitem__("profile", ""), "service.profile"),
@@ -858,6 +926,9 @@ class LifecycleValidatorTest(unittest.TestCase):
         def fallback_route(rows: list[dict]) -> None:
             rows[12]["state"]["route"]["fallback_reason"] = "exact_scan"
 
+        def unknown_route(rows: list[dict]) -> None:
+            rows[12]["state"]["route"]["name"] = "custom_optimized_route"
+
         def stale_route_identity(rows: list[dict]) -> None:
             rows[12]["state"]["route"]["index_identity"] = "stale-index"
 
@@ -873,6 +944,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             (stale_route_identity, "optimized route proof failed"),
             (float_route_generation, "optimized route proof failed"),
             (bool_route_generation, "optimized route proof failed"),
+            (unknown_route, "optimized route proof failed"),
             (fallback_route, "optimized route proof failed"),
         ):
             with self.subTest(mutation=mutation.__name__, expected=expected):
@@ -886,6 +958,19 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
+
+    def test_canonical_optimized_route_names_complete(self) -> None:
+        for route_name in harness.OPTIMIZED_ROUTE_NAMES:
+            with self.subTest(route=route_name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    events[12]["state"]["route"]["name"] = route_name
+                    rewrite_lifecycle_fixture(root, manifest, events)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertTrue(got["complete"], got)
 
     def test_raw_checksum_and_profile_association_are_verified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
