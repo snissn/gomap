@@ -111,6 +111,29 @@ func TestVacuumIndexOnlineFinalSyncFailureRetainsResourceTotals(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlineRuntimeFailureRetainsResourceTotals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	seedVacuumOnlinePointer(t, database, "runtime-failure")
+	wantErr := errors.New("injected replacement runtime failure")
+	database.vacuumReplacementRuntimeHook = func(*rootPublicationRuntimeV1) error { return wantErr }
+	defer func() { database.vacuumReplacementRuntimeHook = nil }()
+
+	if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("VacuumIndexOnline error=%v want %v", err, wantErr)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.WorkCompleted || stats.DurableResourceCaptures != 1 || stats.DurableResourceDescriptors == 0 || stats.DurableResourceBytes == 0 {
+		t.Fatalf("failed runtime stats=%+v want captured resource totals", stats)
+	}
+}
+
 func seedVacuumOnlinePointer(t *testing.T, database *DB, key string) {
 	t.Helper()
 	ptrs, err := database.AppendValueLogValues([][]byte{bytes.Repeat([]byte("value"), 256)})

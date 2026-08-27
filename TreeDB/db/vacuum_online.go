@@ -521,6 +521,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 	var pendingDiagnosticResources *rootpublication.StableResourceSet
 	defer func() {
 		if pendingDiagnosticResources != nil {
+			descriptors, bytes := vacuumDurableResourceSummary(pendingDiagnosticResources)
+			runStats.DurableResourceDescriptors += descriptors
+			runStats.DurableResourceBytes += bytes
 			pendingDiagnosticResources.Release()
 		}
 	}()
@@ -1214,11 +1217,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		holdActive = true
 		if finalSyncErr != nil {
 			unlockCutover(false)
-			descriptors, bytes := vacuumDurableResourceSummary(pendingDiagnosticResources)
-			runStats.DurableResourceDescriptors += descriptors
-			runStats.DurableResourceBytes += bytes
-			pendingDiagnosticResources.Release()
-			pendingDiagnosticResources = nil
 			cleanupNewPager()
 			return finalSyncErr
 		}
