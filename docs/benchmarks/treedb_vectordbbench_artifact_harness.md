@@ -75,7 +75,9 @@ deterministic cumulative projection of the adapter sidecar. All five
 load/build/search boundary timestamps must match their lifecycle stages and
 exact tagged diagnostics samples. Each sample must occur at or after its own
 boundary and before the next boundary; the final acknowledgement proves the
-`cache_warm` sample. Nanosecond boundary values and emitted RFC3339 lifecycle
+`cache_warm` sample. The cumulative WAL frontier/bytes and build counters in
+each boundary state must exactly match the projection of its tagged snapshot.
+Nanosecond boundary values and emitted RFC3339 lifecycle
 timestamps share one integer conversion that truncates sub-microsecond digits.
 Partial artifacts may omit boundaries not yet reached.
 

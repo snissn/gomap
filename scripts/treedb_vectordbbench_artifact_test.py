@@ -140,9 +140,10 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             },
             "wal": {"frontier": sequence, "bytes_written_total": sequence * 100},
             "counters": {
-                "writes": 50_000 if loaded else 0,
-                "checkpoints": 1 if durable else 0,
-                "builds": 1 if sequence >= 6 else 0,
+                "commit_seq": 50_000 if loaded else 0,
+                "wal_write_bytes_total": sequence * 100,
+                "indexed_stage_docs_total": 50_000 if loaded else 0,
+                "indexed_flush_docs_total": 50_000 if durable else 0,
             },
         }
         if sequence >= 6:
@@ -203,16 +204,26 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     )
     service_log = root / "service.log"
     service_log.write_text("fixture service started and stopped cleanly\n", encoding="utf-8")
-    diagnostics = [
-        {
+    diagnostics = []
+    for stage in boundary_stages:
+        event_state = events[stages.index(stage)]["state"]
+        diagnostics.append({
             "timestamp_ns": boundary_ns[stage] + 1,
             "boundary": stage,
             "boundary_timestamp_ns": boundary_ns[stage],
-            "snapshot": {},
+            "snapshot": {
+                "database": {
+                    "treedb.commit_seq": event_state["counters"]["commit_seq"],
+                    "treedb.command_wal.write.bytes_total": event_state["counters"]["wal_write_bytes_total"],
+                    "treedb.command_wal.durable_wal_lsn": event_state["wal"]["frontier"],
+                },
+                "collections": {
+                    "treedb.collections.write_domain.indexed_stage.docs_total": event_state["counters"]["indexed_stage_docs_total"],
+                    "treedb.collections.write_domain.indexed_flush.docs_total": event_state["counters"]["indexed_flush_docs_total"],
+                },
+            },
             "wal_filesystem": {"path": str(data_dir / "maindb" / "wal"), "files": 1, "bytes": 100},
-        }
-        for stage in boundary_stages
-    ]
+        })
     diagnostics_path = root / "diagnostics.jsonl"
     diagnostics_path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in diagnostics), encoding="utf-8"
@@ -1448,6 +1459,31 @@ class LifecycleValidatorTest(unittest.TestCase):
             expected = "matching tagged diagnostics" if mutation == "mismatched" else "checksum mismatch"
             self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_completed_fixture_binds_stage_state_to_tagged_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            diagnostics = root / "diagnostics.jsonl"
+            records = [json.loads(line) for line in diagnostics.read_text(encoding="utf-8").splitlines()]
+            records[0]["snapshot"]["database"]["treedb.command_wal.durable_wal_lsn"] = 0
+            diagnostics.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "diagnostics.jsonl"
+            )["sha256"] = harness.sha256_file(diagnostics)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertIn(
+            "stage load_end wal does not match its tagged diagnostics snapshot",
+            got["errors"],
+        )
+
     def test_completed_fixture_rejects_corrupt_or_mismatched_load_milestones(self) -> None:
         for mutation, expected in (("corrupt", "cannot parse"), ("mismatch", "do not match")):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
@@ -2437,7 +2473,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             late["sequence"] += 1
             late["stage"] = "post_teardown"
             late["timestamp"] = "2026-08-27T00:00:14Z"
-            late["state"]["counters"]["writes"] += 1
+            late["state"]["counters"]["commit_seq"] += 1
             events.append(late)
             rewrite_lifecycle_fixture(root, manifest, events)
 
@@ -2853,7 +2889,10 @@ class LifecycleValidatorTest(unittest.TestCase):
         mutations = (
             (lambda rows: rows[5]["state"]["rows"].__setitem__("server_durable", 0), "rows.server_durable decreased"),
             (lambda rows: rows[5]["state"]["wal"].__setitem__("frontier", 0), "wal.frontier decreased"),
-            (lambda rows: rows[7]["state"]["counters"].__setitem__("builds", 0), "counters.builds decreased"),
+            (
+                lambda rows: rows[7]["state"]["counters"].__setitem__("indexed_stage_docs_total", 0),
+                "counters.indexed_stage_docs_total decreased",
+            ),
         )
         for mutation, expected in mutations:
             with self.subTest(expected=expected):
@@ -2879,6 +2918,22 @@ class LifecycleValidatorTest(unittest.TestCase):
                     manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
                     for event in events:
                         event["state"]["wal"] = {"frontier": 0, "bytes_written_total": 0}
+                        event["state"]["counters"]["wal_write_bytes_total"] = 0
+                    diagnostics = root / "diagnostics.jsonl"
+                    diagnostic_records = [
+                        json.loads(line) for line in diagnostics.read_text(encoding="utf-8").splitlines()
+                    ]
+                    for record in diagnostic_records:
+                        record["snapshot"]["database"]["treedb.command_wal.durable_wal_lsn"] = 0
+                        record["snapshot"]["database"]["treedb.command_wal.write.bytes_total"] = 0
+                    diagnostics.write_text(
+                        "".join(json.dumps(record, sort_keys=True) + "\n" for record in diagnostic_records),
+                        encoding="utf-8",
+                    )
+                    next(
+                        artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                        if artifact["path"] == "diagnostics.jsonl"
+                    )["sha256"] = harness.sha256_file(diagnostics)
                     rewrite_lifecycle_fixture(root, manifest, events)
 
                     got = harness.validate_lifecycle_artifact(root)

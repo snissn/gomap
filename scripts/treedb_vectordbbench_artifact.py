@@ -2243,6 +2243,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                             errors.append(
                                 "lifecycle load milestones do not match the adapter lifecycle sidecar"
                             )
+            diagnostic_state_builder = LifecycleStateBuilder()
             for position, boundary in enumerate(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
                 boundary_ns = adapter[f"{boundary}_ns"]
                 event_timestamp = (stage_events.get(boundary) or {}).get("_timestamp")
@@ -2277,6 +2278,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         f"stage {boundary} requires exactly one matching tagged diagnostics sample "
                         "at or after its boundary and before the next boundary"
                     )
+                elif isinstance((stage_events.get(boundary) or {}).get("state"), dict):
+                    event_state = stage_events[boundary]["state"]
+                    expected_state = diagnostic_state_builder.build(
+                        boundary_records[0]["snapshot"], event_state.get("rows", {})
+                    )
+                    for field in ("wal", "counters"):
+                        if event_state.get(field) != expected_state[field]:
+                            errors.append(
+                                f"stage {boundary} {field} does not match its tagged diagnostics snapshot"
+                            )
             if boundary_acknowledgement is not None:
                 warm_matches = [
                     record for record in (diagnostics_records or [])
