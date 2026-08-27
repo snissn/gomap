@@ -9,6 +9,7 @@ import gzip
 import io
 import inspect
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -1036,6 +1037,25 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any("service.data_dir" in item for item in got["errors"]), got)
+
+    def test_relative_artifact_root_preserves_data_dir_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "artifact"
+            root.mkdir()
+            lifecycle_fixture(root)
+
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(parent)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    got = harness.validate_lifecycle_artifact(Path("artifact"))
+                    exit_code = harness.main(["--validate-lifecycle", "artifact"])
+            finally:
+                os.chdir(previous_cwd)
+
+        self.assertTrue(got["complete"], got)
+        self.assertEqual(exit_code, 0)
 
     def test_service_binary_must_remain_an_executable_with_matching_bytes(self) -> None:
         def missing(path: Path) -> None:
