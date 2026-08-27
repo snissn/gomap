@@ -605,7 +605,7 @@ def no_document_guardrails(response: dict[str, Any]) -> bool:
             isinstance(stats.get(key, 0), int)
             and not isinstance(stats.get(key, 0), bool)
             and stats.get(key, 0) == 0
-            for key in ("documents_fetched", "document_bytes")
+            for key in ("documents_fetched", "document_bytes", "document_output_bytes")
         )
     )
 
@@ -1315,6 +1315,13 @@ def read_adapter_lifecycle_records(path: Path) -> list[dict[str, Any]]:
         timestamp_ns = record.get("timestamp_ns")
         if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool) or timestamp_ns <= 0:
             raise ValueError(f"adapter lifecycle sidecar line {line_number} timestamp_ns must be a positive integer")
+        try:
+            _datetime_from_ns(timestamp_ns)
+        except ValueError as exc:
+            raise ValueError(
+                f"adapter lifecycle sidecar line {line_number} timestamp_ns is outside "
+                "the supported UTC datetime range"
+            ) from exc
         records.append(record)
 
     return records
@@ -2201,6 +2208,24 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             except ValueError as exc:
                 errors.append(f"completed adapter lifecycle sidecar is invalid: {exc}")
         if adapter is not None:
+            load_end_state = (stage_events.get("load_end") or {}).get("state")
+            load_end_rows = load_end_state.get("rows") if isinstance(load_end_state, dict) else None
+            final_state = events[-1].get("state") if events else None
+            final_rows = final_state.get("rows") if isinstance(final_state, dict) else None
+            for key in ("client_sent", "server_accepted"):
+                adapter_count = adapter[key]
+                if adapter_count != expected_rows:
+                    errors.append(
+                        f"adapter lifecycle cumulative {key} does not equal lifecycle.expected_rows"
+                    )
+                if not isinstance(load_end_rows, dict) or load_end_rows.get(key) != adapter_count:
+                    errors.append(
+                        f"adapter lifecycle cumulative {key} does not match stage load_end rows.{key}"
+                    )
+                if not isinstance(final_rows, dict) or final_rows.get(key) != adapter_count:
+                    errors.append(
+                        f"adapter lifecycle cumulative {key} does not match final rows.{key}"
+                    )
             if "lifecycle_load_milestones.json" in raw_by_path:
                 try:
                     milestone_document = _strict_json_loads(

@@ -209,9 +209,9 @@ parses the checksum-bound raw response and requires its no-document status,
 route, fallback status, reopened service generation, and result count to match
 the embedded event. The raw response must also carry the service-emitted
 `no_document_guardrails_ok: true` diagnostic and exact zero
-`documents_fetched` and `document_bytes` counters (the service's Go JSON
-encoding omits those counters when zero); empty, short, malformed, or
-contradictory responses fail closed.
+`documents_fetched`, `document_bytes`, and `document_output_bytes` counters
+(the service's Go JSON encoding omits those counters when zero); empty, short,
+malformed, or contradictory responses fail closed.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is

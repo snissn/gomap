@@ -1168,6 +1168,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response.__setitem__("stats", "malformed"), "stats"),
             (lambda response: response["stats"].__setitem__("documents_fetched", 1), "guardrails"),
             (lambda response: response["stats"].__setitem__("document_bytes", 1), "guardrails"),
+            (lambda response: response["stats"].__setitem__("document_output_bytes", 1), "guardrails"),
             (
                 lambda response: response["diagnostics"].__setitem__(
                     "no_document_guardrails_ok", False
@@ -1485,6 +1486,53 @@ class LifecycleValidatorTest(unittest.TestCase):
             "cannot reconstruct lifecycle load milestones" in error for error in got["errors"]
         ), got)
 
+    def test_completed_fixture_binds_adapter_counts_to_expected_and_lifecycle_rows(self) -> None:
+        for mutation, expected in (
+            ("sidecar", "does not equal lifecycle.expected_rows"),
+            ("load_end", "does not match stage load_end"),
+            ("final", "does not match final"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, events = lifecycle_fixture(root)
+                if mutation == "sidecar":
+                    sidecar = root / "adapter-lifecycle.jsonl"
+                    records = [
+                        json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()
+                    ]
+                    batch = next(record for record in records if record["event"] == "batch_accepted")
+                    batch["client_sent"] = 49_999
+                    batch["server_accepted"] = 49_999
+                    sidecar.write_text(
+                        "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                        encoding="utf-8",
+                    )
+                    milestones = root / "lifecycle_load_milestones.json"
+                    harness.write_json(milestones, harness.lifecycle_load_milestone_document(records))
+                    for artifact in manifest["lifecycle"]["raw_artifacts"]:
+                        if artifact["path"] == "adapter-lifecycle.jsonl":
+                            artifact["sha256"] = harness.sha256_file(sidecar)
+                        elif artifact["path"] == "lifecycle_load_milestones.json":
+                            artifact["sha256"] = harness.sha256_file(milestones)
+                    harness.write_json(root / "manifest.json", manifest)
+                else:
+                    event = next(
+                        event for event in events
+                        if event["stage"] == ("load_end" if mutation == "load_end" else "teardown")
+                    )
+                    event["state"]["rows"]["client_sent"] = 49_999
+                    rewrite_lifecycle_fixture(root, manifest, events)
+
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    exit_code = harness.main([
+                        "--validate-lifecycle", str(root), "--allow-partial",
+                    ])
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertEqual(exit_code, 1)
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
+
     def test_milestone_builder_rejects_unbounded_counts(self) -> None:
         records = [
             {"event": "load_start", "timestamp_ns": 1},
@@ -1609,6 +1657,21 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertTrue(any("outside the supported UTC datetime range" in item for item in got["errors"]), got)
             else:
                 self.assertTrue(any("positive integer" in item for item in got["errors"]), got)
+
+    def test_adapter_sidecar_reader_rejects_out_of_range_timestamp_before_reconstruction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lifecycle_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            records[2]["timestamp_ns"] = 10**30
+            sidecar.write_text(
+                "".join(json.dumps(record, sort_keys=True) + "\n" for record in records),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "line 3 timestamp_ns.*supported UTC"):
+                harness.read_adapter_lifecycle_sidecar(sidecar)
 
     def test_interrupted_fixture_is_analyzable_but_never_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3108,6 +3171,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
         guardrail_mutations = (
             lambda response: response["stats"].__setitem__("documents_fetched", 1),
             lambda response: response["stats"].__setitem__("document_bytes", 1),
+            lambda response: response["stats"].__setitem__("document_output_bytes", 1),
             lambda response: response["diagnostics"].__setitem__(
                 "no_document_guardrails_ok", False
             ),
