@@ -385,6 +385,17 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         for local_start in range(0, len(documents), batch_size):
             source_batch = documents[local_start:local_start + batch_size]
             batch = [service_document(row) for row in source_batch]
+            if self.diagnostics_dir is None:
+                response = self.evidence.call(
+                    operation, "writer", scenario,
+                    lambda batch=batch: self.client.upsert_documents(
+                        self.collection, batch, defer_vector_index_rebuild=True,
+                    ),
+                    on_start=on_writer_start,
+                )
+                if response.upserted != len(batch) or response.ids != [row["id"] for row in batch]:
+                    raise RuntimeError("TreeDB upsert completion did not cover the submitted batch")
+                continue
             batch_start = self._batch_start(scenario, source_batch, local_start)
             with self._diagnostic_lock:
                 sequence = len(self.batch_correlations)

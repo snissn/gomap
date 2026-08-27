@@ -45,6 +45,8 @@ class FakeClient:
         return SimpleNamespace(matched_count=len(documents), documents=documents)
 
     def delete_by_filter(self, *_args: object, **_kwargs: object) -> object:
+        self.count = 0
+        self.present_ids.clear()
         return SimpleNamespace(deleted=1)
 
     def count_documents(self, *_args: object, **_kwargs: object) -> object:
@@ -184,6 +186,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
 
     def test_mutation_overrides_forward_writer_start_callbacks(self) -> None:
         workload = self.workload(self.response())
+        workload.controller.stats_snapshot = mock.Mock(side_effect=AssertionError("default upsert requested diagnostics"))
         starts: list[str] = []
         document = {"id": "d", "content": "c", "vector": [1.0, 0.0], "user_id": "u", "fpath": "/a"}
         workload.upsert(
@@ -198,8 +201,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             on_writer_start=lambda: starts.append("delete"),
         )
         self.assertEqual(starts, ["upsert", "delete"])
-    def test_upsert_correlates_batch_and_snapshots_without_changing_default_path(self) -> None:
-        workload = self.workload(self.response())
+        self.assertEqual(workload.batch_correlations, [])
+        workload.controller.stats_snapshot.assert_not_called()
+    def test_diagnostic_upsert_correlates_batch_and_snapshots(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
         snapshots = iter(({"status": "captured", "snapshot": {"stage": "before"}},
                           {"status": "captured", "snapshot": {"stage": "after"}}))
         workload.controller.stats_snapshot = lambda: next(snapshots)
