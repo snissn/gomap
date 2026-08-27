@@ -753,6 +753,11 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	return ResetIndexResponse{Index: info, Created: false, Reset: true, DropOld: req.DropOld, DroppedDocuments: len(ids)}, nil
 }
 
+func reconcileOptimizeIndexTiming(timing *OptimizeIndexTiming, status VectorIndexMaintenanceStatus) {
+	timing.RebuildNanos = max(timing.RebuildNanos, status.DurationNanos)
+	timing.TotalNanos = max(timing.TotalNanos, timing.CacheInvalidateNanos+timing.RebuildNanos+timing.CachePrimeNanos+timing.CacheWarmNanos)
+}
+
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
 	started := time.Now()
@@ -802,7 +807,11 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 			timing.CacheWarmNanos = time.Since(warmStarted).Nanoseconds()
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return OptimizeIndexResponse{}, err
+	}
 	timing.TotalNanos = time.Since(started).Nanoseconds()
+	reconcileOptimizeIndexTiming(&timing, maintenance)
 	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance, Timing: timing}, nil
 }
 

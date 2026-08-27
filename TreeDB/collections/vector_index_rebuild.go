@@ -1431,11 +1431,11 @@ func prepareColumnVectorGraphRebuildManifestWithAuthorityTimed(collection string
 	}
 	stageStarted = time.Now()
 	preparedQuantizedAssets, err := prepareColumnVectorGraphQuantizedAssetsWithStableAuthority(assetRootDir, collection, cfg, def, graph, manifest.Generation, quantizedPartID, rows, authority)
-	if timing != nil {
-		timing.QuantizedPreparation = collectionObservedElapsedSince(stageStarted)
-	}
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	if timing != nil && len(preparedQuantizedAssets) > 0 {
+		timing.QuantizedPreparation = collectionObservedElapsedSince(stageStarted)
 	}
 	searchPackPartID := quantizedPartID
 	if len(preparedQuantizedAssets) > 0 {

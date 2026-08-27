@@ -889,6 +889,14 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 	}
 }
 
+func TestReconcileOptimizeIndexTimingCoarseClock(t *testing.T) {
+	timing := OptimizeIndexTiming{TotalNanos: 100, CacheInvalidateNanos: 1, RebuildNanos: 100, CachePrimeNanos: 1, CacheWarmNanos: 20}
+	reconcileOptimizeIndexTiming(&timing, VectorIndexMaintenanceStatus{DurationNanos: 110})
+	if timing.RebuildNanos != 110 || timing.TotalNanos != 132 {
+		t.Fatalf("reconciled optimize timing=%+v want rebuild/total=110/132", timing)
+	}
+}
+
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
