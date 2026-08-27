@@ -38,6 +38,7 @@ class Model:
 
 class Models:
     FieldCondition = MatchValue = Filter = VectorParams = PointStruct = PointIdsList = Model
+    HnswConfigDiff = OptimizersConfigDiff = Model
     Distance = SimpleNamespace(COSINE="cosine")
     PayloadSchemaType = SimpleNamespace(KEYWORD="keyword")
 
@@ -48,6 +49,9 @@ class SharedQdrant:
         self.points: dict[str, Model] = {}
         self.payload_schema: dict[str, str] = {}
         self.vector_params: dict[str, Model] = {}
+        self.hnsw_config = Model()
+        self.optimizers_config = Model()
+        self.events: list[str] = []
         self.clients: list[FakeClient] = []
         self.index_fields: list[str] = []
         self.query_filters: list[Model] = []
@@ -78,21 +82,49 @@ class FakeClient:
         self.shared.exists = False
         self.shared.points.clear()
 
-    def create_collection(self, *, vectors_config: dict[str, Model], **_: object) -> None:
+    def create_collection(self, *, vectors_config: dict[str, Model],
+                          hnsw_config: Model, optimizers_config: Model,
+                          **_: object) -> None:
         self.shared.exists = True
         self.shared.vector_params = vectors_config
+        self.shared.hnsw_config = hnsw_config
+        self.shared.optimizers_config = optimizers_config
+        self.shared.events.append("create_initial_upload_collection")
+
+    def update_collection(self, *, hnsw_config: Model,
+                          optimizers_config: Model, **_: object) -> None:
+        self.shared.hnsw_config = hnsw_config
+        self.shared.optimizers_config = optimizers_config
+        self.shared.events.append("restore_production_configuration")
 
     def create_payload_index(self, *, field_name: str, field_schema: str, **_: object) -> None:
         self.shared.payload_schema[field_name] = field_schema
         self.shared.index_fields.append(field_name)
 
     def get_collection(self, _: str) -> Model:
+        self.shared.events.append("get_collection")
         return Model(
             status="green",
             optimizer_status=Model(ok=True),
             points_count=len(self.shared.points),
+            indexed_vectors_count=len(self.shared.points),
+            segments_count=1,
             payload_schema=self.shared.payload_schema,
-            config=Model(params=Model(vectors=self.shared.vector_params), wal_config=Model(wal_capacity_mb=32)),
+            config=Model(
+                params=Model(vectors=self.shared.vector_params),
+                hnsw_config=self.shared.hnsw_config,
+                optimizer_config=self.shared.optimizers_config,
+                wal_config=Model(wal_capacity_mb=32),
+            ),
+        )
+
+    def get_optimizations(self, **_: object) -> Model:
+        return Model(
+            summary=Model(
+                queued_optimizations=0, queued_points=0,
+                queued_segments=0, idle_segments=0,
+            ),
+            running=[],
         )
 
     def upsert(self, *, points: list[Model], **_: object) -> None:
@@ -101,6 +133,7 @@ class FakeClient:
             for point in points:
                 self.shared.points[point.id] = point
         self.shared.writer_completed.set()
+        self.shared.events.append("upsert")
 
     @staticmethod
     def _matches(point: Model, filter_value: Model) -> bool:
@@ -131,9 +164,12 @@ class FakeClient:
             for key in doomed:
                 self.shared.points.pop(key, None)
         self.shared.writer_completed.set()
-    def count(self, *, count_filter: Model, **_: object) -> Model:
+    def count(self, *, count_filter: Model | None, **_: object) -> Model:
         with self.shared.lock:
-            return Model(count=sum(self._matches(point, count_filter) for point in self.shared.points.values()))
+            return Model(count=sum(
+                count_filter is None or self._matches(point, count_filter)
+                for point in self.shared.points.values()
+            ))
 
     def scroll(self, *, limit: int, offset: str | None, **_: object) -> tuple[list[Model], str | None]:
         keys = sorted(self.shared.points)
@@ -325,6 +361,250 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         manifest["expected_state_sha256"] = runner.expected_state_hash(manifest)
         with self.assertRaisesRegex(ValueError, "frozen order"):
             runner.validate_manifest(manifest, require_frozen=False)
+
+    def test_bulk_upload_transition_is_ordered_once_and_preserves_manifest(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        before_hashes = runner.manifest_hashes(manifest)
+        before_operations = copy.deepcopy(manifest["operations"])
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.create_owned_collection()
+        initial = manifest["operations"][1]
+        workload.insert_ranges(initial["name"], initial["insert_ranges"], False)
+
+        self.assertEqual(shared.hnsw_config.model_dump(), runner.PRODUCTION_HNSW_CONFIG)
+        self.assertEqual(shared.optimizers_config.model_dump(), runner.PRODUCTION_OPTIMIZERS_CONFIG)
+        self.assertEqual(shared.events.count("restore_production_configuration"), 1)
+        restoration = shared.events.index("restore_production_configuration")
+        self.assertGreater(restoration, max(
+            index for index, event in enumerate(shared.events) if event == "upsert"
+        ))
+        with self.assertRaisesRegex(RuntimeError, "already attempted"):
+            workload.restore_production_configuration()
+
+        artifact = workload.artifact()
+        raw = artifact["backend_raw_evidence"]["qdrant"]
+        transition = raw["collection_configuration_transition"]
+        self.assertTrue(transition["attempted"])
+        self.assertTrue(transition["completed"])
+        self.assertEqual(transition["boundary"], "initial_batch_insert_to_warmup_search")
+        self.assertEqual(
+            [row["phase"] for row in raw["readiness"]["sessions"]],
+            ["initial_upload_collection_created", "initial_load_to_query"],
+        )
+        self.assertTrue(all(row["resource_samples"] for row in raw["readiness"]["sessions"]))
+        self.assertTrue(all(
+            snapshot["optimizations"]["available"]
+            for session in raw["readiness"]["sessions"]
+            for snapshot in session["snapshots"]
+        ))
+        self.assertFalse(artifact["passing"])
+        self.assertEqual(artifact["state"], "partial")
+        self.assertEqual(runner.manifest_hashes(manifest), before_hashes)
+        self.assertEqual(manifest["operations"], before_operations)
+        workload.close()
+
+    def test_readiness_dispositions_are_deterministic(self) -> None:
+        def snapshot(*, status: str = "yellow", optimizer: object = "ok",
+                     running: list[object] | None = None,
+                     summary: dict[str, int] | None = None,
+                     available: bool = True, elapsed: float = 99,
+                     indexed: int = 1) -> dict[str, object]:
+            detail = {
+                "running": running or [],
+                "summary": summary or {
+                    "queued_optimizations": 0, "queued_points": 0,
+                    "queued_segments": 0, "idle_segments": 0,
+                },
+            }
+            return {
+                "elapsed_seconds": elapsed,
+                "status": status, "optimizer_status": optimizer,
+                "indexed_vectors_count": indexed, "segments_count": 1,
+                "optimizations": (
+                    {"available": True, "detail": detail}
+                    if available else {"available": False, "reason": "not exposed"}
+                ),
+            }
+
+        cases = {
+            "active progress": ([
+                snapshot(running=[{"progress": 0.25}], elapsed=95, indexed=1),
+                snapshot(running=[{"progress": 0.50}], elapsed=99, indexed=2),
+            ], []),
+            "queued/idle": ([snapshot(
+                status="grey", summary={"queued_optimizations": 1},
+            )], []),
+            "optimizer error": ([snapshot(
+                status="red", optimizer={"error": "optimizer failed"},
+            )], []),
+            "resource starvation": ([snapshot()], [{
+                "available": True, "tail": "No space left on device",
+            }]),
+            "unknown": ([snapshot(available=False)], []),
+        }
+        for expected, (snapshots, logs) in cases.items():
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    runner.readiness_disposition(snapshots, logs), expected,
+                )
+
+    def test_readiness_progress_must_change_near_deadline(self) -> None:
+        def snapshot(elapsed: float, indexed: int) -> dict[str, object]:
+            return {
+                "elapsed_seconds": elapsed,
+                "status": "yellow", "optimizer_status": "ok",
+                "points_count": 100, "indexed_vectors_count": indexed,
+                "segments_count": 2,
+                "optimizations": {
+                    "available": True,
+                    "detail": {
+                        "summary": {
+                            "queued_optimizations": 1, "queued_points": 100 - indexed,
+                            "queued_segments": 1, "idle_segments": 0,
+                        },
+                        "running": [{"operation_id": 7}],
+                    },
+                },
+            }
+
+        early_progress_then_stall = [
+            snapshot(0, 0), snapshot(20, 50),
+            snapshot(91, 50), snapshot(99, 50),
+        ]
+        recent_progress = [
+            snapshot(0, 0), snapshot(20, 50),
+            snapshot(91, 50), snapshot(99, 75),
+        ]
+        self.assertEqual(
+            runner.readiness_disposition(
+                early_progress_then_stall, [], deadline_seconds=100,
+            ),
+            "queued/idle",
+        )
+        self.assertEqual(
+            runner.readiness_disposition(
+                recent_progress, [], deadline_seconds=100,
+            ),
+            "active progress",
+        )
+
+    def test_grey_is_rejected_and_missing_optimization_monitoring_is_explicit(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.optimizer_timeout = 0.001
+        grey = Model(
+            status="grey", optimizer_status=Model(ok=True),
+            points_count=0, indexed_vectors_count=0, segments_count=1,
+            payload_schema={"user_id": "keyword", "fpath": "keyword"},
+            config=Model(params=Model(vectors={})),
+        )
+        unavailable_resource = {
+            "captured": False, "rss_bytes": 0, "cpu_seconds": 0.0, "disk_bytes": 0,
+            "availability": {
+                "rss_bytes": "unavailable", "cpu_seconds": "unavailable",
+                "disk_bytes": "unavailable", "bytes_per_op": "unavailable",
+                "allocs_per_op": "unavailable", "measurement_error": "",
+            },
+        }
+        with (
+            mock.patch.object(workload.client, "get_collection", return_value=grey),
+            mock.patch.object(
+                workload.client, "get_optimizations",
+                side_effect=NotImplementedError("endpoint unavailable"),
+            ),
+            mock.patch.object(runner, "server_resource_usage", return_value=unavailable_resource),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "queued/idle"):
+                workload.wait_ready(expected_count=0, phase="grey_timeout")
+            artifact = workload.artifact()
+
+        session = artifact["backend_raw_evidence"]["qdrant"]["readiness"]["sessions"][-1]
+        self.assertEqual(session["outcome"], "timeout")
+        self.assertEqual(session["disposition"], "queued/idle")
+        self.assertEqual(session["snapshots"][-1]["status"], "grey")
+        self.assertFalse(session["snapshots"][-1]["optimizations"]["available"])
+        self.assertTrue(any(
+            marker in session["snapshots"][-1]["optimizations"]["reason"]
+            for marker in ("NotImplementedError", "no optimizer diagnostic budget")
+        ))
+        self.assertFalse(artifact["passing"])
+
+        self.assertEqual(artifact["state"], "partial")
+        workload.close()
+
+    def test_readiness_uses_exact_count_not_approximate_collection_counters(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        approximate = Model(
+            status="green", optimizer_status=Model(ok=True),
+            points_count=99, indexed_vectors_count=0, segments_count=1,
+            payload_schema={"user_id": "keyword", "fpath": "keyword"},
+            config=Model(params=Model(vectors={})),
+        )
+        with mock.patch.object(workload.client, "get_collection", return_value=approximate):
+            workload.wait_ready(expected_count=0, phase="exact_count")
+        snapshot = workload.readiness_evidence[-1]["snapshots"][-1]
+        self.assertEqual(snapshot["points_count"], 99)
+        self.assertEqual(snapshot["indexed_vectors_count"], 0)
+        self.assertEqual(snapshot["exact_points_count"], 0)
+        workload.close()
+
+
+    def test_optimizer_diagnostic_uses_per_request_timeout(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        request = mock.Mock(return_value=Model(result=Model(summary=Model(queued_optimizations=0))))
+        workload.client.http = Model(client=Model(request=request))
+        workload.models = Model(InlineResponse20011=object)
+        snapshot = workload.optimization_snapshot(0.25)
+        self.assertTrue(snapshot["available"])
+        self.assertEqual(request.call_args.kwargs["timeout"], 0.25)
+        self.assertEqual(request.call_args.kwargs["params"], {"with": "completed", "completed_limit": 16})
+        workload.close()
+
+    def test_readiness_deduplicates_unchanged_server_log_tail(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        workload.optimizer_timeout = 0.01
+        workload.poll_interval = 0
+        grey = Model(
+            status="grey", optimizer_status=Model(ok=True),
+            points_count=0, indexed_vectors_count=0, segments_count=1,
+            payload_schema={"user_id": "keyword", "fpath": "keyword"},
+            config=Model(params=Model(vectors={})),
+        )
+        with (
+            mock.patch.object(workload.client, "get_collection", return_value=grey),
+            mock.patch.object(workload, "server_log_snapshot", return_value={
+                "available": True, "path": "/tmp/qdrant.log", "size_bytes": 7, "tail": "same",
+            }),
+            mock.patch.object(runner, "READINESS_RESOURCE_INTERVAL_SECONDS", 0),
+        ):
+            with self.assertRaises(TimeoutError):
+                workload.wait_ready(expected_count=0, phase="dedupe_timeout")
+        self.assertEqual(len(workload.readiness_evidence[-1]["server_log_samples"]), 1)
+        workload.close()
+
+    def test_frozen_hashes_and_operation_order_remain_literal(self) -> None:
+        self.assertEqual(runner.FROZEN_HASHES, {
+            "corpus_sha256": "0b1a213652fc97a4460f254f4d9e90f027e4b30ef6111a26807591ade10923e1",
+            "query_sha256": "eb4f076023e361b9a2cf18a06a5e1d69e5023c304da25d38848fc7011575288a",
+            "operation_sha256": "08f38acec8a5ad746dbffadef5ad9c198852c88d1920746229cb0733bfd9c434",
+            "expected_state_sha256": "c2986f2b44e67b33e7bb3f92f5f92b1316e60117ed2505bef73327e0b1e5687f",
+        })
+        self.assertEqual(runner.OPERATION_NAMES, [
+            "ensure_compatible_collection", "initial_batch_insert", "warmup_search",
+            "timed_search_with_batch_insert", "reindex_delete_by_user_and_fpath_while_reading",
+            "reindex_replacement_insert_while_reading", "reindex_visibility_probe", "explicit_update",
+            "update_visibility_probe", "explicit_delete", "delete_visibility_probe",
+            "empty_user_and_file_probes", "close", "reopen", "idempotent_ensure_after_reopen",
+            "final_manifest_and_oracle_comparison",
+        ])
 
     def test_payload_filter_shape(self) -> None:
         value = runner.payload_filter(Models, {"user_id": "u", "fpath": "/a"})
