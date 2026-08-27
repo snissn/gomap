@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -101,13 +102,32 @@ func TestVacuumIndexOnlineFinalSyncFailureRetainsResourceTotals(t *testing.T) {
 		return nil
 	})
 	defer restore()
+	finalSyncReached := make(chan struct{})
+	releaseFinalSync := make(chan struct{})
+	database.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
+		if phase == vacuumPagerSyncFinal {
+			close(finalSyncReached)
+			<-releaseFinalSync
+		}
+	}
+	defer func() { database.vacuumPagerSyncHook = nil }()
+	vacuumErr := make(chan error, 1)
+	go func() { vacuumErr <- database.VacuumIndexOnline(context.Background()) }()
+	waitVacuumTestSignal(t, finalSyncReached, "failing vacuum final sync")
+	blockedAt := time.Now()
+	time.Sleep(50 * time.Millisecond)
+	blockedFor := time.Since(blockedAt)
+	close(releaseFinalSync)
 
-	if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, wantErr) {
+	if err := <-vacuumErr; !errors.Is(err, wantErr) {
 		t.Fatalf("VacuumIndexOnline error=%v want %v", err, wantErr)
 	}
 	stats := database.VacuumOnlineStats()
 	if stats.WorkCompleted || stats.DurableResourceCaptures != 1 || stats.DurableResourceDescriptors == 0 || stats.DurableResourceBytes == 0 {
 		t.Fatalf("failed final-sync stats=%+v want captured resource totals", stats)
+	}
+	if stats.MaxWriterPause < blockedFor || database.vacuumCutoverInProgress.Load() {
+		t.Fatalf("failed final-sync pause=%s gate=%t want released gate and pause >= %s", stats.MaxWriterPause, database.vacuumCutoverInProgress.Load(), blockedFor)
 	}
 }
 

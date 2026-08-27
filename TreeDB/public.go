@@ -2610,7 +2610,12 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 // VacuumOnlineStats returns an owned snapshot of the latest backend online
 // vacuum attempt. The snapshot is diagnostic only and never retains payloads.
 func (db *DB) VacuumOnlineStats() VacuumOnlineStats {
-	if db == nil || db.backend == nil {
+	if db == nil {
+		return VacuumOnlineStats{}
+	}
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.backend == nil {
 		return VacuumOnlineStats{}
 	}
 	return db.backend.VacuumOnlineStats()

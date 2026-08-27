@@ -882,9 +882,14 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.writeMu.Lock()
 		cutoverLocked = true
 		durablePublishLocked := false
+		cutoverGateActive := false
 		holdStarted := time.Now()
+		cutoverStarted := holdStarted
 		var writerHold time.Duration
 		holdActive := true
+		if hook := db.vacuumAfterCutoverLockHook; hook != nil {
+			hook()
+		}
 		recordWriterHold := func() {
 			if !holdActive {
 				return
@@ -898,11 +903,20 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		}
 		unlockCutover := func(completed bool) {
 			recordWriterHold()
+			if cutoverGateActive {
+				// A writer already waiting on writeMu when the gate opens remains
+				// blocked continuously through final replacement sync, so report
+				// the union rather than either overlapping hold in isolation.
+				if blocked := time.Since(cutoverStarted); blocked > runStats.MaxWriterPause {
+					runStats.MaxWriterPause = blocked
+				}
+			}
 			if completed {
 				runStats.CutoverDuration = writerHold
 			}
 			if durablePublishLocked {
 				db.endVacuumCutoverGateLocked()
+				cutoverGateActive = false
 				durablePublishLocked = false
 				db.durablePublishMu.Unlock()
 			}
@@ -1148,6 +1162,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		// recovery-selectable metas. A retained/ambiguous live-index candidate
 		// cannot be transferred across the namespace replacement.
 		db.beginVacuumCutoverGateLocked()
+		cutoverGateActive = true
 		if recoverableRoots != nil {
 			if err := recoverableRoots.revalidateWithDurablePublishLockHeld(); err != nil {
 				unlockCutover(false)

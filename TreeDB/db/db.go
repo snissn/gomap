@@ -223,6 +223,7 @@ type DB struct {
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
+	vacuumAfterCutoverLockHook    func()
 	vacuumBeforeRecorderFenceHook func()
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error
