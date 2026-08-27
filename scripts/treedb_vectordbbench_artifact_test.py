@@ -1488,18 +1488,23 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(any("--k" in error for error in duplicate["errors"]), duplicate)
 
     def test_vdbbench_base_url_must_match_effective_service_address(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            manifest, _events = lifecycle_fixture(root)
-            manifest["service"]["base_url"] = "http://127.0.0.1:9999"
-            set_fixture_vdbbench_command(manifest, "exact")
-            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
-            harness.write_json(root / "manifest.json", manifest)
+        for mutation in ("different", "omitted"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                if mutation == "different":
+                    manifest["service"]["base_url"] = "http://127.0.0.1:9999"
+                else:
+                    addr = manifest["service"]["command"].index("-addr")
+                    del manifest["service"]["command"][addr:addr + 2]
+                set_fixture_vdbbench_command(manifest, "exact")
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
 
-            got = harness.validate_lifecycle_artifact(root)
+                got = harness.validate_lifecycle_artifact(root)
 
-        self.assertFalse(got["analyzable"], got)
-        self.assertTrue(any("base_url" in error and "-addr" in error for error in got["errors"]), got)
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("base_url" in error and "-addr" in error for error in got["errors"]), got)
 
     def test_scalar_command_options_are_bound_to_quantized_manifest_values(self) -> None:
         for option in ("--quantized-index-name", "--quantized-rerank-candidates"):

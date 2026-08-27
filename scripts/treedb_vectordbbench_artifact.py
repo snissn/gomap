@@ -1721,7 +1721,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "addr", "dir", "profile", "pprof", "block-profile-rate", "mutex-profile-fraction",
         }
         profile_values = []
-        effective_addr = "127.0.0.1:9876"
+        effective_addr = "127.0.0.1:7120"
         effective_dir = "/tmp/treedb-document-service"
         effective_pprof = ""
         invalid_command = False
