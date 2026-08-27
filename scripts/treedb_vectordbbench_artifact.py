@@ -2055,10 +2055,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 boundary_acknowledgement = parsed_acknowledgement
                 if boundary_acknowledgement.get("boundary") not in LIFECYCLE_DIAGNOSTIC_BOUNDARIES:
                     errors.append("lifecycle boundary acknowledgement has an unknown boundary")
-                for field in ("boundary_timestamp_ns", "sample_timestamp_ns"):
+                for key in ("boundary_timestamp_ns", "sample_timestamp_ns"):
                     _utc_datetime_from_ns(
-                        boundary_acknowledgement.get(field),
-                        f"lifecycle boundary acknowledgement {field}",
+                        boundary_acknowledgement.get(key),
+                        f"lifecycle boundary acknowledgement {key}",
                         errors,
                     )
 
@@ -2924,7 +2924,12 @@ def lifecycle_raw_artifacts(state: HarnessState, paths: list[Path]) -> list[dict
 
 
 def lifecycle_load_milestone_document(records: list[dict[str, Any]]) -> dict[str, Any]:
-    load_start = next(record["timestamp_ns"] for record in records if record.get("event") == "load_start")
+    load_start = next(
+        (record["timestamp_ns"] for record in records if record.get("event") == "load_start"),
+        None,
+    )
+    if load_start is None:
+        raise ValueError("adapter lifecycle sidecar has no load_start boundary")
     batches = sorted(
         (record for record in records if record.get("event") == "batch_accepted"),
         key=lambda record: record["timestamp_ns"],
@@ -2933,8 +2938,15 @@ def lifecycle_load_milestone_document(records: list[dict[str, Any]]) -> dict[str
     sent = 0
     milestones = []
     for record in batches:
-        accepted += record["server_accepted"]
-        sent += record["client_sent"]
+        batch_sent = record.get("client_sent")
+        batch_accepted = record.get("server_accepted")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (batch_sent, batch_accepted)
+        ):
+            raise ValueError("adapter lifecycle batch counts are invalid")
+        accepted += batch_accepted
+        sent += batch_sent
         elapsed = max(0, record["timestamp_ns"] - load_start) / 1_000_000_000
         try:
             accepted_rate = accepted / elapsed if elapsed > 0 else None
@@ -3002,15 +3014,18 @@ def finalize_partial_lifecycle(
         return
     try:
         records = read_adapter_lifecycle_records(sidecar)
-        milestone_path = write_lifecycle_load_milestones(state, records)
         journal = LifecycleJournal(state.root / "lifecycle.jsonl")
     except (OSError, ValueError):
         return
+    try:
+        milestone_path = write_lifecycle_load_milestones(state, records)
+    except (OSError, ValueError):
+        milestone_path = None
     state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
         state.root / "diagnostics.jsonl",
         sidecar,
         state.root / "lifecycle-boundary-diagnostics.json",
-        milestone_path,
+        *([milestone_path] if milestone_path is not None else []),
         state.root / "service.log",
     ])
     existing = {
@@ -3686,7 +3701,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if args.port == 0:
         args.port = find_free_port(args.host)
     args.base_url = f"http://{host_port(args.host, args.port)}"
-    args.pprof_port = find_free_port(args.host) if args.lifecycle else 0
+    args.pprof_port = 0
+    if args.lifecycle:
+        for _ in range(10):
+            candidate = find_free_port(args.host)
+            if candidate != args.port:
+                args.pprof_port = candidate
+                break
+        if args.pprof_port == 0:
+            parser.error("could not select a free pprof port distinct from the service port")
     args.diagnostics_url = f"http://{host_port(args.host, args.pprof_port)}" if args.lifecycle else ""
     if not args.index_prefix:
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -569,6 +569,22 @@ class HostContextTest(unittest.TestCase):
 
         self.assertEqual(normal.host, "192.168.1.20")
 
+    def test_lifecycle_selects_distinct_service_and_pprof_ports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            lifecycle = [
+                "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                "--case-type", "PerformanceCustomDataset",
+                "--lifecycle-dataset-file", str(dataset),
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+            ]
+            with mock.patch.object(harness, "find_free_port", side_effect=[7120, 7120, 7121]):
+                args = harness.parse_args(lifecycle)
+
+        self.assertEqual(args.port, 7120)
+        self.assertEqual(args.pprof_port, 7121)
+
 
 class SmokeShapeTest(unittest.TestCase):
     def test_campaign_shape_is_valid_and_deterministic(self) -> None:
@@ -3414,6 +3430,46 @@ class LifecycleIntegrationTest(unittest.TestCase):
             "optimize_end", "cache_prime",
         ])
 
+    def test_partial_reset_without_load_start_preserves_recorded_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, _ = self._complete_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            sidecar.write_text(json.dumps(records[0]) + "\n", encoding="utf-8")
+
+            harness.finalize_partial_lifecycle(state, args, sampler)
+            stages = [
+                json.loads(line)["stage"]
+                for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            milestone_exists = (root / "lifecycle_load_milestones.json").exists()
+
+        self.assertEqual(stages, ["startup", "reset"])
+        self.assertFalse(milestone_exists)
+
+    def test_partial_malformed_batch_preserves_prior_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, _ = self._complete_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            records[2].pop("server_accepted")
+            sidecar.write_text(
+                "".join(json.dumps(record) + "\n" for record in records[:3]),
+                encoding="utf-8",
+            )
+
+            harness.finalize_partial_lifecycle(state, args, sampler)
+            stages = [
+                json.loads(line)["stage"]
+                for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            milestone_exists = (root / "lifecycle_load_milestones.json").exists()
+
+        self.assertEqual(stages, ["startup", "reset", "load_start"])
+        self.assertFalse(milestone_exists)
+
     def test_partial_lifecycle_falls_back_when_exact_boundary_sample_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3461,7 +3517,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
             stages = [json.loads(line)["stage"] for line in (root / "lifecycle.jsonl").read_text().splitlines()]
 
         self.assertNotIn("graceful_close", stages)
-        self.assertEqual(state.lifecycle["result_status"], "partial")
+        self.assertNotEqual(state.lifecycle["result_status"], "completed")
+        self.assertEqual(stages[-1], "cache_warm")
 
     def test_reopen_verification_failure_never_records_teardown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
