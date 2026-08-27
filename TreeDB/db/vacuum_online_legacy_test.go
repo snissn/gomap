@@ -58,6 +58,77 @@ func TestVacuumIndexOnlineUsesProductionRecoverableRootSetFence(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlineSwapPublishEndsBeforeResourceSummary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	seedVacuumOnlinePointer(t, database, "summary")
+	var atSwap VacuumOnlineStats
+	database.vacuumAfterSwapPublishHook = func(stats VacuumOnlineStats) { atSwap = stats }
+	defer func() { database.vacuumAfterSwapPublishHook = nil }()
+
+	if err := database.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("VacuumIndexOnline: %v", err)
+	}
+	if atSwap.SwapPublishDuration <= 0 || atSwap.DurableResourceDescriptors != 0 || atSwap.DurableResourceBytes != 0 {
+		t.Fatalf("swap-boundary stats=%+v want timed swap before resource summary", atSwap)
+	}
+	if stats := database.VacuumOnlineStats(); stats.DurableResourceDescriptors == 0 || stats.DurableResourceBytes == 0 {
+		t.Fatalf("completed vacuum stats=%+v want resource summary after swap", stats)
+	}
+}
+
+func TestVacuumIndexOnlineFinalSyncFailureRetainsResourceTotals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true, ValueLog: ValueLogOptions{PointerThreshold: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	seedVacuumOnlinePointer(t, database, "failure")
+	wantErr := errors.New("injected final meta write failure")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeMetaWrite && event.Resource == durabilitycut.ResourceMeta && event.Path == filepath.Join(database.dir, indexNewFileName) {
+			return wantErr
+		}
+		return nil
+	})
+	defer restore()
+
+	if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("VacuumIndexOnline error=%v want %v", err, wantErr)
+	}
+	stats := database.VacuumOnlineStats()
+	if stats.WorkCompleted || stats.DurableResourceCaptures != 1 || stats.DurableResourceDescriptors == 0 || stats.DurableResourceBytes == 0 {
+		t.Fatalf("failed final-sync stats=%+v want captured resource totals", stats)
+	}
+}
+
+func seedVacuumOnlinePointer(t *testing.T, database *DB, key string) {
+	t.Helper()
+	ptrs, err := database.AppendValueLogValues([][]byte{bytes.Repeat([]byte("value"), 256)})
+	if err != nil {
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("AppendValueLogValues pointers=%d want 1", len(ptrs))
+	}
+	batch := database.NewBatch().(*Batch)
+	if err := batch.SetPointer([]byte(key), ptrs[0]); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+}
+
 func TestVacuumDurableResourceSummaryNil(t *testing.T) {
 	if descriptors, bytes := vacuumDurableResourceSummary(nil); descriptors != 0 || bytes != 0 {
 		t.Fatalf("nil resource summary=(%d,%d), want (0,0)", descriptors, bytes)

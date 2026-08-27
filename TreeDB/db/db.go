@@ -227,6 +227,7 @@ type DB struct {
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	vacuumPreflushHook            func() error
 	vacuumReplacementRuntimeHook  func(*rootPublicationRuntimeV1) error
+	vacuumAfterSwapPublishHook    func(VacuumOnlineStats)
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
 	durableRoot                   durableRootRuntimeV1

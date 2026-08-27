@@ -1213,9 +1213,12 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		holdStarted = time.Now()
 		holdActive = true
 		if finalSyncErr != nil {
+			unlockCutover(false)
+			descriptors, bytes := vacuumDurableResourceSummary(pendingDiagnosticResources)
+			runStats.DurableResourceDescriptors += descriptors
+			runStats.DurableResourceBytes += bytes
 			pendingDiagnosticResources.Release()
 			pendingDiagnosticResources = nil
-			unlockCutover(false)
 			cleanupNewPager()
 			return finalSyncErr
 		}
@@ -1398,6 +1401,10 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		db.clearLeafGenerationReachabilityCaches()
 
 		unlockCutover(true)
+		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
+		if hook := db.vacuumAfterSwapPublishHook; hook != nil {
+			hook(*runStats)
+		}
 		descriptors, bytes := vacuumDurableResourceSummary(pendingDiagnosticResources)
 		runStats.DurableResourceDescriptors += descriptors
 		runStats.DurableResourceBytes += bytes
@@ -1406,7 +1413,6 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if valueLogRefTrackerErr != nil {
 			db.reportError(valueLogRefTrackerErr)
 		}
-		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
 		for _, resources := range previousDurableResources {
 			resources.Release()
 		}
