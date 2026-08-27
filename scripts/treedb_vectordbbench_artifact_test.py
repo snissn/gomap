@@ -943,6 +943,8 @@ class LifecycleValidatorTest(unittest.TestCase):
         invalid_storage = (
             {"mount": "unavailable: findmnt missing"},
             {"path": "/tmp", "method": "findmnt", "device": "/dev/x", "filesystem": "xfs", "mount": "/tmp", "capacity_bytes": 0},
+            {"method": {}},
+            {"method": []},
         )
         for storage in invalid_storage:
             with self.subTest(storage=storage), tempfile.TemporaryDirectory() as tmp:

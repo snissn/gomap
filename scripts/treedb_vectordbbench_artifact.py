@@ -380,7 +380,8 @@ def valid_storage_context(storage: Any) -> bool:
 
     return (
         isinstance(storage, dict)
-        and storage.get("method") in {"findmnt", "df-p+stat"}
+        and isinstance(storage.get("method"), str)
+        and storage["method"] in {"findmnt", "df-p+stat"}
         and all(meaningful_text(key) for key in ("path", "device", "filesystem", "mount"))
         and Path(storage["path"]).is_absolute()
         and Path(storage["mount"]).is_absolute()
