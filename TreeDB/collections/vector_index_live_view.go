@@ -88,6 +88,16 @@ func (idx *VectorIndex) publishSearchView() {
 	idx.mu.Unlock()
 }
 
+func (idx *VectorIndex) acknowledgeSearchViewStateLocked() {
+	if !idx.sourceDocumentRootsValid {
+		idx.searchViewAcknowledged = false
+		return
+	}
+	idx.searchViewAcknowledged = true
+	idx.searchViewAcknowledgedMutationSeq = idx.mutationSeq
+	idx.searchViewAcknowledgedGeneration = idx.sourceDocumentGeneration
+}
+
 func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	previous := idx.searchView.Load()
 	next := idx.searchViewSpare.Swap(nil)
@@ -193,6 +203,8 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	if idx.liveDelta != nil {
 		clear(idx.liveDelta.searchViewDirty)
 	}
+	idx.acknowledgeSearchViewStateLocked()
+	idx.searchViewCurrent.Store(true)
 }
 
 func copyVectorIndexSearchNodes(dst, previous, current []vectorIndexNode, dirty map[int]struct{}, forceFull bool) []vectorIndexNode {
@@ -254,7 +266,37 @@ func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {
 }
 
 func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
-	for idx != nil {
+	if idx == nil {
+		return nil
+	}
+	for !idx.searchViewCurrent.Load() {
+		idx.mu.Lock()
+		if idx.searchViewCurrent.Load() {
+			idx.mu.Unlock()
+			break
+		}
+		if !idx.sourceDocumentRootsValid || !idx.searchViewAcknowledged {
+			idx.mu.Unlock()
+			return nil
+		}
+		if idx.searchViewAcknowledgedMutationSeq == idx.mutationSeq &&
+			idx.searchViewAcknowledgedGeneration == idx.sourceDocumentGeneration {
+			idx.publishSearchViewLocked(false)
+			idx.mu.Unlock()
+			break
+		}
+		view := idx.searchView.Load()
+		if view != nil && view.sourceDocumentRootsValid &&
+			view.mutationSeq == idx.searchViewAcknowledgedMutationSeq &&
+			view.sourceDocumentGeneration == idx.searchViewAcknowledgedGeneration &&
+			view.mu.TryRLock() {
+			idx.mu.Unlock()
+			return view
+		}
+		idx.mu.Unlock()
+		runtime.Gosched()
+	}
+	for {
 		view := idx.searchView.Load()
 		if view == nil {
 			return nil
@@ -268,7 +310,6 @@ func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
 		}
 		idx.releaseSearchView(view)
 	}
-	return nil
 }
 
 func (view *vectorIndexSearchView) matchesDefinition(def VectorIndexDefinition) bool {

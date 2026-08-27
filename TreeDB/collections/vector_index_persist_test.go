@@ -1936,7 +1936,7 @@ type acceptedVectorMutationErrorForTest struct {
 	error
 }
 
-func TestNativeVectorCoveragePublishesEachAcknowledgedMutation(t *testing.T) {
+func TestNativeVectorCoverageAcknowledgesEachMutation(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -4668,6 +4668,20 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 	if got := len(reopenedCol.registeredVectorIndexes()); got != 1 {
 		t.Fatalf("write did not lazily load persisted vector index, got %d registered indexes", got)
 	}
+	loadedBeforeSearch := reopenedCol.registeredVectorIndex(def.Name)
+	if loadedBeforeSearch == nil {
+		t.Fatal("write did not retain the loaded persisted vector index")
+	}
+	staleView := loadedBeforeSearch.searchView.Load()
+	if staleView == nil {
+		t.Fatal("persisted index load did not retain its immutable snapshot")
+	}
+	loadedBeforeSearch.mu.RLock()
+	staleMutation := loadedBeforeSearch.mutationSeq
+	loadedBeforeSearch.mu.RUnlock()
+	if staleView.mutationSeq == staleMutation {
+		t.Fatalf("acknowledged reopen write published mutation %d before acquisition", staleMutation)
+	}
 	if err := reopenedCol.Flush(); err != nil {
 		t.Fatalf("flush reopened vector write: %v", err)
 	}
@@ -4683,6 +4697,19 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 		t.Fatalf("search maintained vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "c", "b")
+	published := loaded.searchView.Load()
+	if published == nil {
+		t.Fatal("post-reopen acquisition did not publish an immutable view")
+	}
+	if published == staleView || published.mutationSeq != staleMutation {
+		t.Fatalf("post-reopen acquisition view=%p stale=%p mutation=%d want %d", published, staleView, published.mutationSeq, staleMutation)
+	}
+	if _, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true}); err != nil {
+		t.Fatalf("repeat search maintained vector index: %v", err)
+	}
+	if got := loaded.searchView.Load(); got != published {
+		t.Fatalf("repeat post-reopen search republished view %p want %p", got, published)
+	}
 }
 
 func TestCollectionVectorIndexNativeEmptyRootMaintainsInsertedDocuments(t *testing.T) {

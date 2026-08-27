@@ -621,7 +621,8 @@ func populateNativeScalarColumnsFromSecondaryIndexes(idx *VectorIndex, snap *bac
 	if err := idx.validateNativeScalarColumnLengthsLocked(); err != nil {
 		return err
 	}
-	idx.publishSearchViewLocked(true)
+	idx.acknowledgeSearchViewStateLocked()
+	idx.searchViewCurrent.Store(false)
 	return nil
 }
 

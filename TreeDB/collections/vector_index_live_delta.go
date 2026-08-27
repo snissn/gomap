@@ -152,6 +152,6 @@ func (idx *VectorIndex) foldLiveDeltaForPersistence() error {
 	if err := idx.foldLiveDeltaLocked(); err != nil {
 		return err
 	}
-	idx.publishSearchViewLocked(false)
+	idx.acknowledgeSearchViewStateLocked()
 	return nil
 }
