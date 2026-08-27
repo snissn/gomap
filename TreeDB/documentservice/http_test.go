@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,10 +14,37 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestDenseVectorSearchResponseAlwaysSerializesScalarFilterPlan(t *testing.T) {
+	raw, err := json.Marshal(DenseVectorSearchResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"scalar_filter_plan":""`)) {
+		t.Fatalf("response JSON=%s want scalar_filter_plan", raw)
+	}
+}
+
+func TestHTTPFilterDocumentsRejectsAfterIDWithoutCursorPage(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/v1/indexes/docs/documents/filter", bytes.NewBufferString(`{"after_id":"a"}`))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("after_id without cursor_page status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
+}
 
 func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	svc, db := newTestService(t)
@@ -135,6 +163,13 @@ func TestHTTPWriteJSONEncodeErrorKeepsErrorShape(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInternal)
+}
+func TestFormatErrorChainIncludesWrappedRootCause(t *testing.T) {
+	root := errors.New("slab rotation failed")
+	got := formatErrorChain(wrapServiceError(CodeInternal, "insert documents failed", root))
+	if !strings.Contains(got, "insert documents failed") || !strings.Contains(got, "slab rotation failed") {
+		t.Fatalf("error chain=%q", got)
+	}
 }
 
 func TestHTTPL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {

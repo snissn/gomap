@@ -1232,7 +1232,7 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		w.currentBuilder.SetInternalFenceBoundsBorrowed(w.currentStartKey, nil)
 
 		if addErr := w.currentBuilder.AddInternalChildRef(childKey, child.Ref); addErr != nil {
-			return addErr
+			return fmt.Errorf("zipper: span split retry page=%d key_len=%d ref=%+v: %w", pid, len(childKey), child.Ref, addErr)
 		}
 		recordZipperInternalChildRef(w.metrics, child.Ref)
 	} else if err != nil {
@@ -1385,7 +1385,7 @@ func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *
 			currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 
 			if addErr := currentBuilder.AddInternalChildRef(childKey, child.Ref); addErr != nil {
-				return nil, addErr
+				return nil, fmt.Errorf("zipper: span root retry page=%d key_len=%d ref=%+v: %w", pid, len(childKey), child.Ref, addErr)
 			}
 			recordZipperInternalChildRef(metrics, child.Ref)
 		} else if err != nil {

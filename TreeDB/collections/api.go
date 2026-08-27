@@ -28,6 +28,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rabitq"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -148,6 +149,15 @@ var testBeforeCreateCollectionPublishHook struct {
 
 type testCreateCollectionPublishHook struct {
 	fn func(CollectionMeta)
+}
+
+var testBeforeSchemaBackfillPublishHook struct {
+	installMu sync.Mutex
+	ptr       atomic.Pointer[testSchemaBackfillPublishHook]
+}
+
+type testSchemaBackfillPublishHook struct {
+	fn func(string)
 }
 
 type collectionCatalogLoadFaultStage string
@@ -1246,6 +1256,7 @@ type collectionCatalog struct {
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta                   CollectionMeta
+	pager                  *pager.Pager
 	roots                  map[string]uint64
 	rootOverlays           map[string][]uint64
 	rootOverlayFilters     map[string]map[uint64]collectionRootOverlayFilter
@@ -3700,18 +3711,20 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	if !ok || state.SystemRootPageID == 0 {
 		return nil, false
 	}
+	currentPager := m.db.Pager()
 	domain := m.existingWriteDomainForCollection(name)
 	if domain == nil {
 		return nil, false
 	}
 	catalog := cachedWriteDomainCatalogForState(domain, state.SystemRootPageID, state.CommitSeq)
-	if catalog == nil {
+	if catalog == nil || catalog.pager != currentPager {
 		return nil, false
 	}
 	currentState, ok := m.db.StateToken()
 	if !ok ||
 		currentState.SystemRootPageID != state.SystemRootPageID ||
-		currentState.CommitSeq != state.CommitSeq {
+		currentState.CommitSeq != state.CommitSeq ||
+		m.db.Pager() != currentPager {
 		return nil, false
 	}
 	collection := &Collection{
@@ -3872,6 +3885,22 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c.db.CommandWALEnabled() {
 		return nil, fmt.Errorf("%w: collection catalog index mutation is rejected under command_wal_v2 until catalog index commands are supported", backenddb.ErrCommandWALRejected)
 	}
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		meta, err := c.createIndexOnce(def)
+		if err == nil {
+			return meta, nil
+		}
+		if !isRetriableTextIndexMutationError(err) {
+			return nil, err
+		}
+		lastErr = err
+		waitBeforeCollectionMutationRetry(attempt)
+	}
+	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func (c *Collection) createIndexOnce(def IndexDefinition) (*CollectionMeta, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -3931,6 +3960,12 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
+	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, newMeta, plan.rootNames, plan.tables)
+	if err != nil {
+		resetCollectionTables(plan.tables)
+		return nil, err
+	}
+	defer cleanupPointerized()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
@@ -3941,7 +3976,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		resetCollectionTables(plan.tables)
 	}()
 	for i, rootName := range plan.rootNames {
-		iter := plan.tables[i].NewIterator(nil, nil)
+		iter := publishTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      plan.baseRootIDs[rootName],
@@ -3950,7 +3985,13 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		})
 	}
 
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if hook := testBeforeSchemaBackfillPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
+		hook.fn("index")
+	}
+	preflight := func() error {
+		return c.validateMutationRootDescriptors(snap.Pager(), snapshotUserRoot(snap), snapshotSystemRoot(snap), snapshotCommitSeq(snap))
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildSchemaAndRootDescriptorSystemIterator(baseMeta, newMeta, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {
@@ -4717,6 +4758,24 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if err != nil {
 		return nil, true, err
 	}
+	conflictSnap := snap
+	if currentCatalog != nil && currentCatalog.pager != snap.Pager() {
+		refreshed := c.db.AcquireSnapshot()
+		if refreshed == nil {
+			return nil, true, backenddb.ErrClosed
+		}
+		defer func() { _ = refreshed.Close() }()
+		currentCatalog, err = c.revalidateBufferedWriteDomainAtSnapshotLocked(domain, refreshed)
+		if err != nil {
+			return nil, true, err
+		}
+		currentOptions, err = collectionPlannerOptionsForDB(c.db, currentCatalog.meta)
+		if err != nil {
+			return nil, true, err
+		}
+		indexed = len(currentCatalog.meta.Indexes) > 0
+		conflictSnap = refreshed
+	}
 	if indexed || currentCatalog == nil || !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
 		return nil, false, nil
 	}
@@ -4734,12 +4793,13 @@ func (c *Collection) bufferNoIndexInsertBatch(
 			return nil, true, ErrDocumentExists
 		}
 	}
-	if domain.primaryRoot != 0 {
+	primaryRoot := currentCatalog.rootID(collectionPrimaryRootName(currentCatalog.meta.Name))
+	if primaryRoot != 0 {
 		keys := make([][]byte, len(entries))
 		for i := range entries {
 			keys[i] = entries[i].id
 		}
-		exists, err := snap.HasAnySortedAtRoot(domain.primaryRoot, keys)
+		exists, err := conflictSnap.HasAnySortedAtRoot(primaryRoot, keys)
 		if err != nil {
 			return nil, true, err
 		}
@@ -4768,7 +4828,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	}
 	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
 	if domain.loaded && domain.count > 0 {
-		catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+		catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 		if err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -4781,7 +4841,12 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 		}
 		return catalog, options, len(catalog.meta.Indexes) > 0, nil
 	}
-	if domain.loaded && domain.count == 0 && domain.baseSystemRoot == currentSystemRoot && domain.baseCommitSeq == currentCommitSeq {
+	if domain.loaded &&
+		domain.count == 0 &&
+		domain.baseSystemRoot == currentSystemRoot &&
+		domain.baseCommitSeq == currentCommitSeq &&
+		domain.catalog != nil &&
+		domain.catalog.pager == c.db.Pager() {
 		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(domain.catalog); err != nil {
 			return nil, collectionOptions{}, false, err
 		}
@@ -4798,7 +4863,7 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil {
+	if catalog := cachedWriteDomainCatalogForStateLocked(domain, baseSystemRoot, baseCommitSeq); catalog != nil && catalog.pager == snap.Pager() {
 		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 			_ = snap.Close()
 			return nil, collectionOptions{}, false, err
@@ -4846,7 +4911,19 @@ func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*co
 	return catalog, options, len(catalog.meta.Indexes) > 0, nil
 }
 
-func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain, currentCommitSeq, currentSystemRoot uint64) (*collectionCatalog, error) {
+func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWriteDomain) (*collectionCatalog, error) {
+	if c == nil || c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	return c.revalidateBufferedWriteDomainAtSnapshotLocked(domain, snap)
+}
+
+func (c *Collection) revalidateBufferedWriteDomainAtSnapshotLocked(domain *collectionWriteDomain, snap *backenddb.Snapshot) (*collectionCatalog, error) {
 	if c == nil || c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -4856,18 +4933,18 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if domain.catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	if domain.baseSystemRoot == currentSystemRoot && domain.baseCommitSeq == currentCommitSeq {
-		return domain.catalog, nil
-	}
-
-	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
 	}
+	currentPager := snap.Pager()
+	currentSystemRoot := snapshotSystemRoot(snap)
+	currentCommitSeq := snapshotCommitSeq(snap)
+	if domain.baseSystemRoot == currentSystemRoot &&
+		domain.baseCommitSeq == currentCommitSeq &&
+		domain.catalog.pager == currentPager {
+		return domain.catalog, nil
+	}
 	catalog, err := loadCollectionCatalog(snap, domain.meta.Name)
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
-	_ = snap.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -4885,7 +4962,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	}
 
 	primaryRootName := collectionPrimaryRootName(domain.meta.Name)
-	if hasBufferedIndexedRootRuns(domain) {
+	if domain.catalog.pager != currentPager {
+		if len(domain.indexedPublishingUnits) != 0 {
+			return nil, errBufferedRootBaseMismatch(domain.meta.Name, primaryRootName)
+		}
+		rebaseBufferedIndexedRootBaseIDsForCatalogLocked(domain, catalog)
+	} else if hasBufferedIndexedRootRuns(domain) {
 		if err := forEachPendingIndexedRootBaseIDLocked(domain, func(rootName string, baseRootID uint64) error {
 			if rootID := catalog.rootID(rootName); rootID != baseRootID {
 				return errBufferedRootBaseMismatch(domain.meta.Name, rootName)
@@ -4914,12 +4996,12 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	}
 	domain.meta = catalog.meta
 	domain.catalog = catalog
-	domain.baseCommitSeq = baseCommitSeq
-	domain.baseSystemRoot = baseSystemRoot
+	domain.baseCommitSeq = currentCommitSeq
+	domain.baseSystemRoot = currentSystemRoot
 	domain.primaryRoot = catalog.rootID(primaryRootName)
 	domain.storagePolicy = options.dataStoragePolicy
 	c.meta = catalog.meta
-	c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
+	c.rememberCatalogAtSystemRoot(currentSystemRoot, catalog)
 	return catalog, nil
 }
 
@@ -5074,8 +5156,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	if domain.catalog == nil {
 		return errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return err
 	}
@@ -5179,8 +5260,7 @@ func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
 	if !domain.indexedDeletesOnly {
 		return true
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return true
 	}
@@ -5271,8 +5351,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		return 0, errors.New("collections: indexed write buffer requires an indexed schema")
 	}
 	if domain.count > 0 {
-		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+		currentCatalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 		if err != nil {
 			return 0, err
 		}
@@ -5906,13 +5985,23 @@ func pointerizeCollectionRunTableValuesForRootWithStats(db *backenddb.DB, meta C
 }
 
 func collectionValueLogInlineThresholdResolverForRoot(db *backenddb.DB, meta CollectionMeta, rootName string) func([]byte) int {
-	if db == nil || (!collectionRootStoresRetainedPayloadBodies(meta, rootName) && !collectionRootStoresRetainedSemanticStreamBlocks(meta, rootName)) {
+	if db == nil {
 		return nil
 	}
-	return func([]byte) int {
-		// Retained payload bodies and semantic stream blocks are persistent value-log
-		// payloads. Keep them out of leaf pages; empty values still remain inline.
-		return 0
+	if collectionRootStoresRetainedPayloadBodies(meta, rootName) || collectionRootStoresRetainedSemanticStreamBlocks(meta, rootName) {
+		return func([]byte) int {
+			// Retained payload bodies and semantic stream blocks are persistent value-log
+			// payloads. Keep them out of leaf pages; empty values still remain inline.
+			return 0
+		}
+	}
+	if rootName == collectionPrimaryRootName(meta.Name) || rootName == collectionTemplateRootName(meta.Name) {
+		return nil
+	}
+	return func(key []byte) int {
+		// Index-root values are normally small, but variable-width blocks must be
+		// pointerized before they exceed the capacity of an otherwise empty leaf.
+		return max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
 	}
 }
 
@@ -6176,59 +6265,45 @@ func collectionRetainedTemplateV1PackOrder(values [][]byte) ([]int, bool) {
 	return out, true
 }
 
-func pointerizeInsertBatchPlanDataRuns(db *backenddb.DB, meta CollectionMeta, plan *insertBatchPlan) ([]memtable.Table, error) {
+func pointerizeInsertBatchPlanRuns(db *backenddb.DB, meta CollectionMeta, plan *insertBatchPlan) ([]memtable.Table, error) {
 	if plan == nil || db == nil || !db.HasValueLogAppender() {
 		return nil, nil
 	}
-	var obsolete []memtable.Table
+	replacements := make([]memtable.Table, len(plan.runs))
 	for i := range plan.runs {
-		switch plan.runs[i].kind {
-		case collectionRootPrimary, collectionRootTemplate:
-		default:
-			continue
-		}
 		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, plan.runs[i].name, plan.runs[i].table)
 		if err != nil {
-			resetCollectionTables(obsolete)
+			resetCollectionTables(replacements)
 			return nil, err
 		}
-		if !pointerized {
+		if pointerized {
+			replacements[i] = pointerizedTable
+		}
+	}
+	obsolete := make([]memtable.Table, 0, len(plan.runs))
+	for i, replacement := range replacements {
+		if replacement == nil {
 			continue
 		}
 		obsolete = append(obsolete, plan.runs[i].table)
-		plan.runs[i].table = pointerizedTable
+		plan.runs[i].table = replacement
 	}
 	return obsolete, nil
 }
 
-func collectionDataRootNameSet(meta CollectionMeta) map[string]struct{} {
-	out := map[string]struct{}{
-		collectionPrimaryRootName(meta.Name):  {},
-		collectionTemplateRootName(meta.Name): {},
-	}
-	if columnStoreRetainedPayloadUsesSemanticStreamV1(meta.Options.ColumnStore) {
-		out[collectionRetainedSemanticStreamRootName(meta.Name)] = struct{}{}
-	}
-	return out
-}
-
-func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMeta, rootNames []string, tables []memtable.Table) ([]memtable.Table, func(), error) {
+func pointerizeCollectionRootDeltaTables(db *backenddb.DB, meta CollectionMeta, rootNames []string, tables []memtable.Table) ([]memtable.Table, func(), error) {
 	if db == nil || !db.HasValueLogAppender() || len(rootNames) == 0 || len(tables) == 0 {
 		return tables, func() {}, nil
 	}
 	if len(rootNames) != len(tables) {
 		return nil, nil, fmt.Errorf("collections: invalid delta table lengths roots=%d tables=%d", len(rootNames), len(tables))
 	}
-	dataRoots := collectionDataRootNameSet(meta)
 	var out []memtable.Table
 	var pointerizedTables []memtable.Table
 	cleanup := func() {
 		resetCollectionTables(pointerizedTables)
 	}
 	for i, rootName := range rootNames {
-		if _, ok := dataRoots[rootName]; !ok {
-			continue
-		}
 		pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, rootName, tables[i])
 		if err != nil {
 			cleanup()
@@ -6249,11 +6324,10 @@ func pointerizeCollectionDataRootDeltaTables(db *backenddb.DB, meta CollectionMe
 	return out, cleanup, nil
 }
 
-func pointerizeCollectionDataRootRunMapValues(db *backenddb.DB, meta CollectionMeta, rootRuns map[string][]memtable.Table) (map[string][]memtable.Table, func(), error) {
+func pointerizeCollectionRootRunMapValues(db *backenddb.DB, meta CollectionMeta, rootRuns map[string][]memtable.Table) (map[string][]memtable.Table, func(), error) {
 	if db == nil || !db.HasValueLogAppender() || len(rootRuns) == 0 {
 		return rootRuns, func() {}, nil
 	}
-	dataRoots := collectionDataRootNameSet(meta)
 	var out map[string][]memtable.Table
 	var clonedSlices map[string]bool
 	var pointerizedTables []memtable.Table
@@ -6271,9 +6345,6 @@ func pointerizeCollectionDataRootRunMapValues(db *backenddb.DB, meta CollectionM
 		clonedSlices = make(map[string]bool, 2)
 	}
 	for rootName, runs := range rootRuns {
-		if _, ok := dataRoots[rootName]; !ok {
-			continue
-		}
 		for i, run := range runs {
 			pointerizedTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(db, meta, rootName, run)
 			if err != nil {
@@ -6878,6 +6949,21 @@ func forEachPendingIndexedRootBaseIDLocked(domain *collectionWriteDomain, fn fun
 		}
 	}
 	return nil
+}
+
+func rebaseBufferedIndexedRootBaseIDsForCatalogLocked(domain *collectionWriteDomain, catalog *collectionCatalog) {
+	if domain == nil || catalog == nil {
+		return
+	}
+	rebase := func(rootBaseIDs map[string]uint64) {
+		for rootName := range rootBaseIDs {
+			rootBaseIDs[rootName] = catalog.rootID(rootName)
+		}
+	}
+	for i := range domain.indexedFlushUnits {
+		rebase(domain.indexedFlushUnits[i].rootBaseIDs)
+	}
+	rebase(domain.rootBaseIDs)
 }
 
 func saturatingAddNonNegativeInt64(total, n int64) int64 {
@@ -8887,8 +8973,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 	if domain.catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return nil, err
 	}
@@ -9004,7 +9089,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	if err != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 	}
-	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
+	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
 	if err != nil {
 		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 	}
@@ -9027,7 +9112,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 		unlockAdmission := c.lockVectorIndexPublicationAdmission()
 		defer unlockAdmission()
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
 		})
 		publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -9055,7 +9140,7 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	unlockAdmission := c.lockVectorIndexPublicationAdmission()
 	defer unlockAdmission()
 	publishStart := time.Now()
-	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, c.bufferedIndexedRootPublishPreflight(work.pin.Pager(), work.baseSystemRoot, work.baseCommitSeq, work.meta, work.rootNames, work.rootBaseIDs), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
 	})
 	publishElapsed := collectionObservedElapsedSince(publishStart)
@@ -9521,8 +9606,7 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	if domain.catalog == nil {
 		return errCollectionNotFound
 	}
-	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
-	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain)
 	if err != nil {
 		return err
 	}
@@ -9598,7 +9682,8 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		baseRootIDs[rootName] = baseRoot
 		rootOverlays[rootName] = append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	}
-	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, meta, flushUnit.rootRuns)
+	preflight := c.bufferedIndexedRootPublishPreflight(pin.Pager(), baseSystemRoot, baseCommitSeq, meta, rootNames, baseRootIDs)
+	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionRootRunMapValues(c.db, meta, flushUnit.rootRuns)
 	if err != nil {
 		return err
 	}
@@ -9639,11 +9724,11 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		publishStart := time.Now()
 		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
 			if commandWALIntent != nil {
-				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, preflight, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 				})
 			} else {
-				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 				})
 			}
@@ -9668,11 +9753,11 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 		publishStart := time.Now()
 		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
 			if commandWALIntent != nil {
-				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, preflight, commandWALIntent, rawPublishLocked, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 				})
 			} else {
-				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 				})
 			}
@@ -9740,14 +9825,46 @@ func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *colle
 	return nil
 }
 
-func (c *Collection) publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered []backenddb.OrderedRootDeltaBatchPublishInput, commandWALIntent *backenddb.CommandWALIntent, rawPublishLocked bool, buildSystemDeltaIter backenddb.OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+func (c *Collection) bufferedIndexedRootPublishPreflight(expectedPager *pager.Pager, expectedSystemRoot, expectedCommitSeq uint64, meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
+	return func() error {
+		snap := c.db.AcquireSnapshot()
+		if snap == nil {
+			return backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		if snap.Pager() != expectedPager {
+			return errBufferedRootBaseMismatch(meta.Name, collectionPrimaryRootName(meta.Name))
+		}
+		if snapshotSystemRoot(snap) == expectedSystemRoot && snapshotCommitSeq(snap) == expectedCommitSeq {
+			return nil
+		}
+		catalog, err := loadCollectionCatalog(snap, meta.Name)
+		if err != nil {
+			return err
+		}
+		if catalog == nil {
+			return errCollectionNotFound
+		}
+		if !sameCollectionMeta(catalog.meta, meta) {
+			return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+		}
+		for _, rootName := range rootNames {
+			if catalog.rootID(rootName) != baseRootIDs[rootName] {
+				return errBufferedRootBaseMismatch(meta.Name, rootName)
+			}
+		}
+		return nil
+	}
+}
+
+func (c *Collection) publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered []backenddb.OrderedRootDeltaBatchPublishInput, preflight backenddb.OrderedRootGroupPreflight, commandWALIntent *backenddb.CommandWALIntent, rawPublishLocked bool, buildSystemDeltaIter backenddb.OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	if c == nil || c.db == nil {
 		return 0, nil, errCollectionDBNil
 	}
 	if rawPublishLocked || c.commandWALRawPublishLocked {
-		return c.db.PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, buildSystemDeltaIter)
+		return c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, buildSystemDeltaIter)
 	}
-	return c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, buildSystemDeltaIter)
+	return c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, buildSystemDeltaIter)
 }
 
 func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
@@ -11031,7 +11148,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = pin.Close() }()
-	obsoletePointerizedTables, err := pointerizeInsertBatchPlanDataRuns(c.db, meta, plan)
+	obsoletePointerizedTables, err := pointerizeInsertBatchPlanRuns(c.db, meta, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -11085,8 +11202,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	} else if commandWALIntent != nil {
 		publishMeta = meta
 		publishRootNames = rootNames
+		preflight := func() error {
+			return c.validateMutationRootDescriptors(pin.Pager(), snapshotUserRoot(pin), baseSystemRoot, baseCommitSeq)
+		}
 		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
-			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
 			})
 			return err
@@ -11094,7 +11214,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	} else {
 		publishMeta = meta
 		publishRootNames = rootNames
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		preflight := func() error {
+			return c.validateMutationRootDescriptors(pin.Pager(), snapshotUserRoot(pin), baseSystemRoot, baseCommitSeq)
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
 		})
 	}
@@ -11881,13 +12004,19 @@ func (c *Collection) insertBatchNoIndex(
 				return refreshErr
 			}
 			defer func() { _ = current.Close() }()
-			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			preflight := func() error {
+				return c.validateMutationRootDescriptors(current.Pager(), snapshotUserRoot(current), baseSystemRoot, baseCommitSeq)
+			}
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})
 			return err
 		})
 	} else {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		preflight := func() error {
+			return c.validateMutationRootDescriptors(snap.Pager(), snapshotUserRoot(snap), baseSystemRoot, baseCommitSeq)
+		}
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
 	}
@@ -15530,7 +15659,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	defer cleanupCoalesced()
-	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, c.meta, coalescedRootNames, publishDeltaTables)
+	publishDeltaTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, c.meta, coalescedRootNames, publishDeltaTables)
 	if err != nil {
 		return false, false, err
 	}
@@ -15544,7 +15673,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, coalescedRootNames, ordered)
 	}
 	preflight := func() error {
-		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
+		return c.validateMutationRootDescriptors(snap.Pager(), baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
 	var commandWALIntent *backenddb.CommandWALIntent
 	var columnDocuments []columnWriteDocument
@@ -17914,7 +18043,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		return nil, err
 	}
 	defer cleanupCoalesced()
-	publishTables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, plan.meta, coalescedRootNames, publishTables)
+	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, plan.meta, coalescedRootNames, publishTables)
 	if err != nil {
 		return nil, err
 	}
@@ -17928,7 +18057,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		deltaStats = collectionRootDeltaPlanStatsFromOrdered(plan.meta.Name, coalescedRootNames, ordered)
 	}
 	preflight := func() error {
-		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
+		return c.validateMutationRootDescriptors(plan.snap.Pager(), plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	publishStart := updateBatchStatsNow(detailedStats)
@@ -19064,6 +19193,7 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 
 	c.catalogMu.RLock()
 	if cached := c.catalog; cached != nil &&
+		cached.pager == snap.Pager() &&
 		systemRoot != 0 &&
 		c.catalogSystemRoot == systemRoot &&
 		(c.catalogCommitSeq == commitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(cached)) {
@@ -19077,6 +19207,9 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 		cached = cachedWriteDomainCatalogForStateLocked(c.writeDomain, systemRoot, commitSeq)
 	} else {
 		cached = cachedWriteDomainCatalogForState(c.writeDomain, systemRoot, commitSeq)
+	}
+	if cached != nil && cached.pager != snap.Pager() {
+		cached = nil
 	}
 	if cached != nil {
 		c.rememberCatalog(snap, cached)
@@ -19302,7 +19435,11 @@ func cloneCatalogWithRootUpdates(base *collectionCatalog, meta CollectionMeta, r
 			}
 		}
 	}
-	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	if base != nil {
+		catalog.pager = base.pager
+	}
+	return catalog
 }
 
 func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, rootNames []string, rootIDs []uint64) *collectionCatalog {
@@ -19333,7 +19470,11 @@ func cloneCatalogWithRootOverlays(base *collectionCatalog, meta CollectionMeta, 
 			}
 		}
 	}
-	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(meta), roots, rootOverlays, rootOverlayFilters)
+	if base != nil {
+		catalog.pager = base.pager
+	}
+	return catalog
 }
 
 func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []string, rootIDs []uint64, filters map[string]collectionRootOverlayFilter) *collectionCatalog {
@@ -19364,7 +19505,9 @@ func cloneCatalogWithRootOverlayFilters(base *collectionCatalog, rootNames []str
 		}
 		byRoot[rootIDs[i]] = filter.clone()
 	}
-	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
+	catalog := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(base.meta), roots, rootOverlays, rootOverlayFilters)
+	catalog.pager = base.pager
+	return catalog
 }
 
 func newCollectionCatalog(meta CollectionMeta, roots map[string]uint64) *collectionCatalog {
@@ -20063,9 +20206,12 @@ func uint64SlicesEqual(left, right []uint64) bool {
 	return true
 }
 
-func (c *Collection) validateMutationRootDescriptors(expectedUserRoot, expectedSystemRoot, expectedCommitSeq uint64) error {
+func (c *Collection) validateMutationRootDescriptors(expectedPager *pager.Pager, expectedUserRoot, expectedSystemRoot, expectedCommitSeq uint64) error {
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
+	}
+	if c.db.Pager() != expectedPager {
+		return fmt.Errorf("%w: concurrent index generation replacement detected", ErrConcurrentMutation)
 	}
 	state, ok := c.db.StateToken()
 	if !ok {
@@ -22188,10 +22334,16 @@ func (c *Collection) ScanDocumentIDsPhysicalFunc(maxEntries int, fn func([]byte)
 // collection is exhausted, or fn returns false. The returned boolean is true
 // only when additional documents were present beyond the maxDocuments limit.
 func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
-	return c.scanDocumentsFunc(maxDocuments, fn, false)
+	return c.scanDocumentsFunc(nil, maxDocuments, fn, false)
 }
 
-func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
+// ScanDocumentsAfterFunc is the bounded cursor form of ScanDocumentsFunc.
+// It returns documents whose IDs sort strictly after afterID.
+func (c *Collection) ScanDocumentsAfterFunc(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	return c.scanDocumentsFunc(afterID, maxDocuments, fn, false)
+}
+
+func (c *Collection) scanDocumentsFunc(afterID []byte, maxDocuments int, fn func(DocumentRecord) (bool, error), admissionLocked bool) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -22227,7 +22379,7 @@ func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	if catalog == nil {
 		return false, errCollectionNotFound
 	}
-	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), afterID, nil, false)
 	if err != nil {
 		return false, err
 	}
@@ -22235,22 +22387,27 @@ func (c *Collection) scanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, nil
 	}
 	defer func() { _ = it.Close() }()
+	for it.Valid() && len(afterID) > 0 && bytes.Compare(it.UnsafeKey(), afterID) <= 0 {
+		it.Next()
+	}
 	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
 	if reconstructDocuments {
-		certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog, maxDocuments)
-		if err != nil {
-			return false, err
-		}
-		if preflightRan {
-			scanStats.PreflightProjectedColumns = uint64(preflightDiag.ProjectedColumns)
-			scanStats.PhysicalPasses++
-			scanStats.PhysicalRows += uint64(preflightDiag.RowsScanned)
-			scanStats.PhysicalBytes += uint64(preflightDiag.PhysicalBytesScanned)
-			scanStats.PhysicalDecodedBlocks += uint64(preflightDiag.DecodedBlocks)
-		}
-		if certified {
-			scanStats.CertifiedMonotonicPath = true
-			return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
+		if len(afterID) == 0 {
+			certified, preflightDiag, preflightRan, err := c.preflightMonotonicColumnReconstruction(snap, catalog, maxDocuments)
+			if err != nil {
+				return false, err
+			}
+			if preflightRan {
+				scanStats.PreflightProjectedColumns = uint64(preflightDiag.ProjectedColumns)
+				scanStats.PhysicalPasses++
+				scanStats.PhysicalRows += uint64(preflightDiag.RowsScanned)
+				scanStats.PhysicalBytes += uint64(preflightDiag.PhysicalBytesScanned)
+				scanStats.PhysicalDecodedBlocks += uint64(preflightDiag.DecodedBlocks)
+			}
+			if certified {
+				scanStats.CertifiedMonotonicPath = true
+				return c.scanDocumentsFuncWithMonotonicColumnReconstruction(snap, catalog, maxDocuments, fn, &scanStats)
+			}
 		}
 		scanStats.GenericFallback = true
 		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn, &scanStats)
@@ -22426,6 +22583,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 		return nil, fmt.Errorf("collections: load catalog %q root overlays: %w", name, err)
 	}
 	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
+	catalog.pager = snap.Pager()
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
 		return nil, err
 	}
@@ -22899,7 +23057,9 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 	}
 	rootOverlays := cloneRootOverlayMap(c.rootOverlays)
 	rootOverlayFilters := cloneRootOverlayFilterMap(c.rootOverlayFilters)
-	return newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(c.meta), roots, rootOverlays, rootOverlayFilters)
+	copied := newCollectionCatalogWithOverlayMetadataOwned(copyCollectionMeta(c.meta), roots, rootOverlays, rootOverlayFilters)
+	copied.pager = c.pager
+	return copied
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {

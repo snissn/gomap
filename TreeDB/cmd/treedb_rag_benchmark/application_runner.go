@@ -49,6 +49,7 @@ var (
 )
 
 type applicationConfig struct {
+	Workload        string
 	TopK            int
 	CandidateLimit  int
 	EfSearch        int
@@ -68,7 +69,8 @@ type applicationConfig struct {
 
 func defaultApplicationConfig() applicationConfig {
 	return applicationConfig{
-		TopK: 10, CandidateLimit: 32, EfSearch: 64, M: 8,
+		Workload: "application",
+		TopK:     10, CandidateLimit: 32, EfSearch: 64, M: 8,
 		WarmupQueries: 24, Repetitions: 3, SamplesPerRep: 336,
 		IngestionReps: 5, FinalEvidence: true,
 	}
@@ -331,6 +333,9 @@ func registerSemanticProvider(bundle *semanticVectorBundle) error {
 }
 
 func validateApplicationConfig(cfg applicationConfig) error {
+	if cfg.Workload != "application" {
+		return fmt.Errorf("config: application baseline cannot run workload %q", cfg.Workload)
+	}
 	if cfg.TopK < 10 || cfg.CandidateLimit < cfg.TopK || cfg.EfSearch < cfg.TopK {
 		return fmt.Errorf("config: top_k>=10 and candidate/ef budgets >= top_k required")
 	}
@@ -356,11 +361,13 @@ func isFullRevision(revision string) bool {
 
 func applicationConfigDigest(cfg applicationConfig) string {
 	raw, _ := json.Marshal(struct {
+		Workload                                  string
 		TopK, CandidateLimit, EfSearch, M         int
 		WarmupQueries, Repetitions, SamplesPerRep int
 		IngestionReps                             int
 	}{
-		TopK: cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, M: cfg.M,
+		Workload: cfg.Workload,
+		TopK:     cfg.TopK, CandidateLimit: cfg.CandidateLimit, EfSearch: cfg.EfSearch, M: cfg.M,
 		WarmupQueries: cfg.WarmupQueries, Repetitions: cfg.Repetitions,
 		SamplesPerRep: cfg.SamplesPerRep, IngestionReps: cfg.IngestionReps,
 	})

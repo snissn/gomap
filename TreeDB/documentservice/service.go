@@ -22,6 +22,8 @@ import (
 
 const maxServiceScanDocuments = int(^uint(0) >> 1)
 
+var errStopDocumentCursorPage = errors.New("documentservice: cursor page complete")
+
 // Service maps the document/search contract onto TreeDB collections.
 type Service struct {
 	manager *collections.CollectionManager
@@ -506,8 +508,54 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	if req.Limit < 0 || req.Offset < 0 {
 		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "limit and offset must be non-negative")
 	}
+	if req.AfterID != "" && !req.CursorPage {
+		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "after_id requires cursor_page=true")
+	}
 	if err := req.Filter.Validate(); err != nil {
 		return FilterDocumentsResponse{}, err
+	}
+	if req.CursorPage {
+		if req.Offset != 0 || req.Limit <= 0 {
+			return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "cursor_page requires a positive limit and zero offset")
+		}
+		docs := make([]Document, 0, min(req.Limit, 256))
+		lastScanned, nextAfterID := "", ""
+		pageFull := false
+		scanBudget := req.Limit
+		if scanBudget < maxServiceScanDocuments {
+			scanBudget++
+		}
+		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, func(doc Document) error {
+			lastScanned = doc.ID
+			ok, err := matchFilter(req.Filter, doc)
+			if err != nil || !ok {
+				return err
+			}
+			if len(docs) >= req.Limit {
+				pageFull = true
+				return errStopDocumentCursorPage
+			}
+			if !req.ReturnEmbedding {
+				doc.Embedding = nil
+			}
+			docs = append(docs, doc)
+			nextAfterID = doc.ID
+			return nil
+		})
+		if err != nil && !errors.Is(err, errStopDocumentCursorPage) {
+			return FilterDocumentsResponse{}, err
+		}
+		hasMore := pageFull || truncated
+		if truncated && !pageFull {
+			nextAfterID = lastScanned
+		}
+		if !hasMore {
+			nextAfterID = ""
+		}
+		return FilterDocumentsResponse{
+			Index: info, Documents: docs, MatchedCount: len(docs), Truncated: hasMore,
+			NextAfterID: nextAfterID, Exhausted: !hasMore,
+		}, nil
 	}
 	var docs []Document
 	matched := 0
@@ -1540,18 +1588,23 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 }
 
 func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
+	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, fn)
+	return err
+}
+
+func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, fn func(Document) error) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
-		return err
+		return false, err
 	}
 	if col == nil {
-		return serviceError(CodeIndexUnavailable, "index collection is unavailable")
+		return false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
 	}
 	materializer, err := col.NewStoredDocumentJSONMaterializer()
 	if err != nil {
-		return wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
+		return false, wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
 	}
 	defer func() { _ = materializer.Close() }()
-	_, err = col.ScanDocumentsFunc(maxServiceScanDocuments, func(record collections.DocumentRecord) (bool, error) {
+	truncated, err := col.ScanDocumentsAfterFunc([]byte(afterID), maxDocuments, func(record collections.DocumentRecord) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}
@@ -1568,7 +1621,10 @@ func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection
 		}
 		return true, nil
 	})
-	return mapDocumentScanError(err)
+	if errors.Is(err, errStopDocumentCursorPage) {
+		return truncated, err
+	}
+	return truncated, mapDocumentScanError(err)
 }
 
 func mapDocumentScanError(err error) error {

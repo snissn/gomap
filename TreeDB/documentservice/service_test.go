@@ -1182,7 +1182,10 @@ func TestServiceDenseNativeRuntimeVisibilityMismatchRetriesAndFailsExplicitly(t 
 	if err != nil || hookCalls != 2 || len(got.Documents) != 1 ||
 		got.Documents[0].Content != "v1" ||
 		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{0, 1}) ||
-		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 {
+		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score) > 1e-9 ||
+		got.VisibilityMismatchCount != 1 || got.VisibilityRetryCount != 1 ||
+		!got.NativeBasePlusLiveDelta || got.ExactFallbacks != 0 ||
+		got.DocumentMaterializationRows != 1 {
 		t.Fatalf("retry success response=%+v err=%v hookCalls=%d", got, err, hookCalls)
 	}
 
@@ -1590,6 +1593,65 @@ func newTestService(t testing.TB) (*Service, *backenddb.DB) {
 	return New(collections.NewCollectionManager(db)), db
 }
 
+func TestServiceFilterDocumentsCursorPagesWithoutRescanningPrefix(t *testing.T) {
+	ctx := context.Background()
+	svc, db := newTestService(t)
+	defer func() {
+		_ = svc.Close()
+		_ = db.Close()
+	}()
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "cursor_docs", Dimension: 2, Metric: MetricCosine}); err != nil {
+		t.Fatal(err)
+	}
+	docs := []Document{
+		{ID: "a", Embedding: []float32{1, 0}},
+		{ID: "b", Embedding: []float32{1, 0}},
+		{ID: "c", Embedding: []float32{1, 0}},
+		{ID: "d", Embedding: []float32{1, 0}},
+		{ID: "e", Embedding: []float32{1, 0}},
+	}
+	if _, err := svc.UpsertDocuments(ctx, "cursor_docs", UpsertDocumentsRequest{Documents: docs}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{Limit: 2, CursorPage: true})
+	if err != nil || first.Exhausted || !first.Truncated || first.NextAfterID != "b" ||
+		len(first.Documents) != 2 || first.Documents[0].ID != "a" || first.Documents[1].ID != "b" {
+		t.Fatalf("first cursor page=%+v err=%v", first, err)
+	}
+	second, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{Limit: 2, CursorPage: true, AfterID: first.NextAfterID})
+	if err != nil || second.Exhausted || second.NextAfterID != "d" ||
+		len(second.Documents) != 2 || second.Documents[0].ID != "c" || second.Documents[1].ID != "d" {
+		t.Fatalf("second cursor page=%+v err=%v", second, err)
+	}
+	last, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{Limit: 2, CursorPage: true, AfterID: second.NextAfterID})
+	if err != nil || !last.Exhausted || last.Truncated || last.NextAfterID != "" ||
+		len(last.Documents) != 1 || last.Documents[0].ID != "e" {
+		t.Fatalf("last cursor page=%+v err=%v", last, err)
+	}
+	filter := &Filter{Field: "id", Operator: "==", Value: "e"}
+	sparse, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{Filter: filter, Limit: 1, CursorPage: true})
+	if err != nil || sparse.Exhausted || len(sparse.Documents) != 0 || sparse.NextAfterID != "b" {
+		t.Fatalf("first sparse cursor page=%+v err=%v", sparse, err)
+	}
+	sparse, err = svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{
+		Filter: filter, Limit: 1, CursorPage: true, AfterID: sparse.NextAfterID,
+	})
+	if err != nil || sparse.Exhausted || len(sparse.Documents) != 0 || sparse.NextAfterID != "d" {
+		t.Fatalf("second sparse cursor page=%+v err=%v", sparse, err)
+	}
+	sparse, err = svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{
+		Filter: filter, Limit: 1, CursorPage: true, AfterID: sparse.NextAfterID,
+	})
+	if err != nil || !sparse.Exhausted || len(sparse.Documents) != 1 || sparse.Documents[0].ID != "e" {
+		t.Fatalf("last sparse cursor page=%+v err=%v", sparse, err)
+	}
+	huge, err := svc.FilterDocuments(ctx, "cursor_docs", FilterDocumentsRequest{
+		Limit: int(^uint(0) >> 1), CursorPage: true,
+	})
+	if err != nil || !huge.Exhausted || len(huge.Documents) != len(docs) {
+		t.Fatalf("huge-limit cursor page=%+v err=%v", huge, err)
+	}
+}
 func testBackendOptions(dir string) backenddb.Options {
 	return backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true}
 }
