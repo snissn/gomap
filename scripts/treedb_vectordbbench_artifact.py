@@ -861,7 +861,10 @@ def _valid_go_int64(value: str) -> bool:
     allowed = {2: r"[01_]+", 8: r"[0-7_]+", 10: r"[0-9_]+", 16: r"[0-9a-fA-F_]+"}
     if re.fullmatch(allowed[base], digits) is None:
         return False
-    number = int(digits.replace("_", ""), base)
+    try:
+        number = int(digits.replace("_", ""), base)
+    except ValueError:
+        return False
     if negative:
         number = -number
     return -(1 << 63) <= number < (1 << 63)
