@@ -94,6 +94,7 @@ def valid_perf_fixture() -> bytes:
 
 
 def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
+    data_dir = root / "treedb-data"
     service_binary = root / "bin" / "treedb-document-service"
     service_binary.parent.mkdir(parents=True)
     service_binary.write_bytes(b"fixture treedb document service\n")
@@ -161,8 +162,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         },
         "service": {
             "profile": "command_wal_durable",
+            "data_dir": str(data_dir),
             "command": [
-                str(service_binary), "-dir", "/tmp/treedb-data",
+                str(service_binary), "-dir", str(data_dir),
                 "-addr", "127.0.0.1:9876", "-profile", "command_wal_durable",
             ],
             "binary": {"path": str(service_binary), "sha256": service_binary_sha256},
@@ -710,14 +712,18 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertEqual(exit_code, 1)
 
     def test_present_route_snapshot_types_are_structural_in_partial_artifacts(self) -> None:
-        cases = (
+        cases = [
             (3, lambda state: state.__setitem__("route", []), "route must be an object"),
+            (12, lambda state: state.pop("route"), "route proof object"),
+            (12, lambda state: state.__setitem__("route", {}), "required field"),
             (12, lambda state: state["route"].__setitem__("name", 7), "route.name"),
             (12, lambda state: state["route"].__setitem__("fallback_reason", []), "route.fallback_reason"),
             (12, lambda state: state["route"].__setitem__("optimized", 1), "route.optimized"),
             (12, lambda state: state["route"].__setitem__("index_identity", 7), "route.index_identity"),
             (12, lambda state: state["route"].__setitem__("index_asset_generation", 7.0), "route.index_asset_generation"),
-        )
+        ]
+        for field in ("name", "fallback_reason", "optimized", "index_identity", "index_asset_generation"):
+            cases.append((12, lambda state, key=field: state["route"].pop(key), f"required field {field}"))
         for event_position, mutation, expected in cases:
             with self.subTest(stage_position=event_position, expected=expected):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -1010,6 +1016,26 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_service_data_dir_is_declared_and_artifact_owned(self) -> None:
+        for label in ("external", "declared-mismatch"):
+            with self.subTest(data_dir=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    if label == "external":
+                        external = str(root.parent / "external-treedb-data")
+                        manifest["service"]["command"][2] = external
+                        manifest["service"]["data_dir"] = external
+                    else:
+                        manifest["service"]["data_dir"] = str(root / "other-data")
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any("service.data_dir" in item for item in got["errors"]), got)
 
     def test_service_binary_must_remain_an_executable_with_matching_bytes(self) -> None:
         def missing(path: Path) -> None:

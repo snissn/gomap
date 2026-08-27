@@ -1106,6 +1106,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
         errors.append("manifest.service.profile must name a canonical public profile")
     service_command = service.get("command")
+    effective_dir = None
     if (
         not isinstance(service_command, list)
         or not service_command
@@ -1165,6 +1166,24 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or profile_values[0] != service.get("profile")
         ):
             errors.append("manifest.service.command has invalid flags or does not select exactly one matching profile")
+    declared_data_dir = service.get("data_dir")
+    if not isinstance(declared_data_dir, str) or not declared_data_dir:
+        errors.append("manifest.service.data_dir must be a non-empty absolute path")
+    elif effective_dir is not None:
+        try:
+            declared_path = Path(declared_data_dir)
+            effective_path = Path(effective_dir)
+            if not declared_path.is_absolute() or not effective_path.is_absolute():
+                raise ValueError("declared and effective paths must be absolute")
+            declared_resolved = declared_path.resolve(strict=False)
+            effective_resolved = effective_path.resolve(strict=False)
+            expected_data_dir = root / "treedb-data"
+            if declared_resolved != effective_resolved:
+                errors.append("manifest.service.data_dir does not match the effective service -dir")
+            if declared_resolved != expected_data_dir or effective_resolved != expected_data_dir:
+                errors.append("manifest.service.data_dir must be the artifact-owned treedb-data directory")
+        except (OSError, RuntimeError, ValueError) as exc:
+            errors.append(f"manifest.service.data_dir is invalid: {exc}")
     binary_path = binary.get("path")
     binary_digest = None
     if not isinstance(binary_path, str) or not binary_path:
@@ -1372,8 +1391,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append(f"{prefix} state.index.asset_generation must be an integer")
                 if "status" in index and not isinstance(index.get("status"), str):
                     errors.append(f"{prefix} state.index.status must be a string")
+        route = state.get("route") if "route" in state else None
         if "route" in state:
-            route = state.get("route")
             if not isinstance(route, dict):
                 errors.append(f"{prefix} state.route must be an object")
             else:
@@ -1387,6 +1406,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     isinstance(generation, bool) or not isinstance(generation, int)
                 ):
                     errors.append(f"{prefix} state.route.index_asset_generation must be an integer")
+        if stage == "route_verify":
+            if not isinstance(route, dict):
+                errors.append(f"{prefix} route_verify must contain a route proof object")
+            else:
+                for key in ("name", "fallback_reason", "optimized", "index_identity", "index_asset_generation"):
+                    if key not in route:
+                        errors.append(f"{prefix} state.route is missing required field {key}")
         rows = state.get("rows")
         wal = state.get("wal")
         counters = state.get("counters")

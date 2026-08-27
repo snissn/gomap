@@ -81,7 +81,8 @@ concurrency, batch size, `m`, and `ef_construction`. The argv is part
 of the effective-configuration checksum, and its executable must equal the
 path of a readable, executable local file whose current bytes match both
 recorded service-binary SHA-256 fields. The effective last `dir` flag value
-must be non-empty. Standard case names (for
+must be non-empty, match `service.data_dir`, and resolve to the artifact-owned
+`treedb-data` directory. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. `PerformanceCustomDataset` cannot complete until H2 binds its
@@ -118,7 +119,8 @@ identity, asset-generation, and status field types; missing future index
 evidence remains a completion error.
 Any present route snapshot is likewise structurally validated as an object
 with typed route-proof fields, while a route that has not yet been emitted is
-only missing completion evidence.
+only missing completion evidence. Once `route_verify` is emitted, all five
+route-proof fields are structurally required.
 
 Lifecycle validation requires the pinned Go toolchain for pprof and trace
 profiles, and Linux `perf` for perf-data profiles. A missing native decoder is
