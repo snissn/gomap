@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -21,17 +22,24 @@ import (
 
 const maxServiceScanDocuments = int(^uint(0) >> 1)
 
+var errStopDocumentCursorPage = errors.New("documentservice: cursor page complete")
+
 // Service maps the document/search contract onto TreeDB collections.
 type Service struct {
 	manager *collections.CollectionManager
 	writeMu sync.Mutex
 
-	benchmarkSearchCacheMu       sync.RWMutex
-	benchmarkSearchCache         map[string]*serviceBenchmarkSearchCacheEntry
-	benchmarkSearchBufferPool    sync.Pool
-	denseVectorNativeAfterSearch func(int, collections.VectorIndexSearchResponse) error
-	vectorPartitionOperations    *vectorpartition.OperationsV1
-	closed                       bool
+	benchmarkSearchCacheMu         sync.RWMutex
+	benchmarkSearchCache           map[string]*serviceBenchmarkSearchCacheEntry
+	benchmarkSearchBufferPool      sync.Pool
+	denseVectorNativeAfterSearch   func(int, collections.VectorIndexSearchResponse) error
+	vectorPartitionOperations      *vectorpartition.OperationsV1
+	diagnosticsEnabled             atomic.Bool
+	diagnosticsMu                  sync.Mutex
+	diagnosticsActive              atomic.Pointer[diagnosticsActiveIndex]
+	diagnosticsCompleted           sync.Map // map[string]*diagnosticsCompletedInsert
+	diagnosticsBeforeActivePublish func()
+	closed                         bool
 }
 
 // RegisterVectorPartitionOperationsV1 installs the optional default-off
@@ -233,6 +241,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
 		s.benchmarkSearchCacheMu.RUnlock()
 		if cached {
+			s.noteDiagnosticsIndex(req.Name, info)
 			return info, nil
 		}
 		col, _, err := s.openIndex(ctx, req.Name, 0)
@@ -274,6 +283,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 			}
 		}
 	}
+	s.noteDiagnosticsIndex(req.Name, info)
 	return info, nil
 }
 
@@ -340,13 +350,16 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 	if len(insertIDs) > 0 {
 		if _, err := col.InsertBatch(insertIDs, insertDocs); err == nil {
 			inserted = len(insertIDs)
+			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
 		} else if collections.IsDuplicateKeyError(err) {
 			// Upsert is a service contract, while Collection.InsertBatch is an
 			// insert-only primitive. If another request inserts one of these IDs
 			// between the read preflight and InsertBatch, fall back per item to
 			// replace-or-insert semantics instead of leaking ErrDocumentExists.
 			for _, doc := range inserts {
-				wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, true)
+				wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, true, func() {
+					s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+				})
 				if err != nil {
 					return UpsertDocumentsResponse{}, err
 				}
@@ -362,7 +375,9 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 	}
 	for _, doc := range updates {
-		wasInserted, wasUpdated, err := upsertPreparedDocument(ctx, col, doc, false)
+		wasInserted, wasUpdated, err := upsertPreparedDocumentWithInsertCallback(ctx, col, doc, false, func() {
+			s.publishDiagnosticsInsert(index, info, col.LastInsertStats())
+		})
 		if err != nil {
 			return UpsertDocumentsResponse{}, err
 		}
@@ -493,8 +508,54 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	if req.Limit < 0 || req.Offset < 0 {
 		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "limit and offset must be non-negative")
 	}
+	if req.AfterID != "" && !req.CursorPage {
+		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "after_id requires cursor_page=true")
+	}
 	if err := req.Filter.Validate(); err != nil {
 		return FilterDocumentsResponse{}, err
+	}
+	if req.CursorPage {
+		if req.Offset != 0 || req.Limit <= 0 {
+			return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "cursor_page requires a positive limit and zero offset")
+		}
+		docs := make([]Document, 0, min(req.Limit, 256))
+		lastScanned, nextAfterID := "", ""
+		pageFull := false
+		scanBudget := req.Limit
+		if scanBudget < maxServiceScanDocuments {
+			scanBudget++
+		}
+		truncated, err := s.scanDocumentsAfter(ctx, col, req.AfterID, scanBudget, func(doc Document) error {
+			lastScanned = doc.ID
+			ok, err := matchFilter(req.Filter, doc)
+			if err != nil || !ok {
+				return err
+			}
+			if len(docs) >= req.Limit {
+				pageFull = true
+				return errStopDocumentCursorPage
+			}
+			if !req.ReturnEmbedding {
+				doc.Embedding = nil
+			}
+			docs = append(docs, doc)
+			nextAfterID = doc.ID
+			return nil
+		})
+		if err != nil && !errors.Is(err, errStopDocumentCursorPage) {
+			return FilterDocumentsResponse{}, err
+		}
+		hasMore := pageFull || truncated
+		if truncated && !pageFull {
+			nextAfterID = lastScanned
+		}
+		if !hasMore {
+			nextAfterID = ""
+		}
+		return FilterDocumentsResponse{
+			Index: info, Documents: docs, MatchedCount: len(docs), Truncated: hasMore,
+			NextAfterID: nextAfterID, Exhausted: !hasMore,
+		}, nil
 	}
 	var docs []Document
 	matched := 0
@@ -692,8 +753,15 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	return ResetIndexResponse{Index: info, Created: false, Reset: true, DropOld: req.DropOld, DroppedDocuments: len(ids)}, nil
 }
 
+func reconcileOptimizeIndexTiming(timing *OptimizeIndexTiming, status VectorIndexMaintenanceStatus) {
+	timing.RebuildNanos = max(timing.RebuildNanos, status.DurationNanos)
+	timing.TotalNanos = max(timing.TotalNanos, timing.CacheInvalidateNanos+timing.RebuildNanos+timing.CachePrimeNanos+timing.CacheWarmNanos)
+}
+
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	started := time.Now()
+	var timing OptimizeIndexTiming
 	if s == nil {
 		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
@@ -712,26 +780,39 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
 	}
 
+	invalidateStarted := time.Now()
 	if err := s.invalidateBenchmarkSearchCache(index); err != nil {
 		return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache before optimize failed", err)
 	}
+	timing.CacheInvalidateNanos = time.Since(invalidateStarted).Nanoseconds()
+	rebuildStarted := time.Now()
 	status, err := col.RebuildVectorIndex(vectorIndexName)
 	if err != nil {
 		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("optimize vector index", err)
 	}
+	timing.RebuildNanos = time.Since(rebuildStarted).Nanoseconds()
 	maintenance := vectorIndexMaintenanceStatus(status)
 	if info.Capabilities.NoDocumentVectorSearch && maintenance.Loaded && !maintenance.RebuildNeeded {
+		primeStarted := time.Now()
 		if err := s.primeBenchmarkSearchCache(index, col, info); err != nil {
 			return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "prime benchmark vector search cache after optimize failed", err)
 		}
+		timing.CachePrimeNanos = time.Since(primeStarted).Nanoseconds()
 		if info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			warmStarted := time.Now()
 			if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
 				_ = s.invalidateBenchmarkSearchCache(index)
 				return OptimizeIndexResponse{}, err
 			}
+			timing.CacheWarmNanos = time.Since(warmStarted).Nanoseconds()
 		}
 	}
-	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance}, nil
+	if err := ctx.Err(); err != nil {
+		return OptimizeIndexResponse{}, err
+	}
+	timing.TotalNanos = time.Since(started).Nanoseconds()
+	reconcileOptimizeIndexTiming(&timing, maintenance)
+	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance, Timing: timing}, nil
 }
 
 // SearchBenchmarkVector runs fail-closed no-document vector-index benchmark
@@ -820,7 +901,7 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 			stats.ServiceResponseNanos = 1
 		}
 	}
-	return BenchmarkVectorSearchResponse{
+	response := BenchmarkVectorSearchResponse{
 		Index:                     info,
 		Results:                   results,
 		Metric:                    info.Metric,
@@ -832,7 +913,9 @@ func (s *Service) SearchBenchmarkVector(ctx context.Context, index string, req B
 		Stats:                     stats,
 		Diagnostics:               stats.Diagnostics(),
 		compactIDs:                compactIDs,
-	}, nil
+	}
+	s.noteDiagnosticsIndex(index, info)
+	return response, nil
 }
 
 // SearchKeyword runs ranked lexical search over the service content text index.
@@ -1101,6 +1184,7 @@ func (s *Service) warmBenchmarkSearchCache(ctx context.Context, index string, in
 	if err := validateBenchmarkVectorSearchRoute(BenchmarkVectorQueryModeExact, BenchmarkVectorSearchRequest{}, response); err != nil {
 		return err
 	}
+	s.noteDiagnosticsIndex(index, info)
 	return nil
 }
 
@@ -1134,6 +1218,7 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 		if expectedGeneration != 0 && expectedGeneration != info.Generation {
 			return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 		}
+		s.noteDiagnosticsIndex(name, info)
 		return col, info, nil
 	}
 	s.benchmarkSearchCacheMu.RUnlock()
@@ -1148,7 +1233,54 @@ func (s *Service) openIndex(ctx context.Context, name string, expectedGeneration
 	if expectedGeneration != 0 && expectedGeneration != info.Generation {
 		return nil, IndexInfo{}, serviceErrorf(CodeIndexStale, "index %q generation %d does not match expected_generation %d", name, info.Generation, expectedGeneration)
 	}
+	s.noteDiagnosticsIndex(name, info)
 	return col, info, nil
+}
+
+func (s *Service) noteDiagnosticsIndex(name string, info IndexInfo) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	insert := s.completedDiagnosticsInsert(name, info)
+	if s.diagnosticsBeforeActivePublish != nil {
+		s.diagnosticsBeforeActivePublish()
+	}
+	s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
+}
+
+// publishDiagnosticsInsert records the completed insert snapshot only while
+// this exact index generation remains active. A reopen cannot replace a newer
+// completed snapshot for the same identity.
+func (s *Service) publishDiagnosticsInsert(name string, info IndexInfo, insert collections.CollectionInsertStats) {
+	if s == nil || !s.diagnosticsEnabled.Load() {
+		return
+	}
+	s.diagnosticsMu.Lock()
+	defer s.diagnosticsMu.Unlock()
+	s.diagnosticsCompleted.Store(name, &diagnosticsCompletedInsert{generation: info.Generation, insert: insert})
+	active := s.diagnosticsActive.Load()
+	if active != nil && active.name == name && active.info.Generation == info.Generation {
+		s.diagnosticsActive.Store(&diagnosticsActiveIndex{name: name, info: info, insert: insert})
+	}
+}
+
+type diagnosticsCompletedInsert struct {
+	generation uint64
+	insert     collections.CollectionInsertStats
+}
+
+func (s *Service) completedDiagnosticsInsert(name string, info IndexInfo) collections.CollectionInsertStats {
+	value, ok := s.diagnosticsCompleted.Load(name)
+	if !ok {
+		return collections.CollectionInsertStats{}
+	}
+	completed, ok := value.(*diagnosticsCompletedInsert)
+	if !ok || completed.generation != info.Generation {
+		return collections.CollectionInsertStats{}
+	}
+	return completed.insert
 }
 
 func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
@@ -1360,6 +1492,10 @@ func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
+	return upsertPreparedDocumentWithInsertCallback(ctx, col, doc, preferInsert, nil)
+}
+
+func upsertPreparedDocumentWithInsertCallback(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool, afterInsert func()) (inserted bool, updated bool, err error) {
 	const maxAttempts = 4
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if err := ctxErr(ctx); err != nil {
@@ -1367,6 +1503,9 @@ func upsertPreparedDocument(ctx context.Context, col *collections.Collection, do
 		}
 		if preferInsert {
 			if _, err := col.InsertBatch([][]byte{[]byte(doc.id)}, [][]byte{doc.raw}); err == nil {
+				if afterInsert != nil {
+					afterInsert()
+				}
 				return true, false, nil
 			} else if !collections.IsDuplicateKeyError(err) {
 				return false, false, wrapServiceError(CodeInternal, "insert document failed", err)
@@ -1469,18 +1608,23 @@ func (s *Service) collectMatchingIDs(ctx context.Context, col *collections.Colle
 }
 
 func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection, fn func(Document) error) error {
+	_, err := s.scanDocumentsAfter(ctx, col, "", maxServiceScanDocuments, fn)
+	return err
+}
+
+func (s *Service) scanDocumentsAfter(ctx context.Context, col *collections.Collection, afterID string, maxDocuments int, fn func(Document) error) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
-		return err
+		return false, err
 	}
 	if col == nil {
-		return serviceError(CodeIndexUnavailable, "index collection is unavailable")
+		return false, serviceError(CodeIndexUnavailable, "index collection is unavailable")
 	}
 	materializer, err := col.NewStoredDocumentJSONMaterializer()
 	if err != nil {
-		return wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
+		return false, wrapServiceError(CodeIndexUnavailable, "document materializer unavailable", err)
 	}
 	defer func() { _ = materializer.Close() }()
-	_, err = col.ScanDocumentsFunc(maxServiceScanDocuments, func(record collections.DocumentRecord) (bool, error) {
+	truncated, err := col.ScanDocumentsAfterFunc([]byte(afterID), maxDocuments, func(record collections.DocumentRecord) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}
@@ -1497,7 +1641,10 @@ func (s *Service) scanDocuments(ctx context.Context, col *collections.Collection
 		}
 		return true, nil
 	})
-	return mapDocumentScanError(err)
+	if errors.Is(err, errStopDocumentCursorPage) {
+		return truncated, err
+	}
+	return truncated, mapDocumentScanError(err)
 }
 
 func mapDocumentScanError(err error) error {
@@ -1611,6 +1758,26 @@ func vectorIndexMaintenanceStatus(status collections.VectorIndexStatus) VectorIn
 		NativeRootLoaded: status.NativeRootLoaded,
 		NativeRootBytes:  status.NativeRootBytes,
 		DurationNanos:    status.Duration.Nanoseconds(),
+		ColumnGraphBuild: ColumnGraphBuildTiming{
+			TotalNanos:                     status.ColumnGraphBuild.Total.Nanoseconds(),
+			SnapshotNanos:                  status.ColumnGraphBuild.Snapshot.Nanoseconds(),
+			RowExtractionNanos:             status.ColumnGraphBuild.RowExtraction.Nanoseconds(),
+			AdjacencyBuildNanos:            status.ColumnGraphBuild.AdjacencyBuild.Nanoseconds(),
+			LocalityRemapNanos:             status.ColumnGraphBuild.LocalityRemap.Nanoseconds(),
+			AssetPreparationNanos:          status.ColumnGraphBuild.AssetPreparation.Nanoseconds(),
+			InvNormPreparationNanos:        status.ColumnGraphBuild.InvNormPreparation.Nanoseconds(),
+			AdjacencyStatePreparationNanos: status.ColumnGraphBuild.AdjacencyStatePreparation.Nanoseconds(),
+			RowRefPreparationNanos:         status.ColumnGraphBuild.RowRefPreparation.Nanoseconds(),
+			DocumentIDPreparationNanos:     status.ColumnGraphBuild.DocumentIDPreparation.Nanoseconds(),
+			QuantizedPreparationNanos:      status.ColumnGraphBuild.QuantizedPreparation.Nanoseconds(),
+			SearchPackPreparationNanos:     status.ColumnGraphBuild.SearchPackPreparation.Nanoseconds(),
+			ManifestFinalizationNanos:      status.ColumnGraphBuild.ManifestFinalization.Nanoseconds(),
+			FileSyncNanos:                  status.ColumnGraphBuild.FileSync.Nanoseconds(),
+			FileSyncCount:                  status.ColumnGraphBuild.FileSyncCount,
+			NamespaceSyncNanos:             status.ColumnGraphBuild.NamespaceSync.Nanoseconds(),
+			NamespaceSyncCount:             status.ColumnGraphBuild.NamespaceSyncCount,
+			PublicationNanos:               status.ColumnGraphBuild.Publication.Nanoseconds(),
+		},
 	}
 }
 

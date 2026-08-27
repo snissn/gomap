@@ -692,6 +692,82 @@ func TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes(
 	requireCollectionMaintenanceTemplateReads(t, reopenedCol)
 }
 
+type failSecondCollectionValueLogAppender struct {
+	calls int
+}
+
+func (a *failSecondCollectionValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	a.calls++
+	if a.calls == 2 {
+		return nil, errors.New("injected second root append failure")
+	}
+	ptrs := make([]page.ValuePtr, len(values))
+	for i, value := range values {
+		ptrs[i] = page.ValuePtr{
+			FileID: page.ValueLogFileID(1),
+			Offset: uint64(i + 1),
+			Length: uint32(len(value)),
+		}
+	}
+	return ptrs, nil
+}
+
+func (*failSecondCollectionValueLogAppender) Flush() error { return nil }
+func (*failSecondCollectionValueLogAppender) Sync() error  { return nil }
+func (*failSecondCollectionValueLogAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func TestPointerizeInsertBatchPlanRunsLaterFailurePreservesPlanOwnership(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+	appender := &failSecondCollectionValueLogAppender{}
+	d.SetValueLogAppender(appender)
+	defer d.SetValueLogAppender(nil)
+
+	newRun := func(rootName string) collectionRootRun {
+		table := newCollectionRunTable(1)
+		setCollectionRunValue(table, []byte("large"), bytes.Repeat([]byte("v"), page.PageSize+1))
+		table.Freeze()
+		return collectionRootRun{name: rootName, kind: collectionRootSecondary, table: table}
+	}
+	plan := &insertBatchPlan{runs: []collectionRootRun{
+		newRun(collectionSecondaryRootName("docs", "first")),
+		newRun(collectionSecondaryRootName("docs", "second")),
+	}}
+	originals := []memtable.Table{plan.runs[0].table, plan.runs[1].table}
+	defer func() {
+		for i, original := range originals {
+			if plan.runs[i].table != original {
+				resetCollectionRunTable(plan.runs[i].table)
+			}
+			resetCollectionRunTable(original)
+		}
+	}()
+
+	obsolete, err := pointerizeInsertBatchPlanRuns(d, CollectionMeta{Name: "docs"}, plan)
+	if err == nil || !strings.Contains(err.Error(), "injected second root append failure") {
+		t.Fatalf("pointerize err=%v want injected later failure", err)
+	}
+	if obsolete != nil {
+		t.Fatalf("obsolete tables=%v want nil on failure", obsolete)
+	}
+	if appender.calls != 2 {
+		t.Fatalf("value-log append calls=%d want 2", appender.calls)
+	}
+	for i, original := range originals {
+		if plan.runs[i].table != original {
+			t.Fatalf("run %d table ownership changed on failure", i)
+		}
+		if original.Len() != 1 {
+			t.Fatalf("run %d original table was released on failure", i)
+		}
+	}
+}
+
 func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
 	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
@@ -767,6 +843,200 @@ func TestCollectionFastJSONLargeDocumentsUseValueLogPointers(t *testing.T) {
 	}
 	if !bytes.Equal(reopenedDoc, wantFirst) {
 		t.Fatalf("reopened large JSON doc mismatch: got %d bytes want %d", len(reopenedDoc), len(wantFirst))
+	}
+}
+
+func TestCollectionOversizedTextIndexValueUsesValueLogPointer(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:             t.TempDir(),
+		ResolvedProfile: backenddb.ProfileCommandWALDurable,
+		CommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Indexes: []IndexDefinition{{Name: "kind", Field: "kind", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{
+			Name:    "lexical",
+			Version: TextIndexVersionV2,
+			Fields:  []TextIndexField{{Field: "body"}},
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	const documents = int(textV2DefaultDocMapBlockSize)
+	ids := make([][]byte, documents)
+	values := make([][]byte, documents)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d-%s", i, strings.Repeat("x", 56)))
+		values[i] = []byte(`{"kind":"test","body":"pointerize this text index block"}`)
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		t.Fatalf("insert oversized text block: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionTextV2DocMapRootName("docs", "lexical")
+	rootID := catalog.rootID(rootName)
+	key := encodeTextV2BlockKey(1)
+	entry, err := snap.GetEntryAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("get docmap entry: %v", err)
+	}
+	value, err := snap.GetAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("read docmap value: %v", err)
+	}
+	maxInline := page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize - len(key)
+	if len(value) <= maxInline {
+		t.Fatalf("docmap value len=%d unexpectedly fits one leaf entry with max=%d", len(value), maxInline)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("docmap entry flags=%#x ptr=%+v want value-log pointer", entry.Flags, entry.ValuePtr)
+	}
+}
+
+func TestCollectionCreateTextIndexPointerizesOversizedBackfillValue(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	if !d.HasValueLogAppender() {
+		t.Fatal("database has no value-log appender")
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	const documents = int(textV2DefaultDocMapBlockSize)
+	ids := make([][]byte, documents)
+	values := make([][]byte, documents)
+	for i := range ids {
+		ids[i] = []byte(fmt.Sprintf("doc-%03d-%s", i, strings.Repeat("x", 56)))
+		values[i] = []byte(`{"body":"pointerize this text index backfill block"}`)
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		t.Fatalf("insert backfill source: %v", err)
+	}
+	if _, _, err := col.CreateTextIndex(TextIndexDefinition{
+		Name:    "lexical",
+		Version: TextIndexVersionV2,
+		Fields:  []TextIndexField{{Field: "body"}},
+	}); err != nil {
+		t.Fatalf("create text index: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootID := catalog.rootID(collectionTextV2DocMapRootName("docs", "lexical"))
+	key := encodeTextV2BlockKey(1)
+	entry, err := snap.GetEntryAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("get docmap entry: %v", err)
+	}
+	value, err := snap.GetAtRoot(rootID, key)
+	if err != nil {
+		t.Fatalf("read docmap value: %v", err)
+	}
+	maxInline := page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize - len(key)
+	if len(value) <= maxInline {
+		t.Fatalf("docmap value len=%d unexpectedly fits one leaf entry with max=%d", len(value), maxInline)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("docmap entry flags=%#x ptr=%+v want value-log pointer", entry.Flags, entry.ValuePtr)
+	}
+}
+
+func TestCollectionCreateIndexPointerizesOversizedBackfillValue(t *testing.T) {
+	opts := treedb.OptionsFor(treedb.ProfileFast, t.TempDir())
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	tags := make([]string, 160)
+	for i := range tags {
+		tags[i] = fmt.Sprintf("tag-%03d-%s", i, strings.Repeat("x", 24))
+	}
+	document, err := json.Marshal(map[string]any{"tags": tags})
+	if err != nil {
+		t.Fatalf("marshal document: %v", err)
+	}
+	documentID := []byte("doc")
+	if _, err := col.InsertBatch([][]byte{documentID}, [][]byte{document}); err != nil {
+		t.Fatalf("insert backfill source: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{
+		Name:      "tags",
+		Field:     "tags",
+		ValueType: IndexValueString,
+		MultiKey:  true,
+	}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing snapshot")
+	}
+	defer snap.Close()
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootID := catalog.rootID(collectionIndexStateRootName("docs"))
+	entry, err := snap.GetEntryAtRoot(rootID, documentID)
+	if err != nil {
+		t.Fatalf("get index-state entry: %v", err)
+	}
+	value, err := snap.GetAtRoot(rootID, documentID)
+	if err != nil {
+		t.Fatalf("read index-state value: %v", err)
+	}
+	maxInline := page.PageSize - node.NodeHeaderSize - node.DirectoryEntrySize - 7 - page.EntryRevisionSize - len(documentID)
+	if len(value) <= maxInline {
+		t.Fatalf("index-state value len=%d unexpectedly fits one leaf entry with max=%d", len(value), maxInline)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("index-state entry flags=%#x ptr=%+v want value-log pointer", entry.Flags, entry.ValuePtr)
 	}
 }
 
@@ -2906,6 +3176,85 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	}
 	if !bytes.Equal(got, wantU2) {
 		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
+	}
+}
+
+func TestCollectionNoIndexBufferedInsertRejectsDuplicateAcrossOnlineVacuumSnapshot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	original := []byte(`{"name":"original"}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{original}); err != nil {
+		t.Fatalf("insert original: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush original: %v", err)
+	}
+
+	stale := d.AcquireSnapshot()
+	if stale == nil {
+		t.Fatal("acquire pre-vacuum snapshot")
+	}
+	defer func() { _ = stale.Close() }()
+	stalePager := stale.Pager()
+	staleCatalog, err := loadCollectionCatalog(stale, "users")
+	if err != nil {
+		t.Fatalf("load pre-vacuum catalog: %v", err)
+	}
+	options, err := collectionPlannerOptionsForDB(d, staleCatalog.meta)
+	if err != nil {
+		t.Fatalf("planner options: %v", err)
+	}
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	current := d.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("acquire post-vacuum snapshot")
+	}
+	if current.Pager() == stalePager {
+		_ = current.Close()
+		t.Fatal("vacuum did not replace pager")
+	}
+	_ = current.Close()
+
+	_, buffered, err := col.bufferNoIndexInsertBatch(
+		col.writeDomain,
+		staleCatalog,
+		stale,
+		options,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"replacement"}`)},
+		insertBatchExecutionOptions{},
+	)
+	if !buffered || !errors.Is(err, ErrDocumentExists) {
+		t.Fatalf("stale-snapshot duplicate buffered=%t err=%v want ErrDocumentExists", buffered, err)
+	}
+	if col.writeDomain.count != 0 {
+		t.Fatalf("buffered duplicate count=%d want 0", col.writeDomain.count)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get original after rejected insert: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("document after rejected insert=%s want %s", got, original)
 	}
 }
 
@@ -9861,6 +10210,10 @@ func TestCollectionLockAndValidateInsertBatchPlanRefreshesVacuumedSnapshot(t *te
 		_ = snap.Close()
 		t.Fatalf("vacuum: %v", err)
 	}
+	if err := col.validateMutationRootDescriptors(oldPager, snapshotUserRoot(snap), snapshotSystemRoot(snap), snapshotCommitSeq(snap)); !errors.Is(err, ErrConcurrentMutation) {
+		_ = snap.Close()
+		t.Fatalf("pre-vacuum mutation preflight err=%v want ErrConcurrentMutation", err)
+	}
 	mutationUnlock := col.lockMutation()
 	mutationLocked := true
 	var unlockMutation collectionMutationUnlock
@@ -9877,6 +10230,222 @@ func TestCollectionLockAndValidateInsertBatchPlanRefreshesVacuumedSnapshot(t *te
 		if got, want := baseRootIDs[i], currentCatalog.rootID(rootName); got != want {
 			t.Fatalf("base root %q=%d want current %d", rootName, got, want)
 		}
+	}
+}
+
+func TestCollectionBufferedIndexedRootsRebaseAfterOnlineVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("seed")}, [][]byte{[]byte(`{"city":"seed"}`)}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"a"}`)}); err != nil {
+		t.Fatalf("buffer first row: %v", err)
+	}
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare buffered publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare buffered publish returned no work")
+	}
+	before := d.AcquireSnapshot()
+	if before == nil {
+		t.Fatal("missing pre-vacuum snapshot")
+	}
+	beforePager := before.Pager()
+	_ = before.Close()
+	if err := d.VacuumIndexOnline(t.Context()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	after := d.AcquireSnapshot()
+	if after == nil {
+		t.Fatal("missing post-vacuum snapshot")
+	}
+	if after.Pager() == beforePager {
+		_ = after.Close()
+		t.Fatal("vacuum did not replace the index pager")
+	}
+	if err := col.publishPreparedIndexedFlush(work); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("publish prepared work after vacuum err=%v want ErrConcurrentMutation", err)
+	}
+	freshCatalog, err := loadCollectionCatalog(after, "users")
+	_ = after.Close()
+	if err != nil {
+		t.Fatalf("load post-vacuum catalog: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u2")}, [][]byte{[]byte(`{"city":"b"}`)}); err != nil {
+		t.Fatalf("buffer second row after vacuum: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	for rootName, baseRoot := range col.writeDomain.rootBaseIDs {
+		if want := freshCatalog.rootID(rootName); baseRoot != want {
+			col.writeDomain.mu.RUnlock()
+			t.Fatalf("rebased root %q=%d want %d", rootName, baseRoot, want)
+		}
+	}
+	col.writeDomain.mu.RUnlock()
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush rebased rows: %v", err)
+	}
+	for id, want := range map[string]string{
+		"seed": `{"city":"seed"}`,
+		"u1":   `{"city":"a"}`,
+		"u2":   `{"city":"b"}`,
+	} {
+		got, err := col.Get([]byte(id))
+		if err != nil || string(got) != want {
+			t.Fatalf("Get(%q)=(%q,%v) want %q", id, got, err, want)
+		}
+	}
+}
+
+func TestCollectionSchemaBackfillsRetryAfterOnlineVacuumPagerReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	tests := []struct {
+		name      string
+		operation string
+		rootName  string
+		create    func(*Collection) error
+	}{
+		{
+			name:      "scalar index",
+			operation: "index",
+			rootName:  collectionSecondaryRootName("docs", "city"),
+			create: func(col *Collection) error {
+				_, err := col.CreateIndex(IndexDefinition{Name: "city", Field: "city", ValueType: IndexValueString})
+				return err
+			},
+		},
+		{
+			name:      "text index",
+			operation: "text_index",
+			rootName:  collectionTextV2DocMapRootName("docs", "lexical"),
+			create: func(col *Collection) error {
+				_, _, err := col.CreateTextIndex(TextIndexDefinition{
+					Name:    "lexical",
+					Version: TextIndexVersionV2,
+					Fields:  []TextIndexField{{Field: "body"}},
+				})
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+				t.Fatalf("create collection: %v", err)
+			}
+			col, err := mgr.OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("d1"), []byte("d2")},
+				[][]byte{[]byte(`{"city":"hnl","body":"first document"}`), []byte(`{"city":"nyc","body":"second document"}`)},
+			); err != nil {
+				t.Fatalf("insert source documents: %v", err)
+			}
+
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releasePublish := func() {
+				releaseOnce.Do(func() { close(release) })
+			}
+			defer releasePublish()
+			var blocked atomic.Bool
+			var calls atomic.Int32
+			testBeforeSchemaBackfillPublishHook.installMu.Lock()
+			testBeforeSchemaBackfillPublishHook.ptr.Store(&testSchemaBackfillPublishHook{fn: func(operation string) {
+				if operation != tc.operation {
+					return
+				}
+				calls.Add(1)
+				if blocked.CompareAndSwap(false, true) {
+					close(entered)
+					<-release
+				}
+			}})
+			defer func() {
+				testBeforeSchemaBackfillPublishHook.ptr.Store(nil)
+				testBeforeSchemaBackfillPublishHook.installMu.Unlock()
+			}()
+
+			done := make(chan error, 1)
+			go func() {
+				done <- tc.create(col)
+			}()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("schema backfill did not reach pre-publish hook")
+			}
+			beforePager := d.Pager()
+			if err := d.VacuumIndexOnline(t.Context()); err != nil {
+				t.Fatalf("vacuum: %v", err)
+			}
+			if d.Pager() == beforePager {
+				t.Fatal("vacuum did not replace pager")
+			}
+			releasePublish()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("schema backfill retry: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("schema backfill retry did not finish")
+			}
+			if got := calls.Load(); got < 2 {
+				t.Fatalf("schema backfill publish attempts=%d want retry after pager replacement", got)
+			}
+			snap := d.AcquireSnapshot()
+			if snap == nil {
+				t.Fatal("missing post-retry snapshot")
+			}
+			catalog, err := loadCollectionCatalog(snap, "docs")
+			_ = snap.Close()
+			if err != nil {
+				t.Fatalf("load post-retry catalog: %v", err)
+			}
+			if rootID := catalog.rootID(tc.rootName); rootID == 0 {
+				t.Fatalf("post-retry root %q is empty", tc.rootName)
+			}
+		})
 	}
 }
 

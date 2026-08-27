@@ -2541,29 +2541,34 @@ func (db *DB) CompactIndex() error {
 // a short writer pause. Disk space from the old index is reclaimed once any old
 // snapshots/iterators drain.
 func (db *DB) VacuumIndexOnline(ctx context.Context) error {
+	_, err := db.vacuumIndexOnlineStats(ctx)
+	return err
+}
+
+func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return VacuumOnlineStats{}, err
 	}
 	// Reject unsupported platforms before maintenance acquisition or cached
 	// checkpointing so this API remains non-mutating when it cannot run.
 	if runtime.GOOS == "windows" {
-		return errVacuumUnsupported
+		return VacuumOnlineStats{}, errVacuumUnsupported
 	}
 	_, finishMaintenance, err := db.beginFullScanMaintenanceContext(ctx, "vacuum")
 	if err != nil {
-		return err
+		return VacuumOnlineStats{}, err
 	}
 	success := false
 	defer func() { finishMaintenance(success) }()
 	if err := db.beginPublicOperation(); err != nil {
-		return err
+		return VacuumOnlineStats{}, err
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.backend == nil {
-		return ErrClosed
+		return VacuumOnlineStats{}, ErrClosed
 	}
 
 	// In cached mode, ensure the backend reflects all buffered writes before
@@ -2572,11 +2577,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// can break higher layers that assume a stable durable boundary.
 	if db.cached != nil {
 		if err := db.cached.CheckpointContext(ctx); err != nil {
-			return err
+			return VacuumOnlineStats{}, err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return VacuumOnlineStats{}, err
 	}
 
 	// Collection command-WAL writers buffer root deltas above the cached layer.
@@ -2588,16 +2593,31 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.commandWALCached {
 		unlockCommandWALPublish, err = db.backend.LockCommandWALPublishWithBarriers()
 		if err != nil {
-			return err
+			return VacuumOnlineStats{}, err
 		}
 		defer unlockCommandWALPublish()
 	}
 
-	if err := db.reconcileCachedBackendMaintenance(db.backend.VacuumIndexOnline(ctx)); err != nil {
-		return err
+	onlineStats, stats := db.backend.VacuumIndexOnlineWithStats(ctx)
+	if err := db.reconcileCachedBackendMaintenance(stats); err != nil {
+		return onlineStats, err
 	}
 	success = true
-	return nil
+	return onlineStats, nil
+}
+
+// VacuumOnlineStats returns an owned snapshot of the latest backend online
+// vacuum attempt. The snapshot is diagnostic only and never retains payloads.
+func (db *DB) VacuumOnlineStats() VacuumOnlineStats {
+	if db == nil {
+		return VacuumOnlineStats{}
+	}
+	db.lifecycleMu.RLock()
+	defer db.lifecycleMu.RUnlock()
+	if db.backend == nil {
+		return VacuumOnlineStats{}
+	}
+	return db.backend.VacuumOnlineStats()
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.

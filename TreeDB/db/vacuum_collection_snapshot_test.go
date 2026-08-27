@@ -331,6 +331,20 @@ func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *
 
 	reached := make(chan struct{})
 	release := make(chan struct{})
+	initialWriterReady := make(chan struct{})
+	releaseInitialHold := make(chan struct{})
+	initialHoldStarted := make(chan time.Time, 1)
+	writeErr := make(chan error, 1)
+	db.vacuumAfterCutoverLockHook = func() {
+		initialHoldStarted <- time.Now()
+		go func() {
+			close(initialWriterReady)
+			writeErr <- db.SetSync([]byte("during-final-sync"), []byte("n"))
+		}()
+		<-initialWriterReady
+		<-releaseInitialHold
+	}
+	defer func() { db.vacuumAfterCutoverLockHook = nil }()
 	var once sync.Once
 	db.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
 		if phase == vacuumPagerSyncFinal {
@@ -342,12 +356,20 @@ func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *
 	}
 	vacuumErr := make(chan error, 1)
 	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
+	waitVacuumTestSignal(t, initialWriterReady, "writer blocked by cutover write lock")
+	initialStartedAt := <-initialHoldStarted
+	select {
+	case err := <-writeErr:
+		close(releaseInitialHold)
+		_ = db.Close()
+		t.Fatalf("writer passed initial cutover hold: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	initialHoldFor := time.Since(initialStartedAt)
+	close(releaseInitialHold)
 	waitVacuumTestSignal(t, reached, "vacuum final sync")
+	finalSyncBlockedAt := time.Now()
 
-	writeErr := make(chan error, 1)
-	go func() {
-		writeErr <- db.SetSync([]byte("during-final-sync"), []byte("n"))
-	}()
 	select {
 	case err := <-writeErr:
 		close(release)
@@ -356,6 +378,7 @@ func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *
 		t.Fatalf("writer passed active cutover gate: %v", err)
 	case <-time.After(250 * time.Millisecond):
 	}
+	finalSyncBlockedFor := time.Since(finalSyncBlockedAt)
 	close(release)
 	if err := <-vacuumErr; err != nil {
 		_ = db.Close()
@@ -364,6 +387,10 @@ func TestVacuumIndexOnlineFinalSyncGateWaitsWriterAndPublishesItAfterCutover(t *
 	if err := <-writeErr; err != nil {
 		_ = db.Close()
 		t.Fatalf("writer after cutover: %v", err)
+	}
+	if stats := db.VacuumOnlineStats(); stats.MaxWriterPause < initialHoldFor+finalSyncBlockedFor {
+		_ = db.Close()
+		t.Fatalf("max writer pause=%s want initial+final blocked interval at least %s", stats.MaxWriterPause, initialHoldFor+finalSyncBlockedFor)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)

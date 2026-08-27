@@ -505,7 +505,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		return err
 	}
 	defer cleanupCoalesced()
-	tables, cleanupPointerized, err := pointerizeCollectionDataRootDeltaTables(c.db, plan.meta, rootNames, tables)
+	tables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, plan.meta, rootNames, tables)
 	if err != nil {
 		return err
 	}
@@ -521,7 +521,7 @@ func (c *Collection) publishSourceReplacementPlan(plan *sourceReplacementPlan, h
 		}
 	}
 	preflight := func() error {
-		return c.validateMutationRootDescriptors(plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
+		return c.validateMutationRootDescriptors(plan.snap.Pager(), plan.baseUserRoot, plan.baseSystemRoot, plan.baseCommitSeq)
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64

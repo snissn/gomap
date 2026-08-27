@@ -592,14 +592,18 @@ type VectorIndexSearchStats struct {
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
 	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
 	// ScalarFilterPlan identifies the native declared-scalar execution plan.
-	ScalarFilterPlan           NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs       uint64                 `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidateIDs   uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterVisited        uint64                 `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterAdmitted       uint64                 `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterUnderfill      uint64                 `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterExactScoring   uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterPlan                 NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
+	ScalarFilterProbeIDs             uint64                 `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated       uint64                 `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates           uint64                 `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs         uint64                 `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs uint64                 `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs  uint64                 `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited              uint64                 `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored               uint64                 `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterAdmitted             uint64                 `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterUnderfill            uint64                 `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterExactScoring         uint64                 `json:"scalar_filter_exact_scoring,omitempty"`
 }
 
 type vectorIndexSearchVisibility struct {
@@ -1497,8 +1501,12 @@ func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDef
 				response.Stats.ScalarFilterPlan = scalarPlan.identity
 				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
 				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
+				response.Stats.ScalarFilterCandidates = uint64(scalarWork.visited)
 				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
+				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
+				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
 				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
+				response.Stats.ScalarFilterScored = uint64(scalarWork.visited)
 				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
 				if scalarWork.underfill {
 					response.Stats.ScalarFilterUnderfill = 1
@@ -1615,26 +1623,30 @@ func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (Ve
 }
 
 func (c *Collection) cachedVectorIndexForState(name, rootName string, state backenddb.StateToken) (VectorIndexDefinition, uint64, bool, bool) {
+	currentPager := c.db.Pager()
 	c.catalogMu.RLock()
 	catalog := c.catalog
 	current := catalog != nil &&
+		catalog.pager == currentPager &&
 		state.SystemRootPageID != 0 &&
 		c.catalogSystemRoot == state.SystemRootPageID &&
 		(c.catalogCommitSeq == state.CommitSeq || c.canReuseCachedCatalogAcrossDataOnlyCommits(catalog))
 	c.catalogMu.RUnlock()
 	if !current && catalog != nil && c.nativeVectorIndexMutationActive() && c.writeDomain != nil {
 		if c.writeDomain.mu.TryRLock() {
-			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil {
+			if currentCatalog := cachedWriteDomainCatalogForStateLocked(c.writeDomain, state.SystemRootPageID, state.CommitSeq); currentCatalog != nil && currentCatalog.pager == currentPager {
 				catalog, current = currentCatalog, true
 			}
 			c.writeDomain.mu.RUnlock()
-		} else if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
-			return def, catalog.rootID(rootName), true, true
+		} else if catalog.pager == currentPager {
+			if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+				return def, catalog.rootID(rootName), true, true
+			}
 		}
 	}
 	if !current {
 		catalog = cachedWriteDomainCatalogForState(c.writeDomain, state.SystemRootPageID, state.CommitSeq)
-		if catalog == nil {
+		if catalog == nil || catalog.pager != currentPager {
 			return VectorIndexDefinition{}, 0, false, false
 		}
 		c.catalogMu.Lock()
@@ -1646,6 +1658,9 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 		c.catalogMu.Unlock()
 	}
 	if catalog == nil {
+		return VectorIndexDefinition{}, 0, false, false
+	}
+	if c.db.Pager() != currentPager {
 		return VectorIndexDefinition{}, 0, false, false
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)

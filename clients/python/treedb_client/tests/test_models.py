@@ -6,6 +6,7 @@ import _support  # noqa: F401
 from treedb_client import (
     BenchmarkVectorIndexOptions,
     BenchmarkVectorSearchResponse,
+    ColumnGraphBuildTiming,
     Document,
     HybridFusionOptions,
     HybridSearchPlan,
@@ -16,6 +17,7 @@ from treedb_client import (
     KeywordSearchRequest,
     KeywordSearchResponse,
     QuantizedIndexInfo,
+    OptimizeIndexResponse,
     ScalarU8AlphaPolicy,
     ScalarU8CalibrationConfig,
 )
@@ -64,6 +66,21 @@ class DocumentModelTests(unittest.TestCase):
 
 
 class IndexModelTests(unittest.TestCase):
+    def test_optimize_timing_models_parse_column_graph_build(self) -> None:
+        response = OptimizeIndexResponse.from_dict(
+            {
+                "index": _sample_index(),
+                "vector_index_name": "embedding",
+                "status": {"name": "embedding", "column_graph_build": {"total_nanos": 10, "file_sync_count": 2}},
+                "timing": {"total_nanos": 20, "cache_warm_nanos": 3},
+            }
+        )
+        self.assertEqual(response.timing.total_nanos, 20)
+        self.assertEqual(response.timing.cache_warm_nanos, 3)
+        self.assertIsInstance(response.status.column_graph_build, ColumnGraphBuildTiming)
+        self.assertEqual(response.status.column_graph_build.total_nanos, 10)
+        self.assertEqual(response.status.column_graph_build.file_sync_count, 2)
+
     def test_index_info_round_trip(self) -> None:
         info = IndexInfo.from_dict(
             {
@@ -77,6 +94,10 @@ class IndexModelTests(unittest.TestCase):
                 "text_field": "content",
                 "text_index_name": "content",
                 "document_type": "treedb_document_service_v1",
+                "scalar_fields": [
+                    {"field": "meta.user_id", "index_name": "scalar.meta.user_id", "value_type": "string"},
+                    {"field": "meta.fpath", "index_name": "scalar.meta.fpath", "value_type": "string"},
+                ],
                 "capabilities": {
                     "dense_vector_search": True,
                     "exact_dense_scoring": True,
@@ -96,6 +117,9 @@ class IndexModelTests(unittest.TestCase):
         self.assertEqual(info.vector_index_name, "embedding")
         self.assertEqual(info.text_field, "content")
         self.assertEqual(info.text_index_name, "content")
+        self.assertEqual([(row.field, row.value_type) for row in info.scalar_fields], [
+            ("meta.user_id", "string"), ("meta.fpath", "string"),
+        ])
         self.assertTrue(info.capabilities.metadata_filters)
         self.assertTrue(info.capabilities.keyword_search)
         self.assertTrue(info.capabilities.hybrid_search)

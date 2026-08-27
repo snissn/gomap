@@ -32,7 +32,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "Set", "SetMaintenancePhase", "SetSync", "Stats",
-		"Update", "UpdateSync", "VacuumIndexOnline", "ValueLogGC", "ValueLogRewriteOnline",
+		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
@@ -64,6 +64,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	profileInventoryRequireBody(t, vlogRewriteBodies, "ValueLogRewriteOffline", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackend", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLog", "Open(opts)")
+	profileInventoryRequireBody(t, backendOpenBodies, "OpenBackendWithCachedLeafLogStats", "Open(opts)")
 	profileInventoryRequireBody(t, profileBodies, "OptionsFor", "ApplyProfile")
 	profileInventoryRequireBody(t, profileBodies, "OptionsForBenchmark", "ApplyBenchmarkProfile")
 	for _, name := range []string{"ApplyProfile", "ApplyBenchmarkProfile"} {

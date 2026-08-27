@@ -536,6 +536,8 @@ class TreeDBClientTests(unittest.TestCase):
                     "index": SAMPLE_INDEX,
                     "matched_count": 1,
                     "documents": [{"id": "a", "content": "alpha", "meta": {"repo": "gomap"}}],
+                    "next_after_id": "a",
+                    "exhausted": False,
                 },
                 0,
             ),
@@ -560,12 +562,18 @@ class TreeDBClientTests(unittest.TestCase):
             client = TreeDBClient(server.base_url, timeout=1)
 
             self.assertEqual(client.count_documents("docs", {"field": "meta.repo", "operator": "==", "value": "gomap"}).count, 2)
-            self.assertEqual(client.filter_documents("docs", limit=10).documents[0].id, "a")
+            filtered = client.filter_documents("docs", limit=10, after_id="before", cursor_page=True)
+            self.assertEqual(filtered.documents[0].id, "a")
+            self.assertEqual(filtered.next_after_id, "a")
+            self.assertFalse(filtered.exhausted)
             self.assertEqual(client.query_by_embedding("docs", [1, 0], 1).documents[0].score, 1.0)
             self.assertEqual(client.delete_by_filter("docs", {"field": "meta.repo", "operator": "$eq", "value": "gomap"}).deleted, 1)
 
             delete_body = json_body(server.records[-1])
             self.assertEqual(delete_body["filter"], {"field": "meta.repo", "operator": "==", "value": "gomap"})
+            filter_body = json_body(server.records[1])
+            self.assertEqual(filter_body["after_id"], "before")
+            self.assertTrue(filter_body["cursor_page"])
 
 
     def test_benchmark_lifecycle_and_vector_index_search_methods(self) -> None:
@@ -585,7 +593,8 @@ class TreeDBClientTests(unittest.TestCase):
                 {
                     "index": SAMPLE_INDEX,
                     "vector_index_name": "embedding",
-                    "status": {"name": "embedding", "strategy": "column_graph", "state": "column_graph_loaded", "loaded": True},
+                    "status": {"name": "embedding", "strategy": "column_graph", "state": "column_graph_loaded", "loaded": True, "column_graph_build": {"total_nanos": 11}},
+                    "timing": {"total_nanos": 13, "cache_warm_nanos": 2},
                 },
                 0,
             ),
@@ -652,6 +661,9 @@ class TreeDBClientTests(unittest.TestCase):
 
             self.assertTrue(reset.created)
             self.assertTrue(optimize.status.loaded)
+            self.assertEqual(optimize.status.column_graph_build.total_nanos, 11)
+            self.assertEqual(optimize.timing.total_nanos, 13)
+            self.assertEqual(optimize.timing.cache_warm_nanos, 2)
             b64_search = client.search_vector_index(
                 "bench",
                 [1, 0],
@@ -730,6 +742,8 @@ class TreeDBClientTests(unittest.TestCase):
             client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="f32_le_b64")
         with self.assertRaisesRegex(InvalidRequestError, "query_embedding"):
             client.search_vector_index("docs", ["not-a-number"], 1, query_embedding_encoding="json")
+        with self.assertRaisesRegex(InvalidRequestError, "after_id requires cursor_page=True"):
+            client.filter_documents("docs", after_id="cursor")
 
     def test_keyword_search_serializes_request_and_parses_response(self) -> None:
         route = "/v1/indexes/docs/search/keyword"
@@ -928,6 +942,28 @@ class TreeDBClientTests(unittest.TestCase):
             "exact": False,
             "candidates": 10,
             "route": "ann",
+            "native_base_plus_live_delta": True,
+            "scalar_filter_membership_source": "bounded_candidate_refinement",
+            "scalar_filter_plan": "mixed_refined",
+            "scalar_filter_probe_ids": 4096,
+            "scalar_filter_probe_truncated": 1,
+            "scalar_filter_candidates": 41,
+            "scalar_filter_candidate_ids": 5,
+            "scalar_filter_retained_candidate_ids": 23,
+            "scalar_filter_refined_candidate_ids": 5,
+            "scalar_filter_visited": 41,
+            "scalar_filter_scored": 41,
+            "scalar_filter_admitted": 5,
+            "scalar_filter_exact_scoring": True,
+            "scalar_filter_underfill": False,
+            "scalar_filter_unbounded": 0,
+            "exact_fallbacks": 0,
+            "full_document_scan_fallbacks": 0,
+            "allowed_id_materialization_rows": 23,
+            "primary_document_scans": 0,
+            "document_materialization_rows": 5,
+            "visibility_mismatch_count": 1,
+            "visibility_retry_count": 1,
         }
         with FixtureServer({("POST", route): (200, response, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
@@ -937,6 +973,29 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(result.route, "ann")
             self.assertFalse(result.exact)
             self.assertEqual(result.candidates, 10)
+            self.assertTrue(result.native_base_plus_live_delta)
+            self.assertEqual(result.scalar_filter_membership_source, "bounded_candidate_refinement")
+            self.assertEqual(result.scalar_filter_plan, "mixed_refined")
+            self.assertEqual(result.scalar_filter_probe_ids, 4096)
+            self.assertEqual(result.scalar_filter_probe_truncated, 1)
+            self.assertEqual(result.scalar_filter_candidates, 41)
+            self.assertEqual(result.scalar_filter_candidate_ids, 5)
+            self.assertNotEqual(result.scalar_filter_candidates, result.scalar_filter_candidate_ids)
+            self.assertEqual(result.scalar_filter_retained_candidate_ids, 23)
+            self.assertEqual(result.scalar_filter_refined_candidate_ids, 5)
+            self.assertEqual(result.scalar_filter_visited, 41)
+            self.assertEqual(result.scalar_filter_scored, 41)
+            self.assertEqual(result.scalar_filter_admitted, 5)
+            self.assertTrue(result.scalar_filter_exact_scoring)
+            self.assertFalse(result.scalar_filter_underfill)
+            self.assertEqual(result.scalar_filter_unbounded, 0)
+            self.assertEqual(result.exact_fallbacks, 0)
+            self.assertEqual(result.full_document_scan_fallbacks, 0)
+            self.assertEqual(result.allowed_id_materialization_rows, 23)
+            self.assertEqual(result.primary_document_scans, 0)
+            self.assertEqual(result.document_materialization_rows, 5)
+            self.assertEqual(result.visibility_mismatch_count, 1)
+            self.assertEqual(result.visibility_retry_count, 1)
             body = json_body(server.records[0])
             self.assertEqual(body["route"], "ann")
             self.assertEqual(body["ef_search"], 64)

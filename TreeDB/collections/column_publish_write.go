@@ -472,6 +472,12 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 
 func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
 	return func() error {
+		if c == nil || c.db == nil {
+			return backenddb.ErrClosed
+		}
+		if input.catalog == nil || input.catalog.pager != c.db.Pager() {
+			return fmt.Errorf("%w: concurrent index generation replacement detected", ErrConcurrentMutation)
+		}
 		return c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
 	}
 }
