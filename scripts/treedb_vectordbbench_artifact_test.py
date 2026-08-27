@@ -42,6 +42,42 @@ def valid_trace_fixture() -> bytes:
     ).read_bytes()
 
 
+@functools.cache
+def valid_heap_pprof_fixture() -> bytes:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        source = root / "heap_profile.go"
+        profile = root / "heap.pprof"
+        source.write_text(
+            """package main
+import (
+    "os"
+    "runtime"
+    "runtime/pprof"
+)
+func main() {
+    data := make([]byte, 1<<20)
+    runtime.GC()
+    out, err := os.Create(os.Args[1])
+    if err != nil { panic(err) }
+    if err := pprof.Lookup("heap").WriteTo(out, 0); err != nil { panic(err) }
+    if err := out.Close(); err != nil { panic(err) }
+    runtime.KeepAlive(data)
+}
+""",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ("go", "run", str(source), str(profile)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=True,
+        )
+        return profile.read_bytes()
+
+
 def valid_perf_fixture() -> bytes:
     header = bytearray(104)
     header[:8] = b"PERFILE2"
@@ -826,6 +862,64 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
 
+    def test_go_1_26_heap_profile_without_default_marker_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _ = lifecycle_fixture(root)
+            profile = root / "profiles" / "build.heap.pprof"
+            profile.write_bytes(valid_heap_pprof_fixture())
+            checksum = harness.sha256_file(profile)
+            manifest["lifecycle"]["raw_artifacts"] = [{"path": "profiles/build.heap.pprof", "sha256": checksum}]
+            manifest["lifecycle"]["profiles"] = [{
+                "path": "profiles/build.heap.pprof",
+                "sha256": checksum,
+                "kind": "heap",
+                "before_sequence": 5,
+                "after_sequence": 6,
+            }]
+            harness.write_json(root / "manifest.json", manifest)
+
+            metadata = harness._pprof_metadata(profile)
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertIsNotNone(metadata)
+        samples = metadata.decode("utf-8").split("Samples:\n", 1)[1].splitlines()[0]
+        self.assertNotIn("[dflt]", samples)
+        self.assertTrue(got["complete"], got)
+
+    def test_missing_native_profile_decoders_are_structural_errors(self) -> None:
+        cases = (
+            ("pprof", "cpu", "profiles/build.cpu.pprof", valid_pprof_fixture(), "go"),
+            ("trace", "trace", "profiles/build.trace.out", valid_trace_fixture(), "go"),
+            ("perf", "perf", "profiles/build.perf.data", valid_perf_fixture(), "perf"),
+        )
+        for label, kind, relative, payload, decoder in cases:
+            with self.subTest(profile=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    profile = root / relative
+                    profile.write_bytes(payload)
+                    checksum = harness.sha256_file(profile)
+                    manifest["lifecycle"]["raw_artifacts"] = [{"path": relative, "sha256": checksum}]
+                    manifest["lifecycle"]["profiles"] = [{
+                        "path": relative,
+                        "sha256": checksum,
+                        "kind": kind,
+                        "before_sequence": 5,
+                        "after_sequence": 6,
+                    }]
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    with mock.patch.object(harness.shutil, "which", return_value=None):
+                        got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(
+                    any(f"unavailable native decoder: {decoder}" in item for item in got["errors"]),
+                    got,
+                )
+
     def test_manifest_controlled_paths_fail_closed_without_cli_traceback(self) -> None:
         mutations = (
             ("lifecycle", lambda row: row["lifecycle"].__setitem__("file", "bad\x00lifecycle.jsonl")),
@@ -917,7 +1011,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                 else:
                     result = subprocess.CompletedProcess(("perf", "script"), native)
                     decoder = mock.patch.object(harness.subprocess, "run", return_value=result)
-                with decoder:
+                with mock.patch.object(harness.shutil, "which", return_value="/usr/bin/perf"), decoder:
                     return harness.validate_lifecycle_artifact(root)
 
         cases = (

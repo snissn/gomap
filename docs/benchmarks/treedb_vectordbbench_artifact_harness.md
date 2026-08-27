@@ -79,8 +79,9 @@ raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,
 `block`, and `mutex` as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
 decoder accepts with matching period and sample metadata. CPU profiles are
 distinct; heap and allocs use the shared Go allocation family but require their
-respective default sample type; block and mutex share indistinguishable Go
-contention metadata and are validated as that family. Go `trace` is a `.out`
+respective sample-type selection (Go 1.26 heap profiles may omit the default
+marker, while allocs must mark `alloc_space/bytes`); block and mutex share
+indistinguishable Go contention metadata and are validated as that family. Go `trace` is a `.out`
 file that the native trace decoder accepts, and Linux `perf` as a `.data` file
 with bounded header sections that native `perf script` can decode while walking
 samples. Profile validation is an offline correctness gate and invokes the
@@ -93,6 +94,10 @@ fallback. `T_ready` is reconstructed from `load_start`
 through `cold_open_ready`; client, accepted/durable, and reopened counts are
 never substituted for one another, and a completed lifecycle requires strictly
 positive `T_ready`.
+
+Lifecycle validation requires the pinned Go toolchain for pprof and trace
+profiles, and Linux `perf` for perf-data profiles. A missing native decoder is
+a structural validation error rather than an invalid-profile diagnosis.
 
 Validate a completed artifact with:
 

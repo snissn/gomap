@@ -884,10 +884,15 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                     "alloc_objects/count", "alloc_space/bytes", "inuse_objects/count", "inuse_space/bytes",
                 }
                 expected_default = "inuse_space/bytes" if kind == "heap" else "alloc_space/bytes"
+                valid_defaults = (
+                    {frozenset(), frozenset({expected_default})}
+                    if kind == "heap"
+                    else {frozenset({expected_default})}
+                )
                 return (
                     "PeriodType: space bytes" in lines
                     and required <= sample_types
-                    and default_types == {expected_default}
+                    and frozenset(default_types) in valid_defaults
                 )
             required = {"contentions/count", "delay/nanoseconds"}
             return "PeriodType: contentions count" in lines and required <= sample_types
@@ -1377,7 +1382,15 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             except OSError as exc:
                 errors.append(f"cannot read profile {position}: {exc}")
             else:
-                if not _valid_profile_payload(kind, profile_path, profile_data):
+                decoder = None
+                if isinstance(kind, str):
+                    if kind in PPROF_PROFILE_KINDS or kind == "trace":
+                        decoder = "go"
+                    elif kind == "perf":
+                        decoder = "perf"
+                if decoder is not None and shutil.which(decoder) is None:
+                    errors.append(f"profile {position} requires unavailable native decoder: {decoder}")
+                elif not _valid_profile_payload(kind, profile_path, profile_data):
                     errors.append(f"profile {position} content does not match a supported kind")
 
     if all(stage in stage_events for stage in ("load_start", "load_end", "drain_checkpoint", "optimize_end", "graceful_close", "cold_open_ready")):
