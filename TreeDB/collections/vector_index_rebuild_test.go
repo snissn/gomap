@@ -253,6 +253,13 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	timing := status.ColumnGraphBuild
+	if timing.Total == 0 || timing.Snapshot == 0 || timing.RowExtraction == 0 || timing.AssetPreparation == 0 || timing.ManifestFinalization == 0 || timing.Publication == 0 {
+		t.Fatalf("empty rebuild timing=%+v want completed stages", timing)
+	}
+	if timing.AdjacencyBuild != 0 || timing.LocalityRemap != 0 || timing.Total < timing.Snapshot+timing.RowExtraction+timing.Publication || timing.Publication < timing.AssetPreparation {
+		t.Fatalf("empty rebuild timing=%+v has invalid reconciliation", timing)
+	}
 	status, err = col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		t.Fatalf("second RebuildVectorIndex empty collection: %v", err)

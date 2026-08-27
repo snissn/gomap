@@ -206,12 +206,15 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	rootName := collectionColumnManifestRootName(baseMeta.Name)
 	baseManifestRootID := catalog.rootID(rootName)
 	if baseManifestRootID == 0 {
+		timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
+		rowsStarted := time.Now()
 		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+		timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
 		if err != nil {
 			return VectorIndexStatus{}, err
 		}
 		if len(rows) == 0 {
-			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay)
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay, started, &timing)
 		}
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires an initial physical column manifest root before rebuilding %d documents", name, len(rows))
 	}
@@ -512,7 +515,7 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 	return rows, true, nil
 }
 
-func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent, started time.Time, timing *ColumnGraphBuildTiming) (VectorIndexStatus, error) {
 	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -531,9 +534,19 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		if err != nil {
 			return nil, err
 		}
-		preparedAsset, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifestForPublication(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
+		prepareStarted := time.Now()
+		preparedAsset, deltaRecords, nextIdentity, err := prepareColumnVectorGraphRebuildManifestForPublicationTimed(baseMeta.Name, cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, nil, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry(), timing)
+		if timing != nil {
+			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
+		}
 		if err != nil {
 			return nil, err
+		}
+		if timing != nil {
+			timing.FileSync = preparedAsset.stableFileSync
+			timing.FileSyncCount = preparedAsset.stableContentSyncs
+			timing.NamespaceSync = preparedAsset.stableNamespaceSync
+			timing.NamespaceSyncCount = preparedAsset.stableNamespaceSyncs
 		}
 		replaceColumnVectorGraphPreparedPhysicalAsset(&prepared, preparedAsset)
 		if prepared.RowCount != 0 {
@@ -566,7 +579,11 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 		}
 		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	}
+	publicationStarted := time.Now()
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
+	if timing != nil {
+		timing.Publication = collectionObservedElapsedSince(publicationStarted)
+	}
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -577,7 +594,16 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return c.columnGraphVectorIndexStatus(def.Name)
+	status, err := c.columnGraphVectorIndexStatus(def.Name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if timing != nil {
+		timing.Total = collectionObservedElapsedSince(started)
+		status.Duration = timing.Total
+		status.ColumnGraphBuild = *timing
+	}
+	return status, nil
 }
 
 func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) VectorIndexStatus {
