@@ -1368,16 +1368,30 @@ class QdrantMinimaRunner:
                 "optimizations": bounded_optimization_snapshot(),
                 "resource_sample_index": resource_index,
             }
+            ready_metadata = (
+                snapshot["status"] == "green"
+                and optimizer_is_ok(optimizer)
+                and all(field in schema for field in self.config["scalar_fields"])
+            )
+            if ready_metadata and expected_count is not None:
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    try:
+                        exact = self.client.count(
+                            collection_name=self.collection, count_filter=None, exact=True,
+                            timeout=min(self.operation_timeout, remaining),
+                        )
+                        snapshot["exact_points_count"] = getattr(exact, "count", None)
+                    except Exception as exc:
+                        snapshot["exact_count_error"] = f"{type(exc).__name__}: {exc}"
             snapshots = session["snapshots"]
             if len(snapshots) == READINESS_SNAPSHOT_LIMIT:
                 del snapshots[1]
                 session["snapshots_dropped"] += 1
             snapshots.append(snapshot)
             if (
-                snapshot["status"] == "green"
-                and optimizer_is_ok(optimizer)
-                and (expected_count is None or snapshot["points_count"] == expected_count)
-                and all(field in schema for field in self.config["scalar_fields"])
+                ready_metadata
+                and (expected_count is None or snapshot.get("exact_points_count") == expected_count)
             ):
                 finish("ready")
                 return

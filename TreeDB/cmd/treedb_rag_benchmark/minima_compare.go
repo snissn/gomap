@@ -169,6 +169,7 @@ type minimaRawQdrantReadinessSnapshot struct {
 	PayloadSchema       map[string]json.RawMessage          `json:"payload_schema"`
 	Config              json.RawMessage                     `json:"config"`
 	Optimizations       minimaRawQdrantOptimizationSnapshot `json:"optimizations"`
+	ExactPointsCount    *int                                `json:"exact_points_count"`
 }
 
 type minimaRawQdrantReadinessSession struct {
@@ -470,14 +471,37 @@ func minimaRawJSONMatchesConfiguration(raw json.RawMessage, encoded string) bool
 	return reflect.DeepEqual(actual, expected)
 }
 
+func minimaJSONContainsExpected(actual, expected any) bool {
+	expectedMap, ok := expected.(map[string]any)
+	if !ok {
+		return reflect.DeepEqual(actual, expected)
+	}
+	actualMap, ok := actual.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, expectedValue := range expectedMap {
+		actualValue, exists := actualMap[key]
+		if !exists || !minimaJSONContainsExpected(actualValue, expectedValue) {
+			return false
+		}
+	}
+	return true
+}
+
 func minimaQdrantCollectionConfigMatches(raw json.RawMessage, hnsw, optimizer string) bool {
 	var config struct {
 		HNSW      json.RawMessage `json:"hnsw_config"`
 		Optimizer json.RawMessage `json:"optimizer_config"`
 	}
+	var actualHNSW, actualOptimizer, expectedHNSW, expectedOptimizer any
 	return json.Unmarshal(raw, &config) == nil &&
-		minimaRawJSONMatchesConfiguration(config.HNSW, hnsw) &&
-		minimaRawJSONMatchesConfiguration(config.Optimizer, optimizer)
+		json.Unmarshal(config.HNSW, &actualHNSW) == nil &&
+		json.Unmarshal(config.Optimizer, &actualOptimizer) == nil &&
+		json.Unmarshal([]byte(hnsw), &expectedHNSW) == nil &&
+		json.Unmarshal([]byte(optimizer), &expectedOptimizer) == nil &&
+		minimaJSONContainsExpected(actualHNSW, expectedHNSW) &&
+		minimaJSONContainsExpected(actualOptimizer, expectedOptimizer)
 }
 
 func minimaQdrantOptimizerReady(raw json.RawMessage) bool {
@@ -491,7 +515,7 @@ func minimaQdrantOptimizerReady(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &status) == nil && status.OK != nil && *status.OK
 }
 
-func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence) error {
+func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaBackendEvidence, expectedSessions int) error {
 	transition := raw.CollectionConfigurationTransition
 	if transition.Boundary != "initial_batch_insert_to_warmup_search" ||
 		!transition.Attempted || !transition.Completed || transition.Error != "" {
@@ -519,7 +543,7 @@ func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaB
 		return fmt.Errorf("minima artifact: Qdrant effective production configuration is unproven")
 	}
 	readiness := raw.Readiness
-	if len(readiness.Sessions) < 2 || readiness.LatestNonReadyDisposition != "none" ||
+	if len(readiness.Sessions) != expectedSessions || readiness.LatestNonReadyDisposition != "none" ||
 		readiness.Sessions[0].Phase != "initial_upload_collection_created" ||
 		readiness.Sessions[1].Phase != "initial_load_to_query" ||
 		readiness.Sessions[0].ExpectedPointsCount == nil ||
@@ -538,14 +562,15 @@ func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaB
 		snapshot := session.Snapshots[len(session.Snapshots)-1]
 		if snapshot.Status != "green" || !minimaQdrantOptimizerReady(snapshot.OptimizerStatus) ||
 			snapshot.PointsCount == nil || *snapshot.PointsCount < 0 ||
-			snapshot.IndexedVectorsCount == nil || *snapshot.IndexedVectorsCount != *snapshot.PointsCount ||
+			snapshot.IndexedVectorsCount == nil || *snapshot.IndexedVectorsCount < 0 ||
 			snapshot.SegmentsCount == nil || *snapshot.SegmentsCount <= 0 ||
 			snapshot.PayloadSchema["user_id"] == nil || snapshot.PayloadSchema["fpath"] == nil ||
 			!snapshot.Optimizations.Available || len(snapshot.Optimizations.Detail) == 0 {
 			return fmt.Errorf("minima artifact: Qdrant readiness session %d final snapshot is incomplete", ordinal)
 		}
-		if session.ExpectedPointsCount != nil && *snapshot.PointsCount != *session.ExpectedPointsCount {
-			return fmt.Errorf("minima artifact: Qdrant readiness session %d point count mismatch", ordinal)
+		if session.ExpectedPointsCount != nil &&
+			(snapshot.ExactPointsCount == nil || *snapshot.ExactPointsCount != *session.ExpectedPointsCount) {
+			return fmt.Errorf("minima artifact: Qdrant readiness session %d exact point count mismatch", ordinal)
 		}
 		wantHNSW, wantOptimizer := minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig
 		if ordinal == 0 {
@@ -555,11 +580,11 @@ func validateMinimaQdrantReadiness(raw minimaRawBackendEvidence, backend minimaB
 			return fmt.Errorf("minima artifact: Qdrant readiness session %d configuration mismatch", ordinal)
 		}
 		var detail struct {
-			Summary json.RawMessage `json:"summary"`
-			Running json.RawMessage `json:"running"`
+			Summary map[string]any    `json:"summary"`
+			Running []json.RawMessage `json:"running"`
 		}
 		if json.Unmarshal(snapshot.Optimizations.Detail, &detail) != nil ||
-			len(detail.Summary) == 0 || len(detail.Running) == 0 {
+			detail.Summary == nil || detail.Running == nil {
 			return fmt.Errorf("minima artifact: Qdrant readiness session %d optimizer detail is incomplete", ordinal)
 		}
 	}
@@ -630,7 +655,7 @@ func validateMinimaRawEvidence(artifact *minimaArtifact, backends map[string]min
 			}
 		}
 		if name == "qdrant" {
-			if err := validateMinimaQdrantReadiness(raw, backend); err != nil {
+			if err := validateMinimaQdrantReadiness(raw, backend, len(timedPlan.Rounds)+7); err != nil {
 				return err
 			}
 		}

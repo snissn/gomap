@@ -527,9 +527,9 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		{"Qdrant effective configuration mismatch", func(a *minimaArtifact) {
 			minimaTestBackend(a, "qdrant").Configuration["effective_collection"] = `{"hnsw_config":{},"optimizer_config":{}}`
 		}},
-		{"Qdrant readiness phase omitted", func(a *minimaArtifact) {
+		{"Qdrant later readiness phase omitted", func(a *minimaArtifact) {
 			raw := a.RawEvidence["qdrant"]
-			raw.Readiness.Sessions = raw.Readiness.Sessions[:1]
+			raw.Readiness.Sessions = raw.Readiness.Sessions[:len(raw.Readiness.Sessions)-1]
 			a.RawEvidence["qdrant"] = raw
 		}},
 		{"Qdrant readiness snapshot empty", func(a *minimaArtifact) {
@@ -655,7 +655,7 @@ func validMinimaArtifact() minimaArtifact {
 			snapshot := func(points int, hnsw, optimizer string) minimaRawQdrantReadinessSnapshot {
 				return minimaRawQdrantReadinessSnapshot{
 					Status: "green", OptimizerStatus: json.RawMessage(`{"ok":true}`),
-					PointsCount: intPointer(points), IndexedVectorsCount: intPointer(points), SegmentsCount: intPointer(1),
+					PointsCount: intPointer(points), IndexedVectorsCount: intPointer(points), ExactPointsCount: intPointer(points), SegmentsCount: intPointer(1),
 					PayloadSchema: map[string]json.RawMessage{"user_id": json.RawMessage(`"keyword"`), "fpath": json.RawMessage(`"keyword"`)},
 					Config:        json.RawMessage(fmt.Sprintf(`{"hnsw_config":%s,"optimizer_config":%s}`, hnsw, optimizer)),
 					Optimizations: minimaRawQdrantOptimizationSnapshot{
@@ -663,20 +663,27 @@ func validMinimaArtifact() minimaArtifact {
 					},
 				}
 			}
-			evidence.Readiness = minimaRawQdrantReadiness{
-				Sessions: []minimaRawQdrantReadinessSession{
-					{
-						Phase: "initial_upload_collection_created", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(0),
-						Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(0, minimaQdrantInitialHNSWConfig, minimaQdrantInitialOptimizerConfig)},
-						ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
-					},
-					{
-						Phase: "initial_load_to_query", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(expectedRows),
-						Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(expectedRows, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig)},
-						ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
-					},
+			sessions := []minimaRawQdrantReadinessSession{
+				{
+					Phase: "initial_upload_collection_created", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(0),
+					Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(0, minimaQdrantInitialHNSWConfig, minimaQdrantInitialOptimizerConfig)},
+					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
 				},
-				LatestNonReadyDisposition: "none",
+				{
+					Phase: "initial_load_to_query", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(expectedRows),
+					Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(expectedRows, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig)},
+					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
+				},
+			}
+			for len(sessions) < len(timed.Rounds)+7 {
+				sessions = append(sessions, minimaRawQdrantReadinessSession{
+					Phase: "mutation_visibility", DeadlineSeconds: 600,
+					Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(expectedRows, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig)},
+					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
+				})
+			}
+			evidence.Readiness = minimaRawQdrantReadiness{
+				Sessions: sessions, LatestNonReadyDisposition: "none",
 			}
 			rawEvidence[backend.Name] = evidence
 		}

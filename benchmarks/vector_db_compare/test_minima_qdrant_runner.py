@@ -164,9 +164,12 @@ class FakeClient:
             for key in doomed:
                 self.shared.points.pop(key, None)
         self.shared.writer_completed.set()
-    def count(self, *, count_filter: Model, **_: object) -> Model:
+    def count(self, *, count_filter: Model | None, **_: object) -> Model:
         with self.shared.lock:
-            return Model(count=sum(self._matches(point, count_filter) for point in self.shared.points.values()))
+            return Model(count=sum(
+                count_filter is None or self._matches(point, count_filter)
+                for point in self.shared.points.values()
+            ))
 
     def scroll(self, *, limit: int, offset: str | None, **_: object) -> tuple[list[Model], str | None]:
         keys = sorted(self.shared.points)
@@ -527,8 +530,28 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
             for marker in ("NotImplementedError", "no optimizer diagnostic budget")
         ))
         self.assertFalse(artifact["passing"])
+
         self.assertEqual(artifact["state"], "partial")
         workload.close()
+
+    def test_readiness_uses_exact_count_not_approximate_collection_counters(self) -> None:
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.connect()
+        approximate = Model(
+            status="green", optimizer_status=Model(ok=True),
+            points_count=99, indexed_vectors_count=0, segments_count=1,
+            payload_schema={"user_id": "keyword", "fpath": "keyword"},
+            config=Model(params=Model(vectors={})),
+        )
+        with mock.patch.object(workload.client, "get_collection", return_value=approximate):
+            workload.wait_ready(expected_count=0, phase="exact_count")
+        snapshot = workload.readiness_evidence[-1]["snapshots"][-1]
+        self.assertEqual(snapshot["points_count"], 99)
+        self.assertEqual(snapshot["indexed_vectors_count"], 0)
+        self.assertEqual(snapshot["exact_points_count"], 0)
+        workload.close()
+
 
     def test_optimizer_diagnostic_uses_per_request_timeout(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
