@@ -882,12 +882,15 @@ def _valid_pprof_listen_address(value: str) -> bool:
         if closing < 0 or value[closing + 1:closing + 2] != ":":
             return False
         host = value[1:closing]
-        if ":" in value[closing + 2:]:
+        port = value[closing + 2:]
+        if ":" in port:
             return False
     else:
         if value.count(":") != 1:
             return False
-        host, _ = value.rsplit(":", 1)
+        host, port = value.rsplit(":", 1)
+    if "%" in host or re.fullmatch(r"[0-9]{1,5}", port) is None or not 1 <= int(port) <= 65535:
+        return False
     if host == "localhost":
         return True
     try:

@@ -86,7 +86,9 @@ must be non-empty, match `service.data_dir`, and resolve to the artifact-owned
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. A nonempty effective `pprof` address must
-parse as a loopback-only host and port. `PerformanceCustomDataset` cannot complete until H2 binds its
+use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
+65535; port zero is excluded because the service does not publish the selected
+ephemeral diagnostics port. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries
 name existing before/after event sequences and use the same checksum as their
 raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,

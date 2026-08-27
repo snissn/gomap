@@ -995,10 +995,11 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertTrue(got["complete"], got)
 
     def test_service_pprof_address_matches_loopback_listener_contract(self) -> None:
-        valid = ("", "127.0.0.1:6060", "localhost:6060", "[::1]:6060")
+        valid = ("", "127.0.0.1:6060", "localhost:6060", "[::1]:6060", "127.0.0.1:65535")
         invalid = (
             "localhost", "127.0.0.1", ":6060", "0.0.0.0:6060", "[::]:6060",
-            "192.0.2.1:6060", "example.com:6060",
+            "192.0.2.1:6060", "example.com:6060", "127.0.0.1:", "127.0.0.1:0",
+            "127.0.0.1:http", "127.0.0.1:65536", "[::1%lo]:6060",
         )
         for address in valid:
             with self.subTest(pprof=address):
