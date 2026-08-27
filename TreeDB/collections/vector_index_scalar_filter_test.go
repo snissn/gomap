@@ -882,6 +882,113 @@ func TestNativeScalarPublicationSnapshotsOnlyMutableTail(t *testing.T) {
 	}
 }
 
+func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
+	const (
+		rows             = 5200
+		eligibleStart    = 1000
+		seedRegionEnd    = 1040
+		bridgeEnd        = 1100
+		eligibleEnd      = 5157
+		topK             = 5
+		efSearch         = 16
+		explorationLimit = efSearch * nativeScalarANNVisitFactor
+	)
+	nodes := make([]vectorIndexNode, rows)
+	column := newVectorIndexScalarColumn(IndexValueString)
+	for row := range nodes {
+		eligible := row == 0 || row >= eligibleStart && row < seedRegionEnd ||
+			row >= bridgeEnd && row < eligibleEnd
+		tenant := []byte("beta")
+		vector := []float32{1, 0}
+		if eligible {
+			tenant = []byte("alpha")
+			vector = []float32{0, 1}
+		}
+		if row >= bridgeEnd && row < eligibleEnd {
+			score := 0.9 - 0.0001*float32(row-bridgeEnd)
+			vector = []float32{score, float32(math.Sqrt(float64(1 - score*score)))}
+		}
+		normSquared := float64(vector[0]*vector[0] + vector[1]*vector[1])
+		nodes[row] = vectorIndexNode{
+			documentID:    []byte(fmt.Sprintf("doc-%05d", row)),
+			vector:        vector,
+			normSquared:   normSquared,
+			cachedInvNorm: float32(1 / math.Sqrt(normSquared)),
+			neighbors:     make([][]vectorIndexNeighbor, 1),
+		}
+		column.appendPrevalidated(tenant, true)
+	}
+	for row := 0; row+1 < eligibleStart; row++ {
+		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: row + 1})
+		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: row})
+	}
+	for row := eligibleStart; row+1 < eligibleEnd; row++ {
+		nodes[row].neighbors[0] = append(nodes[row].neighbors[0], vectorIndexNeighbor{nodeID: row + 1})
+		nodes[row+1].neighbors[0] = append(nodes[row+1].neighbors[0], vectorIndexNeighbor{nodeID: row})
+	}
+	columns := map[string]vectorIndexScalarColumn{"tenant_idx": column}
+	plan := &nativeScalarFilterExecution{
+		identity: NativeScalarFilterPlanVectorAligned,
+		clauses: []nativeScalarClause{{
+			indexName: "tenant_idx", lower: []byte("alpha"), upper: []byte("alpha"),
+			lowerInclusive: true, upperInclusive: true,
+		}},
+	}
+	query := []float32{1, 0}
+	view := &vectorIndexSearchView{
+		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
+		dimensions: 2, m: 8, efSearch: efSearch,
+	}
+	runtime := VectorIndex{
+		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
+		dimensions: 2, m: 8, efSearch: efSearch,
+		nodes: nodes, entry: 0,
+	}
+
+	var ordinaryScratch vectorIndexSearchScratch
+	ordinary := runtime.searchCandidatesLocked(query, 1, nil, explorationLimit, &ordinaryScratch)
+	for _, candidate := range ordinary {
+		node := &nodes[candidate.nodeID]
+		if plan.matches(columns, candidate.nodeID, node.documentID) {
+			t.Fatalf("ordinary bounded global frontier unexpectedly reached eligible row %d", candidate.nodeID)
+		}
+	}
+
+	var scratch vectorIndexSearchScratch
+	var results []VectorIndexSearchResult
+	var resultIDBytes []byte
+	got, work, err := searchVectorIndexViewPlaneNativeScalar(
+		query, 1, nil, topK, efSearch,
+		nodes, 0, 0, columns, nil, plan, view, false,
+		&scratch, &results, &resultIDBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != topK {
+		t.Fatalf("filtered result count=%d want=%d work=%+v", len(got), topK, work)
+	}
+	for rank, result := range got {
+		want := fmt.Sprintf("doc-%05d", bridgeEnd+rank)
+		if string(result.ID) != want {
+			t.Fatalf("rank %d id=%q want=%q results=%+v", rank, result.ID, want, got)
+		}
+		nodeID := bridgeEnd + rank
+		if !plan.matches(columns, nodeID, nodes[nodeID].documentID) {
+			t.Fatalf("rank %d leaked nonmatching tenant id=%q", rank, result.ID)
+		}
+	}
+	if work.eligibleSeeds <= 0 || work.eligibleSeeds > nativeScalarANNSeedLimit {
+		t.Fatalf("eligible seeds=%d want 1..%d", work.eligibleSeeds, nativeScalarANNSeedLimit)
+	}
+	if work.seedRowsVisited > nativeScalarANNSeedProbeLimit ||
+		work.scored > explorationLimit ||
+		work.visited != work.seedRowsVisited+work.scored ||
+		work.admitted != topK || work.underfill {
+		t.Fatalf("unbounded or dishonest scalar ANN work=%+v score_limit=%d", work, explorationLimit)
+	}
+}
+
 func TestNativeScalarANNReusesSearchBufferScratch(t *testing.T) {
 	idx, query := newNativeScalarExecutorBenchmarkIndex(t, 2, 8192)
 	view := idx.searchView.Load()
@@ -890,8 +997,22 @@ func TestNativeScalarANNReusesSearchBufferScratch(t *testing.T) {
 		sourceGeneration: view.sourceDocumentGeneration,
 	}
 	var buffer VectorIndexSearchBuffer
-	if results, _, _, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer); err != nil || len(results) != 10 {
+	results, _, work, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 10, 64, plan, &buffer)
+	if err != nil || len(results) != 10 {
 		t.Fatalf("warm filtered ANN results=%d err=%v", len(results), err)
+	}
+	if work.seedRowsVisited <= 0 || work.seedRowsVisited > nativeScalarANNSeedProbeLimit ||
+		work.eligibleSeeds <= 0 || work.eligibleSeeds > nativeScalarANNSeedLimit ||
+		work.visited != work.seedRowsVisited+work.scored {
+		t.Fatalf("all-match route reported unbounded or dishonest seeded work: %+v", work)
+	}
+	var tinyBuffer VectorIndexSearchBuffer
+	tinyResults, _, tinyWork, err := idx.searchGraphOnlyWithNativeScalarFilterBuffer(query, 1, 1, plan, &tinyBuffer)
+	if err != nil || len(tinyResults) != 1 || string(tinyResults[0].ID) != "doc-00000" {
+		t.Fatalf("tiny-budget all-match results=%+v err=%v work=%+v", tinyResults, err, tinyWork)
+	}
+	if tinyWork.scored > nativeScalarANNVisitFactor || tinyWork.eligibleSeeds > nativeScalarANNVisitFactor/4 {
+		t.Fatalf("tiny-budget seeded work exceeded reserved navigation bound: %+v", tinyWork)
 	}
 	visited := &buffer.nativeSearchScratch.visitedEpochs[0]
 	allocs := testing.AllocsPerRun(100, func() {
