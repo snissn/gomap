@@ -28,6 +28,7 @@ SERVICE_LOG_TAIL_BYTES = 64 << 10
 DIAGNOSTICS_STATS_PATH = "/debug/treedb/stats"
 DIAGNOSTIC_CAPTURE_BYTES = 32 << 20
 DIAGNOSTIC_STATS_BYTES = 4 << 20
+STATE_SCROLL_PAGE_SIZE = 65536
 DIAGNOSTIC_PROFILE_ENDPOINTS = {
     "cpu": ("/debug/pprof/profile", "cpu.pprof"),
     "goroutine": ("/debug/pprof/goroutine?debug=2", "goroutine.txt"),
@@ -723,10 +724,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         after_id: str | None = None
         while True:
             result = self.client.filter_documents(
-                self.collection, limit=1024, return_embedding=True,
+                self.collection, limit=STATE_SCROLL_PAGE_SIZE, return_embedding=True,
                 after_id=after_id, cursor_page=True,
             )
-            if result.matched_count != len(result.documents) or len(result.documents) > 1024:
+            if result.matched_count != len(result.documents) or len(result.documents) > STATE_SCROLL_PAGE_SIZE:
                 raise RuntimeError("TreeDB cursor page count exceeds its bounded response")
             for row in result.documents:
                 document = {"id": row.id, "content": row.content, "vector": row.embedding,
