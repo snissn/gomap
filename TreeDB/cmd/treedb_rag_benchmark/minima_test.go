@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -516,6 +517,26 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 			raw.Readiness.Sessions[0].Outcome = "timeout"
 			a.RawEvidence["qdrant"] = raw
 		}},
+		{"Qdrant transition and configuration jointly doctored", func(a *minimaArtifact) {
+			doctored := `{"m":0,"ef_construct":100,"full_scan_threshold":10000,"max_indexing_threads":0,"on_disk":false}`
+			raw := a.RawEvidence["qdrant"]
+			raw.CollectionConfigurationTransition.ProductionHNSW = json.RawMessage(doctored)
+			a.RawEvidence["qdrant"] = raw
+			minimaTestBackend(a, "qdrant").Configuration["production_hnsw"] = doctored
+		}},
+		{"Qdrant effective configuration mismatch", func(a *minimaArtifact) {
+			minimaTestBackend(a, "qdrant").Configuration["effective_collection"] = `{"hnsw_config":{},"optimizer_config":{}}`
+		}},
+		{"Qdrant readiness phase omitted", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.Readiness.Sessions = raw.Readiness.Sessions[:1]
+			a.RawEvidence["qdrant"] = raw
+		}},
+		{"Qdrant readiness snapshot empty", func(a *minimaArtifact) {
+			raw := a.RawEvidence["qdrant"]
+			raw.Readiness.Sessions[1].Snapshots[0] = minimaRawQdrantReadinessSnapshot{}
+			a.RawEvidence["qdrant"] = raw
+		}},
 		{"missing reopen", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.Attempted = false }},
 		{"wrong nonempty reopen hash", func(a *minimaArtifact) { minimaTestBackend(a, "treedb").Reopen.ResultManifestHash = "wrong" }},
 		{"backend reopen hash mismatch", func(a *minimaArtifact) { minimaTestBackend(a, "qdrant").Reopen.ResultManifestHash = "different" }},
@@ -558,8 +579,10 @@ func validMinimaArtifact() minimaArtifact {
 	backends := []minimaBackendEvidence{
 		{Name: "treedb", ServerVersion: "test", ClientVersion: "test", Durability: "wal_sync", Configuration: map[string]string{"effective": "test"}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 		{Name: "qdrant", ServerVersion: "test", ClientVersion: "test", Durability: "wal", Configuration: map[string]string{
-			"effective": "test", "initial_upload_hnsw": `{"m":0}`, "initial_upload_optimizers": `{"indexing_threshold":0}`,
-			"production_hnsw": `{"m":16}`, "production_optimizers": `{"indexing_threshold":20000}`,
+			"effective":           "test",
+			"initial_upload_hnsw": minimaQdrantInitialHNSWConfig, "initial_upload_optimizers": minimaQdrantInitialOptimizerConfig,
+			"production_hnsw": minimaQdrantProductionHNSWConfig, "production_optimizers": minimaQdrantProductionOptimizerConfig,
+			"effective_collection": fmt.Sprintf(`{"hnsw_config":%s,"optimizer_config":%s}`, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig),
 		}, Environment: minimaTestEnvironment(), Manifest: hashes, Operations: operations, Reopen: minimaReopenEvidence{Attempted: true, CommittedParity: true, ResultManifestHash: manifest.ExpectedStateSHA256}},
 	}
 	queries := minimaQueryMap(&manifest)
@@ -625,16 +648,34 @@ func validMinimaArtifact() minimaArtifact {
 			evidence := rawEvidence[backend.Name]
 			evidence.CollectionConfigurationTransition = minimaRawQdrantConfigurationTransition{
 				Boundary: "initial_batch_insert_to_warmup_search", Attempted: true, Completed: true,
-				InitialUploadHNSW: json.RawMessage(`{"m":0}`), InitialUploadOptimizers: json.RawMessage(`{"indexing_threshold":0}`),
-				ProductionHNSW: json.RawMessage(`{"m":16}`), ProductionOptimizers: json.RawMessage(`{"indexing_threshold":20000}`),
+				InitialUploadHNSW: json.RawMessage(minimaQdrantInitialHNSWConfig), InitialUploadOptimizers: json.RawMessage(minimaQdrantInitialOptimizerConfig),
+				ProductionHNSW: json.RawMessage(minimaQdrantProductionHNSWConfig), ProductionOptimizers: json.RawMessage(minimaQdrantProductionOptimizerConfig),
+			}
+			intPointer := func(value int) *int { return &value }
+			snapshot := func(points int, hnsw, optimizer string) minimaRawQdrantReadinessSnapshot {
+				return minimaRawQdrantReadinessSnapshot{
+					Status: "green", OptimizerStatus: json.RawMessage(`{"ok":true}`),
+					PointsCount: intPointer(points), IndexedVectorsCount: intPointer(points), SegmentsCount: intPointer(1),
+					PayloadSchema: map[string]json.RawMessage{"user_id": json.RawMessage(`"keyword"`), "fpath": json.RawMessage(`"keyword"`)},
+					Config:        json.RawMessage(fmt.Sprintf(`{"hnsw_config":%s,"optimizer_config":%s}`, hnsw, optimizer)),
+					Optimizations: minimaRawQdrantOptimizationSnapshot{
+						Available: true, Detail: json.RawMessage(`{"summary":{},"running":[]}`),
+					},
+				}
 			}
 			evidence.Readiness = minimaRawQdrantReadiness{
-				Sessions: []minimaRawQdrantReadinessSession{{
-					Phase: "qualification", DeadlineSeconds: 600,
-					Snapshots:       []json.RawMessage{json.RawMessage(`{"status":"green"}`)},
-					ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)},
-					Outcome:         "ready", Disposition: "ready",
-				}},
+				Sessions: []minimaRawQdrantReadinessSession{
+					{
+						Phase: "initial_upload_collection_created", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(0),
+						Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(0, minimaQdrantInitialHNSWConfig, minimaQdrantInitialOptimizerConfig)},
+						ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
+					},
+					{
+						Phase: "initial_load_to_query", DeadlineSeconds: 600, ExpectedPointsCount: intPointer(expectedRows),
+						Snapshots:       []minimaRawQdrantReadinessSnapshot{snapshot(expectedRows, minimaQdrantProductionHNSWConfig, minimaQdrantProductionOptimizerConfig)},
+						ResourceSamples: []json.RawMessage{json.RawMessage(`{"captured":true}`)}, Outcome: "ready", Disposition: "ready",
+					},
+				},
 				LatestNonReadyDisposition: "none",
 			}
 			rawEvidence[backend.Name] = evidence

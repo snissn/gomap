@@ -1151,7 +1151,7 @@ class QdrantMinimaRunner:
             return {"available": False, "reason": "qdrant-client get_optimizations unavailable"}
         try:
             if timeout_seconds is None:
-                detail = method(collection_name=self.collection, completed_limit=16)
+                detail = method(collection_name=self.collection, _with="completed", completed_limit=16)
             elif timeout_seconds <= 0:
                 return {"available": False, "reason": "readiness deadline has no optimizer diagnostic budget"}
             else:
@@ -1161,7 +1161,7 @@ class QdrantMinimaRunner:
                 request = getattr(api_client, "request", None)
                 if remote is None:
                     # Test/local clients have no remote HTTP transport.
-                    detail = method(collection_name=self.collection, completed_limit=16)
+                    detail = method(collection_name=self.collection, _with="completed", completed_limit=16)
                 elif not callable(request) or response_type is None:
                     return {
                         "available": False,
@@ -1172,7 +1172,7 @@ class QdrantMinimaRunner:
                         type_=response_type, method="GET",
                         url="/collections/{collection_name}/optimizations",
                         path_params={"collection_name": self.collection},
-                        params={"completed_limit": 16}, timeout=timeout_seconds,
+                        params={"with": "completed", "completed_limit": 16}, timeout=timeout_seconds,
                     )
                     detail = getattr(response, "result", response)
             return {"available": True, "detail": model_value(detail)}

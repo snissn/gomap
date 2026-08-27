@@ -537,7 +537,7 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
         snapshot = workload.optimization_snapshot(0.25)
         self.assertTrue(snapshot["available"])
         self.assertEqual(request.call_args.kwargs["timeout"], 0.25)
-        self.assertEqual(request.call_args.kwargs["params"], {"completed_limit": 16})
+        self.assertEqual(request.call_args.kwargs["params"], {"with": "completed", "completed_limit": 16})
         workload.close()
 
     def test_readiness_deduplicates_unchanged_server_log_tail(self) -> None:
