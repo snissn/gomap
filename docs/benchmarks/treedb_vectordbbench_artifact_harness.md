@@ -63,7 +63,10 @@ startup -> reset -> load_start -> load_end -> drain_checkpoint
 
 For a completed lifecycle, both `reset` and `load_start` must report zero for
 all four row counts. `teardown` must be the final event and must retain the
-exact expected row counts.
+exact expected row counts. The command-WAL profiles must also report positive
+WAL frontier and cumulative bytes at `load_end` after accepted rows and at
+`drain_checkpoint` after durable rows; `no_wal_fast` and partial streams are
+exempt from this completion proof.
 
 The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,

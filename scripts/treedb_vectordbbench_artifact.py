@@ -1089,9 +1089,13 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     )
     for name, actual, width in identities:
         declared = identity.get(name)
-        if not re.fullmatch(rf"[0-9a-f]{{{width}}}", str(actual or "")):
+        actual_valid = isinstance(actual, str) and re.fullmatch(rf"[0-9a-f]{{{width}}}", actual)
+        declared_valid = isinstance(declared, str) and re.fullmatch(rf"[0-9a-f]{{{width}}}", declared)
+        if not actual_valid:
             errors.append(f"manifest {name} is missing or invalid")
-        elif declared != actual:
+        if not declared_valid:
+            errors.append(f"lifecycle identity {name} is missing or invalid")
+        elif actual_valid and declared != actual:
             errors.append(f"lifecycle identity {name} does not match manifest")
     if gomap.get("dirty") is not False or vectordbbench.get("dirty") is not False:
         errors.append("gomap and VectorDBBench checkouts must be clean")
@@ -1256,6 +1260,24 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         errors.append("lifecycle.result_status must be completed, partial, or interrupted")
     if status != "completed":
         completion_errors.append(f"result_status is {status!r}, not 'completed'")
+    service_profile = service.get("profile")
+    if (
+        status == "completed"
+        and isinstance(service_profile, str)
+        and service_profile in {"command_wal_durable", "command_wal_relaxed"}
+    ):
+        for stage, row_count in (("load_end", "server_accepted"), ("drain_checkpoint", "server_durable")):
+            state = (stage_events.get(stage) or {}).get("state")
+            rows = state.get("rows") if isinstance(state, dict) else None
+            wal = state.get("wal") if isinstance(state, dict) else None
+            progress = rows.get(row_count) if isinstance(rows, dict) else None
+            if isinstance(progress, int) and not isinstance(progress, bool) and progress > 0:
+                for key in ("frontier", "bytes_written_total"):
+                    value = wal.get(key) if isinstance(wal, dict) else None
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        completion_errors.append(
+                            f"stage {stage} requires positive wal.{key} after positive rows.{row_count}"
+                        )
     if events:
         report["last_stage"] = events[-1].get("stage")
         if report["last_stage"] != "teardown":

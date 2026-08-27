@@ -688,6 +688,52 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
 
+    def test_manifest_and_lifecycle_identities_must_be_strings(self) -> None:
+        cases = (
+            (
+                "manifest-gomap",
+                lambda row: row["context"]["gomap"].__setitem__("commit", int("1" * 40)),
+                "manifest gomap_commit",
+            ),
+            (
+                "manifest-vdb",
+                lambda row: row["context"]["vectordbbench"].__setitem__("commit", int("2" * 40)),
+                "manifest vectordbbench_commit",
+            ),
+            (
+                "manifest-binary",
+                lambda row: row["service"]["binary"].__setitem__("sha256", int("3" * 64)),
+                "manifest service_binary_sha256",
+            ),
+            (
+                "identity-gomap",
+                lambda row: row["lifecycle"]["identity"].__setitem__("gomap_commit", int("1" * 40)),
+                "identity gomap_commit",
+            ),
+            (
+                "identity-vdb",
+                lambda row: row["lifecycle"]["identity"].__setitem__("vectordbbench_commit", int("2" * 40)),
+                "identity vectordbbench_commit",
+            ),
+            (
+                "identity-binary",
+                lambda row: row["lifecycle"]["identity"].__setitem__("service_binary_sha256", int("3" * 64)),
+                "identity service_binary_sha256",
+            ),
+        )
+        for label, mutation, expected in cases:
+            with self.subTest(identity=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
+
     def test_effective_service_and_harness_config_must_be_present(self) -> None:
         mutations = (
             (lambda row: row["service"].__setitem__("profile", ""), "service.profile"),
@@ -1127,6 +1173,46 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["complete"])
                 self.assertTrue(any(expected in item for item in got["errors"]), got)
+
+    def test_completed_wal_profiles_require_progress_with_no_wal_and_partial_exemptions(self) -> None:
+        for profile in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
+            with self.subTest(profile=profile):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    manifest["service"]["profile"] = profile
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    for event in events:
+                        event["state"]["wal"] = {"frontier": 0, "bytes_written_total": 0}
+                    rewrite_lifecycle_fixture(root, manifest, events)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                if profile == "no_wal_fast":
+                    self.assertTrue(got["complete"], got)
+                else:
+                    self.assertTrue(got["analyzable"], got)
+                    self.assertFalse(got["complete"], got)
+                    self.assertTrue(
+                        any("requires positive wal.frontier" in item for item in got["completion_errors"]), got,
+                    )
+                    self.assertTrue(
+                        any("requires positive wal.bytes_written_total" in item for item in got["completion_errors"]),
+                        got,
+                    )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["lifecycle"]["result_status"] = "partial"
+            manifest["lifecycle"]["profiles"] = []
+            for event in events:
+                event["state"]["wal"] = {"frontier": 0, "bytes_written_total": 0}
+            rewrite_lifecycle_fixture(root, manifest, events[:4])
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+
+        self.assertEqual(exit_code, 0)
 
     def test_empty_counters_are_structurally_invalid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
