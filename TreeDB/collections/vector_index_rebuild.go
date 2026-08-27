@@ -146,6 +146,8 @@ func registerColumnVectorGraphDurablePublication(ctx backenddb.CommandWALPublish
 }
 
 func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+	started := time.Now()
+	var timing ColumnGraphBuildTiming
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -161,6 +163,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, err
 	}
 
+	snapshotStarted := time.Now()
 	snap := c.db.AcquireStableSnapshot()
 	if snap == nil {
 		return VectorIndexStatus{}, backenddb.ErrClosed
@@ -231,6 +234,8 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, baseMeta.Name, "column vector graph rebuild"); err != nil {
 		return VectorIndexStatus{}, err
 	}
+	timing.Snapshot = collectionObservedElapsedSince(snapshotStarted)
+	rowsStarted := time.Now()
 	rows, usedTypedColumns, err := c.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap, catalog, *cfg, records, manifest, def)
 	if err == nil && !usedTypedColumns {
 		rows, err = c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
@@ -243,9 +248,10 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			return VectorIndexStatus{}, err
 		}
 	}
+	timing.RowExtraction = collectionObservedElapsedSince(rowsStarted)
 	runColumnVectorGraphRebuildBeforeBuildTestHook()
 
-	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
+	if err := buildColumnVectorGraphAdjacencyTimed(rows, def, &timing); err != nil {
 		return VectorIndexStatus{}, err
 	}
 	rootNames := []string{rootName}
@@ -263,7 +269,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 			var deltaRecords []columnManifestRecord
 			var nextIdentity ColumnManifestIdentity
+			prepareStarted := time.Now()
 			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifestForPublication(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir(), c.db.StableResourceIdentityPinRegistry())
+			timing.AssetPreparation = collectionObservedElapsedSince(prepareStarted)
 			if prepareErr != nil {
 				return nil, prepareErr
 			}
@@ -303,7 +311,9 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			}
 			return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		}
+		publicationStarted := time.Now()
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
+		timing.Publication = collectionObservedElapsedSince(publicationStarted)
 		if err != nil {
 			return VectorIndexStatus{}, err
 		}
@@ -317,7 +327,14 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return c.columnGraphVectorIndexStatus(def.Name)
+	status, err := c.columnGraphVectorIndexStatus(def.Name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	timing.Total = collectionObservedElapsedSince(started)
+	status.Duration = timing.Total
+	status.ColumnGraphBuild = timing
+	return status, nil
 }
 
 func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
@@ -698,7 +715,11 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
-	return buildColumnVectorGraphAdjacencyV1(rows, def, nil, true, nil, true)
+	return buildColumnVectorGraphAdjacencyV1(rows, def, nil, true, nil, true, nil)
+}
+
+func buildColumnVectorGraphAdjacencyTimed(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, timing *ColumnGraphBuildTiming) error {
+	return buildColumnVectorGraphAdjacencyV1(rows, def, nil, true, nil, true, timing)
 }
 
 func buildColumnVectorGraphAdjacencyWithConstructionTraceV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1) error {
@@ -713,10 +734,10 @@ func buildColumnVectorGraphAdjacencyWithConstructionTraceFinalV1(rows []columnVe
 }
 
 func buildColumnVectorGraphAdjacencyWithConstructionPolicyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1) error {
-	return buildColumnVectorGraphAdjacencyV1(rows, def, trace, recordFinal, policy, false)
+	return buildColumnVectorGraphAdjacencyV1(rows, def, trace, recordFinal, policy, false, nil)
 }
 
-func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool) error {
+func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming) error {
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
@@ -732,6 +753,7 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 		}
 	}
 
+	adjacencyStarted := time.Now()
 	index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return err
@@ -759,7 +781,11 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 	// The final refinement stages have consumed this bounded offline pool.
 	// Release it before locality remapping allocates its working buffers.
 	index.qualityPostfillCandidates = nil
+	if timing != nil {
+		timing.AdjacencyBuild = collectionObservedElapsedSince(adjacencyStarted)
+	}
 
+	localityStarted := time.Now()
 	inputOrdinalByNode := make([]int, len(index.nodes))
 	for i := range inputOrdinalByNode {
 		inputOrdinalByNode[i] = -1
@@ -811,6 +837,9 @@ func buildColumnVectorGraphAdjacencyV1(rows []columnVectorGraphAssetRow, def Vec
 		if err := trace.recordFinalSurvivors(rows); err != nil {
 			return err
 		}
+	}
+	if timing != nil {
+		timing.LocalityRemap = collectionObservedElapsedSince(localityStarted)
 	}
 	return nil
 }

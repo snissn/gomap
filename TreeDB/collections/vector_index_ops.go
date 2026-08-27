@@ -25,6 +25,19 @@ type VectorIndexStatus struct {
 	Stats               VectorIndexStats
 	RebuildNeeded       bool
 	Duration            time.Duration
+	ColumnGraphBuild    ColumnGraphBuildTiming
+}
+
+// ColumnGraphBuildTiming records completed named rebuild stages.
+// It is populated only for a successful column_graph rebuild.
+type ColumnGraphBuildTiming struct {
+	Total            time.Duration
+	Snapshot         time.Duration
+	RowExtraction    time.Duration
+	AdjacencyBuild   time.Duration
+	LocalityRemap    time.Duration
+	AssetPreparation time.Duration
+	Publication      time.Duration
 }
 
 // VectorIndexStatus returns persisted-root and runtime status for a declared

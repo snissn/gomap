@@ -299,12 +299,34 @@ type VectorIndexMaintenanceStatus struct {
 	NativeRootLoaded bool                            `json:"native_root_loaded,omitempty"`
 	NativeRootBytes  int64                           `json:"native_root_bytes,omitempty"`
 	DurationNanos    int64                           `json:"duration_nanos,omitempty"`
+	ColumnGraphBuild ColumnGraphBuildTiming          `json:"column_graph_build,omitempty"`
+}
+
+// ColumnGraphBuildTiming exposes completed column_graph rebuild stages.
+// Zero fields mean the strategy did not execute that stage.
+type ColumnGraphBuildTiming struct {
+	TotalNanos            int64 `json:"total_nanos,omitempty"`
+	SnapshotNanos         int64 `json:"snapshot_nanos,omitempty"`
+	RowExtractionNanos    int64 `json:"row_extraction_nanos,omitempty"`
+	AdjacencyBuildNanos   int64 `json:"adjacency_build_nanos,omitempty"`
+	LocalityRemapNanos    int64 `json:"locality_remap_nanos,omitempty"`
+	AssetPreparationNanos int64 `json:"asset_preparation_nanos,omitempty"`
+	PublicationNanos      int64 `json:"publication_nanos,omitempty"`
+}
+
+type OptimizeIndexTiming struct {
+	TotalNanos           int64 `json:"total_nanos,omitempty"`
+	CacheInvalidateNanos int64 `json:"cache_invalidate_nanos,omitempty"`
+	RebuildNanos         int64 `json:"rebuild_nanos,omitempty"`
+	CachePrimeNanos      int64 `json:"cache_prime_nanos,omitempty"`
+	CacheWarmNanos       int64 `json:"cache_warm_nanos,omitempty"`
 }
 
 type OptimizeIndexResponse struct {
 	Index           IndexInfo                    `json:"index"`
 	VectorIndexName string                       `json:"vector_index_name"`
 	Status          VectorIndexMaintenanceStatus `json:"status"`
+	Timing          OptimizeIndexTiming          `json:"timing"`
 }
 
 // BenchmarkVectorQueryMode selects the no-document vector-index benchmark score

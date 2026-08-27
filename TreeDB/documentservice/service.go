@@ -755,6 +755,8 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 
 // OptimizeIndex rebuilds service vector assets after a benchmark load phase.
 func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeIndexRequest) (OptimizeIndexResponse, error) {
+	started := time.Now()
+	var timing OptimizeIndexTiming
 	if s == nil {
 		return OptimizeIndexResponse{}, serviceError(CodeIndexUnavailable, "document service has no collection manager")
 	}
@@ -773,26 +775,35 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 		return OptimizeIndexResponse{}, serviceErrorf(CodeInvalidRequest, "unsupported vector_index_name %q", req.VectorIndexName)
 	}
 
+	invalidateStarted := time.Now()
 	if err := s.invalidateBenchmarkSearchCache(index); err != nil {
 		return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "invalidate benchmark vector search cache before optimize failed", err)
 	}
+	timing.CacheInvalidateNanos = time.Since(invalidateStarted).Nanoseconds()
+	rebuildStarted := time.Now()
 	status, err := col.RebuildVectorIndex(vectorIndexName)
 	if err != nil {
 		return OptimizeIndexResponse{}, mapCollectionMaintenanceError("optimize vector index", err)
 	}
+	timing.RebuildNanos = time.Since(rebuildStarted).Nanoseconds()
 	maintenance := vectorIndexMaintenanceStatus(status)
 	if info.Capabilities.NoDocumentVectorSearch && maintenance.Loaded && !maintenance.RebuildNeeded {
+		primeStarted := time.Now()
 		if err := s.primeBenchmarkSearchCache(index, col, info); err != nil {
 			return OptimizeIndexResponse{}, wrapServiceError(CodeInternal, "prime benchmark vector search cache after optimize failed", err)
 		}
+		timing.CachePrimeNanos = time.Since(primeStarted).Nanoseconds()
 		if info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+			warmStarted := time.Now()
 			if err := s.warmBenchmarkSearchCache(ctx, index, info, vectorIndexName); err != nil {
 				_ = s.invalidateBenchmarkSearchCache(index)
 				return OptimizeIndexResponse{}, err
 			}
+			timing.CacheWarmNanos = time.Since(warmStarted).Nanoseconds()
 		}
 	}
-	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance}, nil
+	timing.TotalNanos = time.Since(started).Nanoseconds()
+	return OptimizeIndexResponse{Index: info, VectorIndexName: vectorIndexName, Status: maintenance, Timing: timing}, nil
 }
 
 // SearchBenchmarkVector runs fail-closed no-document vector-index benchmark
@@ -1738,6 +1749,15 @@ func vectorIndexMaintenanceStatus(status collections.VectorIndexStatus) VectorIn
 		NativeRootLoaded: status.NativeRootLoaded,
 		NativeRootBytes:  status.NativeRootBytes,
 		DurationNanos:    status.Duration.Nanoseconds(),
+		ColumnGraphBuild: ColumnGraphBuildTiming{
+			TotalNanos:            status.ColumnGraphBuild.Total.Nanoseconds(),
+			SnapshotNanos:         status.ColumnGraphBuild.Snapshot.Nanoseconds(),
+			RowExtractionNanos:    status.ColumnGraphBuild.RowExtraction.Nanoseconds(),
+			AdjacencyBuildNanos:   status.ColumnGraphBuild.AdjacencyBuild.Nanoseconds(),
+			LocalityRemapNanos:    status.ColumnGraphBuild.LocalityRemap.Nanoseconds(),
+			AssetPreparationNanos: status.ColumnGraphBuild.AssetPreparation.Nanoseconds(),
+			PublicationNanos:      status.ColumnGraphBuild.Publication.Nanoseconds(),
+		},
 	}
 }
 

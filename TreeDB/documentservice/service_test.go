@@ -932,6 +932,13 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 	if !optimize.Status.Loaded || optimize.Status.RebuildNeeded {
 		t.Fatalf("optimize status=%+v", optimize.Status)
 	}
+	if optimize.Timing.TotalNanos == 0 || optimize.Timing.CacheInvalidateNanos == 0 || optimize.Timing.RebuildNanos == 0 || optimize.Timing.CachePrimeNanos == 0 || optimize.Timing.CacheWarmNanos == 0 {
+		t.Fatalf("optimize timing=%+v want completed cache and rebuild stages", optimize.Timing)
+	}
+	build := optimize.Status.ColumnGraphBuild
+	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.PublicationNanos == 0 {
+		t.Fatalf("column graph build timing=%+v want completed ordered stages", build)
+	}
 	exact, err := svc.SearchBenchmarkVector(ctx, "bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, EfSearch: 8})
 	if err != nil {
 		t.Fatalf("SearchBenchmarkVector exact: %v", err)
