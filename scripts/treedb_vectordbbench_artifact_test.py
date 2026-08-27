@@ -1038,24 +1038,45 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any("service.data_dir" in item for item in got["errors"]), got)
 
-    def test_relative_artifact_root_preserves_data_dir_binding(self) -> None:
+    def test_relative_and_symlinked_artifact_roots_preserve_data_dir_binding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             root = parent / "artifact"
             root.mkdir()
             lifecycle_fixture(root)
+            (parent / "artifact-link").symlink_to(root, target_is_directory=True)
 
             previous_cwd = Path.cwd()
             try:
                 os.chdir(parent)
                 with contextlib.redirect_stdout(io.StringIO()):
                     got = harness.validate_lifecycle_artifact(Path("artifact"))
+                    linked = harness.validate_lifecycle_artifact(Path("artifact-link"))
                     exit_code = harness.main(["--validate-lifecycle", "artifact"])
             finally:
                 os.chdir(previous_cwd)
 
         self.assertTrue(got["complete"], got)
+        self.assertTrue(linked["complete"], linked)
         self.assertEqual(exit_code, 0)
+
+    def test_artifact_data_dir_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / "artifact"
+            root.mkdir()
+            lifecycle_fixture(root)
+            external = parent / "prepopulated"
+            external.mkdir()
+            (root / "treedb-data").symlink_to(external, target_is_directory=True)
+
+            got = harness.validate_lifecycle_artifact(root)
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+
+        self.assertFalse(got["analyzable"], got)
+        self.assertTrue(any("data_dir must not be a symlink" in item for item in got["errors"]), got)
+        self.assertEqual(exit_code, 1)
 
     def test_service_binary_must_remain_an_executable_with_matching_bytes(self) -> None:
         def missing(path: Path) -> None:

@@ -1177,7 +1177,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 raise ValueError("declared and effective paths must be absolute")
             declared_resolved = declared_path.resolve(strict=False)
             effective_resolved = effective_path.resolve(strict=False)
-            expected_data_dir = (root / "treedb-data").resolve(strict=False)
+            artifact_data_dir = root / "treedb-data"
+            if artifact_data_dir.is_symlink():
+                errors.append("manifest.service.data_dir must not be a symlink")
+            expected_data_dir = artifact_data_dir.resolve(strict=False)
             if declared_resolved != effective_resolved:
                 errors.append("manifest.service.data_dir does not match the effective service -dir")
             if declared_resolved != expected_data_dir or effective_resolved != expected_data_dir:
