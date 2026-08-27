@@ -891,11 +891,11 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 			stride++
 		}
 		seedScores := 0
-		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit; ordinal++ {
+		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit && seedBudget.rows > 0; ordinal++ {
 			bucket := ordinal * stride % seedBuckets
 			start := bucket * probeRows / seedBuckets
 			end := (bucket + 1) * probeRows / seedBuckets
-			for probe := start; probe < end; probe++ {
+			for probe := start; probe < end && seedBudget.rows > 0; probe++ {
 				// Integer stratification visits every row for small graphs and
 				// evenly covers the full immutable ordinal space for large graphs.
 				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
@@ -905,19 +905,50 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
 					continue
 				}
-				visited[nodeID] = mark
-				distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
-				work.scored++
-				seedScores++
-				seedBudget.scores--
-				if math.IsInf(float64(distance), 1) {
-					continue
+				clusterStart := nodeID
+				for clusterStart > 0 && seedBudget.rows > 0 {
+					previous := clusterStart - 1
+					work.seedRowsVisited++
+					seedBudget.rows--
+					previousNode := &idx.nodes[previous]
+					if previousNode.deleted || !plan.matches(columns, previous, previousNode.documentID) {
+						break
+					}
+					clusterStart = previous
 				}
-				candidate := vectorIndexCandidate{nodeID: nodeID, distance: distance}
-				queue.push(candidate)
-				navigation.pushBounded(candidate, explorationLimit)
-				eligible.pushBounded(candidate, topK)
-				work.eligibleSeeds++
+				clusterScoreLimit := minInt(topK, seedScoreLimit-seedScores)
+				clusterScores := 0
+				for candidateID := clusterStart; candidateID < len(idx.nodes) &&
+					clusterScores < clusterScoreLimit; candidateID++ {
+					if candidateID > nodeID {
+						if seedBudget.rows <= 0 {
+							break
+						}
+						work.seedRowsVisited++
+						seedBudget.rows--
+					}
+					candidateNode := &idx.nodes[candidateID]
+					if candidateNode.deleted || !plan.matches(columns, candidateID, candidateNode.documentID) {
+						break
+					}
+					if visited[candidateID] == mark {
+						continue
+					}
+					visited[candidateID] = mark
+					distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, candidateID)
+					work.scored++
+					seedScores++
+					clusterScores++
+					seedBudget.scores--
+					if math.IsInf(float64(distance), 1) {
+						continue
+					}
+					candidate := vectorIndexCandidate{nodeID: candidateID, distance: distance}
+					queue.push(candidate)
+					navigation.pushBounded(candidate, explorationLimit)
+					eligible.pushBounded(candidate, topK)
+					work.eligibleSeeds++
+				}
 				break
 			}
 		}
