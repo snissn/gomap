@@ -61,6 +61,17 @@ startup -> reset -> load_start -> load_end -> drain_checkpoint
 -> graceful_close -> cold_open_ready -> exact_verify -> route_verify -> teardown
 ```
 
+The integrated runner creates `startup` and a `partial` lifecycle declaration
+after the service health gate but before invoking VDBBench. Here `startup`
+means the beginning of lifecycle observation, not the operating-system process
+launch instant. On a load, optimize, close, reopen, or verification
+failure it keeps only structurally complete sidecar boundaries; it never
+synthesizes a missing future stage. `graceful_close` is written only after the
+first service exits successfully, and terminal `teardown` only after the
+cold-reopened service exits successfully. The graceful-close timeout is
+configured with `--service-close-timeout` (300 seconds by default for 10M-scale
+reuse).
+
 For a completed lifecycle, both `reset` and `load_start` must report zero for
 all four row counts. `teardown` must be the final event and must retain the
 exact expected row counts. The command-WAL profiles must also report positive
@@ -68,6 +79,18 @@ WAL frontier and cumulative bytes at `load_end` after accepted rows and at
 `drain_checkpoint` after durable rows; `no_wal_fast` and partial streams are
 exempt from this completion proof. Reopened rows remain zero through
 `graceful_close` and become populated only after the cold-reopen boundary.
+For the currently supported `command_wal_durable` producer, successful insert
+responses establish the durable acknowledgement boundary. The diagnostics
+snapshot at `load_end` must independently show a positive accepted frontier,
+a durable frontier at or beyond it, and positive WAL bytes before the adapter's
+`optimize_start`; otherwise the runner fails closed rather than claiming a
+checkpoint. Load-end and optimize-start/end stages each use their own sampled
+snapshot so offline-build counters cannot be attributed to ingestion.
+The canonical sampler runs every five seconds by default and records both the
+service snapshot and filesystem WAL bytes/file count from the first pre-load
+sample onward. The checksum-bound adapter sidecar retains each equal-size batch
+completion; `lifecycle_load_milestones.json` sorts those completions by time and
+records cumulative accepted-row time and throughput.
 
 The lifecycle declaration binds the exact clean gomap and VectorDBBench
 commits, service-binary SHA-256, effective service/harness configuration,
@@ -88,8 +111,11 @@ vector count. Integer diagnostic flags must also parse within the 64-bit Go
 service's signed `flag.Int` range. A nonempty effective `pprof` address must
 use an unscoped loopback host and an ASCII-decimal TCP port from 1 through
 65535; port zero is excluded because the service does not publish the selected
-ephemeral diagnostics port. `PerformanceCustomDataset` cannot complete until H2 binds its
-selected result's task-config dataset shape into this artifact. Profile entries
+ephemeral diagnostics port. `PerformanceCustomDataset` additionally binds the
+unique canonical result file and task-config checksum, verifies its size and
+dimension against the lifecycle declaration, resolves the exact one-file
+`train.parquet` or `shuffle_train.parquet` selection, and hashes those actual
+dataset bytes. Profile entries
 name existing before/after event sequences and use the same checksum as their
 raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,
 `block`, and `mutex` as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
@@ -103,11 +129,18 @@ file that the native trace decoder accepts, and Linux `perf` as a `.data` file
 with bounded header sections that native `perf script` can decode while walking
 samples. Profile validation is an offline correctness gate and invokes the
 corresponding native decoder once per profile. The optimized index identity and durable `asset_generation`
-must survive close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
-root ID, not the service's reopen-local generation counter. The artifact-owned
+must survive close and cold reopen. For a `column_graph`, H2 uses the positive index generation paired
+with `column_graph_loaded` and requires the cold-reopened index to report that same generation. For a
+`native_runtime` index, H2 uses its positive vector-maintenance root ID. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
 and route proof must use the same index identity and asset generation without
 fallback through either `exact_hnsw_search_pack_v1` or `quantized_rerank`.
+`graceful_close.database` is the post-close durable state verified by the first
+cold-open diagnostics snapshot, while its event timestamp remains the actual
+close-completion time. TreeDB `Close` may advance the commit sequence after the
+last live snapshot, so the runner preserves that pre-close snapshot in
+`diagnostics.jsonl` and performs no application mutation between cold-open
+health and the verifying snapshot.
 `T_ready` is reconstructed from `load_start`
 through `cold_open_ready`; client, accepted/durable, and reopened counts are
 never substituted for one another, and a completed lifecycle requires strictly
@@ -139,8 +172,14 @@ python3 scripts/treedb_vectordbbench_artifact.py \
 The command exits nonzero for partial, interrupted, stale, mismatched, or
 corrupt artifacts. `--allow-partial` returns success only when a partial or
 interrupted artifact is structurally analyzable; its JSON result still has
-`complete: false`. H2 owns emitting these fields and lifecycle events. Existing
-smoke-only artifact-v1 output remains unchanged until that integration lands.
+`complete: false`. Existing smoke-only artifact-v1 output remains unchanged
+unless `--lifecycle` is selected.
+
+Canonical timed lifecycle artifacts include a low-overhead heap snapshot.
+CPU, allocation, block, mutex, trace, and Linux perf captures are separate
+aligned diagnostic companions: each must declare its nearest lifecycle
+before/after state window and is not silently included in the canonical wall
+measurement.
 
 ## Route-proof sidecar contract
 

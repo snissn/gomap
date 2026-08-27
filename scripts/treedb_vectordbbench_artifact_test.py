@@ -478,6 +478,20 @@ class HarnessOrderTest(unittest.TestCase):
 
         self.assertLess(source.index("run_vdbbench_rows("), source.index("run_route_proof_smoke("))
 
+    def test_lifecycle_startup_means_healthy_observation_boundary(self) -> None:
+        source = inspect.getsource(harness.main)
+
+        self.assertLess(source.index("start_service("), source.index("initialize_lifecycle_capture("))
+
+    def test_failure_stops_service_before_hashing_partial_evidence(self) -> None:
+        source = inspect.getsource(harness.main)
+        failure_path = source[source.index("except Exception as exc:"):]
+
+        self.assertLess(
+            failure_path.index("terminate_process_group("),
+            failure_path.index("finalize_partial_lifecycle("),
+        )
+
     def test_route_proof_can_be_skipped_for_measurement_only_runs(self) -> None:
         args = harness.parse_args(["--run-vdbbench", "--skip-route-proof"])
 
@@ -513,6 +527,51 @@ class LifecycleValidatorTest(unittest.TestCase):
             "reopened": 50_000,
         })
         self.assertEqual(got["t_ready_seconds"], 8.0)
+
+    def test_custom_case_binds_canonical_task_config_and_dataset_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            dataset_dir = root / "cohere-50k"
+            dataset_dir.mkdir()
+            dataset_file = dataset_dir / "train.parquet"
+            dataset_file.write_bytes(b"cohere vectors")
+            task_config = {"case_config": {"custom_case": {"dataset_config": {
+                "dir": str(dataset_dir), "size": 50000, "dim": 768,
+                "file_count": "1", "use_shuffled": False,
+            }}}}
+            result = root / "vdbbench-results" / "result.json"
+            result.parent.mkdir()
+            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
+            metrics = {
+                "result_file": str(result.relative_to(root)),
+                "result_sha256": harness.sha256_file(result),
+                "task_config": task_config,
+                "task_config_sha256": harness.canonical_sha256(task_config),
+            }
+            manifest["harness"]["case_type"] = "PerformanceCustomDataset"
+            manifest["vdbbench"] = [{"load_metrics": metrics}]
+            manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
+            manifest["lifecycle"]["task_config_binding"] = {
+                key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
+            }
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            harness.write_json(root / "manifest.json", manifest)
+
+            got = harness.validate_lifecycle_artifact(root)
+            self.assertTrue(got["complete"], got)
+
+            task_config["case_config"]["custom_case"]["dataset_config"]["dim"] = 769
+            metrics["task_config_sha256"] = harness.canonical_sha256(task_config)
+            manifest["lifecycle"]["task_config_binding"]["task_config_sha256"] = metrics["task_config_sha256"]
+            result.write_text(json.dumps({"results": [{"task_config": task_config}]}), encoding="utf-8")
+            metrics["result_sha256"] = harness.sha256_file(result)
+            manifest["lifecycle"]["task_config_binding"]["result_sha256"] = metrics["result_sha256"]
+            harness.write_json(root / "manifest.json", manifest)
+
+            rejected = harness.validate_lifecycle_artifact(root)
+            self.assertFalse(rejected["complete"])
+            self.assertTrue(any("shape" in error for error in rejected["errors"]), rejected)
 
     def test_completed_fixture_requires_positive_t_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1720,6 +1779,292 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["complete"])
         self.assertTrue(any("non-empty cumulative counter" in item for item in got["errors"]), got)
         self.assertEqual(exit_code, 1)
+
+
+class LifecycleIntegrationTest(unittest.TestCase):
+    def _complete_fixture(self, root: Path):
+        dataset = root / "dataset.parquet"
+        dataset.write_bytes(b"dataset")
+        args = harness.parse_args([
+            "--out", str(root), "--run-vdbbench", "--rows", "exact",
+            "--lifecycle", "--lifecycle-dataset-file", str(dataset),
+            "--service-close-timeout", "1",
+        ])
+        state = harness.HarnessState(root=root, lifecycle_started_ns=1)
+        state.lifecycle = harness.lifecycle_metadata(state, args)
+        state.vdbbench = [{"load_metrics": {
+            "result_file": "vdbbench-results/result.json",
+            "result_sha256": "a" * 64,
+            "task_config": {"db_config": {"index_name": harness.lifecycle_index_name(args)}},
+            "task_config_sha256": harness.canonical_sha256({"db_config": {"index_name": harness.lifecycle_index_name(args)}}),
+        }}]
+        snapshot = {
+            "database": {
+                "treedb.commit_seq": "10",
+                "treedb.command_wal.write.bytes_total": "100",
+                "treedb.command_wal.durable_wal_lsn": "5",
+                "treedb.command_wal.live_accepted_max_lsn": "5",
+            },
+            "collections": {},
+        }
+
+        class Sampler:
+            samples = [{"timestamp_ns": 1, "snapshot": snapshot}]
+
+            def stop(self):
+                return None
+
+            def at(self, timestamp_ns):
+                return snapshot
+
+            def sample(self):
+                record = {"timestamp_ns": 8, "snapshot": snapshot}
+                self.samples.append(record)
+                return record
+
+        harness.LifecycleJournal(root / "lifecycle.jsonl").append(
+            "startup", harness.LifecycleStateBuilder().build(snapshot, harness.lifecycle_rows()),
+            timestamp=harness.iso_from_ns(1),
+        )
+        records = [
+            {"event": "reset", "timestamp_ns": 2, "response": {}},
+            {"event": "load_start", "timestamp_ns": 3},
+            {"event": "batch_accepted", "timestamp_ns": 4, "client_sent": 50000, "server_accepted": 50000},
+            {"event": "load_end", "timestamp_ns": 5},
+            {"event": "optimize_start", "timestamp_ns": 6},
+            {
+                "event": "optimize_end", "timestamp_ns": 7,
+                "response": {
+                    "index": {
+                        "name": harness.lifecycle_index_name(args),
+                        "generation": 7,
+                        "vector_strategy": "column_graph",
+                    },
+                    "vector_index_name": "vector_hnsw",
+                    "status": {
+                        "root_id": 0,
+                        "strategy": "column_graph",
+                        "state": "column_graph_loaded",
+                        "loaded": True,
+                        "rebuild_needed": False,
+                    },
+                },
+            },
+        ]
+        (root / "adapter-lifecycle.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+        )
+        proc = mock.Mock(returncode=None)
+        return args, state, Sampler(), proc
+
+    def test_column_graph_ready_asset_uses_index_generation_not_root_id(self) -> None:
+        optimize = {
+            "index": {"name": "cohere", "generation": 7, "vector_strategy": "column_graph"},
+            "vector_index_name": "embedding",
+            "status": {
+                "root_id": 0,
+                "strategy": "column_graph",
+                "state": "column_graph_loaded",
+                "loaded": True,
+                "rebuild_needed": False,
+            },
+        }
+
+        identity, generation, reopen_generation = harness.lifecycle_ready_asset(optimize, "cohere")
+
+        self.assertEqual(identity, "cohere:embedding")
+        self.assertEqual(generation, 7)
+        self.assertEqual(reopen_generation, 7)
+
+    def test_column_graph_ready_asset_rejects_stale_or_root_substituted_generation(self) -> None:
+        optimize = {
+            "index": {"name": "cohere", "generation": 0, "vector_strategy": "column_graph"},
+            "vector_index_name": "embedding",
+            "status": {
+                "root_id": 9,
+                "strategy": "column_graph",
+                "state": "column_graph_loaded",
+                "loaded": True,
+                "rebuild_needed": False,
+            },
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "durable column graph"):
+            harness.lifecycle_ready_asset(optimize, "cohere")
+
+    def test_native_ready_asset_uses_positive_root_id(self) -> None:
+        optimize = {
+            "index": {"name": "cohere", "generation": 7, "vector_strategy": "native_runtime"},
+            "vector_index_name": "embedding",
+            "status": {
+                "root_id": 9,
+                "strategy": "native_runtime",
+                "state": "native_runtime",
+                "loaded": True,
+                "rebuild_needed": False,
+            },
+        }
+
+        self.assertEqual(
+            harness.lifecycle_ready_asset(optimize, "cohere"),
+            ("cohere:embedding", 9, None),
+        )
+
+    def test_column_graph_route_proof_rejects_stale_reopen_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = harness.HarnessState(root=Path(tmp))
+            args = harness.parse_args(["--rows", "exact"])
+            with mock.patch.object(harness, "http_json", return_value={"index": {"generation": 8}}):
+                with self.assertRaisesRegex(RuntimeError, "does not match"):
+                    harness.run_loaded_route_proof(
+                        state,
+                        args,
+                        "cohere",
+                        "cohere:embedding",
+                        7,
+                        expected_service_generation=7,
+                    )
+
+    def test_lifecycle_journal_is_append_only_and_sequence_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "lifecycle.jsonl"
+            journal = harness.LifecycleJournal(path)
+            first = journal.append("startup", {"rows": {"client_sent": 0}})
+            second = journal.append("reset", {"rows": {"client_sent": 0}})
+
+            events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual((first, second), (0, 1))
+        self.assertEqual([event["stage"] for event in events], ["startup", "reset"])
+        self.assertEqual([event["sequence"] for event in events], [0, 1])
+        self.assertTrue(all(event["schema_version"] == harness.LIFECYCLE_EVENT_SCHEMA for event in events))
+
+    def test_adapter_lifecycle_sidecar_reconciles_load_and_optimize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "adapter-lifecycle.jsonl"
+            records = (
+                {"event": "reset", "timestamp_ns": 1, "response": {"generation": 1}},
+                {"event": "load_start", "timestamp_ns": 2},
+                {"event": "batch_accepted", "timestamp_ns": 4, "client_sent": 3, "server_accepted": 3},
+                {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 2, "server_accepted": 2},
+                {"event": "load_end", "timestamp_ns": 5},
+                {"event": "optimize_start", "timestamp_ns": 6},
+                {
+                    "event": "optimize_end",
+                    "timestamp_ns": 7,
+                    "response": {"index": {"name": "cohere", "generation": 7}, "status": {"root_id": 9}},
+                },
+            )
+            path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+            got = harness.read_adapter_lifecycle_sidecar(path)
+
+        self.assertEqual(got["client_sent"], 5)
+        self.assertEqual(got["server_accepted"], 5)
+        self.assertEqual(got["load_start_ns"], 2)
+        self.assertEqual(got["load_end_ns"], 5)
+        self.assertEqual(got["optimize_response"]["status"]["root_id"], 9)
+
+    def test_adapter_lifecycle_sidecar_rejects_partial_or_missing_boundaries(self) -> None:
+        cases = {
+            "partial write": '{"event":"reset"',
+            "missing optimize": "".join(
+                json.dumps(record) + "\n"
+                for record in (
+                    {"event": "reset", "timestamp_ns": 1, "response": {}},
+                    {"event": "load_start", "timestamp_ns": 2},
+                    {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
+                    {"event": "load_end", "timestamp_ns": 4},
+                )
+            ),
+        }
+        for label, content in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "adapter-lifecycle.jsonl"
+                path.write_text(content, encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    harness.read_adapter_lifecycle_sidecar(path)
+
+    def test_adapter_lifecycle_sidecar_rejects_batch_outside_load_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "adapter-lifecycle.jsonl"
+            records = (
+                {"event": "reset", "timestamp_ns": 1, "response": {}},
+                {"event": "load_start", "timestamp_ns": 3},
+                {"event": "batch_accepted", "timestamp_ns": 2, "client_sent": 1, "server_accepted": 1},
+                {"event": "load_end", "timestamp_ns": 4},
+                {"event": "optimize_start", "timestamp_ns": 5},
+                {"event": "optimize_end", "timestamp_ns": 6, "response": {}},
+            )
+            path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "outside the load boundaries"):
+                harness.read_adapter_lifecycle_sidecar(path)
+
+    def test_build_failure_preserves_truthful_partial_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, _ = self._complete_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            sidecar.write_text(
+                "".join(json.dumps(record) + "\n" for record in records[:-1]), encoding="utf-8"
+            )
+
+            harness.finalize_partial_lifecycle(state, args, sampler)
+            stages = [
+                json.loads(line)["stage"]
+                for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(state.lifecycle["result_status"], "partial")
+        self.assertEqual(stages, ["startup", "reset", "load_start", "load_end", "optimize_start"])
+
+    def test_close_failure_never_records_graceful_close(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, proc = self._complete_fixture(root)
+
+            with mock.patch.object(harness, "fetch_file", side_effect=lambda _url, path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"x")), \
+                    mock.patch.object(harness, "http_json", return_value={"database": {}, "collections": {}}), \
+                    mock.patch.object(harness, "close_process_group_cleanly", side_effect=RuntimeError("close failed")):
+                with self.assertRaisesRegex(RuntimeError, "close failed"):
+                    harness.complete_lifecycle(state, args, Path(tmp), Path(tmp) / "service", proc, sampler)
+
+            stages = [json.loads(line)["stage"] for line in (root / "lifecycle.jsonl").read_text().splitlines()]
+
+        self.assertNotIn("graceful_close", stages)
+        self.assertEqual(state.lifecycle["result_status"], "partial")
+
+    def test_reopen_verification_failure_never_records_teardown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, proc = self._complete_fixture(root)
+            reopened = mock.Mock(returncode=None)
+
+            calls = []
+
+            def http(_method, url, _payload=None, timeout=10.0):
+                calls.append(url)
+                if url.endswith("/documents/count"):
+                    return {"count": 49999}
+                return {"database": {"treedb.commit_seq": "10"}, "collections": {}}
+
+            with mock.patch.object(harness, "fetch_file", side_effect=lambda _url, path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"x")), \
+                    mock.patch.object(harness, "http_json", side_effect=http), \
+                    mock.patch.object(harness, "close_process_group_cleanly"), \
+                    mock.patch.object(harness, "terminate_process_group") as terminate, \
+                    mock.patch.object(harness, "start_service", return_value=(reopened, {}, ["service"])):
+                with self.assertRaisesRegex(RuntimeError, "count mismatch"):
+                    harness.complete_lifecycle(state, args, Path(tmp), Path(tmp) / "service", proc, sampler)
+
+            stages = [json.loads(line)["stage"] for line in (root / "lifecycle.jsonl").read_text().splitlines()]
+
+        self.assertIn("cold_open_ready", stages)
+        self.assertNotIn("teardown", stages)
+        self.assertEqual(calls[0], args.diagnostics_url + "/debug/treedb/stats")
+        self.assertTrue(calls[1].endswith("/documents/count"))
+        terminate.assert_called_once_with(reopened, graceful_timeout=1.0)
 
 
 class ManifestFileListTest(unittest.TestCase):

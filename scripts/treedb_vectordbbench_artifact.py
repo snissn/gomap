@@ -139,6 +139,9 @@ class HarnessState:
     health: dict[str, Any] | None = None
     route_proof: dict[str, Any] | None = None
     vdbbench: list[dict[str, Any]] = field(default_factory=list)
+    lifecycle: dict[str, Any] | None = None
+    lifecycle_started_ns: int | None = None
+    diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 def add_skip(state: HarnessState, name: str, reason: str) -> None:
@@ -237,7 +240,37 @@ def cpu_brand() -> str:
     return platform.processor() or "unknown"
 
 
-def collect_context(gomap_root: Path, vectordbbench_dir: Path | None) -> dict[str, Any]:
+def physical_cpu_count() -> int:
+    pairs: set[tuple[str, str]] = set()
+    physical = core = None
+    with contextlib.suppress(OSError):
+        for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines() + [""]:
+            if line.startswith("physical id"):
+                physical = line.partition(":")[2].strip()
+            elif line.startswith("core id"):
+                core = line.partition(":")[2].strip()
+            elif not line and physical is not None and core is not None:
+                pairs.add((physical, core))
+                physical = core = None
+    return len(pairs) or (os.cpu_count() or 1)
+
+
+def memory_bytes() -> int | None:
+    with contextlib.suppress(OSError, ValueError):
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) * 1024
+    return None
+
+
+def storage_context(path: Path) -> dict[str, Any]:
+    output = command_output(["findmnt", "-n", "-o", "SOURCE,FSTYPE,TARGET", "--target", str(path)])
+    return {"path": str(path.resolve()), "mount": output or "unavailable"}
+
+
+def collect_context(
+    gomap_root: Path, vectordbbench_dir: Path | None, storage_path: Path | None = None
+) -> dict[str, Any]:
     return {
         "generated_at": iso_now(),
         "host": {
@@ -250,6 +283,10 @@ def collect_context(gomap_root: Path, vectordbbench_dir: Path | None) -> dict[st
             "go": command_output(["go", "version"]),
             "uname": command_output(["uname", "-a"]),
             "cpu_brand": cpu_brand(),
+            "logical_cpu_count": os.cpu_count() or 1,
+            "physical_cpu_count": physical_cpu_count(),
+            "memory_bytes": memory_bytes(),
+            "storage": storage_context(storage_path or gomap_root),
         },
         "gomap": git_context(gomap_root),
         "vectordbbench": git_context(vectordbbench_dir) if vectordbbench_dir else {"available": False, "reason": "VECTORDBBENCH_DIR not set"},
@@ -297,13 +334,15 @@ def wait_health(base_url: str, timeout_seconds: float, interval: float = 0.25) -
     raise RuntimeError(f"TreeDB document service did not become healthy within {timeout_seconds}s: {last_error}")
 
 
-def terminate_process_group(proc: subprocess.Popen[str]) -> None:
+def terminate_process_group(
+    proc: subprocess.Popen[str], *, graceful_timeout: float = 10.0
+) -> None:
     if proc.poll() is not None:
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGTERM)
     try:
-        proc.wait(timeout=10)
+        proc.wait(timeout=graceful_timeout)
         return
     except subprocess.TimeoutExpired:
         pass
@@ -311,6 +350,24 @@ def terminate_process_group(proc: subprocess.Popen[str]) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
+
+
+def close_process_group_cleanly(
+    proc: subprocess.Popen[str], *, graceful_timeout: float
+) -> None:
+    """Stop a service and reject timeout, signal, or nonzero exit."""
+    if proc.poll() is None:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=graceful_timeout)
+        except subprocess.TimeoutExpired as exc:
+            terminate_process_group(proc, graceful_timeout=0)
+            raise RuntimeError(
+                f"document service did not close within {graceful_timeout}s"
+            ) from exc
+    if proc.returncode != 0:
+        raise RuntimeError(f"document service did not close cleanly: exit={proc.returncode}")
 
 
 def build_service(state: HarnessState, gomap_root: Path, service_bin: str | None) -> Path:
@@ -342,11 +399,15 @@ def start_service(
     port: int,
     profile: str,
     health_timeout: float,
+    pprof_addr: str = "",
+    append_log: bool = False,
 ) -> tuple[subprocess.Popen[str], dict[str, Any], list[str]]:
     service_log = state.root / "service.log"
     cmd = [str(service_bin), "-dir", str(data_dir), "-addr", f"{host}:{port}", "-profile", profile]
+    if pprof_addr:
+        cmd.extend(["-pprof", pprof_addr])
     data_dir.mkdir(parents=True, exist_ok=True)
-    log_fh = service_log.open("w", encoding="utf-8")
+    log_fh = service_log.open("a" if append_log else "w", encoding="utf-8")
     proc = subprocess.Popen(
         cmd,
         cwd=str(gomap_root),
@@ -734,6 +795,8 @@ def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_ro
     env["RESULTS_LOCAL_DIR"] = str(state.root / "vdbbench-results" / row) if row else str(state.root / "vdbbench-results")
     env["LOG_FILE"] = str(state.root / "vdbbench.log")
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
+    if getattr(args, "lifecycle", False):
+        env["TREEDB_LIFECYCLE_SIDECAR"] = str(state.root / "adapter-lifecycle.jsonl")
     return env
 
 
@@ -837,6 +900,205 @@ def _strict_json_loads(value: str) -> Any:
         return result
 
     return json.loads(value, parse_constant=reject_constant, object_pairs_hook=reject_duplicate_keys)
+
+
+class LifecycleJournal:
+    """Append lifecycle stages without rewriting prior evidence."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._sequence = 0
+        if path.exists():
+            raw = path.read_text(encoding="utf-8")
+            if raw and not raw.endswith("\n"):
+                raise ValueError(f"lifecycle journal {path} has a partial final record")
+            for expected, line in enumerate(raw.splitlines()):
+                event = _strict_json_loads(line)
+                if not isinstance(event, dict) or event.get("sequence") != expected:
+                    raise ValueError(f"lifecycle journal {path} has invalid sequence {expected}")
+                self._sequence += 1
+
+    def append(self, stage: str, state: dict[str, Any], *, timestamp: str | None = None) -> int:
+        if stage not in LIFECYCLE_STAGES:
+            raise ValueError(f"unknown lifecycle stage {stage!r}")
+        if not isinstance(state, dict):
+            raise TypeError("lifecycle state must be an object")
+        with self._lock:
+            sequence = self._sequence
+            event = {
+                "schema_version": LIFECYCLE_EVENT_SCHEMA,
+                "sequence": sequence,
+                "stage": stage,
+                "timestamp": timestamp or iso_now(),
+                "state": state,
+            }
+            payload = (json.dumps(event, separators=(",", ":"), sort_keys=True) + "\n").encode()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            try:
+                if os.write(fd, payload) != len(payload):
+                    raise OSError("short lifecycle journal write")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            self._sequence += 1
+            return sequence
+
+
+class DiagnosticsSampler:
+    """Persist bounded service snapshots while the blocking benchmark runs."""
+
+    def __init__(self, url: str, path: Path, interval: float, data_dir: Path):
+        self.url = url
+        self.path = path
+        self.interval = interval
+        self.data_dir = data_dir
+        self.samples: list[dict[str, Any]] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._stopped = False
+
+    def sample(self) -> dict[str, Any]:
+        wal_dir = self.data_dir / "maindb" / "wal"
+        wal_files = []
+        with contextlib.suppress(OSError):
+            wal_files = [path for path in wal_dir.iterdir() if path.is_file()]
+        wal_bytes = 0
+        for path in wal_files:
+            with contextlib.suppress(OSError):
+                wal_bytes += path.stat().st_size
+        record = {
+            "timestamp_ns": time.time_ns(),
+            "snapshot": http_json("GET", self.url, timeout=2.0),
+            "wal_filesystem": {
+                "path": str(wal_dir),
+                "files": len(wal_files),
+                "bytes": wal_bytes,
+            },
+        }
+        payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            if os.write(fd, payload) != len(payload):
+                raise OSError("short diagnostics sample write")
+        finally:
+            os.close(fd)
+        self.samples.append(record)
+        return record
+
+    def start(self) -> None:
+        self.sample()
+
+        def run() -> None:
+            while not self._stop.wait(self.interval):
+                with contextlib.suppress(Exception):
+                    self.sample()
+
+        self._thread = threading.Thread(target=run, name="treedb-lifecycle-diagnostics", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=max(2.0, self.interval * 2))
+        with contextlib.suppress(Exception):
+            self.sample()
+
+    def at(self, timestamp_ns: int) -> dict[str, Any]:
+        eligible = [sample for sample in self.samples if sample["timestamp_ns"] <= timestamp_ns]
+        selected = eligible[-1] if eligible else (self.samples[0] if self.samples else None)
+        return selected["snapshot"] if selected else {}
+
+    def latest(self) -> dict[str, Any]:
+        return self.samples[-1]["snapshot"] if self.samples else {}
+
+
+def read_adapter_lifecycle_records(path: Path) -> list[dict[str, Any]]:
+    """Read structurally complete sidecar records without inventing boundaries."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read adapter lifecycle sidecar: {exc}") from exc
+    if not raw or not raw.endswith("\n"):
+        raise ValueError("adapter lifecycle sidecar is empty or has a partial final record")
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(raw.splitlines(), start=1):
+        if not line:
+            raise ValueError(f"adapter lifecycle sidecar line {line_number} is blank")
+        try:
+            record = _strict_json_loads(line)
+        except ValueError as exc:
+            raise ValueError(f"adapter lifecycle sidecar line {line_number} is invalid: {exc}") from exc
+        if not isinstance(record, dict):
+            raise ValueError(f"adapter lifecycle sidecar line {line_number} must be an object")
+        timestamp_ns = record.get("timestamp_ns")
+        if not isinstance(timestamp_ns, int) or isinstance(timestamp_ns, bool) or timestamp_ns <= 0:
+            raise ValueError(f"adapter lifecycle sidecar line {line_number} timestamp_ns must be a positive integer")
+        records.append(record)
+
+    return records
+
+
+def read_adapter_lifecycle_sidecar(path: Path) -> dict[str, Any]:
+    """Read the adapter's complete boundary stream, rejecting partial evidence."""
+    records = read_adapter_lifecycle_records(path)
+    events = [record.get("event") for record in records]
+    if len(records) < 6 or events[:2] != ["reset", "load_start"] or events[-3:] != [
+        "load_end",
+        "optimize_start",
+        "optimize_end",
+    ]:
+        raise ValueError("adapter lifecycle sidecar is missing required ordered boundaries")
+    batches = records[2:-3]
+    if not batches or any(record.get("event") != "batch_accepted" for record in batches):
+        raise ValueError("adapter lifecycle sidecar must contain only accepted batches between load boundaries")
+    reset_ns = records[0]["timestamp_ns"]
+    load_start_ns = records[1]["timestamp_ns"]
+    load_end_ns = records[-3]["timestamp_ns"]
+    optimize_start_ns = records[-2]["timestamp_ns"]
+    optimize_end_ns = records[-1]["timestamp_ns"]
+    if not reset_ns <= load_start_ns <= load_end_ns <= optimize_start_ns <= optimize_end_ns:
+        raise ValueError("adapter lifecycle boundary timestamps are out of order")
+    if any(not load_start_ns <= record["timestamp_ns"] <= load_end_ns for record in batches):
+        raise ValueError("adapter lifecycle batch timestamp falls outside the load boundaries")
+    reset_response = records[0].get("response")
+    optimize_response = records[-1].get("response")
+    if not isinstance(reset_response, dict) or not isinstance(optimize_response, dict):
+        raise ValueError("adapter lifecycle reset and optimize responses must be objects")
+    client_sent = 0
+    server_accepted = 0
+    for record in batches:
+        sent = record.get("client_sent")
+        accepted = record.get("server_accepted")
+        if (
+            not isinstance(sent, int)
+            or isinstance(sent, bool)
+            or sent <= 0
+            or not isinstance(accepted, int)
+            or isinstance(accepted, bool)
+            or accepted < 0
+            or accepted > sent
+        ):
+            raise ValueError("adapter lifecycle batch counts are invalid")
+        client_sent += sent
+        server_accepted += accepted
+    return {
+        "records": records,
+        "client_sent": client_sent,
+        "server_accepted": server_accepted,
+        "reset_response": reset_response,
+        "reset_ns": reset_ns,
+        "load_start_ns": load_start_ns,
+        "load_end_ns": load_end_ns,
+        "optimize_start_ns": optimize_start_ns,
+        "optimize_end_ns": optimize_end_ns,
+        "optimize_response": optimize_response,
+    }
 
 
 def _valid_go_int64(value: str) -> bool:
@@ -1250,7 +1512,62 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
     elif case_type == "PerformanceCustomDataset":
-        completion_errors.append("custom case cannot complete without task_config dataset shape evidence")
+        binding = lifecycle.get("task_config_binding")
+        if not isinstance(binding, dict):
+            completion_errors.append("custom case cannot complete without task_config dataset shape evidence")
+        else:
+            for key in ("result_file", "result_sha256", "task_config_sha256"):
+                value = binding.get(key)
+                if not isinstance(value, str) or not value:
+                    errors.append(f"lifecycle.task_config_binding.{key} must be a non-empty string")
+            candidates = [
+                row.get("load_metrics")
+                for row in manifest.get("vdbbench", [])
+                if isinstance(row, dict) and isinstance(row.get("load_metrics"), dict)
+            ]
+            matches = [
+                item for item in candidates
+                if item.get("result_file") == binding.get("result_file")
+                and item.get("result_sha256") == binding.get("result_sha256")
+                and item.get("task_config_sha256") == binding.get("task_config_sha256")
+            ]
+            if len(matches) != 1:
+                errors.append("lifecycle task_config binding does not select one manifest VDBBench result")
+            else:
+                selected = matches[0]
+                task_config = selected.get("task_config")
+                if not isinstance(task_config, dict) or canonical_sha256(task_config) != binding.get("task_config_sha256"):
+                    errors.append("lifecycle task_config binding checksum does not match canonical task_config")
+                else:
+                    try:
+                        custom_vectors, custom_dimensions = custom_task_config_shape(task_config)
+                        selected_dataset = custom_task_config_dataset_file(task_config)
+                        selected_digest = sha256_file(selected_dataset)
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        errors.append(f"custom task_config dataset evidence is invalid: {exc}")
+                    else:
+                        if custom_vectors != expected_rows or custom_vectors != vectors or custom_dimensions != dimensions:
+                            errors.append("custom task_config dataset shape does not match lifecycle dataset")
+                        if selected_digest != dataset.get("sha256"):
+                            errors.append("custom task_config selected dataset checksum does not match lifecycle dataset")
+                result_path = _artifact_file(root, binding.get("result_file"), "task_config result", errors)
+                if result_path is not None:
+                    try:
+                        result_digest = sha256_file(result_path)
+                        result_document = _strict_json_loads(result_path.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, ValueError) as exc:
+                        errors.append(f"cannot read task_config result: {exc}")
+                    else:
+                        if result_digest != binding.get("result_sha256"):
+                            errors.append("task_config result checksum does not match lifecycle binding")
+                        result_configs = [
+                            item.get("task_config")
+                            for item in result_document.get("results", [])
+                            if isinstance(item, dict) and isinstance(item.get("task_config"), dict)
+                            and canonical_sha256(item["task_config"]) == binding.get("task_config_sha256")
+                        ] if isinstance(result_document, dict) else []
+                        if len(result_configs) != 1 or result_configs[0] != selected.get("task_config"):
+                            errors.append("task_config result does not contain the uniquely bound manifest task_config")
     else:
         try:
             case_vectors = case_vector_count(case_type)
@@ -1720,6 +2037,42 @@ def case_vector_dimensions(case_type: str) -> int:
     return int(match.group(1))
 
 
+def lifecycle_dataset_shape(args: argparse.Namespace) -> tuple[int, int]:
+    if args.case_type == "PerformanceCustomDataset":
+        return args.lifecycle_vectors, args.lifecycle_dimensions
+    return case_vector_count(args.case_type), case_vector_dimensions(args.case_type)
+
+
+def custom_task_config_shape(task_config: dict[str, Any]) -> tuple[int, int]:
+    dataset = ((task_config.get("case_config") or {}).get("custom_case") or {}).get("dataset_config") or {}
+    values = []
+    for key in ("size", "dim"):
+        value = dataset.get(key)
+        if isinstance(value, bool) or not (
+            isinstance(value, int) or isinstance(value, str) and value.isascii() and value.isdigit()
+        ):
+            raise ValueError(f"custom task_config dataset {key} must be a positive integer")
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError(f"custom task_config dataset {key} must be a positive integer")
+        values.append(parsed)
+    return values[0], values[1]
+
+
+def custom_task_config_dataset_file(task_config: dict[str, Any]) -> Path:
+    dataset = ((task_config.get("case_config") or {}).get("custom_case") or {}).get("dataset_config") or {}
+    directory = dataset.get("dir")
+    file_count = dataset.get("file_count")
+    shuffled = dataset.get("use_shuffled")
+    one_file = file_count == 1 or (
+        isinstance(file_count, str) and file_count.isascii() and file_count == "1"
+    )
+    if not isinstance(directory, str) or not directory or not one_file or not isinstance(shuffled, bool):
+        raise ValueError("custom task_config must identify one concrete training file")
+    filename = "shuffle_train.parquet" if shuffled else "train.parquet"
+    return (Path(directory).expanduser() / filename).resolve(strict=False)
+
+
 def result_vector_count(task_config: dict[str, Any], case_type: str) -> tuple[int, str]:
     custom_case = task_config.get("case_config", {}).get("custom_case") or {}
     size = custom_case.get("dataset_config", {}).get("size")
@@ -1855,6 +2208,518 @@ def run_vdbbench_rows(
             })
 
 
+def iso_from_ns(timestamp_ns: int) -> str:
+    return _dt.datetime.fromtimestamp(timestamp_ns / 1_000_000_000, _dt.timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def snapshot_int(snapshot: dict[str, Any], section: str, key: str) -> int:
+    values = snapshot.get(section)
+    if not isinstance(values, dict):
+        return 0
+    value = values.get(key, 0)
+    if isinstance(value, bool):
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, parsed)
+
+
+class LifecycleStateBuilder:
+    def __init__(self):
+        self.counters = {
+            "commit_seq": 0,
+            "wal_write_bytes_total": 0,
+            "indexed_stage_docs_total": 0,
+            "indexed_flush_docs_total": 0,
+        }
+        self.wal_frontier = 0
+        self.wal_bytes = 0
+
+    def build(
+        self,
+        snapshot: dict[str, Any],
+        rows: dict[str, int],
+        *,
+        index: dict[str, Any] | None = None,
+        database: dict[str, Any] | None = None,
+        route: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        observed = {
+            "commit_seq": snapshot_int(snapshot, "database", "treedb.commit_seq"),
+            "wal_write_bytes_total": snapshot_int(
+                snapshot, "database", "treedb.command_wal.write.bytes_total"
+            ),
+            "indexed_stage_docs_total": snapshot_int(
+                snapshot, "collections", "treedb.collections.write_domain.indexed_stage.docs_total"
+            ),
+            "indexed_flush_docs_total": snapshot_int(
+                snapshot, "collections", "treedb.collections.write_domain.indexed_flush.docs_total"
+            ),
+        }
+        self.counters = {key: max(self.counters[key], observed[key]) for key in self.counters}
+        self.wal_frontier = max(
+            self.wal_frontier,
+            snapshot_int(snapshot, "database", "treedb.command_wal.durable_wal_lsn"),
+        )
+        self.wal_bytes = max(self.wal_bytes, observed["wal_write_bytes_total"])
+        state: dict[str, Any] = {
+            "rows": dict(rows),
+            "wal": {"frontier": self.wal_frontier, "bytes_written_total": self.wal_bytes},
+            "counters": dict(self.counters),
+        }
+        if index is not None:
+            state["index"] = index
+        if database is not None:
+            state["database"] = database
+        if route is not None:
+            state["route"] = route
+        return state
+
+
+def lifecycle_rows(sent: int = 0, accepted: int = 0, durable: int = 0, reopened: int = 0) -> dict[str, int]:
+    return {
+        "client_sent": sent,
+        "server_accepted": accepted,
+        "server_durable": durable,
+        "reopened": reopened,
+    }
+
+
+def lifecycle_metadata(state: HarnessState, args: argparse.Namespace) -> dict[str, Any]:
+    expected_rows, dimensions = lifecycle_dataset_shape(args)
+    dataset_name = args.lifecycle_dataset_name or args.lifecycle_dataset_file.parent.name
+    return {
+        "schema_version": LIFECYCLE_SCHEMA,
+        "result_status": "partial",
+        "file": "lifecycle.jsonl",
+        "expected_rows": expected_rows,
+        "dataset": {
+            "name": dataset_name,
+            "sha256": sha256_file(args.lifecycle_dataset_file),
+            "dimensions": dimensions,
+            "vectors": expected_rows,
+        },
+        "raw_artifacts": [],
+        "profiles": [],
+    }
+
+
+def lifecycle_raw_artifacts(state: HarnessState, paths: list[Path]) -> list[dict[str, str]]:
+    artifacts = []
+    for path in paths:
+        if path.is_file():
+            artifacts.append({
+                "path": str(path.relative_to(state.root)),
+                "sha256": sha256_file(path),
+            })
+    return artifacts
+
+
+def write_lifecycle_load_milestones(state: HarnessState, records: list[dict[str, Any]]) -> Path:
+    load_start = next(record["timestamp_ns"] for record in records if record.get("event") == "load_start")
+    batches = sorted(
+        (record for record in records if record.get("event") == "batch_accepted"),
+        key=lambda record: record["timestamp_ns"],
+    )
+    accepted = 0
+    sent = 0
+    milestones = []
+    for record in batches:
+        accepted += record["server_accepted"]
+        sent += record["client_sent"]
+        elapsed = max(0, record["timestamp_ns"] - load_start) / 1_000_000_000
+        milestones.append({
+            "timestamp_ns": record["timestamp_ns"],
+            "client_sent_cumulative": sent,
+            "server_accepted_cumulative": accepted,
+            "elapsed_seconds": elapsed,
+            "accepted_vectors_per_second_cumulative": accepted / elapsed if elapsed > 0 else None,
+        })
+    path = state.root / "lifecycle_load_milestones.json"
+    write_json(path, {
+        "schema_version": "treedb-vectordbbench-load-milestones/v1",
+        "ordering": "batch completion timestamp; equal-size NUM_PER_BATCH milestones except the final batch",
+        "milestones": milestones,
+    })
+    return path
+
+
+def initialize_lifecycle_capture(
+    state: HarnessState, args: argparse.Namespace, sampler: DiagnosticsSampler
+) -> None:
+    """Create analyzable partial ownership before the load can fail."""
+    state.lifecycle = lifecycle_metadata(state, args)
+    started_ns = state.lifecycle_started_ns or time.time_ns()
+    LifecycleJournal(state.root / "lifecycle.jsonl").append(
+        "startup",
+        LifecycleStateBuilder().build(sampler.at(started_ns), lifecycle_rows()),
+        timestamp=iso_from_ns(started_ns),
+    )
+
+
+def finalize_partial_lifecycle(
+    state: HarnessState, args: argparse.Namespace, sampler: DiagnosticsSampler | None
+) -> None:
+    """Retain only sidecar boundaries that are structurally present after failure."""
+    if state.lifecycle is None:
+        return
+    state.lifecycle["result_status"] = "partial"
+    if sampler is not None:
+        sampler.stop()
+        state.diagnostics = list(sampler.samples)
+    sidecar = state.root / "adapter-lifecycle.jsonl"
+    state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
+        state.root / "diagnostics.jsonl",
+        sidecar,
+        state.root / "service.log",
+    ])
+    if not sidecar.exists():
+        return
+    try:
+        records = read_adapter_lifecycle_records(sidecar)
+        milestone_path = write_lifecycle_load_milestones(state, records)
+        journal = LifecycleJournal(state.root / "lifecycle.jsonl")
+    except (OSError, ValueError):
+        return
+    state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
+        state.root / "diagnostics.jsonl",
+        sidecar,
+        milestone_path,
+        state.root / "service.log",
+    ])
+    existing = {
+        event["stage"]
+        for event in (
+            _strict_json_loads(line)
+            for line in (state.root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+        )
+    }
+    builder = LifecycleStateBuilder()
+    accepted = 0
+    sent = 0
+    for record in records:
+        event = record.get("event")
+        if event == "batch_accepted":
+            batch_sent = record.get("client_sent")
+            batch_accepted = record.get("server_accepted")
+            if all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in (batch_sent, batch_accepted)):
+                sent += batch_sent
+                accepted += batch_accepted
+            continue
+        stage = event if event in {"reset", "load_start", "load_end", "optimize_start"} else None
+        if stage is None or stage in existing:
+            continue
+        rows = lifecycle_rows()
+        if stage in {"load_end", "optimize_start"}:
+            rows = lifecycle_rows(sent, accepted, accepted)
+        snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
+        journal.append(stage, builder.build(snapshot, rows), timestamp=iso_from_ns(record["timestamp_ns"]))
+        existing.add(stage)
+
+
+def fetch_file(url: str, path: Path, timeout: float = 30.0) -> None:
+    request = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - loopback diagnostics only
+        data = response.read()
+    if not data:
+        raise RuntimeError(f"empty response from {url}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def lifecycle_index_name(args: argparse.Namespace) -> str:
+    row = next(row.strip().lower() for row in args.rows.split(",") if row.strip())
+    suffix = "exact_vdbbench" if row == "exact" else "scalar_u8_vdbbench"
+    return f"{args.index_prefix}_{suffix}"
+
+
+def bind_lifecycle_task_config(
+    state: HarnessState, args: argparse.Namespace, expected_rows: int, dimensions: int
+) -> dict[str, str]:
+    metrics = [row.get("load_metrics") for row in state.vdbbench if isinstance(row.get("load_metrics"), dict)]
+    if len(metrics) != 1:
+        raise RuntimeError("lifecycle requires exactly one canonical VDBBench load result")
+    selected = metrics[0]
+    task_config = selected.get("task_config")
+    if not isinstance(task_config, dict):
+        raise RuntimeError("canonical VDBBench result has no task_config object")
+    if args.case_type == "PerformanceCustomDataset":
+        if custom_task_config_shape(task_config) != (expected_rows, dimensions):
+            raise RuntimeError("custom VDBBench task_config shape does not match lifecycle dataset shape")
+        if custom_task_config_dataset_file(task_config) != args.lifecycle_dataset_file.resolve():
+            raise RuntimeError("custom VDBBench task_config does not select the checksum-bound lifecycle dataset file")
+    binding = {
+        "result_file": selected.get("result_file"),
+        "result_sha256": selected.get("result_sha256"),
+        "task_config_sha256": selected.get("task_config_sha256"),
+    }
+    if any(not isinstance(value, str) or not value for value in binding.values()):
+        raise RuntimeError("canonical VDBBench result identity is incomplete")
+    return binding
+
+
+def run_loaded_route_proof(
+    state: HarnessState,
+    args: argparse.Namespace,
+    index_name: str,
+    index_identity: str,
+    asset_generation: int,
+    expected_service_generation: int | None = None,
+) -> dict[str, Any]:
+    opened = http_json("GET", index_url(args.base_url, index_name))
+    info = opened.get("index")
+    if not isinstance(info, dict):
+        raise RuntimeError("cold-reopened index response is missing index metadata")
+    service_generation = info.get("generation")
+    if isinstance(service_generation, bool) or not isinstance(service_generation, int) or service_generation <= 0:
+        raise RuntimeError("cold-reopened index has no positive service generation")
+    if expected_service_generation is not None and service_generation != expected_service_generation:
+        raise RuntimeError(
+            "cold-reopened index generation does not match the optimized column graph: "
+            f"expected={expected_service_generation} actual={service_generation}"
+        )
+    expected_rows, dimensions = lifecycle_dataset_shape(args)
+    request: dict[str, Any] = {
+        "query_embedding": [1.0, *([0.0] * (dimensions - 1))],
+        "top_k": min(args.k, expected_rows),
+        "ef_search": max(args.ef_search, args.k),
+        "query_mode": "exact",
+        "expected_generation": service_generation,
+    }
+    row = next(row.strip().lower() for row in args.rows.split(",") if row.strip())
+    expected_route = "exact_hnsw_search_pack_v1"
+    if row == "scalar":
+        expected_route = "quantized_rerank"
+        request.update(
+            query_mode="quantized_rerank",
+            quantized_index_name=args.quantized_index_name,
+            quantized_rerank_candidates=max(args.rerank_candidates, args.k),
+        )
+    response = http_json("POST", index_url(args.base_url, index_name, "/search/vector-index"), request)
+    write_json(state.root / "lifecycle_route_response.json", response)
+    summary = proof_summary(row, index_name, response, request)
+    route = {
+        "name": summary["route"],
+        "fallback_reason": summary["fallback_reason"],
+        "optimized": summary["route"] == expected_route and summary["fallback_reason"] == "none",
+        "index_identity": index_identity,
+        "index_asset_generation": asset_generation,
+    }
+    if not route["optimized"] or not response.get("no_documents"):
+        raise RuntimeError(f"cold-reopen route proof failed: {route}")
+    return route
+
+
+def lifecycle_ready_asset(optimize: dict[str, Any], index_name: str) -> tuple[str, int, int | None]:
+    index_info = optimize.get("index")
+    status = optimize.get("status")
+    if not isinstance(index_info, dict) or not isinstance(status, dict):
+        raise RuntimeError("optimize response is missing index/status evidence")
+    vector_index_name = optimize.get("vector_index_name")
+    strategy = index_info.get("vector_strategy")
+    if (
+        index_info.get("name") != index_name
+        or not isinstance(vector_index_name, str)
+        or not vector_index_name
+        or status.get("strategy") != strategy
+        or status.get("loaded") is not True
+        or status.get("rebuild_needed") is not False
+    ):
+        raise RuntimeError(f"optimize response does not prove a ready durable asset: {optimize}")
+    expected_service_generation: int | None = None
+    if strategy == "column_graph":
+        generation = index_info.get("generation")
+        if (
+            status.get("state") != "column_graph_loaded"
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation <= 0
+        ):
+            raise RuntimeError(f"optimize response does not prove a ready durable column graph: {optimize}")
+        expected_service_generation = generation
+    elif strategy == "native_runtime":
+        generation = status.get("root_id")
+        if (
+            status.get("state") != "native_runtime"
+            or isinstance(generation, bool)
+            or not isinstance(generation, int)
+            or generation <= 0
+        ):
+            raise RuntimeError(f"optimize response does not prove a ready native vector root: {optimize}")
+    else:
+        raise RuntimeError(f"optimize response has unsupported vector strategy: {strategy!r}")
+    return f"{index_name}:{vector_index_name}", generation, expected_service_generation
+
+
+def complete_lifecycle(
+    state: HarnessState,
+    args: argparse.Namespace,
+    gomap_root: Path,
+    service_bin: Path,
+    service_proc: subprocess.Popen[str],
+    sampler: DiagnosticsSampler,
+) -> list[str]:
+    adapter = read_adapter_lifecycle_sidecar(state.root / "adapter-lifecycle.jsonl")
+    milestone_path = write_lifecycle_load_milestones(state, adapter["records"])
+    sampler.stop()
+    state.diagnostics.extend(sampler.samples)
+    expected_rows, dimensions = lifecycle_dataset_shape(args)
+    if adapter["client_sent"] != expected_rows or adapter["server_accepted"] != expected_rows:
+        raise RuntimeError(f"adapter lifecycle counts do not equal expected rows: {adapter}")
+    task_config_binding = bind_lifecycle_task_config(
+        state, args, expected_rows, dimensions
+    )
+    optimize = adapter["optimize_response"]
+    index_name = lifecycle_index_name(args)
+    index_identity, asset_generation, expected_service_generation = lifecycle_ready_asset(
+        optimize, index_name
+    )
+    index_state = {"identity": index_identity, "asset_generation": asset_generation, "status": "ready"}
+    builder = LifecycleStateBuilder()
+    journal = LifecycleJournal(state.root / "lifecycle.jsonl")
+    zero = lifecycle_rows()
+    loaded = lifecycle_rows(expected_rows, expected_rows, expected_rows, 0)
+    load_start_snapshot = sampler.at(adapter["load_start_ns"])
+    load_end_snapshot = sampler.at(adapter["load_end_ns"])
+    optimize_start_snapshot = sampler.at(adapter["optimize_start_ns"])
+    optimize_end_snapshot = sampler.at(adapter["optimize_end_ns"])
+    journal.append(
+        "reset",
+        builder.build(sampler.at(adapter["reset_ns"]), zero),
+        timestamp=iso_from_ns(adapter["reset_ns"]),
+    )
+    journal.append(
+        "load_start", builder.build(load_start_snapshot, zero),
+        timestamp=iso_from_ns(adapter["load_start_ns"]),
+    )
+    journal.append(
+        "load_end", builder.build(load_end_snapshot, loaded),
+        timestamp=iso_from_ns(adapter["load_end_ns"]),
+    )
+    durable_lsn = snapshot_int(load_end_snapshot, "database", "treedb.command_wal.durable_wal_lsn")
+    accepted_lsn = snapshot_int(load_end_snapshot, "database", "treedb.command_wal.live_accepted_max_lsn")
+    wal_bytes = snapshot_int(load_end_snapshot, "database", "treedb.command_wal.write.bytes_total")
+    if durable_lsn <= 0 or accepted_lsn <= 0 or durable_lsn < accepted_lsn or wal_bytes <= 0:
+        raise RuntimeError(
+            "command_wal_durable load boundary did not prove a positive drained WAL frontier: "
+            f"durable={durable_lsn} accepted={accepted_lsn} bytes={wal_bytes}"
+        )
+    # Successful command_wal_durable insert responses prove all accepted batches
+    # reached durable acknowledgement; this snapshot independently proves the
+    # server's accepted frontier was drained before optimize began.
+    journal.append(
+        "drain_checkpoint", builder.build(load_end_snapshot, loaded),
+        timestamp=iso_from_ns(adapter["load_end_ns"]),
+    )
+    journal.append(
+        "optimize_start", builder.build(optimize_start_snapshot, loaded),
+        timestamp=iso_from_ns(adapter["optimize_start_ns"]),
+    )
+    journal.append(
+        "optimize_end", builder.build(optimize_end_snapshot, loaded, index=index_state),
+        timestamp=iso_from_ns(adapter["optimize_end_ns"]),
+    )
+    journal.append("cache_prime", builder.build(optimize_end_snapshot, loaded, index=index_state), timestamp=iso_from_ns(adapter["optimize_end_ns"]))
+    journal.append("cache_warm", builder.build(optimize_end_snapshot, loaded, index=index_state), timestamp=iso_from_ns(adapter["optimize_end_ns"]))
+
+    profile_path = state.root / "profiles" / "optimize.heap.pprof"
+    fetch_file(f"{args.diagnostics_url}/debug/pprof/heap?gc=1", profile_path)
+    # Preserve the last live/pre-close telemetry record in the raw sampler stream.
+    sampler.sample()
+    database_identity = f"artifact-data:{canonical_sha256(str(args.data_dir.resolve()))}"
+    close_process_group_cleanly(service_proc, graceful_timeout=args.service_close_timeout)
+    close_completed_ns = time.time_ns()
+
+    reopened_proc, health, command = start_service(
+        state,
+        gomap_root=gomap_root,
+        service_bin=service_bin,
+        data_dir=args.data_dir,
+        host=args.host,
+        port=args.port,
+        profile=args.profile,
+        health_timeout=args.health_timeout,
+        pprof_addr=f"{args.host}:{args.pprof_port}",
+        append_log=True,
+    )
+    try:
+        state.health = health
+        # This must be the first application-state request after cold open. The
+        # health probe in start_service is read-only; no application mutation is
+        # allowed before this snapshot establishes the post-Close durable state.
+        reopen_snapshot = http_json("GET", f"{args.diagnostics_url}/debug/treedb/stats")
+        reopen_database = {
+            "identity": database_identity,
+            "commit_seq": snapshot_int(reopen_snapshot, "database", "treedb.commit_seq"),
+        }
+        reopened_rows = lifecycle_rows(expected_rows, expected_rows, expected_rows, expected_rows)
+        journal.append(
+            "graceful_close",
+            builder.build(reopen_snapshot, loaded, index=index_state, database=reopen_database),
+            timestamp=iso_from_ns(close_completed_ns),
+        )
+        journal.append(
+            "cold_open_ready",
+            builder.build(reopen_snapshot, reopened_rows, index=index_state, database=reopen_database),
+        )
+        count = http_json("POST", index_url(args.base_url, index_name, "/documents/count"), {})
+        if count.get("count") != expected_rows:
+            raise RuntimeError(f"cold-reopen count mismatch: {count}")
+        journal.append("exact_verify", builder.build(reopen_snapshot, reopened_rows, index=index_state))
+        route = run_loaded_route_proof(
+            state,
+            args,
+            index_name,
+            index_identity,
+            asset_generation,
+            expected_service_generation,
+        )
+        journal.append(
+            "route_verify",
+            builder.build(reopen_snapshot, reopened_rows, index=index_state, route=route),
+        )
+        close_process_group_cleanly(reopened_proc, graceful_timeout=args.service_close_timeout)
+        journal.append(
+            "teardown",
+            builder.build(reopen_snapshot, reopened_rows, index=index_state, database=reopen_database),
+        )
+    except Exception:
+        terminate_process_group(reopened_proc, graceful_timeout=args.service_close_timeout)
+        raise
+
+    profile_relative = str(profile_path.relative_to(state.root))
+    profile_sha = sha256_file(profile_path)
+    raw_artifacts = lifecycle_raw_artifacts(state, [
+        profile_path,
+        state.root / "diagnostics.jsonl",
+        state.root / "adapter-lifecycle.jsonl",
+        milestone_path,
+        state.root / "service.log",
+        state.root / "lifecycle_route_response.json",
+    ])
+    assert state.lifecycle is not None
+    state.diagnostics = list(sampler.samples)
+    state.lifecycle.update({
+        "result_status": "completed",
+        "task_config_binding": task_config_binding,
+        "raw_artifacts": raw_artifacts,
+        "profiles": [
+            {
+                "path": profile_relative,
+                "sha256": profile_sha,
+                "kind": "heap",
+                "before_sequence": 5,
+                "after_sequence": 6,
+            }
+        ],
+    })
+    return command
+
+
 def write_readme(state: HarnessState, args: argparse.Namespace) -> None:
     proof = state.route_proof or {}
     exact = proof.get("exact_fp32", {})
@@ -1963,6 +2828,17 @@ def write_manifest(
         "files_truncated": files_truncated,
         "data_dir_note": "treedb-data is artifact-owned and intentionally not enumerated in files; see service.data_dir.",
     }
+    if state.lifecycle is not None:
+        lifecycle = dict(state.lifecycle)
+        lifecycle_path = state.root / str(lifecycle["file"])
+        lifecycle["sha256"] = sha256_file(lifecycle_path)
+        lifecycle["identity"] = {
+            "gomap_commit": context.get("gomap", {}).get("commit"),
+            "vectordbbench_commit": context.get("vectordbbench", {}).get("commit"),
+            "service_binary_sha256": (state.service_binary or {}).get("sha256"),
+        }
+        manifest["lifecycle"] = lifecycle
+        lifecycle["identity"]["config_sha256"] = lifecycle_config_sha256(manifest)
     write_json(state.root / "manifest.json", manifest)
 
 
@@ -2005,6 +2881,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--index-prefix", default=os.environ.get("TREEDB_VDBBENCH_INDEX_PREFIX", ""), help="unique benchmark index prefix")
     parser.add_argument("--validate-lifecycle", default="", help="validate an existing artifact-v1 lifecycle root and exit")
     parser.add_argument("--allow-partial", action="store_true", help="return success for an analyzable partial lifecycle validation")
+    parser.add_argument("--lifecycle", action="store_true", help="capture the fail-closed load/build/reopen lifecycle for one VDBBench row")
+    parser.add_argument("--lifecycle-dataset-file", default="", help="exact local training dataset file used by the lifecycle row")
+    parser.add_argument("--lifecycle-dataset-name", default="", help="stable dataset label recorded with its checksum")
+    parser.add_argument("--lifecycle-vectors", type=int, default=0, help="custom-case vector count, verified against canonical task_config")
+    parser.add_argument("--lifecycle-dimensions", type=int, default=0, help="custom-case dimensions, verified against canonical task_config")
+    parser.add_argument("--diagnostics-interval", type=float, default=5.0, help="seconds between lifecycle service/filesystem snapshots")
+    parser.add_argument(
+        "--service-close-timeout",
+        type=float,
+        default=300.0,
+        help="seconds to allow each lifecycle service graceful close",
+    )
     parser.add_argument("--self-test", action="store_true", help="run route-proof summarizer self-test and exit")
     args = parser.parse_args(argv)
     if args.self_test and args.validate_lifecycle:
@@ -2027,12 +2915,35 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error(str(exc))
     if args.num_per_batch <= 0:
         parser.error("num-per-batch must be positive")
+    if args.lifecycle:
+        rows = [row.strip() for row in args.rows.split(",") if row.strip()]
+        if not args.run_vdbbench or args.vdbbench_dry_run or args.skip_load or len(rows) != 1:
+            parser.error("lifecycle requires exactly one real, load-enabled VDBBench row")
+        if args.profile != "command_wal_durable":
+            parser.error("lifecycle completion currently requires command_wal_durable")
+        if not args.lifecycle_dataset_file:
+            parser.error("lifecycle requires --lifecycle-dataset-file")
+        if args.case_type == "PerformanceCustomDataset" and (
+            args.lifecycle_vectors <= 0 or args.lifecycle_dimensions <= 0
+        ):
+            parser.error("custom lifecycle requires positive --lifecycle-vectors and --lifecycle-dimensions")
+        if args.diagnostics_interval <= 0:
+            parser.error("diagnostics-interval must be positive")
+        if args.service_close_timeout <= 0:
+            parser.error("service-close-timeout must be positive")
     args.out = Path(args.out).expanduser().resolve()
     args.validate_lifecycle = None
     args.vectordbbench_dir = Path(args.vectordbbench_dir).expanduser().resolve() if args.vectordbbench_dir else None
+    args.lifecycle_dataset_file = (
+        Path(args.lifecycle_dataset_file).expanduser().resolve() if args.lifecycle_dataset_file else None
+    )
+    if args.lifecycle and (args.lifecycle_dataset_file is None or not args.lifecycle_dataset_file.is_file()):
+        parser.error("lifecycle dataset file must exist and be a regular file")
     if args.port == 0:
         args.port = find_free_port(args.host)
     args.base_url = f"http://{args.host}:{args.port}"
+    args.pprof_port = find_free_port(args.host) if args.lifecycle else 0
+    args.diagnostics_url = f"http://{args.host}:{args.pprof_port}" if args.lifecycle else ""
     if not args.index_prefix:
         stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
         args.index_prefix = f"treedb_vdbbench_{stamp}_{os.getpid()}"
@@ -2093,9 +3004,10 @@ def main(argv: list[str]) -> int:
         print(f"harness failed before start; error={exc}", file=sys.stderr)
         return 2
     state = HarnessState(root=args.out)
-    context = collect_context(gomap_root, args.vectordbbench_dir)
+    context = collect_context(gomap_root, args.vectordbbench_dir, args.out)
     service_proc: subprocess.Popen[str] | None = None
     service_command: list[str] | None = None
+    sampler: DiagnosticsSampler | None = None
     try:
         service_bin = build_service(state, gomap_root, args.service_bin or None)
         state.service_binary = file_identity(service_bin)
@@ -2108,9 +3020,20 @@ def main(argv: list[str]) -> int:
             port=args.port,
             profile=args.profile,
             health_timeout=args.health_timeout,
+            pprof_addr=f"{args.host}:{args.pprof_port}" if args.lifecycle else "",
         )
+        state.lifecycle_started_ns = time.time_ns()
         state.health = health
         write_json(args.out / "health.json", health)
+        if args.lifecycle:
+            sampler = DiagnosticsSampler(
+                f"{args.diagnostics_url}/debug/treedb/stats",
+                args.out / "diagnostics.jsonl",
+                args.diagnostics_interval,
+                args.data_dir,
+            )
+            sampler.start()
+            initialize_lifecycle_capture(state, args, sampler)
         run_vdbbench_tests(state, args=args, gomap_root=gomap_root, vectordbbench_dir=args.vectordbbench_dir)
         run_vdbbench_rows(
             state,
@@ -2120,7 +3043,14 @@ def main(argv: list[str]) -> int:
             base_url=args.base_url,
             index_prefix=args.index_prefix,
         )
-        if args.skip_route_proof:
+        if args.lifecycle:
+            assert sampler is not None
+            service_command = complete_lifecycle(
+                state, args, gomap_root, service_bin, service_proc, sampler
+            )
+            service_proc = None
+            sampler = None
+        elif args.skip_route_proof:
             add_skip(state, "route_proof", "skip-route-proof requested")
         else:
             run_route_proof_smoke(
@@ -2146,13 +3076,21 @@ def main(argv: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001 - write failure artifact before exiting
         error = {"error": str(exc), "traceback": traceback.format_exc(), "generated_at": iso_now()}
         write_json(args.out / "harness_error.json", error)
+        if service_proc is not None:
+            terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
+            service_proc = None
+        with contextlib.suppress(Exception):
+            finalize_partial_lifecycle(state, args, sampler)
+            sampler = None
         with contextlib.suppress(Exception):
             write_manifest(state, args=args, context=context, service_command=service_command)
         print(f"harness failed; artifact_root={args.out}; error={exc}", file=sys.stderr)
         return 1
     finally:
+        if sampler is not None:
+            sampler.stop()
         if service_proc is not None:
-            terminate_process_group(service_proc)
+            terminate_process_group(service_proc, graceful_timeout=args.service_close_timeout)
 
 
 if __name__ == "__main__":
