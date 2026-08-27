@@ -49,7 +49,9 @@ Each JSONL event uses `treedb-vectordbbench-lifecycle-event/v1`, an increasing
 sequence and UTC timestamp, and a state snapshot containing distinct
 `client_sent`, `server_accepted`, `server_durable`, and `reopened` row counts.
 WAL frontier/total-written counters and the selected cumulative product
-counters must also remain monotonic.
+counters must also remain monotonic. Every event must repeat the same cumulative
+counter key set. `lifecycle.jsonl` must contain exactly one JSON object per line
+and no blank lines.
 
 The strict gate requires these ordered markers:
 

@@ -465,11 +465,10 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertEqual(malformed_complete, 1)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with contextlib.redirect_stdout(io.StringIO()):
-                missing_manifest = harness.main([
-                    "--validate-lifecycle", tmp, "--allow-partial",
-                ])
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            missing_manifest = harness.main([
+                "--validate-lifecycle", tmp, "--allow-partial",
+            ])
 
         self.assertEqual(missing_manifest, 1)
 
@@ -478,32 +477,34 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda rows: rows.pop(5), "missing required stage optimize_start"),
             (lambda rows: rows.__setitem__(slice(5, 7), [rows[6], rows[5]]), "sequence must increase"),
         ):
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                manifest, events = lifecycle_fixture(root)
-                mutation(events)
-                rewrite_lifecycle_fixture(root, manifest, events)
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    mutation(events)
+                    rewrite_lifecycle_fixture(root, manifest, events)
 
-                got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-            self.assertFalse(got["complete"])
-            self.assertTrue(any(expected in item for item in got["errors"] + got["completion_errors"]), got)
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(expected in item for item in got["errors"] + got["completion_errors"]), got)
 
     def test_identity_and_config_must_match_manifest(self) -> None:
         for key, value, expected in (
             ("gomap_commit", "f" * 40, "gomap_commit does not match"),
             ("config_sha256", "f" * 64, "config_sha256 does not match"),
         ):
-            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                manifest, _ = lifecycle_fixture(root)
-                manifest["lifecycle"]["identity"][key] = value
-                harness.write_json(root / "manifest.json", manifest)
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["identity"][key] = value
+                    harness.write_json(root / "manifest.json", manifest)
 
-                got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-            self.assertFalse(got["complete"])
-            self.assertTrue(any(expected in item for item in got["errors"]), got)
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
 
     def test_effective_service_and_harness_config_must_be_present(self) -> None:
         mutations = (
@@ -516,17 +517,18 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda row: row["harness"].__setitem__("ef_construction", -1), "harness.ef_construction"),
         )
         for mutation, expected in mutations:
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                manifest, _ = lifecycle_fixture(root)
-                mutation(manifest)
-                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
-                harness.write_json(root / "manifest.json", manifest)
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(manifest)
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
 
-                got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-            self.assertFalse(got["analyzable"])
-            self.assertTrue(any(expected in item for item in got["errors"]), got)
+                self.assertFalse(got["analyzable"])
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
 
     def test_teardown_counts_must_match_expected_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -560,16 +562,17 @@ class LifecycleValidatorTest(unittest.TestCase):
             (stale_route_identity, "optimized route proof failed"),
             (fallback_route, "optimized route proof failed"),
         ):
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                manifest, events = lifecycle_fixture(root)
-                mutation(events)
-                rewrite_lifecycle_fixture(root, manifest, events)
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    mutation(events)
+                    rewrite_lifecycle_fixture(root, manifest, events)
 
-                got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-            self.assertFalse(got["complete"])
-            self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(expected in item for item in got["completion_errors"]), got)
 
     def test_raw_checksum_and_profile_association_are_verified(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -582,16 +585,18 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertFalse(got["analyzable"])
         self.assertTrue(any("checksum mismatch" in item for item in got["errors"]), got)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            manifest, _ = lifecycle_fixture(root)
-            manifest["lifecycle"]["profiles"][0]["after_sequence"] = 999
-            harness.write_json(root / "manifest.json", manifest)
+        for malformed in (999, []):
+            with self.subTest(after_sequence=malformed):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["profiles"][0]["after_sequence"] = malformed
+                    harness.write_json(root / "manifest.json", manifest)
 
-            got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-        self.assertFalse(got["complete"])
-        self.assertTrue(any("profile state association" in item for item in got["errors"]), got)
+                self.assertFalse(got["complete"])
+                self.assertTrue(any("profile state association" in item for item in got["errors"]), got)
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -612,16 +617,17 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda rows: rows[7]["state"]["counters"].__setitem__("builds", 0), "counters.builds decreased"),
         )
         for mutation, expected in mutations:
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                manifest, events = lifecycle_fixture(root)
-                mutation(events)
-                rewrite_lifecycle_fixture(root, manifest, events)
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, events = lifecycle_fixture(root)
+                    mutation(events)
+                    rewrite_lifecycle_fixture(root, manifest, events)
 
-                got = harness.validate_lifecycle_artifact(root)
+                    got = harness.validate_lifecycle_artifact(root)
 
-            self.assertFalse(got["complete"])
-            self.assertTrue(any(expected in item for item in got["errors"]), got)
+                self.assertFalse(got["complete"])
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
 
 
 class ManifestFileListTest(unittest.TestCase):

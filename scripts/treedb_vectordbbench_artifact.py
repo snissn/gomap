@@ -1150,12 +1150,12 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             not isinstance(relative, str)
             or relative not in raw_by_path
             or profile.get("sha256") != raw_by_path.get(str(relative))
-            or before not in sequence_events
-            or after not in sequence_events
             or isinstance(before, bool)
             or isinstance(after, bool)
             or not isinstance(before, int)
             or not isinstance(after, int)
+            or before not in sequence_events
+            or after not in sequence_events
             or before >= after
         ):
             errors.append(f"profile state association {position} is invalid")
