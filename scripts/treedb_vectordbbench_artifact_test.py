@@ -114,7 +114,6 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         "vector_index_name": "vector_hnsw",
         "query_mode": "exact",
         "quantized_index_name": None,
-        "quantized_rerank_candidates": 0,
         "results": [{"id": "1"}, {"id": "2"}],
         "no_documents": True,
         "stats": {"search_route_hnsw_search_pack": 1},
@@ -1311,6 +1310,32 @@ class LifecycleValidatorTest(unittest.TestCase):
 
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any(expected in error for error in got["errors"]), got)
+
+    def test_scalar_route_configuration_normalizes_row_and_uses_harness_k(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, events = lifecycle_fixture(root)
+            manifest["harness"].update(rows=" Scalar ", k=4, rerank_candidates=1)
+            events[12]["state"]["route"]["name"] = "quantized_rerank"
+            response_path = root / "lifecycle_route_response.json"
+            response = json.loads(response_path.read_text(encoding="utf-8"))
+            response.update({
+                "query_mode": "quantized_rerank",
+                "quantized_index_name": manifest["harness"]["quantized_index_name"],
+                "quantized_rerank_candidates": 4,
+            })
+            response["diagnostics"]["route"] = "quantized_rerank"
+            harness.write_json(response_path, response)
+            next(
+                artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                if artifact["path"] == "lifecycle_route_response.json"
+            )["sha256"] = harness.sha256_file(response_path)
+            manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+            rewrite_lifecycle_fixture(root, manifest, events)
+
+            got = harness.validate_lifecycle_artifact(root)
+
+        self.assertTrue(got["complete"], got)
 
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):
@@ -3346,7 +3371,6 @@ class LifecycleIntegrationTest(unittest.TestCase):
                     "vector_index_name": "vector_hnsw",
                     "query_mode": "exact",
                     "quantized_index_name": None,
-                    "quantized_rerank_candidates": 0,
                     "no_documents": True,
                     "results": [{"id": "1"}, {"id": "2"}],
                     "stats": {"search_route_hnsw_search_pack": 1},
@@ -3389,7 +3413,6 @@ class LifecycleIntegrationTest(unittest.TestCase):
             "vector_index_name": "vector_hnsw",
             "query_mode": "exact",
             "quantized_index_name": None,
-            "quantized_rerank_candidates": 0,
             "no_documents": True,
             "results": [{"id": "1"}, {"id": "2"}],
             "stats": {"search_route_hnsw_search_pack": 1},
