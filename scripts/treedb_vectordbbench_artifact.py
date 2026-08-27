@@ -1170,36 +1170,45 @@ def capture_lifecycle_boundary_diagnostics(
 ) -> None:
     """Synchronously sample each load/build boundary while the adapter is paused."""
     next_boundary = 0
-    while not stop.wait(0.01):
+    observed_size = -1
+    while not stop.wait(0.1):
+        try:
+            current_size = sidecar.stat().st_size
+        except OSError:
+            continue
+        if current_size <= observed_size:
+            continue
+        observed_size = current_size
         try:
             records = read_adapter_lifecycle_records(sidecar)
         except ValueError:
             continue
-        boundary = LIFECYCLE_DIAGNOSTIC_BOUNDARIES[next_boundary]
-        matches = [record for record in records if record.get("event") == boundary]
-        if not matches:
-            continue
-        if len(matches) != 1:
-            raise ValueError(f"adapter lifecycle sidecar has duplicate {boundary} boundaries")
-        boundary_ns = matches[0]["timestamp_ns"]
-        sample = sampler.sample(boundary=boundary, boundary_timestamp_ns=boundary_ns)
-        sample_ns = sample["timestamp_ns"]
-        if sample_ns < boundary_ns:
-            raise RuntimeError(f"{boundary} diagnostics sample predates the adapter boundary")
-        temporary = acknowledgement.with_name(f".{acknowledgement.name}.{os.getpid()}.tmp")
-        try:
-            write_json(temporary, {
-                "boundary": boundary,
-                "boundary_timestamp_ns": boundary_ns,
-                "sample_timestamp_ns": sample_ns,
-            })
-            os.replace(temporary, acknowledgement)
-        finally:
-            with contextlib.suppress(FileNotFoundError):
-                temporary.unlink()
-        next_boundary += 1
-        if next_boundary == len(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
-            return
+        while next_boundary < len(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
+            boundary = LIFECYCLE_DIAGNOSTIC_BOUNDARIES[next_boundary]
+            matches = [record for record in records if record.get("event") == boundary]
+            if not matches:
+                break
+            if len(matches) != 1:
+                raise ValueError(f"adapter lifecycle sidecar has duplicate {boundary} boundaries")
+            boundary_ns = matches[0]["timestamp_ns"]
+            sample = sampler.sample(boundary=boundary, boundary_timestamp_ns=boundary_ns)
+            sample_ns = sample["timestamp_ns"]
+            if sample_ns < boundary_ns:
+                raise RuntimeError(f"{boundary} diagnostics sample predates the adapter boundary")
+            temporary = acknowledgement.with_name(f".{acknowledgement.name}.{os.getpid()}.tmp")
+            try:
+                write_json(temporary, {
+                    "boundary": boundary,
+                    "boundary_timestamp_ns": boundary_ns,
+                    "sample_timestamp_ns": sample_ns,
+                })
+                os.replace(temporary, acknowledgement)
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    temporary.unlink()
+            next_boundary += 1
+            if next_boundary == len(LIFECYCLE_DIAGNOSTIC_BOUNDARIES):
+                return
 
 
 def boundary_diagnostics_snapshot(
@@ -2686,7 +2695,10 @@ def finalize_partial_lifecycle(
         if stage in {"load_end", "optimize_start"}:
             rows = lifecycle_rows(sent, accepted, accepted)
         if sampler is not None and stage in {"load_end", "optimize_start"}:
-            snapshot = boundary_diagnostics_snapshot(stage, record["timestamp_ns"], sampler)
+            try:
+                snapshot = boundary_diagnostics_snapshot(stage, record["timestamp_ns"], sampler)
+            except ValueError:
+                snapshot = sampler.at(record["timestamp_ns"])
         else:
             snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
         journal.append(stage, builder.build(snapshot, rows), timestamp=iso_from_ns(record["timestamp_ns"]))

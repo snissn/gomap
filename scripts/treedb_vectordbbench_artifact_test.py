@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -575,6 +576,57 @@ class VDBBenchBatchTest(unittest.TestCase):
 
 
 class VDBBenchLoadMetricsTest(unittest.TestCase):
+    def test_boundary_capture_reparses_sidecar_only_after_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            acknowledgement = root / "lifecycle-boundary-diagnostics.json"
+            sidecar.write_text("{}\n", encoding="utf-8")
+            initial_size = sidecar.stat().st_size
+            reads = []
+            stop = threading.Event()
+
+            def records(_path):
+                reads.append(sidecar.stat().st_size)
+                if sidecar.stat().st_size == initial_size:
+                    return []
+                return [{"event": "load_end", "timestamp_ns": 4}]
+
+            sampler = mock.Mock()
+            sampler.sample.return_value = {"timestamp_ns": 5, "snapshot": {}}
+            errors = []
+
+            def capture():
+                try:
+                    harness.capture_lifecycle_boundary_diagnostics(
+                        sidecar, acknowledgement, sampler, stop
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=capture)
+            with mock.patch.object(harness, "read_adapter_lifecycle_records", side_effect=records):
+                thread.start()
+                deadline = time.monotonic() + 2
+                while not reads and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(reads, [initial_size])
+                time.sleep(0.25)
+                self.assertEqual(reads, [initial_size])
+                with sidecar.open("a", encoding="utf-8") as stream:
+                    stream.write("x")
+                deadline = time.monotonic() + 2
+                while not acknowledgement.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                stop.set()
+                thread.join(timeout=2)
+                acknowledged_boundary = json.loads(acknowledgement.read_text())["boundary"]
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(reads, [initial_size, initial_size + 1])
+        self.assertEqual(acknowledged_boundary, "load_end")
+
     def test_lifecycle_run_synchronously_captures_each_fast_load_build_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2668,6 +2720,36 @@ class LifecycleIntegrationTest(unittest.TestCase):
 
         self.assertEqual(state.lifecycle["result_status"], "partial")
         self.assertEqual(stages, ["startup", "reset", "load_start", "load_end", "optimize_start"])
+
+    def test_partial_lifecycle_falls_back_when_exact_boundary_sample_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, _ = self._complete_fixture(root)
+            sidecar = root / "adapter-lifecycle.jsonl"
+            records = [json.loads(line) for line in sidecar.read_text(encoding="utf-8").splitlines()]
+            sidecar.write_text(
+                "".join(json.dumps(record) + "\n" for record in records[:-1]), encoding="utf-8"
+            )
+            sampler.samples = [sampler.samples[0]]
+
+            harness.finalize_partial_lifecycle(state, args, sampler)
+            stages = [
+                json.loads(line)["stage"]
+                for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(stages, ["startup", "reset", "load_start", "load_end", "optimize_start"])
+
+    def test_complete_lifecycle_still_requires_exact_boundary_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args, state, sampler, proc = self._complete_fixture(root)
+            sampler.samples = [sampler.samples[0]]
+
+            with self.assertRaisesRegex(ValueError, "load_end diagnostics has no exact sampled snapshot"):
+                harness.complete_lifecycle(
+                    state, args, root, root / "service", proc, sampler
+                )
 
     def test_close_failure_never_records_graceful_close(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
