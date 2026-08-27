@@ -620,6 +620,7 @@ def identified_route_results(value: Any, expected_count: int) -> bool:
             and bool(result["id"])
             for result in value
         )
+        and len({result["id"] for result in value}) == expected_count
     )
 
 

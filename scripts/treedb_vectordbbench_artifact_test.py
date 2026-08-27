@@ -1207,6 +1207,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response.__setitem__("results", [{}, {"id": "2"}]), "results"),
             (lambda response: response.__setitem__("results", [{"id": ""}, {"id": "2"}]), "results"),
             (lambda response: response.__setitem__("results", [{"id": 1}, {"id": "2"}]), "results"),
+            (lambda response: response.__setitem__("results", [{"id": "1"}, {"id": "1"}]), "results"),
             (lambda response: response.__setitem__("results", []), "result count"),
             (lambda response: response.__setitem__("results", [{"id": "1"}]), "result count"),
             (lambda response: response.__setitem__("stats", []), "stats"),
@@ -3341,6 +3342,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
             [{}, {"id": "2"}],
             [{"id": ""}, {"id": "2"}],
             [{"id": 1}, {"id": "2"}],
+            [{"id": "1"}, {"id": "1"}],
         ):
             with self.subTest(results=results), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
