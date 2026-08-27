@@ -643,6 +643,12 @@ type nativeScalarSearchWork struct {
 	underfill       bool
 }
 
+type nativeScalarSeedBudget struct {
+	rows            int
+	scores          int
+	planesRemaining int
+}
+
 func (p *nativeScalarFilterExecution) exact() bool {
 	return p != nil && p.exactScoring
 }
@@ -733,15 +739,19 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 	if preparedCosine {
 		prepared = &preparedQuery
 	}
+	seedBudget := nativeScalarSeedBudget{
+		rows: nativeScalarANNSeedProbeLimit, scores: nativeScalarANNSeedLimit, planesRemaining: 1,
+	}
 	if len(view.deltaNodes) == 0 {
-		results, work, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
+		results, work, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
 		return results, work, err
 	}
-	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
+	seedBudget.planesRemaining = 2
+	base, baseWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.scalarColumns, view.currentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
-	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaScalarColumns, view.deltaCurrentNode, plan, view, plan.exact(), &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
+	delta, deltaWork, err := searchVectorIndexViewPlaneNativeScalar(query, queryNorm, prepared, topK, efSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaScalarColumns, view.deltaCurrentNode, plan, view, plan.exact(), &seedBudget, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
 	if err != nil {
 		return nil, baseWork, err
 	}
@@ -757,7 +767,7 @@ func (view *vectorIndexSearchView) searchWithNativeScalarFilterBuffer(query []fl
 	return merged, work, err
 }
 
-func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, resultIDBytes *[]byte) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
+func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, view *vectorIndexSearchView, exact bool, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, resultIDBytes *[]byte) ([]VectorIndexSearchResult, nativeScalarSearchWork, error) {
 	runtimeIndex := VectorIndex{metric: view.metric, encoding: view.encoding, dimensions: view.dimensions, m: view.m, efSearch: view.efSearch, nodes: nodes, entry: entry, maxLevel: maxLevel}
 	var candidates []vectorIndexCandidate
 	work := nativeScalarSearchWork{}
@@ -796,7 +806,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		scratch.out = candidates
 	} else {
 		var err error
-		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, scratch)
+		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, seedBudget, scratch)
 		if err != nil {
 			return nil, work, err
 		}
@@ -834,7 +844,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	return *results, work, nil
 }
 
-func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
+func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
 	work := nativeScalarSearchWork{}
 	if idx.entry < 0 || len(idx.nodes) == 0 || topK <= 0 {
 		return nil, work, nil
@@ -858,14 +868,31 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 	eligible := scratch.liveBest[:0]
 
 	seedEligibleRegion := plan.identity == NativeScalarFilterPlanVectorAligned
-	if seedEligibleRegion {
-		probeRows := minInt(len(idx.nodes), nativeScalarANNSeedProbeLimit)
+	if seedEligibleRegion && seedBudget != nil && seedBudget.rows > 0 &&
+		seedBudget.scores > 0 && seedBudget.planesRemaining > 0 {
+		planeProbeLimit := (seedBudget.rows + seedBudget.planesRemaining - 1) / seedBudget.planesRemaining
+		planeScoreLimit := (seedBudget.scores + seedBudget.planesRemaining - 1) / seedBudget.planesRemaining
+		seedBudget.planesRemaining--
+		probeRows := minInt(len(idx.nodes), planeProbeLimit)
 		seedBuckets := minInt(probeRows, nativeScalarANNSeedLimit)
-		// Preserve at least three quarters of the total score budget for the
+		// Preserve at least three quarters of the plane's score budget for the
 		// ordinary entry and graph navigation. Tiny ef/top-k searches must not
 		// spend their entire frontier on scalar-derived entries.
-		seedScoreLimit := minInt(nativeScalarANNSeedLimit, explorationLimit/4)
-		for bucket := 0; bucket < seedBuckets && work.scored < seedScoreLimit; bucket++ {
+		seedScoreLimit := minInt(planeScoreLimit, explorationLimit/4)
+		stride := maxInt(1, seedBuckets*3/5)
+		for {
+			left, right := stride, seedBuckets
+			for right != 0 {
+				left, right = right, left%right
+			}
+			if left == 1 {
+				break
+			}
+			stride++
+		}
+		seedScores := 0
+		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit; ordinal++ {
+			bucket := ordinal * stride % seedBuckets
 			start := bucket * probeRows / seedBuckets
 			end := (bucket + 1) * probeRows / seedBuckets
 			for probe := start; probe < end; probe++ {
@@ -873,6 +900,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				// evenly covers the full immutable ordinal space for large graphs.
 				nodeID := int(uint64(probe) * uint64(len(idx.nodes)) / uint64(probeRows))
 				work.seedRowsVisited++
+				seedBudget.rows--
 				node := &idx.nodes[nodeID]
 				if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
 					continue
@@ -880,6 +908,8 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 				visited[nodeID] = mark
 				distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
 				work.scored++
+				seedScores++
+				seedBudget.scores--
 				if math.IsInf(float64(distance), 1) {
 					continue
 				}
@@ -899,7 +929,7 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 	// predicate.
 	entryPoint := idx.entry
 	if seedEligibleRegion {
-		upperLimit := maxInt(0, explorationLimit-1)
+		upperLimit := maxInt(0, explorationLimit-2)
 		for layer := idx.maxLevel; layer > 0 && work.scored < upperLimit; layer-- {
 			entryPoint = idx.greedyNearestAtLayerBoundedLocked(query, queryNorm, prepared, entryPoint, layer, upperLimit, &work.scored)
 		}

@@ -957,10 +957,13 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 	var scratch vectorIndexSearchScratch
 	var results []VectorIndexSearchResult
 	var resultIDBytes []byte
+	seedBudget := nativeScalarSeedBudget{
+		rows: nativeScalarANNSeedProbeLimit, scores: nativeScalarANNSeedLimit, planesRemaining: 1,
+	}
 	got, work, err := searchVectorIndexViewPlaneNativeScalar(
 		query, 1, nil, topK, efSearch,
 		nodes, 0, 0, columns, nil, plan, view, false,
-		&scratch, &results, &resultIDBytes,
+		&seedBudget, &scratch, &results, &resultIDBytes,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -986,6 +989,161 @@ func TestNativeScalarANNSeedsEligibleRegionBeyondGlobalFrontier(t *testing.T) {
 		work.visited != work.seedRowsVisited+work.scored ||
 		work.admitted != topK || work.underfill {
 		t.Fatalf("unbounded or dishonest scalar ANN work=%+v score_limit=%d", work, explorationLimit)
+	}
+}
+
+func TestNativeScalarANNReducedSeedBudgetSpansWholeGraph(t *testing.T) {
+	const rows = 5200
+	nodes := make([]vectorIndexNode, rows)
+	column := newVectorIndexScalarColumn(IndexValueString)
+	for row := range nodes {
+		tenant := []byte("beta")
+		vector := []float32{0, 1}
+		if row < 650 || row >= 3000 && row < 3300 {
+			tenant = []byte("alpha")
+		}
+		if row >= 3000 && row < 3300 {
+			vector = []float32{1, 0}
+		}
+		nodes[row] = vectorIndexNode{
+			documentID: []byte(fmt.Sprintf("doc-%05d", row)), vector: vector,
+			normSquared: 1, cachedInvNorm: 1, neighbors: make([][]vectorIndexNeighbor, 1),
+		}
+		column.appendPrevalidated(tenant, true)
+	}
+	plan := &nativeScalarFilterExecution{
+		identity: NativeScalarFilterPlanVectorAligned,
+		clauses: []nativeScalarClause{{
+			indexName: "tenant_idx", lower: []byte("alpha"), upper: []byte("alpha"),
+			lowerInclusive: true, upperInclusive: true,
+		}},
+	}
+	view := &vectorIndexSearchView{
+		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
+		dimensions: 2, m: 8, efSearch: 1,
+	}
+	budget := nativeScalarSeedBudget{
+		rows: nativeScalarANNSeedProbeLimit, scores: nativeScalarANNSeedLimit, planesRemaining: 1,
+	}
+	var scratch vectorIndexSearchScratch
+	var results []VectorIndexSearchResult
+	var ids []byte
+	got, work, err := searchVectorIndexViewPlaneNativeScalar(
+		[]float32{1, 0}, 1, nil, 1, 1, nodes, 0, 0,
+		map[string]vectorIndexScalarColumn{"tenant_idx": column}, nil,
+		plan, view, false, &budget, &scratch, &results, &ids,
+	)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("reduced-budget search results=%+v work=%+v err=%v", got, work, err)
+	}
+	if id := string(got[0].ID); id < "doc-03000" || id >= "doc-03300" {
+		t.Fatalf("reduced seed budget stayed in early buckets: id=%q work=%+v", id, work)
+	}
+	if work.eligibleSeeds > nativeScalarANNVisitFactor/4 {
+		t.Fatalf("tiny-budget seed scores exceeded reserved share: %+v", work)
+	}
+}
+
+func TestNativeScalarANNSeedBudgetSharedAcrossViewPlanes(t *testing.T) {
+	const rows = 5200
+	buildPlane := func(prefix string) ([]vectorIndexNode, vectorIndexScalarColumn) {
+		nodes := make([]vectorIndexNode, rows)
+		column := newVectorIndexScalarColumn(IndexValueString)
+		for row := range nodes {
+			tenant := []byte("beta")
+			vector := []float32{0, 1}
+			if row >= 4800 {
+				tenant = []byte("alpha")
+				vector = []float32{1, 0}
+			}
+			nodes[row] = vectorIndexNode{
+				documentID: []byte(fmt.Sprintf("%s-%05d", prefix, row)), vector: vector,
+				normSquared: 1, cachedInvNorm: 1, neighbors: make([][]vectorIndexNeighbor, 1),
+			}
+			column.appendPrevalidated(tenant, true)
+		}
+		return nodes, column
+	}
+	baseNodes, baseColumn := buildPlane("base")
+	deltaNodes, deltaColumn := buildPlane("delta")
+	view := &vectorIndexSearchView{
+		name: "shared-seed-budget", sourceDocumentRootsValid: true,
+		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
+		dimensions: 2, m: 8, efSearch: 16,
+		nodes: baseNodes, entry: 0,
+		scalarColumns: map[string]vectorIndexScalarColumn{"tenant_idx": baseColumn},
+		deltaNodes:    deltaNodes, deltaEntry: 0,
+		deltaScalarColumns: map[string]vectorIndexScalarColumn{"tenant_idx": deltaColumn},
+	}
+	plan := &nativeScalarFilterExecution{
+		identity: NativeScalarFilterPlanVectorAligned,
+		clauses: []nativeScalarClause{{
+			indexName: "tenant_idx", lower: []byte("alpha"), upper: []byte("alpha"),
+			lowerInclusive: true, upperInclusive: true,
+		}},
+	}
+	var buffer VectorIndexSearchBuffer
+	got, work, err := view.searchWithNativeScalarFilterBuffer([]float32{1, 0}, 2, 16, plan, &buffer)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("two-plane seeded search results=%+v work=%+v err=%v", got, work, err)
+	}
+	if work.seedRowsVisited > nativeScalarANNSeedProbeLimit ||
+		work.eligibleSeeds > nativeScalarANNSeedLimit {
+		t.Fatalf("two-plane search exceeded query-wide seed caps: %+v", work)
+	}
+}
+
+func TestNativeScalarANNReservesLayerZeroExpansion(t *testing.T) {
+	const rows = 17
+	nodes := make([]vectorIndexNode, rows)
+	column := newVectorIndexScalarColumn(IndexValueString)
+	for row := range nodes {
+		vector := []float32{float32(row + 1), 1}
+		if row == rows-1 {
+			vector = []float32{100, 0}
+		}
+		normSquared := float64(vector[0]*vector[0] + vector[1]*vector[1])
+		nodes[row] = vectorIndexNode{
+			documentID: []byte(fmt.Sprintf("doc-%02d", row)), vector: vector,
+			normSquared: normSquared, cachedInvNorm: float32(1 / math.Sqrt(normSquared)),
+			neighbors: make([][]vectorIndexNeighbor, 2),
+		}
+		tenant := []byte("beta")
+		if row == rows-1 {
+			tenant = []byte("alpha")
+		}
+		column.appendPrevalidated(tenant, true)
+	}
+	for row := range 15 {
+		nodes[row].neighbors[1] = []vectorIndexNeighbor{{nodeID: row + 1}}
+	}
+	nodes[13].neighbors[0] = []vectorIndexNeighbor{{nodeID: rows - 1}}
+	nodes[14].neighbors[0] = []vectorIndexNeighbor{{nodeID: rows - 1}}
+	plan := &nativeScalarFilterExecution{
+		identity: NativeScalarFilterPlanVectorAligned,
+		clauses: []nativeScalarClause{{
+			indexName: "tenant_idx", lower: []byte("alpha"), upper: []byte("alpha"),
+			lowerInclusive: true, upperInclusive: true,
+		}},
+	}
+	view := &vectorIndexSearchView{
+		metric: VectorMetricCosine, encoding: VectorIndexEncodingFloat32,
+		dimensions: 2, m: 8, efSearch: 1,
+	}
+	budget := nativeScalarSeedBudget{rows: nativeScalarANNSeedProbeLimit, planesRemaining: 1}
+	var scratch vectorIndexSearchScratch
+	var results []VectorIndexSearchResult
+	var ids []byte
+	got, work, err := searchVectorIndexViewPlaneNativeScalar(
+		[]float32{1, 0}, 1, nil, 1, 1, nodes, 0, 1,
+		map[string]vectorIndexScalarColumn{"tenant_idx": column}, nil,
+		plan, view, false, &budget, &scratch, &results, &ids,
+	)
+	if err != nil || len(got) != 1 || string(got[0].ID) != "doc-16" {
+		t.Fatalf("layer-zero navigation was not reserved: results=%+v work=%+v err=%v", got, work, err)
+	}
+	if work.scored > nativeScalarANNVisitFactor {
+		t.Fatalf("layer-zero reservation exceeded score budget: %+v", work)
 	}
 }
 
