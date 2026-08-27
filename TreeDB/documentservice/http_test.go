@@ -30,6 +30,22 @@ func TestDenseVectorSearchResponseAlwaysSerializesScalarFilterPlan(t *testing.T)
 	}
 }
 
+func TestHTTPFilterDocumentsRejectsAfterIDWithoutCursorPage(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	handler := NewHandler(svc)
+	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "docs", Dimension: 2}, http.StatusOK, nil)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		"/v1/indexes/docs/documents/filter", bytes.NewBufferString(`{"after_id":"a"}`))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("after_id without cursor_page status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	assertHTTPErrorCode(t, rr.Body.Bytes(), CodeInvalidRequest)
+}
+
 func TestHTTPMalformedJSONKeywordHybridAndErrorPayloads(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

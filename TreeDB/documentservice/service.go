@@ -508,6 +508,9 @@ func (s *Service) FilterDocuments(ctx context.Context, index string, req FilterD
 	if req.Limit < 0 || req.Offset < 0 {
 		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "limit and offset must be non-negative")
 	}
+	if req.AfterID != "" && !req.CursorPage {
+		return FilterDocumentsResponse{}, serviceError(CodeInvalidRequest, "after_id requires cursor_page=true")
+	}
 	if err := req.Filter.Validate(); err != nil {
 		return FilterDocumentsResponse{}, err
 	}
