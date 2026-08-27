@@ -160,7 +160,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
                 "/tmp/treedb-document-service", "-dir", "/tmp/treedb-data",
                 "-addr", "127.0.0.1:9876", "-profile", "command_wal_durable",
             ],
-            "binary": {"sha256": "3" * 64},
+            "binary": {"path": "/tmp/treedb-document-service", "sha256": "3" * 64},
         },
         "harness": {
             "case_type": "Performance768D50K",
@@ -888,13 +888,37 @@ class LifecycleValidatorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             manifest, _ = lifecycle_fixture(root)
-            manifest["service"]["command"][0] = "/different/treedb-document-service"
+            manifest["service"]["command"][2] = "/different/treedb-data"
             harness.write_json(root / "manifest.json", manifest)
 
             got = harness.validate_lifecycle_artifact(root)
 
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("config_sha256 does not match" in item for item in got["errors"]), got)
+
+    def test_service_command_executable_matches_declared_binary_path(self) -> None:
+        cases = (
+            ("missing-path", lambda row: row["service"]["binary"].pop("path"), "binary.path"),
+            ("typed-path", lambda row: row["service"]["binary"].__setitem__("path", 7), "binary.path"),
+            (
+                "mismatched-command",
+                lambda row: row["service"]["command"].__setitem__(0, "/different/treedb-document-service"),
+                "command[0]",
+            ),
+        )
+        for label, mutation, expected in cases:
+            with self.subTest(binding=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    mutation(manifest)
+                    manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+
+                    got = harness.validate_lifecycle_artifact(root)
+
+                self.assertFalse(got["analyzable"], got)
+                self.assertTrue(any(expected in item for item in got["errors"]), got)
 
     def test_concurrency_tokens_are_bounded_ascii_decimals(self) -> None:
         for concurrency in ("²", "9" * 5000):

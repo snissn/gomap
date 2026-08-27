@@ -76,7 +76,8 @@ JSONL, raw artifacts, and every profile window. The minimum effective
 configuration includes a canonical public service profile, case type,
 the exact non-empty service argv with one matching `-profile <profile>`
 selector, concurrency, batch size, `m`, and `ef_construction`. The argv is part
-of the effective-configuration checksum. Standard case names (for
+of the effective-configuration checksum, and its executable must equal the
+path of the SHA-256-bound service binary. Standard case names (for
 example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries

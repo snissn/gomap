@@ -1073,6 +1073,16 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or service_command[profile_positions[0] + 1] != service.get("profile")
         ):
             errors.append("manifest.service.command must contain exactly one matching '-profile <profile>' selector")
+    binary_path = binary.get("path")
+    if not isinstance(binary_path, str) or not binary_path:
+        errors.append("manifest.service.binary.path must be a non-empty string")
+    elif (
+        isinstance(service_command, list)
+        and service_command
+        and isinstance(service_command[0], str)
+        and service_command[0] != binary_path
+    ):
+        errors.append("manifest.service.command[0] must match manifest.service.binary.path")
     case_type = harness.get("case_type")
     if not isinstance(case_type, str) or not case_type.strip():
         errors.append("manifest.harness.case_type must be non-empty")
