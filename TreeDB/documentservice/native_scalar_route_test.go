@@ -44,10 +44,25 @@ func TestServiceNativeScalarDenseAndVectorOnlyHybridParity(t *testing.T) {
 	}
 	if dense.Route != RouteAnn ||
 		dense.Exact ||
+		!dense.NativeBasePlusLiveDelta ||
+		dense.ScalarFilterMembershipSource != "bounded_complete_set" ||
 		dense.ScalarFilterPlan != collections.NativeScalarFilterPlanCompleteExact ||
+		dense.ScalarFilterCandidates != 2 ||
 		dense.ScalarFilterCandidateIDs != 2 ||
+		dense.ScalarFilterRetainedCandidateIDs != 2 ||
+		dense.ScalarFilterRefinedCandidateIDs != 2 ||
+		dense.ScalarFilterVisited != 2 ||
+		dense.ScalarFilterScored != 2 ||
 		dense.ScalarFilterAdmitted != 2 ||
-		!dense.ScalarFilterExactScoring {
+		!dense.ScalarFilterExactScoring ||
+		dense.ScalarFilterUnbounded != 0 ||
+		dense.ExactFallbacks != 0 ||
+		dense.FullDocumentScanFallbacks != 0 ||
+		dense.AllowedIDMaterializationRows != 2 ||
+		dense.PrimaryDocumentScans != 0 ||
+		dense.DocumentMaterializationRows != 2 ||
+		dense.VisibilityMismatchCount != 0 ||
+		dense.VisibilityRetryCount != 0 {
 		t.Fatalf("dense=%+v", dense)
 	}
 	hybrid, err := svc.SearchHybrid(ctx, create.Name, HybridSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 2, VectorCandidateLimit: 2, EfSearch: 16, Filter: filter})

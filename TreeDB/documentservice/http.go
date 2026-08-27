@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -293,6 +294,10 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	status := httpStatusForError(err)
+	if status >= http.StatusInternalServerError {
+		log.Printf("document service handled error: status=%d code=%s chain=%s", status, ErrorCodeOf(err), formatErrorChain(err))
+	}
 	var out *Error
 	if serviceCode := ErrorCodeOf(err); serviceCode != CodeInternal {
 		var serviceErr *Error
@@ -303,5 +308,17 @@ func writeError(w http.ResponseWriter, err error) {
 	if out == nil {
 		out = &Error{Code: ErrorCodeOf(err), Message: err.Error()}
 	}
-	writeJSON(w, httpStatusForError(err), map[string]any{"error": out})
+	writeJSON(w, status, map[string]any{"error": out})
+}
+
+func formatErrorChain(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	var chain []string
+	for err != nil && len(chain) < 16 {
+		chain = append(chain, fmt.Sprintf("%T: %v", err, err))
+		err = errors.Unwrap(err)
+	}
+	return strings.Join(chain, " <- ")
 }

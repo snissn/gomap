@@ -1140,7 +1140,7 @@ func TestColumnStoreProfileSupportRejectsWriteDomainCacheOpen(t *testing.T) {
 	domain := &collectionWriteDomain{
 		loaded:         true,
 		meta:           meta,
-		catalog:        &collectionCatalog{meta: meta},
+		catalog:        &collectionCatalog{meta: meta, pager: d.Pager()},
 		baseSystemRoot: state.SystemRootPageID,
 		baseCommitSeq:  state.CommitSeq,
 	}

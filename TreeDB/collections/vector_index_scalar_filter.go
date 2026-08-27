@@ -399,14 +399,16 @@ func (idx *VectorIndex) insertVectorWithNativeScalarLocked(documentID []byte, ve
 }
 
 type nativeScalarFilterExecution struct {
-	identity         NativeScalarFilterPlan
-	clauses          []nativeScalarClause
-	finiteIDs        hybridScalarAllowSet
-	probeIDs         uint64
-	probeTruncated   uint64
-	candidateIDs     uint64
-	sourceGeneration uint64
-	exactScoring     bool
+	identity             NativeScalarFilterPlan
+	clauses              []nativeScalarClause
+	finiteIDs            hybridScalarAllowSet
+	probeIDs             uint64
+	probeTruncated       uint64
+	candidateIDs         uint64
+	retainedCandidateIDs uint64
+	refinedCandidateIDs  uint64
+	sourceGeneration     uint64
+	exactScoring         bool
 }
 
 func (p *nativeScalarFilterExecution) matches(columns map[string]vectorIndexScalarColumn, row int, id []byte) bool {
@@ -533,6 +535,8 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter) (*native
 		}
 		plan.finiteIDs = candidates
 		plan.candidateIDs = uint64(len(candidates))
+		plan.retainedCandidateIDs = uint64(len(candidates))
+		plan.refinedCandidateIDs = uint64(len(candidates))
 		plan.exactScoring = len(candidates) <= nativeScalarExactSafetyCap
 		if plan.exactScoring {
 			plan.identity = NativeScalarFilterPlanCompleteExact
@@ -543,6 +547,8 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter) (*native
 	}
 	plan.finiteIDs = candidates
 	plan.candidateIDs = uint64(len(candidates))
+	plan.retainedCandidateIDs = uint64(len(candidates))
+	plan.refinedCandidateIDs = uint64(len(candidates))
 	plan.identity = NativeScalarFilterPlanMixed
 	plan.exactScoring = len(candidates) <= nativeScalarExactSafetyCap
 	return plan, nil
@@ -673,6 +679,7 @@ func (p *nativeScalarFilterExecution) refineMixed(view *vectorIndexSearchView) {
 		}
 	}
 	p.candidateIDs = uint64(len(p.finiteIDs))
+	p.refinedCandidateIDs = uint64(len(p.finiteIDs))
 	p.exactScoring = len(p.finiteIDs) <= nativeScalarExactSafetyCap
 }
 

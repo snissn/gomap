@@ -255,11 +255,19 @@ class TreeDBClient:
         limit: int = 0,
         offset: int = 0,
         return_embedding: bool = False,
+        after_id: Optional[str] = None,
+        cursor_page: bool = False,
         expected_generation: Optional[int] = None,
     ) -> FilterDocumentsResponse:
         """List documents matching a server-side filter in document-ID order."""
 
+        if after_id is not None and not cursor_page:
+            raise InvalidRequestError("invalid_request", "after_id requires cursor_page=True")
         request: dict[str, Any] = {"limit": limit, "offset": offset, "return_embedding": return_embedding}
+        if after_id is not None:
+            request["after_id"] = str(after_id)
+        if cursor_page:
+            request["cursor_page"] = True
         _add_filter(request, filter)
         _add_expected_generation(request, expected_generation)
         payload = self._request("POST", self._index_path(index, "documents", "filter"), request)
@@ -280,13 +288,11 @@ class TreeDBClient:
         """Score a query embedding through the TreeDB dense search route.
 
         ``route`` selects the execution path (v1alpha2): ``"ann"`` uses a
-        compatible native_runtime or column_graph vector index (the service
-        default when one exists and no filter is supplied); ``"exact"`` keeps
-        the bounded filtered scan. Filters require the exact route — the
-        service rejects filtered ANN requests with a typed error instead of
-        downgrading. Unsupported route values raise
-        :class:`InvalidRequestError` locally; the client never falls back
-        between routes on its own.
+        compatible native_runtime or column_graph vector index; ``"exact"``
+        keeps the bounded filtered scan. Declared scalar filters are supported
+        by native_runtime ANN and expose route/work diagnostics in the response.
+        Unsupported filter shapes fail closed; neither the client nor service
+        silently downgrades an ANN request to exact search.
         """
 
         if route is not None and route not in ("ann", "exact"):

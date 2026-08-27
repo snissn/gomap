@@ -102,6 +102,12 @@ func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMe
 		return nil, emptyStats, err
 	}
 	defer func() { _ = snap.Close() }()
+	publishTables, cleanupPointerized, err := pointerizeCollectionRootDeltaTables(c.db, newMeta, plan.rootNames, plan.tables)
+	if err != nil {
+		resetCollectionTables(plan.tables)
+		return nil, emptyStats, err
+	}
+	defer cleanupPointerized()
 
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(plan.rootNames))
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
@@ -112,7 +118,7 @@ func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMe
 		resetCollectionTables(plan.tables)
 	}()
 	for i, rootName := range plan.rootNames {
-		iter := plan.tables[i].NewIterator(nil, nil)
+		iter := publishTables[i].NewIterator(nil, nil)
 		iterators = append(iterators, iter)
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      plan.baseRootIDs[rootName],
@@ -121,7 +127,13 @@ func (c *Collection) createTextIndexOnce(def TextIndexDefinition) (*CollectionMe
 		})
 	}
 
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+	if hook := testBeforeSchemaBackfillPublishHook.ptr.Load(); hook != nil && hook.fn != nil {
+		hook.fn("text_index")
+	}
+	preflight := func() error {
+		return c.validateMutationRootDescriptors(snap.Pager(), snapshotUserRoot(snap), snapshotSystemRoot(snap), snapshotCommitSeq(snap))
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildSchemaAndRootDescriptorSystemIterator(baseMeta, newMeta, plan.rootNames, plan.baseRootIDs, rootIDs)
 	})
 	if err != nil {

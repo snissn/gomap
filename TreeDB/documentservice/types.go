@@ -197,6 +197,8 @@ type FilterDocumentsRequest struct {
 	Limit              int     `json:"limit,omitempty"`
 	Offset             int     `json:"offset,omitempty"`
 	ReturnEmbedding    bool    `json:"return_embedding,omitempty"`
+	AfterID            string  `json:"after_id,omitempty"`
+	CursorPage         bool    `json:"cursor_page,omitempty"`
 }
 
 type FilterDocumentsResponse struct {
@@ -204,6 +206,8 @@ type FilterDocumentsResponse struct {
 	Documents    []Document `json:"documents"`
 	MatchedCount int        `json:"matched_count"`
 	Truncated    bool       `json:"truncated,omitempty"`
+	NextAfterID  string     `json:"next_after_id,omitempty"`
+	Exhausted    bool       `json:"exhausted,omitempty"`
 }
 
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route
@@ -221,20 +225,34 @@ type DenseVectorSearchRequest struct {
 }
 
 type DenseVectorSearchResponse struct {
-	Index                      IndexInfo                          `json:"index"`
-	Documents                  []Document                         `json:"documents"`
-	Metric                     Metric                             `json:"metric"`
-	Route                      Route                              `json:"route,omitempty"`
-	Exact                      bool                               `json:"exact"`
-	Candidates                 int                                `json:"candidates"`
-	ScalarFilterPlan           collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs       uint64                             `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated uint64                             `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidateIDs   uint64                             `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterVisited        uint64                             `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterAdmitted       uint64                             `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterExactScoring   bool                               `json:"scalar_filter_exact_scoring,omitempty"`
-	ScalarFilterUnderfill      bool                               `json:"scalar_filter_underfill,omitempty"`
+	Index                            IndexInfo                          `json:"index"`
+	Documents                        []Document                         `json:"documents"`
+	Metric                           Metric                             `json:"metric"`
+	Route                            Route                              `json:"route,omitempty"`
+	Exact                            bool                               `json:"exact"`
+	Candidates                       int                                `json:"candidates"`
+	NativeBasePlusLiveDelta          bool                               `json:"native_base_plus_live_delta"`
+	ScalarFilterMembershipSource     string                             `json:"scalar_filter_membership_source"`
+	ScalarFilterPlan                 collections.NativeScalarFilterPlan `json:"scalar_filter_plan"`
+	ScalarFilterProbeIDs             uint64                             `json:"scalar_filter_probe_ids"`
+	ScalarFilterProbeTruncated       uint64                             `json:"scalar_filter_probe_truncated"`
+	ScalarFilterCandidates           uint64                             `json:"scalar_filter_candidates"`
+	ScalarFilterCandidateIDs         uint64                             `json:"scalar_filter_candidate_ids"`
+	ScalarFilterRetainedCandidateIDs uint64                             `json:"scalar_filter_retained_candidate_ids"`
+	ScalarFilterRefinedCandidateIDs  uint64                             `json:"scalar_filter_refined_candidate_ids"`
+	ScalarFilterVisited              uint64                             `json:"scalar_filter_visited"`
+	ScalarFilterScored               uint64                             `json:"scalar_filter_scored"`
+	ScalarFilterAdmitted             uint64                             `json:"scalar_filter_admitted"`
+	ScalarFilterExactScoring         bool                               `json:"scalar_filter_exact_scoring"`
+	ScalarFilterUnderfill            bool                               `json:"scalar_filter_underfill"`
+	ScalarFilterUnbounded            uint64                             `json:"scalar_filter_unbounded"`
+	ExactFallbacks                   uint64                             `json:"exact_fallbacks"`
+	FullDocumentScanFallbacks        uint64                             `json:"full_document_scan_fallbacks"`
+	AllowedIDMaterializationRows     uint64                             `json:"allowed_id_materialization_rows"`
+	PrimaryDocumentScans             uint64                             `json:"primary_document_scans"`
+	DocumentMaterializationRows      uint64                             `json:"document_materialization_rows"`
+	VisibilityMismatchCount          uint64                             `json:"visibility_mismatch_count"`
+	VisibilityRetryCount             uint64                             `json:"visibility_retry_count"`
 }
 
 // Route selects the dense search execution path.

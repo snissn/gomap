@@ -77,6 +77,10 @@ class IndexModelTests(unittest.TestCase):
                 "text_field": "content",
                 "text_index_name": "content",
                 "document_type": "treedb_document_service_v1",
+                "scalar_fields": [
+                    {"field": "meta.user_id", "index_name": "scalar.meta.user_id", "value_type": "string"},
+                    {"field": "meta.fpath", "index_name": "scalar.meta.fpath", "value_type": "string"},
+                ],
                 "capabilities": {
                     "dense_vector_search": True,
                     "exact_dense_scoring": True,
@@ -96,6 +100,9 @@ class IndexModelTests(unittest.TestCase):
         self.assertEqual(info.vector_index_name, "embedding")
         self.assertEqual(info.text_field, "content")
         self.assertEqual(info.text_index_name, "content")
+        self.assertEqual([(row.field, row.value_type) for row in info.scalar_fields], [
+            ("meta.user_id", "string"), ("meta.fpath", "string"),
+        ])
         self.assertTrue(info.capabilities.metadata_filters)
         self.assertTrue(info.capabilities.keyword_search)
         self.assertTrue(info.capabilities.hybrid_search)
