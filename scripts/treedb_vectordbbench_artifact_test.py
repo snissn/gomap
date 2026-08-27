@@ -11,6 +11,7 @@ import io
 import inspect
 import json
 import os
+import shlex
 import signal
 import subprocess
 import tempfile
@@ -135,6 +136,22 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     service_binary.write_bytes(b"fixture treedb document service\n")
     service_binary.chmod(0o755)
     service_binary_sha256 = harness.sha256_file(service_binary)
+    vdbbench_command = [
+        "python", "-m", "vectordb_bench.cli.vectordbbench",
+        "treedbcolumngraphexact",
+        "--base-url", "http://127.0.0.1:9876",
+        "--index-name", "index-a",
+        "--timeout", "30.0",
+        "--m", "16",
+        "--ef-construction", "128",
+        "--ef-search", "100",
+        "--case-type", "PerformanceCustomDataset",
+        "--k", "2",
+        "--num-concurrency", "32",
+        "--concurrency-duration", "30",
+        "--db-label", "fixture-lifecycle",
+    ]
+    vdbbench_command_string = shlex.join(vdbbench_command)
     profile = root / "profiles" / "build.cpu.pprof"
     profile.parent.mkdir(parents=True)
     profile.write_bytes(valid_pprof_fixture())
@@ -318,6 +335,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             },
         },
         "service": {
+            "base_url": "http://127.0.0.1:9876",
             "profile": "command_wal_durable",
             "data_dir": str(data_dir),
             "command": [
@@ -333,6 +351,9 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "k": 2,
             "num_per_batch": 500,
             "num_concurrency": "32",
+            "concurrency_duration": 30,
+            "client_timeout": 30.0,
+            "db_label": "fixture-lifecycle",
             "m": 16,
             "ef_construction": 128,
             "ef_search": 100,
@@ -342,12 +363,23 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         },
         "vdbbench": [{
             "row": "exact",
-            "command": (
-                "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact "
-                "--base-url http://127.0.0.1:9876"
-            ),
+            "command": vdbbench_command_string,
             "exit_code": 0,
             "load_metrics": load_metrics,
+        }],
+        "commands": [{
+            "name": "vdbbench_exact",
+            "command": vdbbench_command,
+            "command_string": vdbbench_command_string,
+            "cwd": str(root),
+            "started_at": "2026-08-27T00:00:00Z",
+            "finished_at": "2026-08-27T00:00:03Z",
+            "duration_seconds": 3.0,
+            "exit_code": 0,
+            "stdout": "commands/vdbbench_exact.stdout.txt",
+            "stderr": "commands/vdbbench_exact.stderr.txt",
+            "skipped": False,
+            "skip_reason": None,
         }],
         "route_proof": None,
         "lifecycle_count_proof": "lifecycle_count_response.json",
@@ -408,6 +440,44 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     }
     harness.write_json(root / "manifest.json", manifest)
     return manifest, events
+
+
+def set_fixture_vdbbench_command(manifest: dict, row: str) -> None:
+    subcommand = {
+        "exact": "treedbcolumngraphexact",
+        "scalar": "treedbscalaru8rerank",
+    }[row]
+    load_metrics = manifest["vdbbench"][0]["load_metrics"]
+    command = [
+        "python", "-m", "vectordb_bench.cli.vectordbbench", subcommand,
+        "--base-url", manifest["service"]["base_url"],
+        "--index-name", load_metrics["index_name"],
+        "--timeout", str(manifest["harness"]["client_timeout"]),
+        "--m", str(manifest["harness"]["m"]),
+        "--ef-construction", str(manifest["harness"]["ef_construction"]),
+        "--ef-search", str(manifest["harness"]["ef_search"]),
+        "--case-type", manifest["harness"]["case_type"],
+        "--k", str(manifest["harness"]["k"]),
+        "--num-concurrency", manifest["harness"]["num_concurrency"],
+        "--concurrency-duration", str(manifest["harness"]["concurrency_duration"]),
+        "--db-label", manifest["harness"]["db_label"],
+    ]
+    if row == "scalar":
+        command.extend([
+            "--quantized-index-name", manifest["harness"]["quantized_index_name"],
+            "--quantized-rerank-candidates", str(manifest["harness"]["rerank_candidates"]),
+        ])
+    command_string = shlex.join(command)
+    manifest["vdbbench"][0].update(row=row, command=command_string)
+    manifest["commands"][0].update(
+        name=f"vdbbench_{row}", command=command, command_string=command_string,
+    )
+
+
+def set_fixture_vdbbench_command_tokens(manifest: dict, command: list[str]) -> None:
+    command_string = shlex.join(command)
+    manifest["vdbbench"][0]["command"] = command_string
+    manifest["commands"][0].update(command=command, command_string=command_string)
 
 
 def rewrite_lifecycle_fixture(root: Path, manifest: dict, events: list[dict]) -> None:
@@ -1384,6 +1454,78 @@ class LifecycleValidatorTest(unittest.TestCase):
             self.assertFalse(got["analyzable"], got)
             self.assertTrue(any("exit_code=0" in error for error in got["errors"]), got)
 
+    def test_bound_vdbbench_command_options_must_match_manifest_exactly_once(self) -> None:
+        options = (
+            "--base-url", "--index-name", "--timeout", "--m",
+            "--ef-construction", "--ef-search", "--case-type", "--k",
+            "--num-concurrency", "--concurrency-duration", "--db-label",
+        )
+        for option in options:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                command = list(manifest["commands"][0]["command"])
+                command[command.index(option) + 1] = "mismatched-value"
+                set_fixture_vdbbench_command_tokens(manifest, command)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(option in error for error in got["errors"]), got)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest, _events = lifecycle_fixture(root)
+            command = list(manifest["commands"][0]["command"])
+            command.extend(["--k", "99"])
+            set_fixture_vdbbench_command_tokens(manifest, command)
+            harness.write_json(root / "manifest.json", manifest)
+
+            duplicate = harness.validate_lifecycle_artifact(root)
+
+        self.assertFalse(duplicate["analyzable"], duplicate)
+        self.assertTrue(any("--k" in error for error in duplicate["errors"]), duplicate)
+
+    def test_scalar_command_options_are_bound_to_quantized_manifest_values(self) -> None:
+        for option in ("--quantized-index-name", "--quantized-rerank-candidates"):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                manifest["harness"]["rows"] = "scalar"
+                set_fixture_vdbbench_command(manifest, "scalar")
+                command = list(manifest["commands"][0]["command"])
+                command[command.index(option) + 1] = "mismatched-value"
+                set_fixture_vdbbench_command_tokens(manifest, command)
+                manifest["lifecycle"]["identity"]["config_sha256"] = harness.lifecycle_config_sha256(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(option in error for error in got["errors"]), got)
+
+    def test_completed_lifecycle_requires_matching_authoritative_vdbbench_command(self) -> None:
+        mutations = (
+            ("missing", lambda manifest: manifest.pop("commands"), "manifest.commands"),
+            ("duplicate", lambda manifest: manifest["commands"].append(dict(manifest["commands"][0])), "one authoritative"),
+            ("argv", lambda manifest: manifest["commands"][0]["command"].append("--extra"), "does not match"),
+            ("string", lambda manifest: manifest["commands"][0].__setitem__("command_string", "other"), "does not match"),
+            ("nonzero", lambda manifest: manifest["commands"][0].__setitem__("exit_code", 1), "exit_code=0"),
+            ("skipped", lambda manifest: manifest["commands"][0].__setitem__("skipped", True), "does not match"),
+        )
+        for label, mutation, expected in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                mutation(manifest)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
+
     def test_lifecycle_route_response_must_match_route_verify(self) -> None:
         mutations = (
             (lambda response: response["diagnostics"].__setitem__("fallback_reason", "exact_scan"), "fallback"),
@@ -1509,10 +1651,7 @@ class LifecycleValidatorTest(unittest.TestCase):
             root = Path(tmp)
             manifest, events = lifecycle_fixture(root)
             manifest["harness"].update(rows=" Scalar ", k=4, rerank_candidates=1)
-            manifest["vdbbench"][0]["row"] = "scalar"
-            manifest["vdbbench"][0]["command"] = (
-                "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank"
-            )
+            set_fixture_vdbbench_command(manifest, "scalar")
             events[12]["state"]["route"]["name"] = "quantized_rerank"
             events[12]["state"]["route"]["requested_top_k"] = 4
             events[12]["state"]["route"]["result_count"] = 4
@@ -1724,12 +1863,8 @@ class LifecycleValidatorTest(unittest.TestCase):
                 result, "index-a", "PerformanceCustomDataset", root
             )
             manifest["harness"]["case_type"] = "PerformanceCustomDataset"
-            manifest["vdbbench"] = [{
-                "row": "exact",
-                "command": "python -m vectordb_bench.cli.vectordbbench treedbcolumngraphexact",
-                "exit_code": 0,
-                "load_metrics": metrics,
-            }]
+            manifest["vdbbench"][0]["load_metrics"] = metrics
+            set_fixture_vdbbench_command(manifest, "exact")
             manifest["lifecycle"]["dataset"]["sha256"] = harness.sha256_file(dataset_file)
             manifest["lifecycle"]["task_config_binding"] = {
                 key: metrics[key] for key in ("result_file", "result_sha256", "task_config_sha256")
@@ -3139,10 +3274,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                     response["diagnostics"]["route"] = route_name
                     if route_name == "quantized_rerank":
                         manifest["harness"]["rows"] = "scalar"
-                        manifest["vdbbench"][0]["row"] = "scalar"
-                        manifest["vdbbench"][0]["command"] = (
-                            "python -m vectordb_bench.cli.vectordbbench treedbscalaru8rerank"
-                        )
+                        set_fixture_vdbbench_command(manifest, "scalar")
                         response["query_mode"] = "quantized_rerank"
                         response["quantized_index_name"] = manifest["harness"]["quantized_index_name"]
                         response["quantized_rerank_candidates"] = manifest["harness"]["rerank_candidates"]

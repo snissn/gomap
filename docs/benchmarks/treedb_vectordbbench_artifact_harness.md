@@ -370,6 +370,12 @@ recorded in the manifest, README, and each VDBBench row record. CLI and
 environment values must be positive integers; zero and negative values are
 rejected before service startup.
 
+Lifecycle validation binds every harness-owned VDBBench command option exactly
+once to the recorded service, index, and harness configuration. It also
+requires one successful, non-skipped `manifest.commands` record whose argv and
+shell rendering exactly match the selected VDBBench row; the row summary alone
+is not authoritative execution evidence.
+
 For a completed load, the harness selects exactly one *new* canonical
 `result_*.json` matching that generated index name. It records the result path,
 SHA-256, run ID, task configuration and its canonical JSON SHA-256, insert

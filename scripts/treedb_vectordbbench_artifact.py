@@ -1696,6 +1696,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
     if not isinstance(manifest_vdbbench, list):
         errors.append("manifest.vdbbench must be a list")
         manifest_vdbbench = []
+    manifest_commands = manifest.get("commands")
+    if not isinstance(manifest_commands, list):
+        errors.append("manifest.commands must be a list")
+        manifest_commands = []
     if service.get("profile") not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
         errors.append("manifest.service.profile must name a canonical public profile")
     if lifecycle.get("result_status") == "completed" and service.get("profile") != "command_wal_durable":
@@ -1899,10 +1903,79 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     )
                 ):
                     errors.append("bound manifest VDBBench command does not match the lifecycle row")
+                command_name = f"vdbbench_{configured_rows[0]}" if len(configured_rows) == 1 else None
+                command_records = [
+                    record for record in manifest_commands
+                    if isinstance(record, dict) and record.get("name") == command_name
+                ]
+                if len(command_records) != 1:
+                    errors.append("completed lifecycle requires one authoritative VDBBench command record")
+                else:
+                    command_record = command_records[0]
+                    if (
+                        command_record.get("command") != command_tokens
+                        or command_record.get("command_string") != recorded_command
+                        or command_record.get("command_string") != shlex.join(command_tokens)
+                        or command_record.get("skipped") is not False
+                    ):
+                        errors.append("authoritative VDBBench command record does not match the selected row")
+                    command_exit = command_record.get("exit_code")
+                    if isinstance(command_exit, bool) or not isinstance(command_exit, int) or command_exit != 0:
+                        errors.append("authoritative VDBBench command execution must record exit_code=0")
+
+                selected_index_name = selected.get("index_name")
+                expected_command_values = {
+                    "--base-url": service.get("base_url"),
+                    "--index-name": selected_index_name,
+                    "--timeout": harness.get("client_timeout"),
+                    "--m": harness.get("m"),
+                    "--ef-construction": harness.get("ef_construction"),
+                    "--ef-search": harness.get("ef_search"),
+                    "--case-type": harness.get("case_type"),
+                    "--k": harness.get("k"),
+                    "--num-concurrency": harness.get("num_concurrency"),
+                    "--concurrency-duration": harness.get("concurrency_duration"),
+                    "--db-label": harness.get("db_label"),
+                }
+                if configured_rows == ["scalar"]:
+                    expected_command_values.update({
+                        "--quantized-index-name": harness.get("quantized_index_name"),
+                        "--quantized-rerank-candidates": harness.get("rerank_candidates"),
+                    })
+                option_values: dict[str, list[str | None]] = {
+                    name: [] for name in VDBBENCH_OWNED_OPTIONS
+                }
+                position = module_positions[0] + 3 if len(module_positions) == 1 else len(command_tokens)
+                while position < len(command_tokens):
+                    token = command_tokens[position]
+                    name, separator, inline_value = token.partition("=")
+                    if name not in VDBBENCH_OWNED_OPTIONS:
+                        position += 1
+                        continue
+                    if separator:
+                        option_values[name].append(inline_value)
+                        position += 1
+                        continue
+                    value = command_tokens[position + 1] if position + 1 < len(command_tokens) else None
+                    option_values[name].append(value)
+                    position += 2
+                for name, expected_value in expected_command_values.items():
+                    if expected_value is None or isinstance(expected_value, bool):
+                        errors.append(f"manifest value for lifecycle VDBBench option {name} is invalid")
+                    elif option_values[name] != [str(expected_value)]:
+                        errors.append(f"bound lifecycle VDBBench option {name} must occur exactly once with its manifest value")
+                unexpected_owned = sorted(
+                    name for name, values in option_values.items()
+                    if name not in expected_command_values and values
+                )
+                if unexpected_owned:
+                    errors.append(
+                        "bound lifecycle VDBBench command has unexpected harness-owned options: "
+                        + ", ".join(unexpected_owned)
+                    )
                 exit_code = selected_row_record.get("exit_code")
                 if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != 0:
                     errors.append("bound manifest VDBBench execution must record exit_code=0")
-                selected_index_name = selected.get("index_name")
                 if not isinstance(selected_index_name, str) or not selected_index_name:
                     errors.append("bound manifest VDBBench result index_name must be a non-empty string")
                 else:
@@ -3898,6 +3971,8 @@ def write_manifest(
             "k": args.k,
             "num_concurrency": args.num_concurrency,
             "concurrency_duration": args.concurrency_duration,
+            "client_timeout": args.client_timeout,
+            "db_label": args.db_label,
             "m": args.m,
             "ef_construction": args.ef_construction,
             "ef_search": args.ef_search,
