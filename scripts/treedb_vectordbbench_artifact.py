@@ -25,6 +25,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -766,13 +767,18 @@ def _artifact_file(root: Path, relative: Any, label: str, errors: list[str]) -> 
     if not isinstance(relative, str) or not relative:
         errors.append(f"{label} path must be a non-empty relative path")
         return None
-    path = Path(relative)
-    if path.is_absolute() or ".." in path.parts:
-        errors.append(f"{label} path escapes artifact root: {relative!r}")
-        return None
-    resolved = (root / path).resolve()
     try:
-        resolved.relative_to(root.resolve())
+        path = Path(relative)
+        if path.is_absolute() or ".." in path.parts:
+            errors.append(f"{label} path escapes artifact root: {relative!r}")
+            return None
+        resolved_root = root.resolve()
+        resolved = (resolved_root / path).resolve()
+    except (OSError, ValueError) as exc:
+        errors.append(f"{label} path is invalid: {exc}")
+        return None
+    try:
+        resolved.relative_to(resolved_root)
     except ValueError:
         errors.append(f"{label} path escapes artifact root: {relative!r}")
         return None
@@ -808,6 +814,41 @@ def _utc_timestamp(value: Any, label: str, errors: list[str]) -> _dt.datetime | 
     return parsed.astimezone(_dt.timezone.utc)
 
 
+def _pprof_metadata(path: Path) -> bytes | None:
+    try:
+        process = subprocess.Popen(
+            ("go", "tool", "pprof", "-raw", str(path)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    prefix = bytearray()
+
+    def drain() -> None:
+        assert process.stdout is not None
+        with process.stdout:
+            while chunk := process.stdout.read(64 * 1024):
+                if len(prefix) < 64 * 1024:
+                    prefix.extend(chunk[:64 * 1024 - len(prefix)])
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    try:
+        returncode = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        process.wait()
+        reader.join()
+        return None
+    reader.join()
+    return bytes(prefix) if returncode == 0 else None
+
+
 def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
     if not isinstance(kind, str):
         return False
@@ -821,16 +862,32 @@ def _valid_profile_payload(kind: Any, path: Path, data: bytes) -> bool:
                     saw_data = True
             if not saw_data:
                 return False
-            decoded = subprocess.run(
-                ("go", "tool", "pprof", "-raw", str(path)),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            )
-            return decoded.returncode == 0
-        except (OSError, EOFError, zlib.error, subprocess.TimeoutExpired):
+            metadata = _pprof_metadata(path)
+            if metadata is None:
+                return False
+            lines = metadata.decode("utf-8").splitlines()
+            samples_position = lines.index("Samples:")
+            sample_tokens = lines[samples_position + 1].split()
+            sample_types = {token.removesuffix("[dflt]") for token in sample_tokens}
+            default_types = {
+                token.removesuffix("[dflt]") for token in sample_tokens if token.endswith("[dflt]")
+            }
+            if kind == "cpu":
+                required = {"samples/count", "cpu/nanoseconds"}
+                return "PeriodType: cpu nanoseconds" in lines and required <= sample_types
+            if kind in {"heap", "allocs"}:
+                required = {
+                    "alloc_objects/count", "alloc_space/bytes", "inuse_objects/count", "inuse_space/bytes",
+                }
+                expected_default = "inuse_space/bytes" if kind == "heap" else "alloc_space/bytes"
+                return (
+                    "PeriodType: space bytes" in lines
+                    and required <= sample_types
+                    and default_types == {expected_default}
+                )
+            required = {"contentions/count", "delay/nanoseconds"}
+            return "PeriodType: contentions count" in lines and required <= sample_types
+        except (OSError, EOFError, UnicodeError, ValueError, IndexError, zlib.error):
             return False
     if kind == "trace":
         header = re.match(rb"go 1\.[0-9]+ trace\x00\x00\x00", data)

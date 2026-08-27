@@ -756,7 +756,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertFalse(got["complete"])
                 self.assertTrue(any("content does not match" in item for item in got["errors"]), got)
 
-        for kind in ("text", []):
+        for kind in ("heap", "allocs", "block", "mutex", "text", []):
             with self.subTest(profile_kind=kind):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -793,6 +793,35 @@ class LifecycleValidatorTest(unittest.TestCase):
         self.assertTrue(got["analyzable"])
         self.assertFalse(got["complete"])
         self.assertTrue(any("at least one profile" in item for item in got["completion_errors"]), got)
+
+    def test_manifest_controlled_paths_fail_closed_without_cli_traceback(self) -> None:
+        mutations = (
+            ("lifecycle", lambda row: row["lifecycle"].__setitem__("file", "bad\x00lifecycle.jsonl")),
+            (
+                "raw",
+                lambda row: row["lifecycle"]["raw_artifacts"][0].__setitem__("path", "bad\x00profile.pprof"),
+            ),
+            (
+                "profile",
+                lambda row: row["lifecycle"]["profiles"][0].__setitem__("path", "bad\x00profile.pprof"),
+            ),
+        )
+        for label, mutation in mutations:
+            with self.subTest(path=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    manifest, _ = lifecycle_fixture(root)
+                    manifest["lifecycle"]["result_status"] = "partial"
+                    mutation(manifest)
+                    harness.write_json(root / "manifest.json", manifest)
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        exit_code = harness.main(["--validate-lifecycle", str(root), "--allow-partial"])
+                    report = json.loads(output.getvalue())
+
+                self.assertEqual(exit_code, 1)
+                self.assertFalse(report["analyzable"])
+                self.assertTrue(any("path is invalid" in item for item in report["errors"]), report)
 
     def test_trace_profile_requires_native_decoder_acceptance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

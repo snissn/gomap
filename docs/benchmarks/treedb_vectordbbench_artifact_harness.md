@@ -75,12 +75,16 @@ example, `Performance768D1M`) must match the lifecycle dataset dimensions and
 vector count. `PerformanceCustomDataset` cannot complete until H2 binds its
 selected result's task-config dataset shape into this artifact. Profile entries
 name existing before/after event sequences and use the same checksum as their
-raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`, `block`, and `mutex`
-as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
-decoder accepts, Go `trace` as a `.out` file that the native trace decoder
-accepts, and Linux `perf` as a `.data` file with bounded header sections and a
-nonempty sample record. Profile validation is an offline correctness gate and invokes the native decoder once
-per pprof or trace. The optimized index identity and durable `asset_generation`
+raw-artifact entry. Supported profile kinds are `cpu`, `heap`, `allocs`,
+`block`, and `mutex` as non-empty gzip-compressed `.pprof` files that the native `go tool pprof`
+decoder accepts with matching period and sample metadata. CPU profiles are
+distinct; heap and allocs use the shared Go allocation family but require their
+respective default sample type; block and mutex share indistinguishable Go
+contention metadata and are validated as that family. Go `trace` is a `.out`
+file that the native trace decoder accepts, and Linux `perf` as a `.data` file
+with bounded header sections and a nonempty sample record. Profile validation
+is an offline correctness gate and invokes the native decoder once per pprof or
+trace. The optimized index identity and durable `asset_generation`
 must survive close and cold reopen. H2 maps `asset_generation` to the vector-maintenance
 root ID, not the service's reopen-local generation counter. The artifact-owned
 database identity and server `commit_seq` must also match across close/reopen,
