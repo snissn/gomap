@@ -939,6 +939,18 @@ func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T)
 	if build.TotalNanos == 0 || build.SnapshotNanos == 0 || build.RowExtractionNanos == 0 || build.AdjacencyBuildNanos == 0 || build.LocalityRemapNanos == 0 || build.AssetPreparationNanos == 0 || build.InvNormPreparationNanos == 0 || build.AdjacencyStatePreparationNanos == 0 || build.RowRefPreparationNanos == 0 || build.DocumentIDPreparationNanos == 0 || build.QuantizedPreparationNanos == 0 || build.SearchPackPreparationNanos == 0 || build.ManifestFinalizationNanos == 0 || build.FileSyncNanos == 0 || build.FileSyncCount == 0 || build.NamespaceSyncNanos == 0 || build.NamespaceSyncCount == 0 || build.PublicationNanos == 0 {
 		t.Fatalf("column graph build timing=%+v want completed ordered stages", build)
 	}
+	assetChildren := build.InvNormPreparationNanos + build.AdjacencyStatePreparationNanos + build.RowRefPreparationNanos + build.DocumentIDPreparationNanos + build.QuantizedPreparationNanos + build.SearchPackPreparationNanos + build.ManifestFinalizationNanos
+	if build.AssetPreparationNanos < assetChildren || build.PublicationNanos < build.AssetPreparationNanos {
+		t.Fatalf("column graph nested timing=%+v asset_children=%d", build, assetChildren)
+	}
+	buildChildren := build.SnapshotNanos + build.RowExtractionNanos + build.AdjacencyBuildNanos + build.LocalityRemapNanos + build.PublicationNanos
+	if build.TotalNanos < buildChildren || optimize.Status.DurationNanos != build.TotalNanos || optimize.Timing.RebuildNanos < build.TotalNanos {
+		t.Fatalf("column graph timing=%+v optimize=%+v build_children=%d", build, optimize.Timing, buildChildren)
+	}
+	optimizeChildren := optimize.Timing.CacheInvalidateNanos + optimize.Timing.RebuildNanos + optimize.Timing.CachePrimeNanos + optimize.Timing.CacheWarmNanos
+	if optimize.Timing.TotalNanos < optimizeChildren {
+		t.Fatalf("optimize timing=%+v children=%d", optimize.Timing, optimizeChildren)
+	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 	failed, err := svc.OptimizeIndex(canceled, "bench", OptimizeIndexRequest{})
