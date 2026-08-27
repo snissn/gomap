@@ -373,10 +373,24 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 }
 
 func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error {
-	return db.vacuumIndexOnlineProductionV1(ctx, lockMaintenance)
+	_, err := db.vacuumIndexOnlineWithStats(ctx, lockMaintenance)
+	return err
 }
 
-func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance bool) (retErr error) {
+// VacuumIndexOnlineWithStats runs an online vacuum and returns the owned
+// snapshot for this invocation. A zero snapshot means it returned before the
+// backend admitted an online-vacuum attempt.
+func (db *DB) VacuumIndexOnlineWithStats(ctx context.Context) (VacuumOnlineStats, error) {
+	return db.vacuumIndexOnlineWithStats(ctx, true)
+}
+
+func (db *DB) vacuumIndexOnlineWithStats(ctx context.Context, lockMaintenance bool) (VacuumOnlineStats, error) {
+	var stats VacuumOnlineStats
+	err := db.vacuumIndexOnlineProductionV1(ctx, lockMaintenance, &stats)
+	return stats, err
+}
+
+func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance bool, result *VacuumOnlineStats) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -410,6 +424,9 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 		seed.Canceled = errors.Is(retErr, context.Canceled)
 		published := seed
 		db.publishVacuumOnlineStats(published)
+		if result != nil {
+			*result = published
+		}
 	}()
 	captureStarted := time.Now()
 	seed.RecoverableSetCaptureAttempts = 1
@@ -421,7 +438,7 @@ func (db *DB) vacuumIndexOnlineProductionV1(ctx context.Context, lockMaintenance
 	seed.RecoverableSetCaptures = 1
 	seed.RecoverableRoots = uint64(len(roots.Roots()))
 	rebuildStarted = true
-	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots, &seed, attemptStarted)
+	return db.vacuumIndexOnlineRebuildV1(ctx, false, nil, roots, &seed, attemptStarted, result)
 }
 
 // vacuumIndexOnlineLegacyV1 retains the pre-root-publication rebuild algorithm
@@ -432,10 +449,10 @@ func (db *DB) vacuumIndexOnlineLegacyV1(ctx context.Context, lockMaintenance boo
 	if capability == nil {
 		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 	}
-	return db.vacuumIndexOnlineRebuildV1(ctx, lockMaintenance, capability, nil, nil, time.Time{})
+	return db.vacuumIndexOnlineRebuildV1(ctx, lockMaintenance, capability, nil, nil, time.Time{}, nil)
 }
 
-func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats, attemptStarted time.Time) (retErr error) {
+func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bool, capability legacyOnlineVacuumCapabilityV1, recoverableRoots *RecoverableRootSet, seed *VacuumOnlineStats, attemptStarted time.Time, result *VacuumOnlineStats) (retErr error) {
 	if capability == nil && (recoverableRoots == nil || recoverableRoots.db != db || recoverableRoots.released.Load()) {
 		return errors.Join(ErrVacuumUnsupported, ErrVacuumRecoverableRootSetRequired)
 	}
@@ -466,6 +483,9 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		runStats.WorkCompleted = publicationCompleted
 		published := *runStats
 		db.publishVacuumOnlineStats(published)
+		if result != nil {
+			*result = published
+		}
 	}()
 	if db.readOnly {
 		return ErrReadOnly

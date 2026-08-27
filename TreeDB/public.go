@@ -2598,8 +2598,7 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 		defer unlockCommandWALPublish()
 	}
 
-	stats := db.backend.VacuumIndexOnline(ctx)
-	onlineStats := db.backend.VacuumOnlineStats()
+	onlineStats, stats := db.backend.VacuumIndexOnlineWithStats(ctx)
 	if err := db.reconcileCachedBackendMaintenance(stats); err != nil {
 		return onlineStats, err
 	}

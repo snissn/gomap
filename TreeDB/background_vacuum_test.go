@@ -73,7 +73,7 @@ func TestBackgroundIndexVacuumFailedRunDoesNotRepublishStaleOnlineSnapshot(t *te
 	d.bgVac.spanRatioPPM = 1
 	d.bgVac.freelistReclaimablePages = ^uint64(0)
 	d.bgVac.collectionRootPages = ^uint64(0)
-	stale := backenddb.VacuumOnlineStats{WorkCompleted: true, TotalDuration: time.Nanosecond}
+	stale := backenddb.VacuumOnlineStats{AttemptID: 7, WorkCompleted: true, TotalDuration: time.Nanosecond}
 	d.bgVac.lastOnlineVacuum.Store(&stale)
 	restore := setBackgroundIndexVacuumRunHookForTest(func(*DB, context.Context) (backenddb.VacuumOnlineStats, error) {
 		return backenddb.VacuumOnlineStats{}, errors.New("cached checkpoint admission failed before backend vacuum")

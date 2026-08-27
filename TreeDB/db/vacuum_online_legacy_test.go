@@ -257,6 +257,53 @@ func TestVacuumOnlineStatsAttemptIDFollowsMaintenanceAdmission(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlineWithStatsReturnsZeroBeforeAttempt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	database, err := Open(Options{
+		Dir:                       t.TempDir(),
+		DisableBackgroundPrune:    true,
+		rootPublicationFixedDelay: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if err := database.SetSync([]byte("seed"), []byte("vacuum")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("seed vacuum: %v", err)
+	}
+	previous := database.VacuumOnlineStats()
+	if previous.AttemptID == 0 || !previous.WorkCompleted {
+		t.Fatalf("seed vacuum stats=%+v want completed attempt", previous)
+	}
+	if err := database.Set([]byte("pending"), []byte("root-publication-debt")); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for database.rootPublication.coordinator.Stats().PendingCommits == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("root publication did not retain pending debt")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stats, err := database.VacuumIndexOnlineWithStats(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("VacuumIndexOnlineWithStats error=%v want context.Canceled", err)
+	}
+	if stats != (VacuumOnlineStats{}) {
+		t.Fatalf("pre-attempt stats=%+v want zero", stats)
+	}
+	if got := database.VacuumOnlineStats(); got != previous {
+		t.Fatalf("latest backend stats=%+v want preserved previous attempt=%+v", got, previous)
+	}
+}
+
 func TestVacuumIndexOnlineInitialCaptureFailureRecordsAttempt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
