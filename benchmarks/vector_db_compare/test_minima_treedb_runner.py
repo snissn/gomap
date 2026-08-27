@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import socket
 import sys
@@ -17,9 +18,13 @@ import minima_treedb_runner as runner
 
 
 class FakeClient:
-    def __init__(self, response: object) -> None:
+    def __init__(self, response: object, *, present_ids: set[str] | None = None, count: int = 0,
+                 upsert_error: BaseException | None = None) -> None:
         self.response = response
         self.call: tuple[object, ...] | None = None
+        self.present_ids = set(present_ids or ())
+        self.count = count
+        self.upsert_error = upsert_error
 
     def query_by_embedding(self, *args: object, **kwargs: object) -> object:
         self.call = (*args, kwargs)
@@ -27,13 +32,25 @@ class FakeClient:
 
     def upsert_documents(self, _index: str, documents: list[dict[str, object]],
                          **_kwargs: object) -> object:
-        return SimpleNamespace(upserted=len(documents), ids=[row["id"] for row in documents])
+        if self.upsert_error is not None:
+            raise self.upsert_error
+        ids = [str(row["id"]) for row in documents]
+        self.count += sum(identifier not in self.present_ids for identifier in ids)
+        self.present_ids.update(ids)
+        return SimpleNamespace(upserted=len(documents), ids=ids)
+
+    def filter_documents(self, _index: str, filter: dict[str, object], **_kwargs: object) -> object:
+        identifier = str(filter["value"])
+        documents = [SimpleNamespace(id=identifier)] if identifier in self.present_ids else []
+        return SimpleNamespace(matched_count=len(documents), documents=documents)
 
     def delete_by_filter(self, *_args: object, **_kwargs: object) -> object:
+        self.count = 0
+        self.present_ids.clear()
         return SimpleNamespace(deleted=1)
 
     def count_documents(self, *_args: object, **_kwargs: object) -> object:
-        return SimpleNamespace(count=0)
+        return SimpleNamespace(count=self.count)
 
 
 def write_health_service(binary: Path) -> None:
@@ -78,9 +95,10 @@ Server((host, int(port)), Handler).serve_forever()
 
 
 class MinimaTreeDBRunnerTest(unittest.TestCase):
-    def workload(self, response: object) -> runner.TreeDBMinimaRunner:
+    def workload(self, response: object, *, diagnostics_dir: Path | None = None,
+                 client: FakeClient | None = None) -> runner.TreeDBMinimaRunner:
         workload = object.__new__(runner.TreeDBMinimaRunner)
-        workload.client = FakeClient(response)
+        workload.client = client or FakeClient(response)
         workload.collection = "owned"
         workload.config = {"top_k": 5, "batch_size": 3}
         workload.ef_search = 64
@@ -88,6 +106,19 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.queries = {"mixed": {"vector": [1.0, 0.0]}}
         workload.evidence = common.Evidence({"corpora": [{"name": "mixed"}]})
         workload.route_evidence = {}
+        workload.diagnostics_dir = diagnostics_dir
+        workload.diagnostic_slow_seconds = 30
+        workload.diagnostic_profile_seconds = 1
+        workload.diagnostic_capture_timeout = 1
+        workload.batch_correlations = []
+        workload.diagnostic_resume = None
+        workload._diagnostic_lock = runner.threading.Lock()
+        workload._expected_rows = 0
+        workload._expected_insert_batches = {}
+        workload.controller = SimpleNamespace(
+            stats_snapshot=lambda: {"status": "disabled"},
+            capture_profiles=lambda *_args, **_kwargs: {"status": "captured"},
+        )
         return workload
 
     def response(self, **changes: object) -> object:
@@ -98,6 +129,35 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         }
         values.update(changes)
         return SimpleNamespace(**values)
+    def resume_workload(self, directory: Path, *, present_ids: set[str], count: int) -> runner.TreeDBMinimaRunner:
+        workload = self.workload(
+            self.response(), diagnostics_dir=directory,
+            client=FakeClient(self.response(), present_ids=present_ids, count=count),
+        )
+        workload.config = {"top_k": 5, "batch_size": 256}
+        workload.specs = {
+            "resume": {
+                "name": "resume", "corpus_rows": 1024, "filter": "user_id",
+                "eligible_start": 0, "eligible_rows": 0, "user_id": "target", "fpath": "",
+            },
+        }
+        workload.manifest = {
+            "operations": [{
+                "name": "initial_batch_insert",
+                "insert_ranges": [{"scenario": "resume", "start": 0, "rows": 1024}],
+            }],
+        }
+        workload._expected_insert_batches = {("initial_batch_insert", "resume", 512): 768}
+        workload.storage_path = directory
+        workload.resource_server_name = "TreeDB"
+        workload.controller.pid = 123
+        workload.connect = lambda: None
+        workload.ensure_compatible = lambda: None
+        workload._initial_prefix_identity = lambda *_args: {
+            "algorithm": "test", "expected_rows": 512, "actual_rows": 512,
+            "expected_digest": "expected", "actual_digest": "expected", "match": True,
+        }
+        return workload
 
     def test_search_uses_public_filtered_ann_and_captures_actual_interval(self) -> None:
         workload = self.workload(self.response())
@@ -130,6 +190,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
 
     def test_mutation_overrides_forward_writer_start_callbacks(self) -> None:
         workload = self.workload(self.response())
+        workload.controller.stats_snapshot = mock.Mock(side_effect=AssertionError("default upsert requested diagnostics"))
         starts: list[str] = []
         document = {"id": "d", "content": "c", "vector": [1.0, 0.0], "user_id": "u", "fpath": "/a"}
         workload.upsert(
@@ -144,7 +205,280 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             on_writer_start=lambda: starts.append("delete"),
         )
         self.assertEqual(starts, ["upsert", "delete"])
+        self.assertEqual(workload.batch_correlations, [])
+        workload.controller.stats_snapshot.assert_not_called()
+    def test_diagnostic_upsert_correlates_batch_and_snapshots(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        snapshots = iter(({"status": "captured", "snapshot": {"stage": "before"}},
+                          {"status": "captured", "snapshot": {"stage": "after"}}))
+        workload.controller.stats_snapshot = lambda: next(snapshots)
+        workload._expected_insert_batches[("initial_batch_insert", "mixed", 3)] = 6
+        documents = [
+            {"id": f"minima/mixed/{ordinal:06d}", "content": "c", "vector": [1.0, 0.0],
+             "user_id": "u", "fpath": "/a"}
+            for ordinal in range(3, 6)
+        ]
+        workload.upsert("initial_batch_insert", "mixed", documents)
+        correlation = workload.batch_correlations[0]
+        self.assertEqual(
+            (correlation["operation"], correlation["scenario"], correlation["batch_ordinal"],
+             correlation["batch_start"], correlation["rows"], correlation["accumulated_expected_rows"]),
+            ("initial_batch_insert", "mixed", 1, 3, 3, 6),
+        )
+        self.assertEqual(correlation["before_stats"]["snapshot"]["stage"], "before")
+        self.assertEqual(correlation["after_stats"]["snapshot"]["stage"], "after")
+        self.assertEqual(correlation["outcome"], "completed")
+        self.assertEqual(correlation["profile_capture"], {"status": "not_triggered"})
+    def test_completed_upsert_stops_slow_watcher_before_after_stats(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        workload.diagnostic_slow_seconds = 0.01
+        workload._expected_insert_batches[("initial_batch_insert", "mixed", 0)] = 1
+        snapshots = 0
 
+        def stats_snapshot() -> dict[str, object]:
+            nonlocal snapshots
+            snapshots += 1
+            if snapshots == 2:
+                runner.time.sleep(0.03)
+            return {"status": "captured"}
+
+        workload.controller.stats_snapshot = stats_snapshot
+        workload.controller.capture_profiles = mock.Mock(return_value={"status": "captured"})
+        document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                    "user_id": "u", "fpath": "/a"}
+        with mock.patch.object(runner.time, "monotonic_ns", side_effect=range(100, 300, 10)):
+            workload.upsert("initial_batch_insert", "mixed", [document])
+        workload.controller.capture_profiles.assert_not_called()
+        self.assertEqual(workload.batch_correlations[0]["profile_capture"], {"status": "not_triggered"})
+
+    def test_diagnostic_batch_watchers_keep_iteration_local_capture_state(self) -> None:
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"))
+        workload._expected_insert_batches = {
+            ("initial_batch_insert", "mixed", 0): 3,
+            ("initial_batch_insert", "mixed", 3): 6,
+        }
+        documents = [
+            {"id": f"minima/mixed/{ordinal:06d}", "content": "c", "vector": [1.0, 0.0],
+             "user_id": "u", "fpath": "/a"}
+            for ordinal in range(6)
+        ]
+        deferred: list[object] = []
+
+        class DeferredThread:
+            def __init__(self, *, target: object, **_kwargs: object) -> None:
+                self.target = target
+                deferred.append(self)
+
+            def start(self) -> None:
+                pass
+
+            def join(self, _timeout: float) -> None:
+                pass
+
+            def is_alive(self) -> bool:
+                return False
+
+        with mock.patch.object(runner.threading, "Thread", DeferredThread):
+            workload.upsert("initial_batch_insert", "mixed", documents)
+        first_slow_capture = deferred[0].target.__kwdefaults__["capture_batch"]
+        first_slow_capture("late")
+        self.assertEqual(workload.batch_correlations[0]["capture_reason"], "late")
+        self.assertEqual(workload.batch_correlations[1]["profile_capture"], {"status": "not_triggered"})
+
+    def test_unmapped_diagnostic_upsert_uses_public_counts(self) -> None:
+        client = FakeClient(self.response(), count=0)
+        workload = self.workload(self.response(), diagnostics_dir=Path("diagnostics"), client=client)
+        document = {"id": "new", "content": "c", "vector": [1.0, 0.0], "user_id": "u", "fpath": "/a"}
+        workload.upsert("explicit_update", "mixed", [document])
+        correlation = workload.batch_correlations[0]
+        self.assertEqual(correlation["accumulated_rows_source"], "public_count")
+        self.assertEqual(correlation["before_public_count"], {"status": "captured", "rows": 0})
+        self.assertEqual(correlation["after_public_count"], {"status": "captured", "rows": 1})
+        self.assertEqual(correlation["accumulated_expected_rows"], 1)
+
+
+    def test_failed_upsert_keeps_timeout_correlation_and_capture_failure_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient(self.response(), upsert_error=TimeoutError("request timed out"))
+            workload = self.workload(self.response(), diagnostics_dir=Path(directory), client=client)
+            workload.diagnostic_slow_seconds = 60
+            workload.controller.stats_snapshot = mock.Mock(side_effect=[
+                {"status": "captured", "snapshot": {"phase": "before"}},
+                {"status": "failed", "error": "stats unavailable"},
+            ])
+            workload.controller.capture_profiles = mock.Mock(return_value={
+                "captures": {"cpu": {"status": "failed", "error": "unavailable"}},
+            })
+            document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                        "user_id": "u", "fpath": "/a"}
+            with self.assertRaises(TimeoutError):
+                workload.upsert("initial_batch_insert", "mixed", [document])
+            correlation = workload.batch_correlations[0]
+            self.assertEqual(correlation["outcome"], "timeout")
+            self.assertIn("TimeoutError", correlation["error"])
+            self.assertEqual(correlation["after_stats"]["status"], "failed")
+            self.assertEqual(correlation["capture_reason"], "timeout")
+            self.assertEqual(correlation["profile_capture"]["captures"]["cpu"]["status"], "failed")
+
+    def test_capture_setup_failure_does_not_replace_upsert_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            client = FakeClient(self.response(), upsert_error=TimeoutError("request timed out"))
+            workload = self.workload(self.response(), diagnostics_dir=Path(directory), client=client)
+            workload.diagnostic_slow_seconds = 60
+            workload.controller.capture_profiles = mock.Mock(side_effect=RuntimeError("cannot start capture worker"))
+            document = {"id": "minima/mixed/000000", "content": "c", "vector": [1.0, 0.0],
+                        "user_id": "u", "fpath": "/a"}
+            with self.assertRaisesRegex(TimeoutError, "request timed out"):
+                workload.upsert("initial_batch_insert", "mixed", [document])
+            correlation = workload.batch_correlations[0]
+            self.assertEqual(correlation["outcome"], "timeout")
+            self.assertEqual(correlation["capture_reason"], "timeout")
+            self.assertEqual(correlation["profile_capture"]["status"], "failed")
+            self.assertIn("cannot start capture worker", correlation["profile_capture"]["error"])
+
+    def test_diagnostic_reads_and_profile_captures_are_bounded_and_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = runner.ServiceController(
+                Path("/bin/false"), "http://127.0.0.1:1", Path(directory) / "data", "test", 1,
+                diagnostics_url="http://127.0.0.1:2",
+            )
+            with mock.patch.object(runner.urllib.request, "urlopen", return_value=io.BytesIO(b"12345")):
+                with self.assertRaisesRegex(RuntimeError, "exceeded 4 bytes"):
+                    controller._read_bounded("http://127.0.0.1:2/debug", 1, 4)
+
+            def capture_response(url: str, _timeout: float, _maximum: int) -> bytes:
+                if "/mutex" in url:
+                    raise OSError("mutex unavailable")
+                return b"profile"
+
+            with mock.patch.object(controller, "_read_bounded", side_effect=capture_response):
+                evidence = controller.capture_profiles(Path(directory) / "captures", profile_seconds=1, capture_timeout=2)
+            self.assertEqual(set(evidence["captures"]), set(runner.DIAGNOSTIC_PROFILE_ENDPOINTS))
+            self.assertEqual(evidence["captures"]["mutex"]["status"], "failed")
+            self.assertIn("mutex unavailable", evidence["captures"]["mutex"]["error"])
+            self.assertEqual(evidence["captures"]["cpu"]["status"], "captured")
+            self.assertEqual(evidence["manifest"]["status"], "captured")
+
+    def test_exact_resume_accepts_only_first_wholly_missing_batch(self) -> None:
+        selected_ids = {f"minima/resume/{ordinal:06d}" for ordinal in range(512, 768)}
+        cases = [
+            ("all_present", selected_ids, 768, "all-present", "rejected_all_present"),
+            ("mixed", {next(iter(selected_ids))}, 513, "mixed", "rejected_mixed"),
+            ("ambiguous_count", set(), 511, "visible rows=511", "rejected_ambiguous_count"),
+        ]
+        with mock.patch.object(common, "server_resource_usage", return_value={}):
+            for name, present, count, message, state in cases:
+                with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                    workload = self.resume_workload(Path(directory), present_ids=present, count=count)
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        workload.run_diagnostic_resume("resume", 512)
+                    self.assertEqual(workload.diagnostic_resume["state"], state)
+                    self.assertEqual(workload.batch_correlations, [])
+
+            with tempfile.TemporaryDirectory() as directory:
+                workload = self.resume_workload(Path(directory), present_ids=set(), count=512)
+                workload.run_diagnostic_resume("resume", 512)
+                self.assertEqual(workload.diagnostic_resume["state"], "completed")
+                self.assertTrue(workload.diagnostic_resume["nonqualifying"])
+                self.assertEqual(workload.diagnostic_resume["present_ids_after"], 256)
+                self.assertEqual(workload.diagnostic_resume["visible_rows_after"], 768)
+                self.assertEqual(workload.batch_correlations[0]["accumulated_expected_rows"], 768)
+
+    def test_exact_resume_rejects_matching_count_with_prefix_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(common, "server_resource_usage", return_value={}):
+            workload = self.resume_workload(Path(directory), present_ids=set(), count=512)
+            workload._initial_prefix_identity = lambda *_args: {
+                "algorithm": "test", "expected_rows": 512, "actual_rows": 512,
+                "expected_digest": "expected", "actual_digest": "unrelated-replacement", "match": False,
+            }
+            with self.assertRaisesRegex(RuntimeError, "does not match the exact initial prefix"):
+                workload.run_diagnostic_resume("resume", 512)
+            self.assertEqual(workload.diagnostic_resume["state"], "rejected_prefix_mismatch")
+            self.assertFalse(workload.diagnostic_resume["prefix_identity"]["match"])
+            self.assertEqual(workload.batch_correlations, [])
+
+    def test_exact_resume_unexpected_exception_sets_failed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(common, "server_resource_usage", return_value={}):
+            workload = self.resume_workload(Path(directory), present_ids=set(), count=512)
+
+            def fail_connect() -> None:
+                raise OSError("unexpected connection failure")
+
+            workload.connect = fail_connect
+            with self.assertRaisesRegex(OSError, "unexpected connection failure"):
+                workload.run_diagnostic_resume("resume", 512)
+            self.assertEqual(workload.diagnostic_resume["state"], "failed")
+            self.assertEqual(workload.diagnostic_resume["failure_phase"], "preflight")
+            self.assertIn("OSError", workload.diagnostic_resume["error"])
+
+
+    def test_diagnostic_controller_argv_and_stats_readiness_are_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            controller = runner.ServiceController(
+                Path("/service"), "http://127.0.0.1:17120", root / "data", "command_wal_durable", 1,
+                diagnostics_url="http://127.0.0.1:17121", block_profile_rate=7,
+                mutex_profile_fraction=11,
+            )
+            process = mock.MagicMock(pid=42)
+            process.poll.return_value = None
+            health_client = mock.MagicMock()
+            health_client.health.return_value = {"ok": True, "contract_version": runner.SERVICE_CONTRACT}
+            with mock.patch.object(runner.subprocess, "Popen", return_value=process) as popen, \
+                 mock.patch.object(runner, "TreeDBClient", return_value=health_client), \
+                 mock.patch.object(controller, "_read_json", return_value={
+                     "contract_version": runner.SERVICE_CONTRACT,
+                 }) as read_stats:
+                controller.start()
+            argv = popen.call_args.args[0]
+            self.assertEqual(argv[-6:], [
+                "-pprof", "127.0.0.1:17121", "-block-profile-rate", "7",
+                "-mutex-profile-fraction", "11",
+            ])
+            read_stats.assert_called_once_with(runner.DIAGNOSTICS_STATS_PATH)
+            controller.process = None
+            assert controller.log_file is not None
+            self.assertEqual(
+                controller._listen_address("http://[::1]:17121", "diagnostics"),
+                "[::1]:17121",
+            )
+            controller.log_file.close()
+            controller.log_file = None
+
+            default = runner.ServiceController(
+                Path("/service"), "http://127.0.0.1:17120", root / "default", "command_wal_durable", 1,
+            )
+            process = mock.MagicMock(pid=43)
+            process.poll.return_value = None
+            with mock.patch.object(runner.subprocess, "Popen", return_value=process) as popen, \
+                 mock.patch.object(runner, "TreeDBClient", return_value=health_client):
+                default.start()
+            self.assertNotIn("-pprof", popen.call_args.args[0])
+            default.process = None
+            assert default.log_file is not None
+            default.log_file.close()
+            default.log_file = None
+
+    def test_default_cli_preserves_frozen_timeout_and_disables_diagnostics(self) -> None:
+        argv = [
+            "minima_treedb_runner.py", "--manifest", "manifest.json", "--output", "output.json",
+            "--service-bin", "service", "--data-dir", "data", "--collection", "owned",
+        ]
+        with mock.patch.object(sys, "argv", argv):
+            args = runner.parse_args()
+        self.assertEqual(args.operation_timeout, 120)
+        self.assertEqual(args.startup_timeout, 120)
+        self.assertIsNone(args.diagnostics_dir)
+        self.assertIsNone(args.diagnostic_resume_scenario)
+        self.assertIsNone(args.diagnostic_resume_start)
+
+    def test_script_guards_empty_diagnostic_array_for_bash_nounset(self) -> None:
+        script = (Path(__file__).parents[2] / "scripts/bench_minima_qualification.sh").read_text(encoding="utf-8")
+        guarded = '${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}'
+        self.assertEqual(script.count(guarded), 2)
+        self.assertNotIn('"${treedb_diagnostic_args[@]}" ||', script)
 
     def test_service_log_evidence_is_bounded_and_keeps_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -211,6 +545,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 manifest=root / "manifest.json", output=output, service_bin=binary,
                 url=f"http://127.0.0.1:{port}", data_dir=data_dir, profile="test",
                 startup_timeout=2, collection="owned", operation_timeout=1, ef_search=1, small=False,
+                diagnostics_dir=None, diagnostics_url="http://127.0.0.1:17121",
+                diagnostic_slow_seconds=30, diagnostic_profile_seconds=5,
+                diagnostic_capture_timeout=10, diagnostic_resume_scenario=None,
+                diagnostic_resume_start=None,
             )
             controllers: list[runner.ServiceController] = []
 
@@ -275,6 +613,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.resource_evidence = lambda: resource
         workload.controller = SimpleNamespace(
             profile="test", binary=Path("/bin/false"), log_path=Path("/tmp/service.log"),
+            diagnostics_url=None, block_profile_rate=1, mutex_profile_fraction=1,
             log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
         )
         workload.url = "http://127.0.0.1:1"
@@ -290,6 +629,12 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             ],
             "vector_strategy": "native_runtime",
         }
+        workload.batch_correlations = []
+        workload.diagnostic_resume = None
+        workload.diagnostics_dir = None
+        workload.diagnostic_slow_seconds = 30
+        workload.diagnostic_profile_seconds = 5
+        workload.diagnostic_capture_timeout = 10
         workload.route_evidence = {"small": SimpleNamespace(
             native_base_plus_live_delta=True,
             full_document_scan_fallbacks=0,
