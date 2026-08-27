@@ -263,7 +263,7 @@ def new_runner(manifest: dict[str, object], shared: SharedQdrant, allow_drop: bo
         poll_interval=0, server_version="1.19.0", deployment="standalone", image="", storage_path=None,
         server_pid=1, restart_server=shared.restart, restart_identity="fake owned server",
         process_identity=lambda pid: f"fake-process-{pid}",
-        process_running=lambda _pid: False, process_owns_endpoint=lambda _pid, _url: True)
+        process_running=lambda _pid: False, process_owns_endpoint=lambda _pid, _url, _port: True)
 
 
 class MinimaQdrantRunnerTest(unittest.TestCase):
@@ -525,19 +525,44 @@ class MinimaQdrantRunnerTest(unittest.TestCase):
     def test_restart_rejects_pid_not_owning_endpoint(self) -> None:
         manifest, shared = tiny_manifest(), SharedQdrant()
         workload = new_runner(manifest, shared)
-        workload.process_owns_endpoint = lambda _pid, _url: False
+        workload.process_owns_endpoint = lambda _pid, _url, _port: False
         with self.assertRaisesRegex(RuntimeError, "does not own"):
             workload.restart_backend()
 
-    def test_process_owner_proof_binds_pid_to_listener(self) -> None:
+    def test_process_owner_proof_binds_pid_to_listener_and_docker_port_mapping(self) -> None:
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             listener.listen()
-            port = listener.getsockname()[1]
+            container_port = listener.getsockname()[1]
+            host_port = container_port - 1 if container_port == 65535 else container_port + 1
             self.assertTrue(runner.server_process_running(os.getpid()))
             self.assertTrue(runner.server_process_owns_endpoint(
-                os.getpid(), f"http://127.0.0.1:{port}",
+                os.getpid(), f"http://127.0.0.1:{host_port}", container_port,
             ))
+
+        manifest, shared = tiny_manifest(), SharedQdrant()
+        workload = new_runner(manifest, shared)
+        workload.server_listener_port = 6333
+        observed: list[tuple[int, str, int | None]] = []
+        workload.process_owns_endpoint = lambda pid, url, port: not observed.append((pid, url, port))
+        workload.restart_backend()
+        self.assertEqual(observed, [(2, "http://fake", 6333)])
+
+    def test_linux_socket_inode_scan_skips_disappearing_descriptors_only(self) -> None:
+        fds = [Path("/fake/1"), Path("/fake/2")]
+        vanished = OSError(runner.errno.ENOENT, "descriptor disappeared")
+        with (
+            mock.patch.object(runner.Path, "iterdir", return_value=iter(fds)),
+            mock.patch.object(runner.os, "readlink", side_effect=[vanished, "socket:[42]"]),
+        ):
+            self.assertEqual(runner.linux_process_socket_inodes(123), {"42"})
+        denied = PermissionError(runner.errno.EACCES, "denied")
+        with (
+            mock.patch.object(runner.Path, "iterdir", return_value=iter(fds[:1])),
+            mock.patch.object(runner.os, "readlink", side_effect=denied),
+            self.assertRaises(PermissionError),
+        ):
+            runner.linux_process_socket_inodes(123)
 
     def test_main_writes_artifact_when_run_and_close_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -755,15 +755,32 @@ def server_process_running(pid: int) -> bool:
     return result.returncode == 0 and bool(state) and not state.startswith("Z")
 
 
-def server_process_owns_endpoint(pid: int, url: str) -> bool:
+def linux_process_socket_inodes(pid: int) -> set[str]:
+    inodes: set[str] = set()
+    for fd in (Path("/proc") / str(pid) / "fd").iterdir():
+        try:
+            target = os.readlink(fd)
+        except OSError as exc:
+            if exc.errno in (errno.ENOENT, errno.ESTALE):
+                continue
+            raise
+        if target.startswith("socket:[") and target.endswith("]"):
+            inodes.add(target[8:-1])
+    return inodes
+
+
+def server_process_owns_endpoint(pid: int, url: str, listener_port: int | None = None) -> bool:
     if type(pid) is not int or pid <= 0:
         return False
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in ("http", "https") or parsed.hostname is None:
         return False
     try:
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        endpoint_addresses = {row[4][0] for row in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+        endpoint_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        port = endpoint_port if listener_port is None else listener_port
+        if type(port) is not int or port <= 0 or port > 65535:
+            return False
+        endpoint_addresses = {row[4][0] for row in socket.getaddrinfo(parsed.hostname, endpoint_port, type=socket.SOCK_STREAM)}
         local_addresses = {"127.0.0.1", "::1", "0.0.0.0", "::"}
         for name in (socket.gethostname(), socket.getfqdn()):
             try:
@@ -776,11 +793,7 @@ def server_process_owns_endpoint(pid: int, url: str) -> bool:
         return False
     if sys.platform.startswith("linux"):
         try:
-            socket_inodes = {
-                target[8:-1]
-                for fd in (Path("/proc") / str(pid) / "fd").iterdir()
-                if (target := os.readlink(fd)).startswith("socket:[") and target.endswith("]")
-            }
+            socket_inodes = linux_process_socket_inodes(pid)
             for name in ("tcp", "tcp6"):
                 table = Path("/proc") / str(pid) / "net" / name
                 for line in table.read_text(encoding="ascii").splitlines()[1:]:
@@ -792,8 +805,8 @@ def server_process_owns_endpoint(pid: int, url: str) -> bool:
                         and fields[9] in socket_inodes
                     ):
                         return True
-        except (OSError, ValueError):
-            return False
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"cannot inspect listener ownership for PID {pid}: {exc}") from exc
         return False
     if sys.platform == "darwin":
         try:
@@ -923,7 +936,7 @@ class QdrantMinimaRunner:
                  restart_server: Callable[[], int] | None = None, restart_identity: str = "",
                  process_identity: Callable[[int], str] = server_process_identity,
                  process_running: Callable[[int], bool] = server_process_running,
-                 process_owns_endpoint: Callable[[int, str], bool] = server_process_owns_endpoint,
+                 process_owns_endpoint: Callable[[int, str, int | None], bool] = server_process_owns_endpoint,
                  resource_server_name: str = "Qdrant") -> None:
         self.manifest, self.config = manifest, manifest["config"]
         self.specs, self.queries = scenario_map(manifest), {row["scenario"]: row for row in manifest["queries"]}
@@ -939,6 +952,7 @@ class QdrantMinimaRunner:
         self.server_pid, self.resource_server_name = server_pid, resource_server_name
         self.restart_server, self.restart_identity, self.process_identity = restart_server, restart_identity, process_identity
         self.process_running, self.process_owns_endpoint = process_running, process_owns_endpoint
+        self.server_listener_port = 6333 if deployment == "docker" else None
         self.client: Any | None = None
         self.evidence = Evidence(manifest)
         self.operations = {
@@ -987,8 +1001,9 @@ class QdrantMinimaRunner:
             raise RuntimeError("backend restart hook returned the original PID; restart is unproven")
         if self.process_running(old_pid):
             raise RuntimeError(f"original backend PID {old_pid} is still running after restart hook")
-        if not self.process_owns_endpoint(new_pid, self.url):
-            raise RuntimeError(f"restarted backend PID {new_pid} does not own the configured endpoint")
+        if not self.process_owns_endpoint(new_pid, self.url, self.server_listener_port):
+            listener = self.server_listener_port or urllib.parse.urlsplit(self.url).port
+            raise RuntimeError(f"restarted backend PID {new_pid} does not own listener port {listener}")
         new_process_identity = self.process_identity(new_pid)
         self.restart_boundary = {
             "hook_identity": self.restart_identity,
@@ -1591,6 +1606,7 @@ class QdrantMinimaRunner:
             "write_wait": "true", "point_id_mapping": "uuid5(NAMESPACE_URL,snissn/gomap/minima-qdrant/v1/<manifest-id>)",
             "deployment": self.deployment, "image": self.image or "not_applicable",
             "server_pid": str(self.server_pid) if self.server_pid is not None else "unavailable",
+            "server_listener_port": str(self.server_listener_port or urllib.parse.urlsplit(self.url).port or (443 if urllib.parse.urlsplit(self.url).scheme == "https" else 80)),
             "restart_identity": self.restart_identity,
             "effective_collection": json.dumps(self.effective_collection, sort_keys=True, separators=(",", ":"))}
         environment = {"os": platform.system() + " " + platform.release(), "arch": platform.machine() or "unavailable",
