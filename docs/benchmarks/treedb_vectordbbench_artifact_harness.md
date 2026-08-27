@@ -97,6 +97,8 @@ Lifecycle manifests use harness mode `vdbbench+lifecycle`, leave the generic
 `lifecycle_route_proof: lifecycle_route_response.json`. The same proof is
 embedded in the `route_verify` lifecycle event. The success output prints this
 lifecycle path and never advertises the independent `route_proof.json` smoke.
+The cold-reopen count is independently retained as the checksum-bound
+`lifecycle_count_proof: lifecycle_count_response.json`.
 
 For a completed lifecycle, both `reset` and `load_start` must report zero for
 all four row counts. `teardown` must be the final event and must retain the
@@ -208,8 +210,10 @@ fields plus positive service generation, `requested_top_k`, and `result_count`
 are structurally required. Completion requires the cold-reopened query to
 return exactly `requested_top_k` well-formed result objects. The validator
 parses the checksum-bound raw response and requires its no-document status,
-route, fallback status, reopened service generation, and result count to match
-the embedded event. The raw response must also carry the service-emitted
+route, fallback status, reopened service generation, index/vector-index identity,
+and result count to match the embedded event. The checksum-bound count response
+must report the exact expected rows from that same reopened index generation and
+identity. The raw route response must also carry the service-emitted
 `no_document_guardrails_ok: true` diagnostic and exact zero
 `documents_fetched`, `document_bytes`, and `document_output_bytes` counters
 (the service's Go JSON encoding omits those counters when zero); empty, short,

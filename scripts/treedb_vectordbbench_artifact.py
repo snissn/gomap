@@ -2215,7 +2215,9 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             "adapter-lifecycle.jsonl",
             "diagnostics.jsonl",
             "lifecycle-boundary-diagnostics.json",
+            "lifecycle_count_response.json",
             "lifecycle_load_milestones.json",
+            "lifecycle_route_response.json",
             "service.log",
         }
         for relative in sorted(required_evidence - raw_by_path.keys()):
@@ -2355,6 +2357,15 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
         elif lifecycle_route_proof not in raw_by_path:
             completion_errors.append(
                 "lifecycle_route_response.json must be a checksum-bound raw artifact"
+            )
+        lifecycle_count_proof = manifest.get("lifecycle_count_proof")
+        if lifecycle_count_proof != "lifecycle_count_response.json":
+            completion_errors.append(
+                "completed lifecycle must declare lifecycle_count_response.json count proof"
+            )
+        elif lifecycle_count_proof not in raw_by_path:
+            completion_errors.append(
+                "lifecycle_count_response.json must be a checksum-bound raw artifact"
             )
     service_profile = service.get("profile")
     if (
@@ -2553,6 +2564,8 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     )
                 if isinstance(raw_index, dict) and valid_diagnostics and valid_results and raw_stats is not None:
                     raw_generation = raw_index.get("generation")
+                    raw_index_name = raw_index.get("name")
+                    raw_vector_index_name = raw_route_response.get("vector_index_name")
                     if (
                         isinstance(raw_generation, bool)
                         or not isinstance(raw_generation, int)
@@ -2560,6 +2573,15 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         or raw_generation != route.get("service_generation")
                     ):
                         errors.append("lifecycle route response index generation does not match route_verify")
+                    if (
+                        not isinstance(raw_index_name, str)
+                        or not raw_index_name
+                        or not isinstance(raw_vector_index_name, str)
+                        or not raw_vector_index_name
+                        or f"{raw_index_name}:{raw_vector_index_name}" != route.get("index_identity")
+                        or (bound_index_name is not None and raw_index_name != bound_index_name)
+                    ):
+                        errors.append("lifecycle route response index identity does not match route_verify")
                     raw_summary = proof_summary(
                         "lifecycle", "lifecycle", raw_route_response,
                         {"top_k": route.get("requested_top_k")},
@@ -2568,6 +2590,37 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append("lifecycle route response route does not match route_verify")
                     if raw_summary["fallback_reason"] != route.get("fallback_reason"):
                         errors.append("lifecycle route response fallback status does not match route_verify")
+
+    if status == "completed" and manifest.get("lifecycle_count_proof") == "lifecycle_count_response.json":
+        try:
+            raw_count_response = _strict_json_loads(
+                (root / "lifecycle_count_response.json").read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors.append(f"cannot parse lifecycle count response: {exc}")
+        else:
+            raw_count_index = raw_count_response.get("index") if isinstance(raw_count_response, dict) else None
+            raw_count = raw_count_response.get("count") if isinstance(raw_count_response, dict) else None
+            count_generation = raw_count_index.get("generation") if isinstance(raw_count_index, dict) else None
+            count_index_name = raw_count_index.get("name") if isinstance(raw_count_index, dict) else None
+            count_vector_name = raw_count_index.get("vector_index_name") if isinstance(raw_count_index, dict) else None
+            if not isinstance(raw_count_response, dict) or not isinstance(raw_count_index, dict):
+                errors.append("lifecycle count response and index must be objects")
+            elif (
+                isinstance(raw_count, bool)
+                or not isinstance(raw_count, int)
+                or raw_count != expected_rows
+                or isinstance(count_generation, bool)
+                or not isinstance(count_generation, int)
+                or count_generation != route.get("service_generation")
+                or not isinstance(count_index_name, str)
+                or not count_index_name
+                or not isinstance(count_vector_name, str)
+                or not count_vector_name
+                or f"{count_index_name}:{count_vector_name}" != route.get("index_identity")
+                or (bound_index_name is not None and count_index_name != bound_index_name)
+            ):
+                errors.append("lifecycle count response does not prove expected reopened rows and index identity")
 
     profiles = lifecycle.get("profiles")
     if not isinstance(profiles, list):
@@ -3233,6 +3286,11 @@ def run_loaded_route_proof(
     ):
         raise RuntimeError("cold-reopen route proof response index generation is missing or stale")
     if (
+        response_index.get("name") != index_name
+        or response.get("vector_index_name") != index_identity.partition(":")[2]
+    ):
+        raise RuntimeError("cold-reopen route proof response index identity is missing or stale")
+    if (
         not isinstance(diagnostics, dict)
         or not isinstance(diagnostics.get("route"), str)
         or not diagnostics.get("route")
@@ -3437,7 +3495,21 @@ def complete_lifecycle(
             builder.build(reopen_snapshot, reopened_rows, index=index_state, database=reopen_database),
         )
         count = http_json("POST", index_url(args.base_url, index_name, "/documents/count"), {})
-        if count.get("count") != expected_rows:
+        write_json(state.root / "lifecycle_count_response.json", count)
+        count_index = count.get("index") if isinstance(count, dict) else None
+        if (
+            not isinstance(count_index, dict)
+            or count.get("count") != expected_rows
+            or count_index.get("name") != index_name
+            or count_index.get("vector_index_name") != index_identity.partition(":")[2]
+            or isinstance(count_index.get("generation"), bool)
+            or not isinstance(count_index.get("generation"), int)
+            or count_index.get("generation") <= 0
+            or (
+                expected_service_generation is not None
+                and count_index.get("generation") != expected_service_generation
+            )
+        ):
             raise RuntimeError(f"cold-reopen count mismatch: {count}")
         journal.append("exact_verify", builder.build(reopen_snapshot, reopened_rows, index=index_state))
         route = run_loaded_route_proof(
@@ -3470,6 +3542,7 @@ def complete_lifecycle(
         state.root / "lifecycle-boundary-diagnostics.json",
         milestone_path,
         state.root / "service.log",
+        state.root / "lifecycle_count_response.json",
         state.root / "lifecycle_route_response.json",
     ])
     assert state.lifecycle is not None
@@ -3621,6 +3694,11 @@ def write_manifest(
         "data_dir_note": "treedb-data is artifact-owned and intentionally not enumerated in files; see service.data_dir.",
     }
     if args.lifecycle:
+        manifest["lifecycle_count_proof"] = (
+            "lifecycle_count_response.json"
+            if (state.root / "lifecycle_count_response.json").is_file()
+            else None
+        )
         manifest["lifecycle_route_proof"] = (
             "lifecycle_route_response.json"
             if (state.root / "lifecycle_route_response.json").is_file()

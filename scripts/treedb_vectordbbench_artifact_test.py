@@ -110,7 +110,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
     profile.write_bytes(valid_pprof_fixture())
     lifecycle_route_response = root / "lifecycle_route_response.json"
     harness.write_json(lifecycle_route_response, {
-        "index": {"generation": 7},
+        "index": {"name": "index-a", "generation": 7},
+        "vector_index_name": "vector_hnsw",
         "results": [{"id": "1"}, {"id": "2"}],
         "no_documents": True,
         "stats": {"search_route_hnsw_search_pack": 1},
@@ -120,6 +121,15 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "no_document_guardrails_ok": True,
             "exact_hnsw_search_pack_no_doc_route": True,
         },
+    })
+    lifecycle_count_response = root / "lifecycle_count_response.json"
+    harness.write_json(lifecycle_count_response, {
+        "index": {
+            "name": "index-a",
+            "vector_index_name": "vector_hnsw",
+            "generation": 7,
+        },
+        "count": 50_000,
     })
     stages = [
         "startup", "reset", "load_start", "load_end", "drain_checkpoint",
@@ -290,6 +300,7 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
         },
         "vdbbench": [],
         "route_proof": None,
+        "lifecycle_count_proof": "lifecycle_count_response.json",
         "lifecycle_route_proof": "lifecycle_route_response.json",
     }
     manifest["lifecycle"] = {
@@ -310,6 +321,10 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             {
                 "path": "lifecycle_route_response.json",
                 "sha256": harness.sha256_file(lifecycle_route_response),
+            },
+            {
+                "path": "lifecycle_count_response.json",
+                "sha256": harness.sha256_file(lifecycle_count_response),
             },
             {"path": "adapter-lifecycle.jsonl", "sha256": harness.sha256_file(adapter_path)},
             {"path": "diagnostics.jsonl", "sha256": harness.sha256_file(diagnostics_path)},
@@ -1228,6 +1243,8 @@ class LifecycleValidatorTest(unittest.TestCase):
                 "guardrails",
             ),
             (lambda response: response["index"].__setitem__("generation", 8), "generation"),
+            (lambda response: response["index"].__setitem__("name", "other-index"), "index identity"),
+            (lambda response: response.__setitem__("vector_index_name", "other-vector"), "index identity"),
             (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
         )
         for mutation, expected in mutations:
@@ -1258,6 +1275,32 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertFalse(malformed["analyzable"], malformed)
         self.assertTrue(any("cannot parse lifecycle route response" in error for error in malformed["errors"]), malformed)
+
+    def test_lifecycle_count_response_must_prove_reopened_rows_and_index(self) -> None:
+        mutations = (
+            (lambda response: response.__setitem__("count", 49_999), "expected reopened rows"),
+            (lambda response: response["index"].__setitem__("generation", 8), "expected reopened rows"),
+            (lambda response: response["index"].__setitem__("name", "other-index"), "index identity"),
+            (lambda response: response["index"].__setitem__("vector_index_name", "other-vector"), "index identity"),
+        )
+        for mutation, expected in mutations:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _events = lifecycle_fixture(root)
+                response_path = root / "lifecycle_count_response.json"
+                response = json.loads(response_path.read_text(encoding="utf-8"))
+                mutation(response)
+                harness.write_json(response_path, response)
+                next(
+                    artifact for artifact in manifest["lifecycle"]["raw_artifacts"]
+                    if artifact["path"] == "lifecycle_count_response.json"
+                )["sha256"] = harness.sha256_file(response_path)
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any(expected in error for error in got["errors"]), got)
 
     def test_manifest_vdbbench_must_be_a_list(self) -> None:
         for invalid in (None, {"row": "exact"}):
@@ -3273,10 +3316,18 @@ class LifecycleIntegrationTest(unittest.TestCase):
             snapshot = sampler.samples[0]["snapshot"]
             responses = iter([
                 snapshot,
-                {"count": 50000},
+                {
+                    "count": 50000,
+                    "index": {
+                        "name": harness.lifecycle_index_name(args),
+                        "vector_index_name": "vector_hnsw",
+                        "generation": 7,
+                    },
+                },
                 {"index": {"generation": 7}},
                 {
-                    "index": {"generation": 7},
+                    "index": {"name": harness.lifecycle_index_name(args), "generation": 7},
+                    "vector_index_name": "vector_hnsw",
                     "no_documents": True,
                     "results": [{"id": "1"}, {"id": "2"}],
                     "stats": {"search_route_hnsw_search_pack": 1},
@@ -3300,12 +3351,14 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 harness.complete_lifecycle(state, args, root, root / "service", proc, sampler)
 
             profile = state.lifecycle["profiles"][0]
+            raw_paths = {artifact["path"] for artifact in state.lifecycle["raw_artifacts"]}
             events = [
                 json.loads(line)
                 for line in (root / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
             ]
 
         self.assertEqual((profile["before_sequence"], profile["after_sequence"]), (8, 9))
+        self.assertIn("lifecycle_count_response.json", raw_paths)
         self.assertEqual(events[8]["stage"], "cache_warm")
         self.assertEqual(events[9]["stage"], "graceful_close")
         self.assertLess(events[6]["timestamp"], events[7]["timestamp"])
@@ -3313,7 +3366,8 @@ class LifecycleIntegrationTest(unittest.TestCase):
 
     def test_loaded_route_proof_requires_exact_requested_results(self) -> None:
         valid_response = {
-            "index": {"generation": 7},
+            "index": {"name": "cohere", "generation": 7},
+            "vector_index_name": "vector_hnsw",
             "no_documents": True,
             "results": [{"id": "1"}, {"id": "2"}],
             "stats": {"search_route_hnsw_search_pack": 1},
@@ -3391,6 +3445,11 @@ class LifecycleIntegrationTest(unittest.TestCase):
             ([], "route proof response must be an object"),
             (dict(valid_response, index=[]), "index generation"),
             (dict(valid_response, index={"generation": 8}), "index generation"),
+            (
+                dict(valid_response, index={"name": "other", "generation": 7}),
+                "index identity",
+            ),
+            (dict(valid_response, vector_index_name="other"), "index identity"),
             (dict(valid_response, diagnostics=[]), "diagnostics"),
             (dict(valid_response, no_documents="true"), "no-document"),
         )
