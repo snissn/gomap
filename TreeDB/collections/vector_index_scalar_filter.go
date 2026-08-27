@@ -409,6 +409,7 @@ type nativeScalarFilterExecution struct {
 	identity             NativeScalarFilterPlan
 	clauses              []nativeScalarClause
 	finiteIDs            hybridScalarAllowSet
+	seedIDs              []string
 	probeIDs             uint64
 	probeTruncated       uint64
 	candidateIDs         uint64
@@ -475,6 +476,30 @@ type nativeScalarLeafProbe struct {
 	truncated bool
 }
 
+func boundedNativeScalarSeedIDs(set hybridScalarAllowSet, limit int) []string {
+	if limit <= 0 || len(set) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, minInt(limit, len(set)))
+	for id := range set {
+		if len(ids) < limit {
+			ids = append(ids, id)
+			continue
+		}
+		largest := 0
+		for candidate := 1; candidate < len(ids); candidate++ {
+			if ids[candidate] > ids[largest] {
+				largest = candidate
+			}
+		}
+		if id < ids[largest] {
+			ids[largest] = id
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter) (*nativeScalarFilterExecution, error) {
 	if filter == nil {
 		return nil, nil
@@ -528,6 +553,10 @@ func (c *Collection) planNativeScalarFilter(filter *HybridScalarFilter) (*native
 	}
 	if len(complete) == 0 {
 		plan.identity = NativeScalarFilterPlanVectorAligned
+		plan.seedIDs = boundedNativeScalarSeedIDs(probes[0].set, nativeScalarANNSeedLimit)
+		plan.candidateIDs = uint64(len(plan.seedIDs))
+		plan.retainedCandidateIDs = uint64(len(plan.seedIDs))
+		plan.refinedCandidateIDs = uint64(len(plan.seedIDs))
 		return plan, nil
 	}
 	sort.SliceStable(complete, func(i, j int) bool { return len(complete[i]) < len(complete[j]) })
@@ -806,7 +835,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 		scratch.out = candidates
 	} else {
 		var err error
-		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, plan, seedBudget, scratch)
+		candidates, work, err = runtimeIndex.searchNativeScalarCandidatesLocked(query, queryNorm, prepared, topK, efSearch, columns, currentNode, plan, seedBudget, scratch)
 		if err != nil {
 			return nil, work, err
 		}
@@ -844,7 +873,7 @@ func searchVectorIndexViewPlaneNativeScalar(query []float32, queryNorm float64, 
 	return *results, work, nil
 }
 
-func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, plan *nativeScalarFilterExecution, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
+func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, columns map[string]vectorIndexScalarColumn, currentNode map[string]int, plan *nativeScalarFilterExecution, seedBudget *nativeScalarSeedBudget, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, nativeScalarSearchWork, error) {
 	work := nativeScalarSearchWork{}
 	if idx.entry < 0 || len(idx.nodes) == 0 || topK <= 0 {
 		return nil, work, nil
@@ -892,6 +921,32 @@ func (idx *VectorIndex) searchNativeScalarCandidatesLocked(query []float32, quer
 			stride++
 		}
 		seedScores := 0
+		for _, id := range plan.seedIDs {
+			if seedScores >= seedScoreLimit || seedBudget.scores <= 0 {
+				break
+			}
+			nodeID, ok := currentNode[id]
+			if !ok || nodeID < 0 || nodeID >= len(idx.nodes) || visited[nodeID] == mark {
+				continue
+			}
+			node := &idx.nodes[nodeID]
+			if node.deleted || !plan.matches(columns, nodeID, node.documentID) {
+				continue
+			}
+			visited[nodeID] = mark
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNorm, prepared, nodeID)
+			work.scored++
+			seedScores++
+			seedBudget.scores--
+			if math.IsInf(float64(distance), 1) {
+				continue
+			}
+			candidate := vectorIndexCandidate{nodeID: nodeID, distance: distance}
+			queue.push(candidate)
+			navigation.pushBounded(candidate, explorationLimit)
+			eligible.pushBounded(candidate, topK)
+			work.eligibleSeeds++
+		}
 		for ordinal := 0; ordinal < seedBuckets && seedScores < seedScoreLimit &&
 			seedBudget.rows > 0 && planeRowsRemaining > 0; ordinal++ {
 			bucket := ordinal * stride % seedBuckets

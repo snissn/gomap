@@ -424,7 +424,11 @@ func TestNativeScalarPlannerOverLimitMixedFiniteAndTenantIsolation(t *testing.T)
 	}
 
 	all := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "active_idx", Value: true}, 8)
-	if all.Stats.ScalarFilterPlan != NativeScalarFilterPlanVectorAligned || all.Stats.ScalarFilterProbeTruncated == 0 || all.Stats.ScalarFilterExactScoring != 0 {
+	if all.Stats.ScalarFilterPlan != NativeScalarFilterPlanVectorAligned ||
+		all.Stats.ScalarFilterProbeTruncated == 0 ||
+		all.Stats.ScalarFilterExactScoring != 0 ||
+		all.Stats.ScalarFilterCandidateIDs != nativeScalarANNSeedLimit ||
+		all.Stats.ScalarFilterRetainedCandidateIDs != nativeScalarANNSeedLimit {
 		t.Fatalf("all-match diagnostics=%+v", all.Diagnostics())
 	}
 	unfiltered := searchNativeUnfilteredTest(t, col, def, 8)
