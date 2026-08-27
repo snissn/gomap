@@ -1142,8 +1142,13 @@ class LifecycleValidatorTest(unittest.TestCase):
             (lambda response: response["diagnostics"].pop("fallback_reason"), "diagnostics"),
             (lambda response: response.__setitem__("no_documents", False), "no-document"),
             (lambda response: response.__setitem__("results", ["bad"]), "results"),
+            (lambda response: response.__setitem__("results", [{}, {"id": "2"}]), "results"),
+            (lambda response: response.__setitem__("results", [{"id": ""}, {"id": "2"}]), "results"),
+            (lambda response: response.__setitem__("results", [{"id": 1}, {"id": "2"}]), "results"),
             (lambda response: response.__setitem__("results", []), "result count"),
             (lambda response: response.__setitem__("results", [{"id": "1"}]), "result count"),
+            (lambda response: response.__setitem__("stats", []), "stats"),
+            (lambda response: response.__setitem__("stats", "malformed"), "stats"),
             (lambda response: response["index"].__setitem__("generation", 8), "generation"),
             (lambda response: response["diagnostics"].__setitem__("route", "quantized_rerank"), "route"),
         )
@@ -2955,7 +2960,15 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertEqual(route["requested_top_k"], 2)
         self.assertEqual(route["result_count"], 2)
 
-        for results in ([], [{"id": "1"}], {"0": {"id": "1"}}, ["malformed", {"id": "2"}]):
+        for results in (
+            [],
+            [{"id": "1"}],
+            {"0": {"id": "1"}},
+            ["malformed", {"id": "2"}],
+            [{}, {"id": "2"}],
+            [{"id": ""}, {"id": "2"}],
+            [{"id": 1}, {"id": "2"}],
+        ):
             with self.subTest(results=results), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 args, state, _sampler, _proc = self._complete_fixture(root)
@@ -2964,6 +2977,18 @@ class LifecycleIntegrationTest(unittest.TestCase):
                 with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
                         self.assertRaisesRegex(RuntimeError, "exactly the requested results"):
                     harness.run_loaded_route_proof(state, args, "cohere", "cohere:vector_hnsw", 7, 7)
+
+        for stats in ([], "malformed"):
+            with self.subTest(stats=stats), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                args, state, _sampler, _proc = self._complete_fixture(root)
+                response = dict(valid_response, stats=stats)
+                responses = iter([{"index": {"generation": 7}}, response])
+                with mock.patch.object(harness, "http_json", side_effect=lambda *_args, **_kwargs: next(responses)), \
+                        self.assertRaisesRegex(RuntimeError, "stats must be an object"):
+                    harness.run_loaded_route_proof(
+                        state, args, "cohere", "cohere:vector_hnsw", 7, 7
+                    )
 
     def test_column_graph_ready_asset_uses_index_generation_not_root_id(self) -> None:
         optimize = {

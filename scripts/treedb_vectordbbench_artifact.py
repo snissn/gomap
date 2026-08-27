@@ -589,8 +589,28 @@ def fallback_reason(response: dict[str, Any]) -> str:
     return reason or "none"
 
 
+def route_response_stats(response: dict[str, Any]) -> dict[str, Any] | None:
+    stats = response.get("stats", {})
+    return stats if isinstance(stats, dict) else None
+
+
+def identified_route_results(value: Any, expected_count: int) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == expected_count
+        and all(
+            isinstance(result, dict)
+            and isinstance(result.get("id"), str)
+            and bool(result["id"])
+            for result in value
+        )
+    )
+
+
 def proof_summary(kind: str, index_name: str, response: dict[str, Any], request_payload: dict[str, Any]) -> dict[str, Any]:
-    stats = response.get("stats") or {}
+    stats = route_response_stats(response)
+    if stats is None:
+        raise ValueError("route response stats must be an object when present")
     diagnostics = response.get("diagnostics") or {}
     return {
         "kind": kind,
@@ -2378,6 +2398,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                 raw_index = raw_route_response.get("index")
                 raw_diagnostics = raw_route_response.get("diagnostics")
                 raw_results = raw_route_response.get("results")
+                raw_stats = route_response_stats(raw_route_response)
                 valid_diagnostics = (
                     isinstance(raw_diagnostics, dict)
                     and isinstance(raw_diagnostics.get("route"), str)
@@ -2385,14 +2406,11 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     and isinstance(raw_diagnostics.get("fallback_reason"), str)
                     and bool(raw_diagnostics.get("fallback_reason"))
                 )
+                requested_top_k = route.get("requested_top_k")
                 valid_results = (
-                    isinstance(raw_results, list)
-                    and all(
-                        isinstance(result, dict)
-                        and isinstance(result.get("id"), str)
-                        and bool(result.get("id"))
-                        for result in raw_results
-                    )
+                    isinstance(requested_top_k, int)
+                    and not isinstance(requested_top_k, bool)
+                    and identified_route_results(raw_results, requested_top_k)
                 )
                 if not isinstance(raw_index, dict):
                     errors.append("lifecycle route response index must be an object")
@@ -2400,9 +2418,19 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                     errors.append("lifecycle route response diagnostics must name route and fallback status")
                 if not valid_results:
                     errors.append("lifecycle route response results must be a list of identified result objects")
+                if (
+                    isinstance(raw_results, list)
+                    and (
+                        len(raw_results) != route.get("requested_top_k")
+                        or len(raw_results) != route.get("result_count")
+                    )
+                ):
+                    errors.append("lifecycle route response result count does not match route_verify")
+                if raw_stats is None:
+                    errors.append("lifecycle route response stats must be an object when present")
                 if raw_route_response.get("no_documents") is not True:
                     errors.append("lifecycle route response must prove no-document search")
-                if isinstance(raw_index, dict) and valid_diagnostics and valid_results:
+                if isinstance(raw_index, dict) and valid_diagnostics and valid_results and raw_stats is not None:
                     raw_generation = raw_index.get("generation")
                     if (
                         isinstance(raw_generation, bool)
@@ -2419,11 +2447,6 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
                         errors.append("lifecycle route response route does not match route_verify")
                     if raw_summary["fallback_reason"] != route.get("fallback_reason"):
                         errors.append("lifecycle route response fallback status does not match route_verify")
-                    if (
-                        len(raw_results) != route.get("requested_top_k")
-                        or len(raw_results) != route.get("result_count")
-                    ):
-                        errors.append("lifecycle route response result count does not match route_verify")
 
     profiles = lifecycle.get("profiles")
     if not isinstance(profiles, list):
@@ -3051,15 +3074,13 @@ def run_loaded_route_proof(
     response = http_json("POST", index_url(args.base_url, index_name, "/search/vector-index"), request)
     write_json(state.root / "lifecycle_route_response.json", response)
     results = response.get("results")
-    if (
-        not isinstance(results, list)
-        or any(not isinstance(result, dict) for result in results)
-        or len(results) != request["top_k"]
-    ):
+    if not identified_route_results(results, request["top_k"]):
         raise RuntimeError(
-            "cold-reopen route proof did not return exactly the requested results: "
+            "cold-reopen route proof did not return exactly the requested results with nonempty string ids: "
             f"requested={request['top_k']} actual={len(results) if isinstance(results, list) else 'malformed'}"
         )
+    if route_response_stats(response) is None:
+        raise RuntimeError("cold-reopen route proof stats must be an object when present")
     summary = proof_summary(row, index_name, response, request)
     route = {
         "name": summary["route"],
