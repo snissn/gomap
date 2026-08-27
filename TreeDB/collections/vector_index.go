@@ -67,6 +67,11 @@ var nativeVectorIndexBeforeAutoPersistSaveHookForTest struct {
 	fn func(string)
 }
 
+var vectorIndexRebuildAfterLockHookForTest struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func setNativeVectorIndexBeforeInstallHookForTest(fn func(string)) func() {
 	nativeVectorIndexBeforeInstallHookForTest.mu.Lock()
 	previous := nativeVectorIndexBeforeInstallHookForTest.fn
@@ -106,6 +111,27 @@ func runNativeVectorIndexBeforeAutoPersistSaveHookForTest(name string) {
 	nativeVectorIndexBeforeAutoPersistSaveHookForTest.mu.Unlock()
 	if fn != nil {
 		fn(name)
+	}
+}
+
+func setVectorIndexRebuildAfterLockHookForTest(fn func()) func() {
+	vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+	previous := vectorIndexRebuildAfterLockHookForTest.fn
+	vectorIndexRebuildAfterLockHookForTest.fn = fn
+	vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	return func() {
+		vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+		vectorIndexRebuildAfterLockHookForTest.fn = previous
+		vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	}
+}
+
+func runVectorIndexRebuildAfterLockHookForTest() {
+	vectorIndexRebuildAfterLockHookForTest.mu.Lock()
+	fn := vectorIndexRebuildAfterLockHookForTest.fn
+	vectorIndexRebuildAfterLockHookForTest.mu.Unlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -5184,6 +5210,7 @@ func (idx *VectorIndex) Rebuild() error {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	runVectorIndexRebuildAfterLockHookForTest()
 	if c.vectorIndexRuntimeIsStale(idx) {
 		return fmt.Errorf("%w: %q", errVectorIndexStaleRuntime, idx.name)
 	}
