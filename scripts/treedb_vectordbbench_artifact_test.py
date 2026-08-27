@@ -340,7 +340,8 @@ def lifecycle_fixture(root: Path) -> tuple[dict, list[dict]]:
             "data_dir": str(data_dir),
             "command": [
                 str(service_binary), "-dir", str(data_dir),
-                "-addr", "127.0.0.1:9876", "-profile", "command_wal_durable",
+                "-addr", "127.0.0.1:9876", "-pprof", "127.0.0.1:6060",
+                "-profile", "command_wal_durable",
             ],
             "binary": {"path": str(service_binary), "sha256": service_binary_sha256},
         },
@@ -1484,6 +1485,11 @@ class LifecycleValidatorTest(unittest.TestCase):
 
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("batch sizes" in error for error in got["errors"]), got)
+
+    def test_adapter_remainder_batch_must_be_last(self) -> None:
+        self.assertTrue(harness._batch_distribution_matches([500, 500, 1], 1001, 500))
+        self.assertFalse(harness._batch_distribution_matches([500, 1, 500], 1001, 500))
+        self.assertTrue(harness._batch_distribution_matches([500, 500], 1000, 500))
 
     def test_bound_vdbbench_command_options_must_match_manifest_exactly_once(self) -> None:
         options = (
@@ -2975,7 +2981,7 @@ class LifecycleValidatorTest(unittest.TestCase):
                 self.assertTrue(got["complete"], got)
 
     def test_service_pprof_address_matches_loopback_listener_contract(self) -> None:
-        valid = ("", "127.0.0.1:6060", "localhost:6060", "[::1]:6060", "127.0.0.1:65535")
+        valid = ("127.0.0.1:6060", "localhost:6060", "[::1]:6060", "127.0.0.1:65535")
         invalid = (
             "localhost", "127.0.0.1", ":6060", "0.0.0.0:6060", "[::]:6060",
             "192.0.2.1:6060", "example.com:6060", "127.0.0.1:", "127.0.0.1:0",
@@ -3006,6 +3012,27 @@ class LifecycleValidatorTest(unittest.TestCase):
 
                 self.assertFalse(got["analyzable"], got)
                 self.assertTrue(any("service.command" in item for item in got["errors"]), got)
+
+    def test_completed_lifecycle_requires_enabled_pprof_listener(self) -> None:
+        for mutation in ("missing", "empty"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest, _ = lifecycle_fixture(root)
+                command = manifest["service"]["command"]
+                pprof_position = command.index("-pprof")
+                if mutation == "missing":
+                    del command[pprof_position:pprof_position + 2]
+                else:
+                    command[pprof_position + 1] = ""
+                manifest["lifecycle"]["identity"]["config_sha256"] = (
+                    harness.lifecycle_config_sha256(manifest)
+                )
+                harness.write_json(root / "manifest.json", manifest)
+
+                got = harness.validate_lifecycle_artifact(root)
+
+            self.assertFalse(got["analyzable"], got)
+            self.assertTrue(any("service.command" in item for item in got["errors"]), got)
 
     def test_service_address_must_be_loopback(self) -> None:
         for address in ("0.0.0.0:9876", "192.0.2.1:9876", "example.com:9876"):

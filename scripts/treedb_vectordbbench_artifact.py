@@ -1401,6 +1401,17 @@ def read_adapter_lifecycle_sidecar(path: Path) -> dict[str, Any]:
     }
 
 
+def _batch_distribution_matches(
+    batch_sizes: list[int], expected_rows: int, declared_batch_size: int,
+) -> bool:
+    full_batches, remainder = divmod(expected_rows, declared_batch_size)
+    if len(batch_sizes) != full_batches + (1 if remainder else 0):
+        return False
+    if any(size != declared_batch_size for size in batch_sizes[:full_batches]):
+        return False
+    return remainder == 0 or batch_sizes[-1] == remainder
+
+
 def _valid_go_int64(value: str) -> bool:
     unsigned = value
     negative = False
@@ -1776,6 +1787,7 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             or not effective_dir
             or effective_pprof is None
             or not _valid_pprof_listen_address(effective_pprof)
+            or (lifecycle.get("result_status") == "completed" and not effective_pprof)
             or len(profile_values) != 1
             or profile_values[0] != service.get("profile")
         ):
@@ -2464,18 +2476,10 @@ def validate_lifecycle_artifact(root: Path) -> dict[str, Any]:
             ):
                 errors.append("adapter lifecycle batch distribution requires a positive declared num_per_batch")
             else:
-                full_batches, remainder = divmod(expected_rows, declared_batch_size)
                 batch_sizes = adapter["batch_sizes"]
-                expected_batch_count = full_batches + (1 if remainder else 0)
-                distribution_matches = (
-                    len(batch_sizes) == expected_batch_count
-                    and sum(size == declared_batch_size for size in batch_sizes) == full_batches
-                    and (
-                        (not remainder and all(size == declared_batch_size for size in batch_sizes))
-                        or (remainder > 0 and sum(size == remainder for size in batch_sizes) == 1)
-                    )
-                )
-                if not distribution_matches:
+                if not _batch_distribution_matches(
+                    batch_sizes, expected_rows, declared_batch_size,
+                ):
                     errors.append(
                         "adapter lifecycle batch sizes do not match manifest.harness.num_per_batch"
                     )

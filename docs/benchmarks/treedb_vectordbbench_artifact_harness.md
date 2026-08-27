@@ -122,8 +122,9 @@ its own sampled snapshot so offline-build counters cannot be attributed to
 ingestion.
 The canonical sampler runs every five seconds by default and records both the
 service snapshot and filesystem WAL bytes/file count from the first pre-load
-sample onward. The checksum-bound adapter sidecar retains each equal-size batch
-completion; `lifecycle_load_milestones.json` sorts those completions by time and
+sample onward. The checksum-bound adapter sidecar retains each declared-size
+batch completion, followed only when needed by one smaller final remainder
+batch; `lifecycle_load_milestones.json` sorts those completions by time and
 records cumulative accepted-row time and throughput.
 
 The lifecycle declaration binds the exact clean gomap and VectorDBBench
