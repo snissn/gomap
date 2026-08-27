@@ -84,8 +84,13 @@ responses establish the durable acknowledgement boundary. The diagnostics
 snapshot at `load_end` must independently show a positive accepted frontier,
 a durable frontier at or beyond it, and positive WAL bytes before the adapter's
 `optimize_start`; otherwise the runner fails closed rather than claiming a
-checkpoint. Load-end and optimize-start/end stages each use their own sampled
-snapshot so offline-build counters cannot be attributed to ingestion.
+checkpoint. The opt-in adapter pauses after appending `load_end`; the runner
+takes a synchronous sample through the existing diagnostics sampler and writes
+a timestamp-bound acknowledgement before the adapter may append
+`optimize_start`. The acknowledgement and diagnostics stream are both
+checksum-bound raw artifacts. Load-end and optimize-start/end stages each use
+their own sampled snapshot so offline-build counters cannot be attributed to
+ingestion.
 The canonical sampler runs every five seconds by default and records both the
 service snapshot and filesystem WAL bytes/file count from the first pre-load
 sample onward. The checksum-bound adapter sidecar retains each equal-size batch

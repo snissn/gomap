@@ -899,6 +899,7 @@ def vdbbench_row_env(args: argparse.Namespace, vectordbbench_dir: Path, gomap_ro
     env["NUM_PER_BATCH"] = str(args.num_per_batch)
     if getattr(args, "lifecycle", False):
         env["TREEDB_LIFECYCLE_SIDECAR"] = str(state.root / "adapter-lifecycle.jsonl")
+        env["TREEDB_LIFECYCLE_LOAD_END_ACK"] = str(state.root / "load-end-diagnostics.json")
     return env
 
 
@@ -1060,35 +1061,40 @@ class DiagnosticsSampler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._stopped = False
+        self._sample_lock = threading.Lock()
 
-    def sample(self) -> dict[str, Any]:
-        wal_dir = self.data_dir / "maindb" / "wal"
-        wal_files = []
-        with contextlib.suppress(OSError):
-            wal_files = [path for path in wal_dir.iterdir() if path.is_file()]
-        wal_bytes = 0
-        for path in wal_files:
+    def sample(self, *, boundary: str | None = None, boundary_timestamp_ns: int | None = None) -> dict[str, Any]:
+        with self._sample_lock:
+            wal_dir = self.data_dir / "maindb" / "wal"
+            wal_files = []
             with contextlib.suppress(OSError):
-                wal_bytes += path.stat().st_size
-        record = {
-            "timestamp_ns": time.time_ns(),
-            "snapshot": http_json("GET", self.url, timeout=2.0),
-            "wal_filesystem": {
-                "path": str(wal_dir),
-                "files": len(wal_files),
-                "bytes": wal_bytes,
-            },
-        }
-        payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-        try:
-            if os.write(fd, payload) != len(payload):
-                raise OSError("short diagnostics sample write")
-        finally:
-            os.close(fd)
-        self.samples.append(record)
-        return record
+                wal_files = [path for path in wal_dir.iterdir() if path.is_file()]
+            wal_bytes = 0
+            for path in wal_files:
+                with contextlib.suppress(OSError):
+                    wal_bytes += path.stat().st_size
+            record = {
+                "timestamp_ns": time.time_ns(),
+                "snapshot": http_json("GET", self.url, timeout=2.0),
+                "wal_filesystem": {
+                    "path": str(wal_dir),
+                    "files": len(wal_files),
+                    "bytes": wal_bytes,
+                },
+            }
+            if boundary is not None:
+                record["boundary"] = boundary
+                record["boundary_timestamp_ns"] = boundary_timestamp_ns
+            payload = (json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n").encode()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+            try:
+                if os.write(fd, payload) != len(payload):
+                    raise OSError("short diagnostics sample write")
+            finally:
+                os.close(fd)
+            self.samples.append(record)
+            return record
 
     def start(self) -> None:
         self.sample()
@@ -1118,6 +1124,67 @@ class DiagnosticsSampler:
 
     def latest(self) -> dict[str, Any]:
         return self.samples[-1]["snapshot"] if self.samples else {}
+
+
+def capture_load_end_diagnostics(
+    sidecar: Path,
+    acknowledgement: Path,
+    sampler: DiagnosticsSampler,
+    stop: threading.Event,
+) -> None:
+    """Synchronously sample the server after load_end while optimize is paused."""
+    while not stop.wait(0.01):
+        try:
+            records = read_adapter_lifecycle_records(sidecar)
+        except ValueError:
+            continue
+        load_end = [record for record in records if record.get("event") == "load_end"]
+        if not load_end:
+            continue
+        if len(load_end) != 1:
+            raise ValueError("adapter lifecycle sidecar has duplicate load_end boundaries")
+        load_end_ns = load_end[0]["timestamp_ns"]
+        sample = sampler.sample(boundary="load_end", boundary_timestamp_ns=load_end_ns)
+        sample_ns = sample["timestamp_ns"]
+        if sample_ns < load_end_ns:
+            raise RuntimeError("load-end diagnostics sample predates the adapter boundary")
+        temporary = acknowledgement.with_name(f".{acknowledgement.name}.{os.getpid()}.tmp")
+        try:
+            write_json(temporary, {
+                "load_end_timestamp_ns": load_end_ns,
+                "sample_timestamp_ns": sample_ns,
+            })
+            os.replace(temporary, acknowledgement)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                temporary.unlink()
+        return
+
+
+def load_end_diagnostics_snapshot(
+    root: Path, load_end_ns: int, sampler: DiagnosticsSampler
+) -> dict[str, Any]:
+    acknowledgement_path = root / "load-end-diagnostics.json"
+    try:
+        acknowledgement = _strict_json_loads(acknowledgement_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError(f"cannot read load-end diagnostics acknowledgement: {exc}") from exc
+    if not isinstance(acknowledgement, dict):
+        raise ValueError("load-end diagnostics acknowledgement must be an object")
+    sample_ns = acknowledgement.get("sample_timestamp_ns")
+    if acknowledgement.get("load_end_timestamp_ns") != load_end_ns:
+        raise ValueError("load-end diagnostics acknowledgement does not match the adapter boundary")
+    if not isinstance(sample_ns, int) or isinstance(sample_ns, bool) or sample_ns < load_end_ns:
+        raise ValueError("load-end diagnostics acknowledgement has an invalid sample timestamp")
+    matches = [
+        record for record in sampler.samples
+        if record.get("timestamp_ns") == sample_ns
+        and record.get("boundary") == "load_end"
+        and record.get("boundary_timestamp_ns") == load_end_ns
+    ]
+    if len(matches) != 1 or not isinstance(matches[0].get("snapshot"), dict):
+        raise ValueError("load-end diagnostics acknowledgement has no exact sampled snapshot")
+    return matches[0]["snapshot"]
 
 
 def read_adapter_lifecycle_records(path: Path) -> list[dict[str, Any]]:
@@ -2281,6 +2348,7 @@ def run_vdbbench_rows(
     vectordbbench_dir: Path | None,
     base_url: str,
     index_prefix: str,
+    sampler: DiagnosticsSampler | None = None,
 ) -> None:
     if not args.run_vdbbench:
         add_skip(state, "vectordbbench_rows", "run-vdbbench disabled; route-proof smoke still ran")
@@ -2307,15 +2375,52 @@ def run_vdbbench_rows(
                 "--quantized-rerank-candidates",
                 str(args.rerank_candidates),
             ])
-        record = run_command(
-            state,
-            f"vdbbench_{row}",
-            cmd,
-            cwd=vectordbbench_dir,
-            env=env,
-            timeout=args.vdbbench_timeout,
-            required=True,
-        )
+        capture_stop = threading.Event()
+        capture_errors: list[BaseException] = []
+        capture_thread: threading.Thread | None = None
+        acknowledgement = state.root / "load-end-diagnostics.json"
+        if args.lifecycle:
+            if sampler is None:
+                raise RuntimeError("lifecycle VDBBench run requires the diagnostics sampler")
+            acknowledgement.unlink(missing_ok=True)
+
+            def capture_boundary() -> None:
+                try:
+                    capture_load_end_diagnostics(
+                        state.root / "adapter-lifecycle.jsonl",
+                        acknowledgement,
+                        sampler,
+                        capture_stop,
+                    )
+                except BaseException as exc:  # noqa: BLE001 - propagate worker failure on caller thread
+                    capture_errors.append(exc)
+
+            capture_thread = threading.Thread(
+                target=capture_boundary,
+                name="treedb-lifecycle-load-end",
+                daemon=True,
+            )
+            capture_thread.start()
+        try:
+            record = run_command(
+                state,
+                f"vdbbench_{row}",
+                cmd,
+                cwd=vectordbbench_dir,
+                env=env,
+                timeout=args.vdbbench_timeout,
+                required=True,
+            )
+        finally:
+            capture_stop.set()
+            if capture_thread is not None:
+                capture_thread.join(timeout=2.0)
+        if capture_thread is not None and capture_thread.is_alive():
+            raise RuntimeError("load-end diagnostics capture did not stop")
+        if capture_errors:
+            raise RuntimeError(f"load-end diagnostics capture failed: {capture_errors[0]}") from capture_errors[0]
+        if args.lifecycle and not acknowledgement.is_file():
+            raise RuntimeError("VDBBench lifecycle ended without load-end diagnostics acknowledgement")
         row_record = {
             "row": row,
             "index_name": index_name,
@@ -2505,6 +2610,7 @@ def finalize_partial_lifecycle(
     state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
         state.root / "diagnostics.jsonl",
         sidecar,
+        state.root / "load-end-diagnostics.json",
         state.root / "service.log",
     ])
     if not sidecar.exists():
@@ -2518,6 +2624,7 @@ def finalize_partial_lifecycle(
     state.lifecycle["raw_artifacts"] = lifecycle_raw_artifacts(state, [
         state.root / "diagnostics.jsonl",
         sidecar,
+        state.root / "load-end-diagnostics.json",
         milestone_path,
         state.root / "service.log",
     ])
@@ -2546,7 +2653,10 @@ def finalize_partial_lifecycle(
         rows = lifecycle_rows()
         if stage in {"load_end", "optimize_start"}:
             rows = lifecycle_rows(sent, accepted, accepted)
-        snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
+        if sampler is not None and stage == "load_end":
+            snapshot = load_end_diagnostics_snapshot(state.root, record["timestamp_ns"], sampler)
+        else:
+            snapshot = sampler.at(record["timestamp_ns"]) if sampler is not None else {}
         journal.append(stage, builder.build(snapshot, rows), timestamp=iso_from_ns(record["timestamp_ns"]))
         existing.add(stage)
 
@@ -2727,7 +2837,7 @@ def complete_lifecycle(
     zero = lifecycle_rows()
     loaded = lifecycle_rows(expected_rows, expected_rows, expected_rows, 0)
     load_start_snapshot = sampler.at(adapter["load_start_ns"])
-    load_end_snapshot = sampler.at(adapter["load_end_ns"])
+    load_end_snapshot = load_end_diagnostics_snapshot(state.root, adapter["load_end_ns"], sampler)
     optimize_start_snapshot = sampler.at(adapter["optimize_start_ns"])
     optimize_end_snapshot = sampler.at(adapter["optimize_end_ns"])
     journal.append(
@@ -2840,6 +2950,7 @@ def complete_lifecycle(
         profile_path,
         state.root / "diagnostics.jsonl",
         state.root / "adapter-lifecycle.jsonl",
+        state.root / "load-end-diagnostics.json",
         milestone_path,
         state.root / "service.log",
         state.root / "lifecycle_route_response.json",
@@ -3217,6 +3328,7 @@ def main(argv: list[str]) -> int:
             vectordbbench_dir=args.vectordbbench_dir,
             base_url=args.base_url,
             index_prefix=args.index_prefix,
+            sampler=sampler,
         )
         if args.lifecycle:
             assert sampler is not None

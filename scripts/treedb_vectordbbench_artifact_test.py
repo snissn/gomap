@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -495,6 +496,22 @@ class VDBBenchBatchTest(unittest.TestCase):
         self.assertEqual(cli_override_args.num_per_batch, 500)
         self.assertEqual(override["NUM_PER_BATCH"], "250")
 
+    def test_lifecycle_row_receives_load_end_diagnostics_ack_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = harness.HarnessState(root=Path(tmp))
+            args = harness.parse_args([
+                "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                "--case-type", "PerformanceCustomDataset",
+                "--lifecycle-dataset-file", __file__,
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+            ])
+            env = harness.vdbbench_row_env(args, Path("/vdbbench"), Path("/gomap"), state)
+
+        self.assertEqual(
+            env["TREEDB_LIFECYCLE_LOAD_END_ACK"],
+            str(Path(tmp) / "load-end-diagnostics.json"),
+        )
+
     def test_vdbbench_rows_use_separate_result_directories(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = harness.HarnessState(root=Path(tmp))
@@ -518,6 +535,67 @@ class VDBBenchBatchTest(unittest.TestCase):
 
 
 class VDBBenchLoadMetricsTest(unittest.TestCase):
+    def test_lifecycle_run_synchronously_captures_load_end_before_command_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "train.parquet"
+            dataset.write_bytes(b"dataset")
+            state = harness.HarnessState(root=root)
+            args = harness.parse_args([
+                "--out", str(root), "--run-vdbbench", "--rows", "exact", "--lifecycle",
+                "--case-type", "PerformanceCustomDataset",
+                "--lifecycle-dataset-file", str(dataset),
+                "--lifecycle-vectors", "1", "--lifecycle-dimensions", "1",
+            ])
+
+            class Sampler:
+                samples = [{"timestamp_ns": 1, "snapshot": {"stale": True}}]
+
+                def sample(self, *, boundary=None, boundary_timestamp_ns=None):
+                    record = {
+                        "timestamp_ns": boundary_timestamp_ns + 1,
+                        "snapshot": {"fresh": True},
+                        "boundary": boundary,
+                        "boundary_timestamp_ns": boundary_timestamp_ns,
+                    }
+                    self.samples.append(record)
+                    return record
+
+            def run(*_args, **_kwargs):
+                records = (
+                    {"event": "reset", "timestamp_ns": 1, "response": {}},
+                    {"event": "load_start", "timestamp_ns": 2},
+                    {"event": "batch_accepted", "timestamp_ns": 3, "client_sent": 1, "server_accepted": 1},
+                    {"event": "load_end", "timestamp_ns": 4},
+                )
+                (root / "adapter-lifecycle.jsonl").write_text(
+                    "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+                )
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and not (root / "load-end-diagnostics.json").exists():
+                    time.sleep(0.01)
+                self.assertTrue((root / "load-end-diagnostics.json").exists())
+                return mock.Mock(command_string="vdbbench exact", exit_code=0)
+
+            with mock.patch.object(harness, "run_command", side_effect=run), \
+                    mock.patch.object(harness, "capture_vdbbench_load_metrics", return_value={}):
+                harness.run_vdbbench_rows(
+                    state,
+                    args=args,
+                    gomap_root=root,
+                    vectordbbench_dir=root,
+                    base_url="http://127.0.0.1:1",
+                    index_prefix="test",
+                    sampler=Sampler(),
+                )
+
+            acknowledgement = json.loads((root / "load-end-diagnostics.json").read_text())
+
+        self.assertEqual(acknowledgement, {
+            "load_end_timestamp_ns": 4,
+            "sample_timestamp_ns": 5,
+        })
+
     def test_canonical_result_records_separated_durations_and_checksum(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2115,7 +2193,15 @@ class LifecycleIntegrationTest(unittest.TestCase):
         }
 
         class Sampler:
-            samples = [{"timestamp_ns": 1, "snapshot": snapshot}]
+            samples = [
+                {"timestamp_ns": 1, "snapshot": snapshot},
+                {
+                    "timestamp_ns": 5,
+                    "snapshot": snapshot,
+                    "boundary": "load_end",
+                    "boundary_timestamp_ns": 5,
+                },
+            ]
 
             def stop(self):
                 return None
@@ -2160,8 +2246,38 @@ class LifecycleIntegrationTest(unittest.TestCase):
         (root / "adapter-lifecycle.jsonl").write_text(
             "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
         )
+        harness.write_json(root / "load-end-diagnostics.json", {
+            "load_end_timestamp_ns": 5,
+            "sample_timestamp_ns": 5,
+        })
         proc = mock.Mock(returncode=None)
         return args, state, Sampler(), proc
+
+    def test_load_end_uses_synchronous_sample_when_periodic_sample_is_stale(self) -> None:
+        stale = {"database": {"treedb.command_wal.durable_wal_lsn": "0"}}
+        boundary = {"database": {"treedb.command_wal.durable_wal_lsn": "5"}}
+
+        class Sampler:
+            samples = [
+                {"timestamp_ns": 2, "snapshot": stale},
+                {
+                    "timestamp_ns": 5,
+                    "snapshot": boundary,
+                    "boundary": "load_end",
+                    "boundary_timestamp_ns": 4,
+                },
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            harness.write_json(root / "load-end-diagnostics.json", {
+                "load_end_timestamp_ns": 4,
+                "sample_timestamp_ns": 5,
+            })
+
+            got = harness.load_end_diagnostics_snapshot(root, 4, Sampler())
+
+        self.assertIs(got, boundary)
 
     def test_lifecycle_rejects_standard_case_without_checksum_bound_task_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()) as stderr:
